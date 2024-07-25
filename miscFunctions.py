@@ -253,8 +253,11 @@ def convert_prec_mz(seq,z):
     
     unmod_mass = mass.fast_mass(unmod_seq,charge=z)
     
-    tag_masses = sum([config.tag.mass_dict[j] for i in mods for j in i if j in config.tag.mass_dict])
-    
+    if config.tag:
+    	tag_masses = sum([config.tag.mass_dict[j] for i in mods for j in i if j in config.tag.mass_dict])
+    else: 
+    	tag_masses = 0
+        
     return unmod_mass+(tag_masses)/z
     
 
@@ -325,8 +328,11 @@ def convert_frags(seq,frags,rules=diann_rules):
     ## assume AA is the first 
     unmod_seq = [i[0] for i in split_seq]
     
-    tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in mods]
-    
+    if config.tag:
+    	tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in mods]
+    else:
+    	tag_masses = [0 for i in mods]
+        
     new_frags = {}
     
     for frag in frags:
