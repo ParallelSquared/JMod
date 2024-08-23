@@ -22,7 +22,6 @@ from rtAlignment import MZRTfit, MZRTfit_timeplex
 from miscFunctions import write_to_csv
 import iso_functions as iso_f
 from mass_tags import tag_library
-from fdr_analysis import process_data
 
 if __name__=="__main__":
             
@@ -92,9 +91,6 @@ if __name__=="__main__":
     
     if config.args.tag:
         spectrumLibrary = tag_library(spectrumLibrary,config.tag)
-        mass_tag = config.tag    
-    else:
-        mass_tag = None
         
         
     all_keys = list(spectrumLibrary)
@@ -202,13 +198,6 @@ if __name__=="__main__":
             
             decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
             write_to_csv(long_outputs,decoylib_search_path)
-    
-    process_data(file=decoylib_search_path,
-                 DIAspectra=DIAspectra,
-                 library=spectrumLibrary,
-                 mass_tag=mass_tag,
-                 timeplex=config.args.timeplex)
-    
     
     # """
     
