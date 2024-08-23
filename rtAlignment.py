@@ -97,8 +97,8 @@ from miscFunctions import feature_list_mz, feature_list_rt, createTolWindows, wi
 
 # dia_spectra = load_files.SpectrumFile("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/2024_02_23_MY_pDIA_Non_Red_Alk_500ng_v1-25_1x_orig_E480.mzML")
 
-dia_spectra  = load_files.SpectrumFile("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.mzML")
-dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.features.tsv",sep="\t")
+# dia_spectra  = load_files.SpectrumFile("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.mzML")
+# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.features.tsv",sep="\t")
 # dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-03-21_Sciex_3-plex_678_100ng.mzML")
 # dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-03-21_Sciex_5-plex_01458_100ng.mzML")
 
