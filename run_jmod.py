@@ -39,10 +39,12 @@ if __name__=="__main__":
     lib_file_name = lib_file.split("/")[-1].rsplit(".",1)[0]
 
 
+    
     use_rt = "RT" if config.args.use_rt else ""
     iso = f"iso{config.num_iso_peaks}" if config.args.iso else ""
     mTRAQ = "mTRAQ" if config.args.mTRAQ else ""
     tag = config.args.tag
+    is_timeplex = "timeplex" if config.args.timeplex else ""
     use_feat = ""
     dino_features=None
     feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv"
@@ -53,12 +55,12 @@ if __name__=="__main__":
     
     ms2_align = "MS2align" if config.args.ms2_align else ""
     results_folder_name = "_".join([spec_file_name,
-                                    lib_file_name+"Update280624",
+                                    lib_file_name+"Update060824",
                                     f"{config.mz_ppm}ppm",
                                     f"{config.atleast_m}m",
                                     f"unmatch{config.unmatched_fit_type}",
                                     f"DECOY{config.args.decoy}",
-                                    *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag]))])
+                                    *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,is_timeplex]))])
     
     results_folder_path = "/Users/kevinmcdonnell/Programming/Python/Jmod/Results/"+results_folder_name
     print(results_folder_name)

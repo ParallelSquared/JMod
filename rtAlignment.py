@@ -97,13 +97,18 @@ from miscFunctions import feature_list_mz, feature_list_rt, createTolWindows, wi
 
 # dia_spectra = load_files.SpectrumFile("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/2024_02_23_MY_pDIA_Non_Red_Alk_500ng_v1-25_1x_orig_E480.mzML")
 
-# dia_spectra  = load_files.SpectrumFile("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.mzML")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.features.tsv",sep="\t")
 # dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-03-21_Sciex_3-plex_678_100ng.mzML")
 # dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-03-21_Sciex_5-plex_01458_100ng.mzML")
 
 # dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/timeplex/4plex/20240611_allcols_LF_load_and_run_2p4kV.mzML")
 # dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/4plex/20240611_allcols_LF_load_and_run_2p4kV.features.tsv",sep="\t")
+
+# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.mzML")
+# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.features.tsv",sep="\t")
+
+# dia_spectra  = load_files.SpectrumFile("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep1.mzML")
+# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep1.features.tsv",sep="\t")
+
 
 # diann_report = pd.read_csv("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/Diann/Non_red_alk_500ng_v2_40_2x_orig_E480_RAW/report.tsv",sep="\t")
 # diann_rt = {(re.sub("\(mTRAQ-[nK]-\d\)","",i),j):k for i,j,k in zip(diann_report["Modified.Sequence"],diann_report["Precursor.Charge"],diann_report["RT"])}
@@ -116,15 +121,37 @@ from miscFunctions import feature_list_mz, feature_list_rt, createTolWindows, wi
 # spec_lib = loadSpecLib("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/Diann/Non_red_alk_500ng_v2_40_2x_orig_E480_RAW/NEUlibSearchLibrary_PrositFrags.tsv")
 
 # spec_lib = loadSpecLib("SpectronautUntagChan04.tsv")
+# spec_lib = loadSpecLib("SpectronautUntagChan04_obs.tsv")
 # spec_lib = loadSpecLib("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/Diann/Non_red_alk_500ng_v2_40_2x_orig_E480_RAW/NEUlibSearchLibrary_PrositFrags_iTRAQ.tsv")
+# spec_lib = loadSpecLib("/Volumes/Lab/KMD/DIANN_Searches/PredictedmTRAQ/library.tsv")
 # config.tag = mTRAQ_678
 # librarySpectra = tag_library(spec_lib,config.tag)
-## librarySpectra = iso_f.iso_library(tagSpectra)
+###librarySpectra = iso_f.iso_library(librarySpectra)
 
+# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_500pg_45min_4win.mzML")
+# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_500pg_45min_4win.features.tsv",sep="\t")
+# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_750pg_45min_4win.mzML")
+# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_750pg_45min_4win.features.tsv",sep="\t")
 # dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_250pg_80min_v1-45.mzML")
 # dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_250pg_80min_v1-45.features.tsv",sep="\t")
 # dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_250pg_45min_4win.mzML")
 # dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_250pg_45min_4win.features.tsv",sep="\t")
+
+# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_500pg.mzML")
+# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_500pg.features.tsv",sep="\t")
+# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_5ng.mzML")
+# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_5ng.features.tsv",sep="\t")
+# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_2ng.mzML")
+# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_2ng.features.tsv",sep="\t")
+# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_1ng_1.mzML")
+# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_1ng_1.features.tsv",sep="\t")
+# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_1ng_2.mzML")
+# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_1ng_2.features.tsv",sep="\t")
+# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_500pg.mzML")
+# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_500pg.features.tsv",sep="\t")
+
+
+
 # library = librarySpectra
 # librarySpectra = library
 # diann_lib =  load_tsv_speclib("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/Diann/Non_red_alk_500ng_v2_40_2x_orig_E480_RAW/NEUlibSearchLibrary.tsv")
@@ -289,7 +316,7 @@ def RTfit(dia_spectra,librarySpectra,mz_tol):
 # plt.scatter(diann_report.iRT,diann_report.RT,s=.1)
 
 # plt.scatter(x,spl2(x),s=5)
-
+                            
 
 def twostepfit(x,y,n_knots=2,z=None,k1=1):
     if z is None:
@@ -684,7 +711,7 @@ def fit_gaussian(data,init_std=None):
 ##################################################################################################################################
 
 
-
+                                        
 
 
 
@@ -890,7 +917,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     rt_spl = initstepfit(all_lib_rts,[i[1] for i in all_id_rt],1,z=all_hyper)
     # rt_spl = sgd_fit(output_rts,dia_rt)
     
-    # plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)
+    # plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)#0,c=output_hyper)
     # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
     # plt.xlabel("Library RT");plt.ylabel("Observed RT");
     
@@ -980,7 +1007,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     new_ms1_tol = 4*mz_stddev
     print(f"Optimsed ms1 tolerance: {new_ms1_tol}")
     
-    config.opt_ms1_tol  = new_ms1_tol
+    # config.opt_ms1_tol  = new_ms1_tol
     
     if ms2:
         new_ms2_tol = 4*ms2_stddev
@@ -1248,6 +1275,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     
     output_rts = np.array([max_coeff_rt(i) for i in output])
+    output_hyper = np.array([i[j][18] for i,j in zip(output,max_ids)])
+    output_seqs = np.array([i[j][2:4] for i,j in zip(output,max_ids)])
     all_lib_rts = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
     
     
@@ -1257,7 +1286,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     multiples_idxs = []
     num_multiples = []
     searched = set()
-    for key in id_keys:
+    for key in set(id_keys):
         if key in searched:
             continue
         else:
@@ -1273,33 +1302,54 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     if config.num_timeplex is None:
         timeplex = stats.mode(num_multiples).mode
     else:
-        timeplex = config.timeplex
+        timeplex = config.num_timeplex
         
     # while it may be nice to know, we are assuming that this is not constant and therfore not necessary to know
     time_diffs = np.concatenate([np.diff(i) for i in multiples if len(i)==timeplex])
     # plt.hist(time_diffs,np.linspace(-1,5,40))
     # plt.xlabel("TimePLEX offset")
+    
+    # plt.scatter([i[0] for i in multiples if len(i)==timeplex],time_diffs,s=1)
+    # plt.ylabel("TimePLEX offset")
+    # plt.xlabel("T0 RT")
+    
+    
     # t1 = np.array([[dia_rt[i[0]],output_rts[i[0]]] for i in multiples_idxs])
     # t2 = np.array([[dia_rt[i[1]],output_rts[i[1]]] for i in multiples_idxs])
     
     rt_spls = []
     t_vals = []
+    t_seqs = []
     converted_rts = []
     gaussian_fits = []
     for idx in range(timeplex):
-        t1 = np.array([[dia_rt[i[idx]],output_rts[i[idx]]] for i in multiples_idxs if len(i)==timeplex])
-        rt_spl = threestepfit(t1[:,1],t1[:,0],1)
+        lib_rt_range = [np.percentile(rt_mz[:,0],5),np.percentile(rt_mz[:,0],95)]
+        t1 = np.array([[dia_rt[i[idx]],output_rts[i[idx]],output_hyper[i[idx]]] for i in multiples_idxs if len(i)==timeplex and output_rts[i[idx]]>lib_rt_range[0] and output_rts[i[idx]]<lib_rt_range[1]])
+        t1_s = [output_seqs[i[idx]] for i in multiples_idxs if len(i)==timeplex and output_rts[i[idx]]>lib_rt_range[0] and output_rts[i[idx]]<lib_rt_range[1]]
+        # t1 = np.array([[dia_rt[i[idx]],output_rts[i[idx]],output_hyper[i[idx]]] for i in multiples_idxs if len(i)==timeplex])
+        rt_spl = threestepfit(t1[:,1],t1[:,0],1,t1[:,2])
         rt_spls.append(rt_spl)
         t_vals.append(t1)
+        t_seqs.append(t1_s)
         
         converted_rt = rt_spl(t1[:,1])
         converted_rts.append(converted_rt)
         gaussian_fits.append(fit_gaussian(t1[:,0]-converted_rt))
     
+    # ## just use T0
+    # export_df = pd.DataFrame({"obs_rt":np.concatenate([t_vals[0][:,0],t_vals[1][:,0]]),
+    #                           "lib_rt":np.concatenate([t_vals[0][:,1],t_vals[1][:,1]]),
+    #                           "seq":[i[0] for i in t_seqs[0]]+[i[0] for i in t_seqs[1]],
+    #                           "charge":[i[1] for i in t_seqs[0]]+[i[1] for i in t_seqs[1]]})
+    # export_df.to_csv("/Volumes/Lab/KMD/For_JD/AllFeatures.csv")
+    
     
     ## combined gausian fit
     rt_amplitude, rt_mean, rt_stddev = fit_gaussian(np.concatenate([t[:,0]-c_rt for t,c_rt in zip(t_vals,converted_rts)]))
     
+    ## NB: Only for timeplex=2
+    ## computes differences between the fit lines of both plexes
+    prediction_diffs = np.abs(rt_spls[1](t_vals[1][:,1])-rt_spls[0](t_vals[1][:,1]))
 
     #####  Assume that the mz error is independent of timeplex
     resp_ms1scans = [closest_ms1spec(dia_rt[i], ms1_rt) for i in range(len(dia_rt))]
@@ -1328,7 +1378,36 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
     new_rt_tol = 4*rt_stddev
     print(f"Optimsed RT tolerance: {new_rt_tol}")
+    
+    # ## ensure there is no overlap
+    # obs_rt_range = [min(dia_rt),max(dia_rt)]
+    # ## range that captures middle 90% of library
+    # lib_rt_range = [np.percentile(rt_mz[:,0],5),np.percentile(rt_mz[:,0],95)]
+    # sample_rts = np.linspace(lib_rt_range[0],lib_rt_range[1],100)
+    # # plt.scatter(sample_rts,rt_spls[0](sample_rts),s=1)
+    # # plt.scatter(sample_rts,rt_spls[1](sample_rts),s=1)
+    # ## differnce in 
+    # model_diffs = np.abs(rt_spls[0](sample_rts)-rt_spls[1](sample_rts))
+    # rt_tol_spl = InterpolatedUnivariateSpline(sample_rts,model_diffs)
+    # # plt.plot(rt_spls[0](sample_rts),model_diffs)
+    # # plt.scatter(rt_spls[1](t_vals[1][:,1]),np.ones_like(rt_spls[1](t_vals[1][:,1]))*new_rt_tol*2,s=1)
+    
+    # def rt_tol_fn(obs_rt):
+    #     return np.maximum(np.minimum(new_rt_tol,(rt_tol_spl(lib_rt)/2)*.99),0)
+    
+    # config.rt_tol_spl = rt_tol_fn
+    
+    
+    if new_rt_tol>np.median(time_diffs)/2:
+        print("Warning; Library RTs overlapping")
+        new_rt_tol = (np.min(prediction_diffs)/2)*.99 # ensure no overlap
+        print(f"Reseting tolerance to {new_rt_tol}")
+    
+    
+    
     config.opt_rt_tol = new_rt_tol
+    
+    
     
     # set optimised ms2 tol
     # is_real = ~np.isnan(diffs)
@@ -1366,9 +1445,13 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         ##plot RT alignment
         plt.subplots()
         for idx in range(timeplex):
-            plt.scatter(t_vals[idx][:,1],t_vals[idx][:,0],s=1,c=colours[idx],label=f"T{str(idx)}")
-            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1]),s=1,c=colours[idx])
-        plt.legend()
+            plt.scatter(t_vals[idx][:,1],t_vals[idx][:,0],s=1,c=colours[idx],alpha=.2)
+            plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1]),s=1,label=f"T{str(idx)}",c=colours[idx])
+            plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
+            plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
+            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
+            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
+        plt.legend(markerscale=10)
         plt.xlabel("Library RT")
         plt.ylabel("Observed RT")
         # plt.show()
@@ -1376,15 +1459,48 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         plt.subplots()
         for idx in range(timeplex):
-            plt.hist(t_vals[idx][:,0]-rt_spls[idx](t_vals[idx][:,1]),100,alpha=.5,label=f"T{str(idx)}")
+            vals,bins,_ =plt.hist(t_vals[idx][:,0]-rt_spls[idx](t_vals[idx][:,1]),100,alpha=.5,label=f"T{str(idx)}")
             # rt_stddev = gaussian_fits[idx][-1]
-        plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,50,color="r")
-        plt.text(config.opt_rt_tol,50,np.round(config.opt_rt_tol,2))
+        x_scale = np.diff(plt.xlim())[0]
+        plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
+        plt.text(config.opt_rt_tol+x_scale/100,max(vals)*.8,np.round(config.opt_rt_tol,2))
         plt.legend()  
         plt.xlabel("RT difference")
         plt.ylabel("Frequency") 
         # plt.show()
         plt.savefig(results_folder+"/RTdiff.png",dpi=600,bbox_inches="tight")
+        
+        
+        plt.subplots()
+        for idx in range(timeplex):
+            if idx==1:
+                offset = prediction_diffs
+            else:
+                offset = 0
+            vals,bins,_ =plt.hist(t_vals[idx][:,0]-rt_spls[idx](t_vals[idx][:,1])+offset,100,alpha=.5,label=f"T{str(idx)}")
+            # rt_stddev = gaussian_fits[idx][-1]
+            plt.vlines([-config.opt_rt_tol+np.median(offset),config.opt_rt_tol+np.median(offset)],0,max(vals),color="r")
+        x_scale = np.diff(plt.xlim())[0]
+        # plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
+        plt.text(config.opt_rt_tol+x_scale/100,max(vals)*.8,np.round(config.opt_rt_tol,2))
+        plt.legend()  
+        plt.xlabel("RT difference")
+        plt.ylabel("Frequency") 
+        # plt.show()
+        
+        fig, ax = plt.subplots(nrows = timeplex)        
+        for idx,row in enumerate(ax):
+            row.scatter(t_vals[idx][:,1],t_vals[idx][:,0]-rt_spls[idx](t_vals[idx][:,1]),label="Original_RT",s=.1)
+            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[0,0],color="r",linestyle="--",alpha=.5)
+            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
+            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
+            row.set_ylabel(f"RT Residuals (T{idx})")
+        # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
+        # plt.legend()
+        plt.xlabel("Library RT")
+        # plt.ylabel("RT Residuals")
+        # plt.show()
+        plt.savefig(results_folder+"/RtResidual.png",dpi=600,bbox_inches="tight")
         
         
         ##plot mz alignment
