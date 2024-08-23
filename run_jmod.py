@@ -107,6 +107,14 @@ if __name__=="__main__":
                                  ms2=config.args.ms2_align)
         rt_spls,mz_func = funcs[:2]
         
+        plex_lib = {}
+        rt_mz = []
+        for idx in range(len(rt_spls)):
+            for key in spectrumLibrary:
+                plex_lib[key+(idx,)] = spectrumLibrary[key]
+            rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"])] for i in spectrumLibrary.values()])
+        rt_mz = np.concatenate(rt_mz)
+        spectrumLibrary = plex_lib
         
     else:    
         funcs = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
