@@ -52,7 +52,7 @@ ms1_tol = ms1_ppm*10**(-6)
 
 num_timeplex = None
 
-rt_tol = 10
+rt_tol = 3
 im_tol = 0.5
 im_merge_tol = 0.005
 rt_width = 1.5
@@ -77,7 +77,7 @@ batch_size = 1000
 
 # How many spectra to fit RT alignment
 n_most_intense = 400
-n_most_intense_features = 1000
+n_most_intense_features = 10000
 
 opt_rt_tol = rt_tol # set as default to start
 opt_ms1_tol = ms1_tol 
@@ -101,6 +101,16 @@ unmatched_fit_type = args.unmatched
 
 """
 
+
+score_model = "rf"
+"""
+3 options:
+    rf: Random Forest
+    lda: Linear Discriminant Analyisis
+    xg: XgBoost
+"""
+
+fdr_threshold = 0.01
 
 
 #############################################
