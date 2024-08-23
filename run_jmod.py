@@ -101,7 +101,7 @@ if __name__=="__main__":
         
         
     if config.args.timeplex:
-        funcs = MZRTfit_timeplex(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
+        funcs = MZRTfit_timeplex(DIAspectra, spectrumLibrary, pd.read_csv(feature_path,sep="\t"), config.mz_tol,results_folder=results_folder_path,
                                  ms2=config.args.ms2_align)
         rt_spls,mz_func = funcs[:2]
         
