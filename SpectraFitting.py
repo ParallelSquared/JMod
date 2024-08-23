@@ -358,7 +358,7 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
     
     ### Generate eqivalent Decoy spectra
     if decoy:
-        mass_window_decoy_candidates = [("Decoy_"+i[0],i[1]) for i in mass_window_candidates] 
+        mass_window_decoy_candidates = [("Decoy_"+i[0],*i[1:]) for i in mass_window_candidates] 
         converted_seqs = [change_seq(i[0],config.args.decoy) for i in mass_window_candidates]
         decoy_mz = np.array([convert_prec_mz(i, z=j[1]) for i,j in zip(converted_seqs, mass_window_candidates)])
         if config.args.decoy=="rev": ## this will have the same mz as many correct mathces and therefore a really good ms1 isotope corr
@@ -564,7 +564,10 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
     non_zero_coeffs = [c for c in lib_coefficients if c!=0]
     non_zero_coeffs_idxs = [i for i,c in enumerate(lib_coefficients) if c!=0]
     
-    output = [[0,spec_idx,ms1_spec.scan_num,0,0,prec_mz,prec_rt,*np.zeros(16)]]
+    if config.args.timeplex:
+        output = [[0,spec_idx,ms1_spec.scan_num,0,0,-1,prec_mz,prec_rt,*np.zeros(16)]]
+    else:
+        output = [[0,spec_idx,ms1_spec.scan_num,0,0,prec_mz,prec_rt,*np.zeros(16)]]
     
     if len(non_zero_coeffs)>0:
         lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
@@ -588,16 +591,28 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
                                                                             lib_frag_mz,
                                                                             lib_frag_int,
                                                                             obs_frag_int)]
-            
-        output = [[non_zero_coeffs[i],
-                   spec_idx,
-                   ms1_spec.scan_num,
-                   all_spec_ids[i][0],
-                   all_spec_ids[i][1],
-                   prec_mz,
-                   prec_rt,
-                   *all_features[j],*all_ms2_frags[i]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
         
+        if config.args.timeplex:
+            output = [[non_zero_coeffs[i],
+                       spec_idx,
+                       ms1_spec.scan_num,
+                       all_spec_ids[i][0],
+                       all_spec_ids[i][1],
+                       all_spec_ids[i][2],
+                       prec_mz,
+                       prec_rt,
+                       *all_features[j],*all_ms2_frags[i]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
+        
+        else:
+            output = [[non_zero_coeffs[i],
+                       spec_idx,
+                       ms1_spec.scan_num,
+                       all_spec_ids[i][0],
+                       all_spec_ids[i][1],
+                       prec_mz,
+                       prec_rt,
+                       *all_features[j],*all_ms2_frags[i]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
+            
         # lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
         # output = [[non_zero_coeffs[i],spec_idx,lib_spec_ids[i][0],lib_spec_ids[i][1],prec_mz,prec_rt,*features[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
     
