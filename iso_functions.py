@@ -128,8 +128,11 @@ def gen_isotopes_dict(seq,frags):
         frag_z = int(frag_info[3])
         
         tags = [t for aa in split_frag_seq for t in re.findall("\((.*?)\)",aa)]
-        tag_mz = np.sum([config.tag.mass_dict[t] for t  in tags])/frag_z
-        
+        if config.tag:
+            tag_mz = np.sum([config.tag.mass_dict[t] for t  in tags])/frag_z
+        else:
+            tag_mz = 0
+            
         isotopes = isotopic_variants(frag_comp,
                                      npeaks=config.num_iso_peaks,
                                      charge = frag_z)
