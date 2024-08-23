@@ -1,0 +1,107 @@
+import pandas as pd
+import numpy as np
+
+names = ["coeff","spec_id","Ms1_spec_id",
+         "seq","z","window_mz","rt",
+         "num_lib",
+         "frac_lib_int",
+         "frac_dia_int",
+         "mz_error",
+         "rt_error",
+         "frac_int_matched",
+         "frac_int_pred",
+         "spec_r2",
+         "prec_r2",
+         "prec_r2_uniq",
+         "frac_int_uniq",
+         "frac_int_uniq_pred",
+         "hyperscore",
+         "frac_int_matched_pred",
+         "frac_int_matched_pred_sigcoeff",
+         "cosine",
+         "mz",
+         "frag_names",
+         "frag_errors",
+         "frag_mz",
+         "frag_int",
+         "obs_int"
+         ]
+
+dtypes  = {"coeff":np.float32,
+           "spec_id":np.int32,
+           "Ms1_spec_id":np.int32,
+           "seq":str,
+           "z":np.float32,
+           "window_mz":np.float32,
+           "rt":np.float32,
+            "num_lib":np.float32,
+            "frac_lib_int":np.float32,
+            "frac_dia_int":np.float32,
+            "mz_error":np.float32,
+            "rt_error":np.float32,
+            "frac_int_matched":np.float32,
+            "frac_int_pred":np.float32,
+            "spec_r2":np.float32,
+            "prec_r2":np.float32,
+            "prec_r2_uniq":np.float32,
+            "frac_int_uniq":np.float32,
+            "frac_int_uniq_pred":np.float32,
+            "hyperscore":np.float32,
+            "frac_int_matched_pred":np.float32,
+            "frac_int_matched_pred_sigcoeff":np.float32,
+            "cosine":np.float32,
+            "mz":np.float32,
+            "frag_names":str,
+            "frag_errors":str,
+            "frag_mz":str,
+            "frag_int":str,
+            "obs_int":str
+            }
+
+
+def get_large_prec(file,
+                   condense_output=True,
+                   timeplex=False):
+    
+    col_names = list(names)
+    if timeplex:
+        col_names.insert(5,"time_channel")
+        dtypes["time_channel"] = np.float32 ## !!! need to fix 
+        
+    decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
+    
+    
+    # get dataframe
+    sorted_decoy_coeffs = decoy_coeffs.sort_values(by="coeff")
+    
+    # create dictionay, where value is index of largest coeff for each key (seq,z)
+    
+    # create new dataframe using only these indices
+    if timeplex:
+        # names.insert(5,"time_channel")
+        # dtypes["time_channel"] = np.int32
+        lib_rt = sorted_decoy_coeffs["rt"]-sorted_decoy_coeffs["rt_error"]
+        sorted_decoy_coeffs["lib_rt"] = lib_rt
+        filtered_decoy_coeffs = sorted_decoy_coeffs.drop_duplicates(["seq","z","time_channel"], keep='last')
+        filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
+        filtered_decoy_coeffs = filtered_decoy_coeffs.drop(np.where(filtered_decoy_coeffs.seq=="0")[0])
+        filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
+        large_prec = {(i,j,l):k for i,j,k,l in zip(filtered_decoy_coeffs.seq,
+                                                   filtered_decoy_coeffs.z,
+                                                   filtered_decoy_coeffs.coeff,
+                                                   filtered_decoy_coeffs.time_channel) if k>1}
+    else:
+        filtered_decoy_coeffs = sorted_decoy_coeffs.drop_duplicates(["seq","z"], keep='last')
+        filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
+        filtered_decoy_coeffs = filtered_decoy_coeffs.drop(np.where(filtered_decoy_coeffs.seq=="0")[0])
+        filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
+    
+        large_prec = {(i,j):k for i,j,k in zip(filtered_decoy_coeffs.seq,filtered_decoy_coeffs.z,filtered_decoy_coeffs.coeff) if k>1}
+
+    if condense_output:
+        return large_prec,filtered_decoy_coeffs
+    else:
+        return large_prec,filtered_decoy_coeffs, decoy_coeffs
+
+
+
