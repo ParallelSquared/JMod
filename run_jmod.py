@@ -214,7 +214,7 @@ if __name__=="__main__":
             write_to_csv(long_outputs,decoylib_search_path)
     
     process_data(file=decoylib_search_path,
-                 DIAspectra=DIAspectra,
+                 spectra=DIAspectra,
                  library=spectrumLibrary,
                  mass_tag=mass_tag,
                  timeplex=config.args.timeplex)
