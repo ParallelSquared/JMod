@@ -23,6 +23,7 @@ parser.add_argument('--decoy', default="rev", type=str)
 parser.add_argument('--mTRAQ', action='store_true')
 parser.add_argument('--tag', default="", type=str)
 parser.add_argument('--num_iso', default=2, type=float)
+parser.add_argument('--pp_file', default="", type=str)
 
 
 args = parser.parse_args()

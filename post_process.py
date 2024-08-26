@@ -18,12 +18,14 @@ import argparse
 
 def run():
     
-    parser = argparse.ArgumentParser()
+    #parser = argparse.ArgumentParser()
     
-    parser.add_argument("file")
-    args = vars(parser.parse_args())
+    #parser.add_argument("file")
+    a#rgs = vars(parser.parse_args())
     
-    file = args.file
+    
+    file = config.args.pp_file
+    
     # file = "/Users/kevinmcdonnell/Programming/Data/Results/JD0081_DiannPlexHYE.mspUpdate060824_20ppm_3m_unmatchc_DECOYrev_RT_iso5.0_timeplex/decoylibsearch_coeffs.csv"
     
     results_folder = os.path.dirname(file)
