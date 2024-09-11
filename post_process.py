@@ -21,7 +21,7 @@ def run():
     #parser = argparse.ArgumentParser()
     
     #parser.add_argument("file")
-    a#rgs = vars(parser.parse_args())
+    #args = vars(parser.parse_args())
     
     
     file = config.args.pp_file

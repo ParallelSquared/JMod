@@ -98,9 +98,7 @@ if __name__=="__main__":
     else:
         mass_tag = None
         
-        
-    all_keys = list(spectrumLibrary)
-        
+       
         
     if config.args.timeplex:
         funcs = MZRTfit_timeplex(DIAspectra, spectrumLibrary, pd.read_csv(feature_path,sep="\t"), config.mz_tol,results_folder=results_folder_path,
@@ -122,7 +120,9 @@ if __name__=="__main__":
         rt_spl,mz_func = funcs[:2]
         # rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"])] for i in spectrumLibrary.values()])
-
+   
+    all_keys = list(spectrumLibrary)
+      
     if config.args.ms2_align:
         ms2_func = funcs[2]
         

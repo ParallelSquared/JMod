@@ -80,7 +80,7 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     
     
     ### above is different for mTRAQ label fitting
-    fdc["untag_seq"] = [re.sub("(\(mTRAQ(?:_\d+)?-\d\))?","",peptide) for peptide in fdc["seq"]]
+    fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
     
     if mass_tag:
         group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels(DIAspectra, 
@@ -332,7 +332,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
     
     
-    fdx = ms1_quant(fdc, lp, dc, mass_tag, spectra, mz_ppm, rt_tol)
+    fdx = ms1_quant(fdc, lp, dc, mass_tag, spectra, mz_ppm, rt_tol, timeplex)
     fdx = score_precurors(fdx,config.score_model,config.fdr_threshold,folder=results_folder)
     
     fdx["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdx["untag_seq"],fdx["z"])]
