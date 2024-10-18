@@ -115,6 +115,13 @@ mTRAQ_02468 =   massTag(rules = "nK",
 # print(mTRAQ)
  
 
+diethyl_6plex =       massTag(rules = "nK",
+                        base_mass=56.06260026,
+                        delta = [0.0,2.01255348,4.013419349,6.025972839,8.05021396,10.062767459],#,12.06363332,14.07618681],
+                        channel_names = ["0","2","4","6","8","10"],#,"12","14"],
+                        name = "diethyl_6plex")
+ 
+
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
 def split_frag_name(ion_type):
@@ -267,7 +274,8 @@ def tag_library(library,tag=mTRAQ):
 
 available_tags = {"mTRAQ":mTRAQ,
                   "mTRAQ678":mTRAQ_678,
-                  "mTRAQ02468":mTRAQ_02468}
+                  "mTRAQ02468":mTRAQ_02468,
+                  "diethyl_6plex":diethyl_6plex}
 
 # if config.args.mTRAQ:
 #     config.tag = mTRAQ

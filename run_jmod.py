@@ -69,8 +69,8 @@ if __name__=="__main__":
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
     #results_folder_path = "/Volumes/Lab/KMD/JmodResults/"+results_folder_name
-    #results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
-    results_folder_path = "add/path/here/"
+    results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
+    # results_folder_path = "add/path/here/"
     if not os.path.exists(results_folder_path):
         os.mkdir(results_folder_path)
     
@@ -135,7 +135,16 @@ if __name__=="__main__":
     if config.args.iso:
         spectrumLibrary = iso_f.iso_library(spectrumLibrary)
         
-        
+      
+    print("Creating Decoy Library")
+    decoy_lib = SpecLib.create_decoy_lib(spectrumLibrary,rules="rev")
+    for key in spectrumLibrary:
+        spectrumLibrary[key]["top_n"]=np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
+    for key in decoy_lib:
+        decoy_lib[key]["top_n"]=np.argsort(-decoy_lib[key]["spectrum"][:,1])[:config.top_n]
+    print("... Finished Decoy Library")
+    
+     
     ######################################################
     ### Write search params to file
     param_file = results_folder_path + "/params.txt"
@@ -184,34 +193,66 @@ if __name__=="__main__":
     
     # """
     # ##fit to decoy library
-    start_time = time.time()
-    with multiprocessing.Pool(config.numProc) as p:
+    # start_time = time.time()
+    # with multiprocessing.Pool(config.numProc) as p:
         
-        ## process in batches
-        num_batches = 10
-        num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
+    #     ## process in batches
+    #     num_batches = 10
+    #     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
         
-        for batch_idx in range(num_batches):
-            batch_spectra = spectra_to_fit[batch_idx*num_per_batch:(batch_idx+1)*num_per_batch]
+    #     for batch_idx in range(num_batches):
+    #         batch_spectra = spectra_to_fit[batch_idx*num_per_batch:(batch_idx+1)*num_per_batch]
             
-            outputs = list(tqdm.tqdm(p.imap(partial(fit_to_lib2,
-                                                    library=spectrumLibrary,
-                                                    rt_mz=rt_mz,
-                                                    all_keys=all_keys,
-                                                    dino_features=dino_features,
-                                                    rt_filter=use_rt,
-                                                    rt_tol = config.opt_rt_tol,
-                                                    ms1_tol = config.opt_ms1_tol,
-                                                    ms1_spectra=DIAspectra.ms1scans,
-                                                    return_frags=False,
-                                                    decoy=True),
-                                            batch_spectra,chunksize=config.chunksize),total=len(batch_spectra)))
+    #         outputs = list(tqdm.tqdm(p.imap(partial(fit_to_lib2,
+    #                                                 library=spectrumLibrary,
+    #                                                 rt_mz=rt_mz,
+    #                                                 all_keys=all_keys,
+    #                                                 dino_features=dino_features,
+    #                                                 rt_filter=use_rt,
+    #                                                 rt_tol = config.opt_rt_tol,
+    #                                                 ms1_tol = config.opt_ms1_tol,
+    #                                                 ms1_spectra=DIAspectra.ms1scans,
+    #                                                 return_frags=False,
+    #                                                 decoy=True),
+    #                                         batch_spectra,chunksize=config.chunksize),total=len(batch_spectra)))
     
-            long_outputs = [j for i in outputs for j in i]
-            print(f"Fit {len(spectra_to_fit)} spectra in {round(time.time()-start_time)} sec")
+    #         long_outputs = [j for i in outputs for j in i]
+    #         print(f"Fit {len(spectra_to_fit)} spectra in {round(time.time()-start_time)} sec")
             
-            decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
-            write_to_csv(long_outputs,decoylib_search_path)
+    #         decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
+    #         write_to_csv(long_outputs,decoylib_search_path)
+    
+    
+    num_batches = 10
+    num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
+
+    start_time = time.time()
+    for batch_idx in range(num_batches):
+        
+        batch_spectra = spectra_to_fit[batch_idx*num_per_batch:(batch_idx+1)*num_per_batch]
+        
+        outputs= []
+        for dia_spec in tqdm.tqdm(batch_spectra):
+            
+            outputs.append(fit_to_lib2(dia_spec,
+                            library=spectrumLibrary,
+                            rt_mz=rt_mz,
+                            all_keys=all_keys,
+                            dino_features=None,
+                            rt_filter=True,
+                            rt_tol = config.opt_rt_tol,
+                            ms1_tol = config.opt_ms1_tol,
+                            ms1_spectra=DIAspectra.ms1scans,
+                            return_frags=False,
+                            decoy=True,
+                            decoy_library=decoy_lib))
+            
+        long_outputs = [j for i in outputs for j in i]
+        print(f"Fit {len(spectra_to_fit)} spectra in {round(time.time()-start_time)} sec")
+        
+        decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
+        write_to_csv(long_outputs,decoylib_search_path)
+        
     
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,

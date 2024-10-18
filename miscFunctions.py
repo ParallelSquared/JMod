@@ -498,3 +498,106 @@ def ordered_frags(frag_dict):
     order = np.argsort(peaks[:,0])
     frags = list(frag_dict.keys())
     return {frags[i]:peaks[i] for i in order}
+
+
+
+
+def convert_mq_frag(frg):
+    c = re.findall("\((\d)\+\)",frg)
+    if len(c)>0:
+        charge= c[0]
+        frg = re.sub(f"\({c[0]}\+\)","",frg)
+    else:
+        charge = "1"
+    # charge = "1" if len(c)==0 else c[0]
+        
+    return frg+"_"+charge
+
+
+def SpectralAngle(x,y):
+    x /= np.sqrt(np.sum(np.power(x,2)))
+    y /= np.sqrt(np.sum(np.power(y,2)))
+    
+    return 1- 2*(np.arccos(np.dot(x,y))/np.pi)
+
+
+def cosim(x,y):
+    assert len(x)==len(y)
+    x = np.squeeze(x)
+    y = np.squeeze(y)
+    
+    return np.dot(x,y)/(np.sqrt(np.sum(np.power(x,2)))*np.sqrt(np.sum(np.power(y,2))))
+
+
+
+
+### source: https://stackoverflow.com/questions/62817623/improve-speed-of-scipy-pearson-correlation-for-many-pairwise-calculations
+from scipy.special import betainc
+
+# import cupy as xp
+# from cupyx.scipy.special import betainc
+
+def pearsonr2(x, y):
+    # Assumes inputs are DataFrames and computation is to be performed
+    # pairwise between columns. We convert to arrays and reshape so calculation
+    # is performed according to normal broadcasting rules along the last axis.
+    x = np.asarray(x).T[:, np.newaxis, :]
+    y = np.asarray(y).T
+    n = x.shape[-1]
+
+    # Compute Pearson correlation coefficient. We can't use `cov` or `corrcoef`
+    # because they want to compute everything pairwise between rows of a
+    # stacked x and y.
+    xm = x.mean(axis=-1, keepdims=True)
+    ym = y.mean(axis=-1, keepdims=True)
+    cov = np.sum((x - xm) * (y - ym), axis=-1)/(n-1)
+    sx = np.std(x, ddof=1, axis=-1)
+    sy = np.std(y, ddof=1, axis=-1)
+    rho = cov/(sx * sy)
+
+    # Compute the two-sided p-values. See documentation of scipy.stats.pearsonr.
+    ab = n/2 - 1
+    x = (abs(rho) + 1)/2
+    p = 2*(1-betainc(ab, ab, x))
+    return rho, p
+
+class p_result:
+    def __init__(self,r_sq,p=0):
+        self.statistic = r_sq
+        self.pvalue=p
+    def __repr__(self):
+        return f"PearsonRResult(statistic={self.statistic}, pvalue={self.pvalue})"
+## source https://cancerdatascience.org/blog/posts/pearson-correlation/
+def np_pearson_cor(x, y):
+    assert len(x)==len(y)
+    n=len(x)
+    x_np = np.array(x)
+    y_np = np.array(y)
+    xv = x_np - x_np.mean(axis=0)
+    yv = y_np - y_np.mean(axis=0)
+    xvss = (xv * xv).sum(axis=0)
+    yvss = (yv * yv).sum(axis=0)
+    
+    if xvss==0 or yvss==0:
+        return p_result(np.nan,1)
+    result = np.matmul(xv.transpose(), yv) / np.sqrt(np.multiply(xvss, yvss))
+    
+    ## from scipy## TOO SLOW
+    ab = n/2 - 1
+    # dist = stats.beta(ab, ab, loc=-1, scale=2)
+    # p = 2*dist.cdf(-abs(result))
+    p= 2*(1-betainc(ab, ab, (abs(result) + 1)/2)) 
+    
+    # bound the values to -1 to 1 in the event of precision issues
+    return p_result(np.maximum(np.minimum(result, 1.0), -1.0),p)
+
+
+
+def string_floats(arr,delim=";"):
+    assert type(delim)==str
+    return delim.join(map(str,arr))
+
+def unstring_floats(string,delim=";"):
+    assert type(string)==str
+    assert type(delim)==str
+    return np.array([*map(float,string.split(delim))])

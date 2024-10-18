@@ -11,6 +11,7 @@ import cProfile
 import struct
 import zlib
 import pickle
+import tqdm
 from miscFunctions import split_frag_name, frag_to_peak, specific_frags
 # load in spec library (tsv)
 # file = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HeLa+K562-1prcGlobProt-5prcLocPep-PeakViewConverted.txt"
@@ -317,6 +318,35 @@ def loadSpecLib(lib_file):
     return spec_lib
     
 
+import copy
+import config
+from miscFunctions import change_seq, convert_frags, frag_to_peak
+from iso_functions import gen_isotopes_dict
+
+
+def create_decoy_lib(library,rules):
+    ## keep keys the same but change seq, mz and frags
+    
+    decoy_lib =copy.deepcopy(library) # create copy so we do not change the original
+    
+    for key in tqdm.tqdm(decoy_lib):
+        entry = decoy_lib[key]
+        
+        entry["seq"] = change_seq(key[0],rules)
+        if config.args.decoy=="rev": ## this will have the same mz as many correct mathces and therefore a really good ms1 isotope corr
+            entry["prec_mz"] -= config.decoy_mz_offset
+            
+        entry["frags"] = convert_frags(key[0], entry["frags"],rules)
+        
+        if config.args.iso:
+            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(key[0], entry["frags"])
+        else:
+            entry["spectrum"], entry["ordered_frags"] = frag_to_peak(entry["frags"],return_frags=True)
+            
+            
+    return decoy_lib
+            
+            
 # spec_lib = loadSpecLib("/Volumes/Lab/KMD/SpectralLibraries/8ng_LF_24nce.tsv")
 
 def write_speclib_tsv(library,filename):

@@ -30,293 +30,11 @@ import dill
 import itertools 
 import h5py
 # import alphatims.bruker
-from mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468
+from mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex
 
 from miscFunctions import feature_list_mz, feature_list_rt, createTolWindows, within_tol,moving_average, \
     closest_ms1spec, closest_peak_diff,split_frag_name
-
-
-# spectra = spectra
-# spec_lib=spec_lib
-# n=400
-
-# stop
-
-# mz_ppm = 10
-# mz_tol = mz_ppm*10**(-6)
-
-# all_spectra = spectra.ms2scans
-# dia_data = [[spec.peak_list().T,spec.prec_mz,float(spec.RT),idx] for idx,spec in enumerate(all_spectra)]
-# dia_data = [[dia_data[i][0],dia_data[i][1],dia_data[i][2],dia_data[i][3],float(dia_data[i+1][1]) - float(dia_data[i][1])] 
-#             for i in range(len(dia_data)-1)]
-
-# max_window_precmz = max([i[1] for i in dia_data])+max([i[4] for i in dia_data])
-# max_window_offset =  max([i[4] for i in dia_data])
-
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/Quant/CC20170118_SAM_Specter_Ecolidigest_DIA_01.mzML")
-# librarySpectra = load_tsv_lib("/Volumes/Lab/Quant/SpecLibs/EcoliSpPrositLib.msp.tsv")
-# # librarySpectra = load_tsv_lib("/Volumes/Lab/Quant/SpecLibs/EcoliSpPrositLib.msp.tsv")
-# dino_features = pd.read_csv("/Volumes/Lab/Quant/CC20170118_SAM_Specter_Ecolidigest_DIA_01.features.tsv",sep="\t")
-
-
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/Quant/ThermoTest2/K562_8000pg_1_ms2_bgrad.mzML")
-# # librarySpectra = load_tsv_lib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_prosit.msp.tsv")
-# dino_features = pd.read_csv("/Volumes/Lab/Quant/ThermoTest2/K562_8000pg_1_ms2_bgrad.features.tsv",sep="\t")
-
-
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/Quant/windows/K562_8000pg_15windows.mzML")
-# # librarySpectra = load_tsv_lib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_prosit.msp.tsv")
-# dino_features = pd.read_csv("/Volumes/Lab/Quant/windows/K562_8000pg_15windows.features.tsv",sep="\t")
-
-
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/Windows/K562_8000pg_8windows.mzML")
-# librarySpectra = loadSpecLib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/tims_library_dec_23_PrositFrags.tsv")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/Data/Windows/K562_8000pg_8windows.features.tsv",sep="\t")
-
-# dia_spectra = load_files.SpectrumFile("/Users/kevinmcdonnell/Programming/Data/2023_08_28_LF-DIA_E480.mzML")
-# # librarySpectra = load_tsv_lib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_prosit.msp.tsv")
-# dino_features = pd.read_csv("/Users/kevinmcdonnell/Programming/Data/2023_08_28_LF-DIA_E480.features.tsv",sep="\t")
-
-# dia_spectra = load_files.SpectrumFile("/Users/kevinmcdonnell/Programming/Data/Neo_timePlex_loadcol2_K562_col1_K562.mzML")
-# dino_features = pd.read_csv("/Users/kevinmcdonnell/Programming/Data/Neo_timePlex_loadcol2_K562_col1_K562.features.tsv",sep="\t")
-
-# dia_spectra = load_files.SpectrumFile("/Volumes/Lab/KMD/timeplex/02062024_col3_LOAD_RUN123_50ng_re2.mzML")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/02062024_col3_LOAD_RUN123_50ng_re2.features.tsv",sep="\t")
-
-# dia_spectra = load_files.SpectrumFile("/Volumes/Lab/KMD/2023-11-21_timeplex_loadC3_RUN_20240109152104.mzML")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/2023-11-21_timeplex_loadC3_RUN_20240109152104.features.tsv",sep="\t")
-
-# dia_spectra = load_files.SpectrumFile("/Volumes/Lab/KMD/timeplex/2023-01_16_timeplex_loadC3_RUN_re.mzML")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/2023-01_16_timeplex_loadC3_RUN_re.features.tsv",sep="\t")
-
-# dia_spectra = load_files.SpectrumFile("/Volumes/Lab/KMD/timeplex/2023-01_16_timeplex_loadC3_RUN_re_closer.mzML")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/2023-01_16_timeplex_loadC3_RUN_re_closer.features.tsv",sep="\t")
-
-# dia_spectra = load_files.SpectrumFile("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/2024_02_23_MY_pDIA_Non_Red_Alk_500ng_v2-40_2x_orig_E480.mzML")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/2024_02_23_MY_pDIA_Non_Red_Alk_500ng_v2-40_2x_orig_E480.features.tsv",sep="\t")
-
-# dia_spectra = load_files.SpectrumFile("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/2024_02_23_MY_pDIA_Non_Red_Alk_500ng_v1-25_1x_orig_E480.mzML")
-
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-03-21_Sciex_3-plex_678_100ng.mzML")
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-03-21_Sciex_5-plex_01458_100ng.mzML")
-
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/timeplex/4plex/20240611_allcols_LF_load_and_run_2p4kV.mzML")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/4plex/20240611_allcols_LF_load_and_run_2p4kV.features.tsv",sep="\t")
-
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.mzML")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep2.features.tsv",sep="\t")
-
-# dia_spectra  = load_files.SpectrumFile("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep1.mzML")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/timeplex/JD_timeplex_2col_IO_25cm_4ngeachLF_MS_andAux_PS_re_perfectly_equaldistance_45minGrad_rep1.features.tsv",sep="\t")
-
-
-# diann_report = pd.read_csv("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/Diann/Non_red_alk_500ng_v2_40_2x_orig_E480_RAW/report.tsv",sep="\t")
-# diann_rt = {(re.sub("\(mTRAQ-[nK]-\d\)","",i),j):k for i,j,k in zip(diann_report["Modified.Sequence"],diann_report["Precursor.Charge"],diann_report["RT"])}
-# for i in spec_lib:
-#     spec_lib[i]["iRT"] = diann_rt[i]
-# librarySpectra = loadSpecLib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/tims_library_dec_23_PrositFrags.tsv")
-# dia_spectra = load_files.SpectrumFile("/Volumes/Lab/KMD/Data/2024-02-05_QC_plex_DIA_e480.mzMl")
-# dino_features = pd.read_csv("/Volumes/Lab/KMD/Data/2024-02-05_QC_plex_DIA_e480.features.tsv",sep="\t")
-# # spec_lib = loadSpecLib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/tims_library_dec_23_PrositFrags.tsv")
-# spec_lib = loadSpecLib("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/Diann/Non_red_alk_500ng_v2_40_2x_orig_E480_RAW/NEUlibSearchLibrary_PrositFrags.tsv")
-
-# spec_lib = loadSpecLib("SpectronautUntagChan04.tsv")
-# spec_lib = loadSpecLib("SpectronautUntagChan04_obs.tsv")
-# spec_lib = loadSpecLib("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/Diann/Non_red_alk_500ng_v2_40_2x_orig_E480_RAW/NEUlibSearchLibrary_PrositFrags_iTRAQ.tsv")
-# spec_lib = loadSpecLib("/Volumes/Lab/KMD/DIANN_Searches/PredictedmTRAQ/library.tsv")
-# config.tag = mTRAQ_678
-# librarySpectra = tag_library(spec_lib,config.tag)
-###librarySpectra = iso_f.iso_library(librarySpectra)
-
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_500pg_45min_4win.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_500pg_45min_4win.features.tsv",sep="\t")
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_750pg_45min_4win.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_750pg_45min_4win.features.tsv",sep="\t")
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_250pg_80min_v1-45.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_250pg_80min_v1-45.features.tsv",sep="\t")
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_250pg_45min_4win.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-02_SS_1Da-3plex_250pg_45min_4win.features.tsv",sep="\t")
-
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_500pg.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_500pg.features.tsv",sep="\t")
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_5ng.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_5ng.features.tsv",sep="\t")
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_2ng.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_2ng.features.tsv",sep="\t")
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_1ng_1.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_1ng_1.features.tsv",sep="\t")
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_1ng_2.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_1ng_2.features.tsv",sep="\t")
-# dia_spectra = load_files.loadSpectra("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_500pg.mzML")
-# dino_features =         pd.read_csv("/Volumes/Lab/KMD/Data/9plex/2024-07-12_SS_1Da-3plex_QCmeth_500pg.features.tsv",sep="\t")
-
-
-
-# library = librarySpectra
-# librarySpectra = library
-# diann_lib =  load_tsv_speclib("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/Diann/Non_red_alk_500ng_v2_40_2x_orig_E480_RAW/NEUlibSearchLibrary.tsv")
-# diann_lib = load_tsv_speclib("/Volumes/Lab/KMD/Data/mTRAQ_Bulk/Diann/Non_red_alk_500ng_v2_40_2x_orig_E480_RAW/NEUlibSearchLibrary_PrositFilter.tsv")
-# librarySpectra=diann_lib
-
-# stripped_lib = {(library[i]["seq"],i[1]):library[i] for i in library if "(mTRAQ-0)" in i[0]}
-# stripped_diann = {(diann_lib[i]["seq"],i[1]):diann_lib[i] for i in diann_lib}
-# dino_features =pd.read_csv("/Volumes/Lab/KMD/timeplex/2023-01_18_CytochromeC_col3_load_andRUN_8ngLFHuman.features.tsv",sep="\t")
-# # ## e240 with low ms1 error
-# dia_spectra = load_files.SpectrumFile("/Users/kevinmcdonnell/Programming/Data/2023_10_02_QC_LF_DIA_2_E240.mzML")
-# dino_features = pd.read_csv("/Users/kevinmcdonnell/Programming/Data/2023_10_02_QC_LF_DIA_2_E240.features.tsv",sep="\t")
-
-# files = ["/Users/kevinmcdonnell/Programming/Data/2023_10_02_QC_LF_DIA_2_E240.features.tsv",
-#          "/Users/kevinmcdonnell/Programming/Data/Neo_timePlex_loadcol2_K562_col1_K562.features.tsv",
-#          "/Volumes/Lab/KMD/2023-11-21_timeplex_loadC3_RUN_20240109152104.features.tsv"]
-# for idx,file in enumerate(files):
-#     dino_features = pd.read_csv(file,sep="\t")
-#     # bins = np.linspace(3,10,30)
-#     # plt.hist(np.log10(dino_features.intensitySum),bins,alpha=.5,label=f"{idx} plex")
-#     bins = np.linspace(-10,10,30)
-#     plt.hist(dino_features.fwhm,bins,alpha=.5,label=f"{idx+1} plex")
-# plt.legend()
-# librarySpectra = load_tsv_speclib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositFrags.tsv")
-# librarySpectra = load_tsv_speclib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/Human_Bruker_Library_PrositFrags.tsv")
-
-### timsTOF 
-"""
-librarySpectra = load_tsv_speclib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/tims_library_dec_23.tsv")
-
-bruker_d_folder_name = "/Users/kevinmcdonnell/Programming/Data/2023_10_23_QC_LF_DIA_timsTOF_Slot2-20_1_893.d/"
-data = alphatims.bruker.TimsTOF(bruker_d_folder_name)
-
-file = "/Users/kevinmcdonnell/Programming/Python/2023_10_23_QC_LF_DIA_timsTOF_cfgfl_yaml_output_windows.hdf"
-hdf_root = h5py.File(file, "r")
-
-df = pd.DataFrame()
-for key in hdf_root["clustering"]["as_dataframe"].keys():
-    df[key]= hdf_root["clustering"]["as_dataframe"][key]
-
-fragment_indices = hdf_root["ms2"]["fragments"]["cluster_pointers"]
-fragment_clusters = df.iloc[fragment_indices]
-
-fragment_clusters.loc[:,"quad_low_mz_values"] = np.array(data.as_dataframe(np.array(fragment_clusters.apex_pointer,dtype=int)).quad_low_mz_values)
-fragment_clusters.loc[:,"quad_high_mz_values"] = np.array(data.as_dataframe(np.array(fragment_clusters.apex_pointer,dtype=int)).quad_high_mz_values)
-
-
-#"""
-
-
-# key_mz = {i:librarySpectra[i]["prec_mz"] for i in librarySpectra}
-# diann_key_mz = {i:diannLibrarySpectra[i]["prec_mz"] for i in diannLibrarySpectra}
-
-# shared_keys = set(key_mz).intersection(set(diann_key_mz))
-
-# dia_spectra = DIAspectra
-# librarySpectra=spectrumLibrary#spec_lib#
-"""
-def RTfit(dia_spectra,librarySpectra,mz_tol):
-    
-    print(f"Fitting the {config.n_most_intense} most intense spectra")
-        
-    totalIC = np.array([np.sum(i.intens) for i in dia_spectra])
-    
-    top_n = np.argsort(-totalIC)[:config.n_most_intense]
-    all_keys = list(librarySpectra)
-    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
-    
-    # input_data = [(idx, 
-    #                 dia_spectra[idx],
-    #                 librarySpectra,
-    #                 mz_tol,
-    #                 22.013000488281023,
-    #                 10,
-    #                 5) for idx in top_n]
-    
-    output_rts =[]
-    dia_rt = []
-    lib_rt = []
-    top_n_spectra = [dia_spectra[i] for i in top_n]
-    with multiprocessing.Pool(config.numProc) as p:
-        fit_outputs = list(tqdm.tqdm(p.imap(partial(fit_to_lib,
-                                                    library=librarySpectra,
-                                                    rt_mz=rt_mz,
-                                                    all_keys=all_keys,
-                                                    dino_features=None,
-                                                    rt_filter=False),
-                                            top_n_spectra,chunksize=len(top_n_spectra)//config.numProc),total=len(top_n_spectra)))
-        
-    output=[]
-    for idx,i in enumerate(top_n):
-        # fit_output = fit_to_lib(inputs)
-        fit_output = fit_to_lib(dia_spectra[i],
-                                library=librarySpectra,
-                                rt_mz=rt_mz,
-                                all_keys=all_keys,
-                                dino_features=None,
-                                rt_filter=False)
-    # for idx,fit_output in enumerate(fit_outputs):    
-        if fit_output[0][0]!=0:
-            lib_rt.append([librarySpectra[(i[2],i[3])]["iRT"] for i in fit_output])
-            dia_rt.append(top_n_spectra[idx].RT)
-            output.append(fit_output)
-            max_id = np.argmax([i[0] for i in fit_output])
-            
-    def max_coeff_rt(outputs):
-        max_id = np.argmax([i[0] for i in outputs])
-        # if outputs[0][0]==0:
-        #     return np.nan
-        # else:
-        return librarySpectra[(outputs[max_id][2],outputs[max_id][3])]["iRT"]
-    
-    
-    output_rts = np.array([max_coeff_rt(i) for i in output])
-    
-    ## 2 step fitting
-    sorted_idxs = np.argsort(output_rts)
-    sort_rts = np.array(output_rts)[sorted_idxs]
-    sort_dia_rts = np.array(dia_rt)[sorted_idxs]
-    knots = quantiles(sort_rts,n=2)
-    spl = spline(sort_rts,sort_dia_rts,knots)
-    
-    # find outliers and remove
-    _bool = abs(spl(sort_rts)-sort_dia_rts)<20
-    spl2 = spline(sort_rts[_bool],sort_dia_rts[_bool],knots)
-    
-    plt.scatter(sort_rts,sort_dia_rts)
-    plt.scatter(sort_rts,spl(sort_rts))
-    # plt.show()
-    
-    return spl2
-"""
-# p = np.poly1d(np.polyfit(dia_rt,output_rts,6))
-# plt.scatter(diann_report.RT,diann_report.iRT,s=.1)
-# plt.scatter(dia_rt,p(dia_rt))
-# plt.scatter(dia_rt,output_rts,s=5)
-
-# # ##opp way around
-# p = np.poly1d(np.polyfit(output_rts,dia_rt,6))
-# plt.scatter(diann_report.iRT,diann_report.RT,s=.1)
-
-# plt.scatter(x,spl2(x),s=5)
-# plt.scatter(output_rts,p2(output_rts))
-# plt.scatter(output_rts,dia_rt,s=5)
-
-# x = np.linspace(min(output_rts),max(output_rts),100)
-# plt.scatter(x-10,p2(x),s=5)
-# plt.scatter(x+10,p2(x),s=5)
-
-# sorted_idxs = np.argsort(output_rts)
-# sort_rts = np.array(output_rts)[sorted_idxs]
-# knots = quantiles(sort_rts,n=2)
-# spl = spline(sort_rts,np.array(dia_rt)[sorted_idxs],knots)
-
-# _bool = abs(spl(sort_rts)-np.array(dia_rt)[sorted_idxs])<20
-# spl2 = spline(sort_rts[_bool],np.array(dia_rt)[sorted_idxs][_bool],knots)
-
-# # plt.scatter(sort_rts,np.array(dia_rt)[sorted_idxs])
-# # plt.scatter(sort_rts,spl(sort_rts))
-# # plt.scatter(sort_rts[_bool],np.array(dia_rt)[sorted_idxs][_bool])
-
-# plt.scatter(diann_report.iRT,diann_report.RT,s=.1)
-
-# plt.scatter(x,spl2(x),s=5)
-                            
+                    
 
 def twostepfit(x,y,n_knots=2,z=None,k1=1):
     if z is None:
@@ -459,8 +177,11 @@ def initstepfit(x,y,n_knots=2,z=None,k1=1):
     
     return spl3
 
-# from scipy.interpolate import interp1d
-# import statsmodels.api as sm
+
+from scipy.interpolate import interp1d
+import statsmodels.api as sm
+
+
 # x = output_rts
 # y = dia_rt
 
@@ -470,31 +191,20 @@ def initstepfit(x,y,n_knots=2,z=None,k1=1):
 # x = all_lib_rts
 # y = [i[1] for i in all_id_rt]
 
-# plt.scatter(x,y,s=1)
+def lowess_fit(x,y,frac=.2):
 
-# lowess = sm.nonparametric.lowess(y, x, frac=.75)
-
-# # unpack the lowess smoothed points to their values
-# lowess_x = list(zip(*lowess))[0]
-# lowess_y = list(zip(*lowess))[1]
-
-# # run scipy's interpolation. There is also extrapolation I believe
-# f = interp1d(lowess_x, lowess_y, bounds_error=False)
-
-# xnew = [i/10. for i in range(800)]
-# xnew = np.linspace(min(x),max(x),100)
-
-# # this this generate y values for our xvalues by our interpolator
-# # it will MISS values outsite of the x window (less than 3, greater than 33)
-# # There might be a better approach, but you can run a for loop
-# #and if the value is out of the range, use f(min(lowess_x)) or f(max(lowess_x))
-# ynew = f(xnew)
-
-
-# plt.scatter(x, y,s=1)
-# # plt.plot(lowess_x, lowess_y, '*')
-# plt.plot(xnew, ynew, '-')
-
+    # plt.scatter(x,y,s=1)
+    
+    lowess = sm.nonparametric.lowess(y, x, frac=frac)
+    
+    # unpack the lowess smoothed points to their values
+    lowess_x = list(zip(*lowess))[0]
+    lowess_y = list(zip(*lowess))[1]
+    
+    # run scipy's interpolation. There is also extrapolation I believe
+    f = interp1d(lowess_x, lowess_y, bounds_error=False,fill_value=(min(lowess_y),max(lowess_y)))
+    
+    return f
 
 def get_diff(mz,peaks,window,tol):
     
@@ -916,7 +626,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # rt_spl = initstepfit(all_lib_rts,[i[1] for i in all_id_rt],1,z=np.log10(all_coeff))
     rt_spl = initstepfit(all_lib_rts,[i[1] for i in all_id_rt],1,z=all_hyper)
     # rt_spl = sgd_fit(output_rts,dia_rt)
-    
+    if config.tag.name=="diethyl_6plex":
+        rt_spl = lowess_fit(all_lib_rts,[i[1] for i in all_id_rt])
     # plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)#0,c=output_hyper)
     # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
     # plt.xlabel("Library RT");plt.ylabel("Observed RT");
