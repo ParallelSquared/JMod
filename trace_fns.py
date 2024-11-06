@@ -591,7 +591,7 @@ def get_other_channels(prec,mz,tag):
     return channel_dict
 
 # @profile
-def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=None):
+def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=None,timeplex=False):
     print("Fitting channels together")
     num_iso = 3
     
@@ -618,8 +618,16 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
     ## mapping of ms2 scan nums to ms1 scan nums
     ms2_ms1_scan_map = {spec.scan_num:resp_ms1scans[i] for i,spec in enumerate(all_spectra.ms2scans)}
 
-    grouped_decoy_coeffs = decoy_coeffs.groupby(["seq","z"])
-    fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z"])
+    
+    if timeplex:
+        grouped_decoy_coeffs = decoy_coeffs.groupby(["seq","z","time_channel"])
+        fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z","time_channel"])
+    else:
+        grouped_decoy_coeffs = decoy_coeffs.groupby(["seq","z"])
+        fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z"])
+        
+    # grouped_decoy_coeffs = decoy_coeffs.groupby(["seq","z"])
+    # fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z"])
 
     all_ms1= []
     all_coeff = []
@@ -669,14 +677,26 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         idx_of_max =all_scans.index(top_ms1_spec_idx)
         scans_each_side = np.array(all_scans)[np.arange(max(0,idx_of_max-window_half_width),min(len(all_scans),idx_of_max+window_half_width+1))]
         
-        ## scans where coeff>1
-        coeff_scans = decoy_coeffs["Ms1_spec_id"][np.logical_and(decoy_coeffs["untag_seq"]==key[0],decoy_coeffs["z"]==key[1])]
         
-        ## join
-        all_scans = sorted(list(set(list(scans_each_side)+list(coeff_scans))))
-        
-        ## scans of max of each
-        largest_coeff_scans = list(filtered_decoy_coeffs["Ms1_spec_id"][np.logical_and(filtered_decoy_coeffs["untag_seq"]==key[0],filtered_decoy_coeffs["z"]==key[1])])
+        if timeplex:
+            ## scans where coeff>1
+            coeff_scans = decoy_coeffs["Ms1_spec_id"][np.logical_and.reduce((decoy_coeffs["untag_seq"]==key[0],
+                                                                             decoy_coeffs["z"]==key[1],
+                                                                             decoy_coeffs["time_channel"]==key[2]))]
+            ## join
+            # all_scans = sorted(list(set(list(scans_each_side)+list(coeff_scans))))
+            ## scans of max of each
+            largest_coeff_scans = list(filtered_decoy_coeffs["Ms1_spec_id"][np.logical_and.reduce((filtered_decoy_coeffs["untag_seq"]==key[0],
+                                                                                                  filtered_decoy_coeffs["z"]==key[1],
+                                                                                                  filtered_decoy_coeffs["time_channel"]==key[2]))])
+            
+        else:
+            ## scans where coeff>1
+            coeff_scans = decoy_coeffs["Ms1_spec_id"][np.logical_and(decoy_coeffs["untag_seq"]==key[0],decoy_coeffs["z"]==key[1])] 
+            ## join
+            # all_scans = sorted(list(set(list(scans_each_side)+list(coeff_scans))))
+            ## scans of max of each
+            largest_coeff_scans = list(filtered_decoy_coeffs["Ms1_spec_id"][np.logical_and(filtered_decoy_coeffs["untag_seq"]==key[0],filtered_decoy_coeffs["z"]==key[1])])
         
         ## max and min of this list
         max_scan, min_scan = max(largest_coeff_scans), min(largest_coeff_scans)
