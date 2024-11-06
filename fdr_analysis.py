@@ -79,10 +79,10 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     all_keys = list(lp)
     
     
-    ### above is different for mTRAQ label fitting
-    fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
+    
     
     if mass_tag:
+        fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
         group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels(DIAspectra, 
                                                                                                                         fdc, 
                                                                                                                         dc, 
@@ -109,7 +109,7 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     
     
     else:
-        
+        fdc["untag_seq"] = fdc["seq"]
         p_corrs, ms1_traces, ms2_traces, iso_ratios = ms1_cor(DIAspectra, 
                                                                 fdc, 
                                                                 dc, 
