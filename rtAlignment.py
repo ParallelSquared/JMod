@@ -626,7 +626,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # rt_spl = initstepfit(all_lib_rts,[i[1] for i in all_id_rt],1,z=np.log10(all_coeff))
     rt_spl = initstepfit(all_lib_rts,[i[1] for i in all_id_rt],1,z=all_hyper)
     # rt_spl = sgd_fit(output_rts,dia_rt)
-    if config.tag.name=="diethyl_6plex":
+    if config.tag is not None and "diethyl" in config.tag.name:
         rt_spl = lowess_fit(all_lib_rts,[i[1] for i in all_id_rt])
     # plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)#0,c=output_hyper)
     # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
