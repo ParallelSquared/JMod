@@ -13,10 +13,12 @@ from matplotlib_venn import venn2, venn3
 import os
 from scipy import stats
 
-from miscFunctions import  closest_ms1spec, curve_fit, gaussian
+from miscFunctions import  closest_ms1spec, curve_fit, gaussian, createTolWindows,np_pearson_cor
 from pyteomics import mass
 from read_output import get_large_prec
 
+from load_files import Spectrum, SpectrumFile
+    
 import config 
 
 import dill
@@ -26,14 +28,17 @@ import tqdm
 import iso_functions as iso
 import warnings
 
-from scipy import sparse
+from scipy.interpolate import interp1d
+from scipy import sparse, optimize
+from scipy.signal import find_peaks
 import sparse_nnls
 import Jplot as jp
 
+import multiprocessing
 
-from scipy.interpolate import interp1d
-from scipy import sparse, optimize
-from scipy.special import betainc
+from functools import partial
+
+import line_profiler
 
 def moving_average(x, w):
     return np.convolve(x, np.ones(w), 'same') / w
@@ -52,6 +57,17 @@ linestyles = ["solid", "dotted", "dashed", "dashdot"]
 
 min_int = 1e-3
 
+
+def moving_average(x, w):
+    return np.convolve(x, np.ones(w), 'same') / w
+
+def most_dense_idx(x):
+    arr = np.array(list(x))
+    w=3
+    kernel = np.ones(w)*.99
+    kernel[int(np.floor(w/2))]=1
+    return np.argmax(np.convolve(arr, kernel, 'same') / w)
+
 def get_trace_int_old(spec,mz,atol=0,rtol=0,base=min_int):
     closest_idx = np.argmin(np.abs(spec.mz-mz))
     # order_idx = np.searchsorted(spec.mz,mz)
@@ -63,39 +79,41 @@ def get_trace_int_old(spec,mz,atol=0,rtol=0,base=min_int):
     else:
         return base
     
+# def find_peaks(x):
+#     arr = np.array(list(x))
+#     max_idx = most_dense_idx(arr)
     
-class p_result:
-    def __init__(self,r_sq,p=0):
-        self.statistic = r_sq
-        self.pvalue=p
-    def __repr__(self):
-        return f"PearsonRResult(statistic={self.statistic}, pvalue={self.pvalue})"
+#     ### get front slope
+#     idx = max_idx
+#     val = arr[max_idx]
+#     while idx>0:
+#         new_val = arr[idx-1]
+#         if new_val>=val:
+#             break
+#         else:
+#             val=new_val
+#             idx-=1
+#     start_idx = idx
     
-## source https://cancerdatascience.org/blog/posts/pearson-correlation/
-def np_pearson_cor(x, y):
-    assert len(x)==len(y)
-    n=len(x)
-    x_np = np.array(x)
-    y_np = np.array(y)
-    xv = x_np - x_np.mean(axis=0)
-    yv = y_np - y_np.mean(axis=0)
-    xvss = (xv * xv).sum(axis=0)
-    yvss = (yv * yv).sum(axis=0)
+#     ### get back slope
+#     idx = max_idx
+#     val = arr[max_idx]
+#     while idx<len(arr)-1:
+#         new_val = arr[idx+1]
+#         if new_val>=val:
+#             break
+#         else:
+#             val=new_val
+#             idx+=1
+#     end_idx = idx
     
-    if xvss==0 or yvss==0:
-        return p_result(np.nan,1)
-    result = np.matmul(xv.transpose(), yv) / np.sqrt(np.multiply(xvss, yvss))
-    
-    ## from scipy## TOO SLOW
-    ab = n/2 - 1
-    # dist = stats.beta(ab, ab, loc=-1, scale=2)
-    # p = 2*dist.cdf(-abs(result))
-    p= 2*(1-betainc(ab, ab, (abs(result) + 1)/2)) 
-    
-    # bound the values to -1 to 1 in the event of precision issues
-    return p_result(np.maximum(np.minimum(result, 1.0), -1.0),p)
+#     return start_idx, end_idx
 
 
+
+    
+    
+    
 
 # #@profile
 def get_trace_int(spec,mz,atol=0,rtol=0,base=min_int):
@@ -131,6 +149,25 @@ def get_trace_int(spec,mz,atol=0,rtol=0,base=min_int):
     return base
 
 
+def get_ms1_peak(x,y,idx):
+    x = np.array(x)
+    y = np.array(y)
+    
+    peaks,peak_attr= find_peaks(y,width=(None,None))
+    
+    ## if no peak, return the index of the max
+    if len(peaks)==0:
+        return x[np.argmax(y)],[x[0],x[-1]]
+    
+    peak_idxs = x[peaks]
+    
+    closest_idx = np.argmin(np.abs(idx-peak_idxs))
+
+    peak_idx = peaks[closest_idx]
+    peak_edge_idxs = [peak_attr["left_bases"][closest_idx],peak_attr["right_bases"][closest_idx]]
+    
+    return x[peak_idx],x[peak_edge_idxs]
+    
 # all_spectra = 1#DIAspectra
 
 # filtered_decoy_coeffs = 3#fdc
@@ -139,7 +176,7 @@ def get_trace_int(spec,mz,atol=0,rtol=0,base=min_int):
 
 def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeplex=False):
     print("Fitting precursors individually")
-    num_iso = 6
+    num_iso = config.num_iso_ms1
     window_half_width = 10
     
     ms1_spectra = all_spectra.ms1scans
@@ -180,8 +217,9 @@ def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeple
         prec_z = filtered_decoy_coeffs.iloc[fdc_idx]["z"]
         prec_mz = filtered_decoy_coeffs["mz"][fdc_idx]
         prec_rt = filtered_decoy_coeffs.iloc[fdc_idx]["rt"]
-    
-        ms2_window_bool = np.logical_and(prec_mz>bottom_of_window,prec_mz<top_of_window)
+        
+        offset = config.decoy_mz_offset if "Decoy" in prec_seq else 0
+        ms2_window_bool = np.logical_and(prec_mz+offset>bottom_of_window,prec_mz+offset<top_of_window)
         ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
         ms2_bool = np.logical_and(ms2_window_bool,ms2_rt_bool)
         possible_ms2_scans = ms2_spec_idxs[ms2_bool]
@@ -205,6 +243,7 @@ def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeple
         ms1_index_of_max = filtered_decoy_coeffs.iloc[fdc_idx]["Ms1_spec_id"]
         ms1_list_idx = list(ms1_spec_idxs).index(ms1_index_of_max)
         scans_each_side = np.array(ms1_spec_idxs)[np.arange(max(0,ms1_list_idx-window_half_width),min(len(ms1_spectra),ms1_list_idx+window_half_width+1))]
+        all_scans_rt = np.array(ms1_rt)[np.arange(max(0,ms1_list_idx-window_half_width),min(len(ms1_spectra),ms1_list_idx+window_half_width+1))]
         all_scans = list(scans_each_side)
         spectra_subset = [all_spectra.get_by_idx(idx) for idx in all_scans]
         
@@ -246,7 +285,15 @@ def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeple
                 if scan in prec_isotope_traces[iso_idx]:
                     all_iso_vals[iso_idx][scan] = prec_isotope_traces[iso_idx][scan]
                     
-                    
+        ## use monoiso ms1 prec mz to find the elution ms1 peak
+        ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), list(all_ms1_vals.values()), ms1_index_of_max)
+        
+        ## redefine all_scans to keep only thoe from the above peak
+        all_scans = all_scans[all_scans.index(ms1_peak_edge_idxs[0]):all_scans.index(ms1_peak_edge_idxs[1])+1]
+        all_ms1_vals = {i:all_ms1_vals[i] for i in all_scans}
+        all_iso_vals = [{i:iso_vals[i] for i in all_scans} for iso_vals in all_iso_vals]
+        all_ms2_vals = {i:all_ms2_vals[i] for i in all_scans}
+        
         ms1_traces.append([all_ms1_vals,*all_iso_vals])
         coeff_traces.append(all_ms2_vals)
         
@@ -266,6 +313,7 @@ def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeple
             # obs_ratios.append(obs_pattern)
             iso_ratios.append([stats.pearsonr(theoretical_pattern,obs_pattern),theoretical_pattern,obs_pattern])
         
+          
     return all_pearson, ms1_traces, coeff_traces, iso_ratios
 
 """
@@ -484,16 +532,23 @@ def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
         # below ranks the rows by number therefore removing missing rows
         sparse_row_indices = stats.rankdata(sparse_row_indices,method="dense").astype(int)-1
         
+        max_row = np.max(sparse_row_indices)+1 # plus 1 for indexing
+        max_col = np.max(sparse_col_indices)+1
+        matrix = np.zeros((max_row,max_col))
+        matrix[sparse_row_indices,sparse_col_indices] = sparse_values
+        
+        dia_spec_int = np.append(dia_spec_int,[0]*(matrix.shape[0]-dia_spec_int.shape[0])) 
+        
         # Generate sparse matrix from data
-        sparse_lib_matrix = sparse.coo_matrix((sparse_values,(sparse_row_indices,sparse_col_indices)))
-        dia_spec_int = np.append(dia_spec_int,[0]*(sparse_lib_matrix.shape[0]-dia_spec_int.shape[0])) 
+        # sparse_lib_matrix = sparse.coo_matrix((sparse_values,(sparse_row_indices,sparse_col_indices)))
+        # dia_spec_int = np.append(dia_spec_int,[0]*(sparse_lib_matrix.shape[0]-dia_spec_int.shape[0])) 
         
         # Fit lib spectra to observed spectra
         # fit_results = sparse_nnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
         # lib_coefficients = np.array(fit_results['x']).flatten()
         
         ### NOT Non-Negative!!
-        matrix = np.array(sparse_lib_matrix.todense())
+        # matrix = np.array(sparse_lib_matrix.todense())
         # lib_coefficients = np.linalg.lstsq(matrix, dia_spec_int)[0]
         lib_coefficients, residuals = optimize.nnls(matrix, dia_spec_int)
         
@@ -592,8 +647,7 @@ def get_other_channels(prec,mz,tag):
 
 # @profile
 def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=None,timeplex=False):
-    print("Fitting channels together")
-    num_iso = 3
+    print("Fitting tagged channels together")
     
     decoy_coeffs["untag_seq"] = [re.sub(f"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
     
@@ -643,6 +697,8 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         prec_mzs = tag_group["mz"]
         prec_seqs = tag_group["seq"]
         prec_z = key[1]
+        if timeplex:
+            time_channel = key[2]
         largest_id = np.argmax(tag_group["coeff"])
         top_ms1_spec_idx = list(tag_group["Ms1_spec_id"])[largest_id]
         prec_rt = list(tag_group["rt"])[largest_id]
@@ -655,7 +711,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         # mz_ppm=mz_ppm
         # ms1_spectra=ms1_spectra
         # rt_bool=rt_bool
-        num_iso =6
+        num_iso = config.num_iso_ms1
         window_half_width = 10
         # assert spec.scan_num == ms1_spec_idx
         
@@ -665,17 +721,15 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
     
     
         
-        ms2_window_bool = np.logical_and(window_mz>bottom_of_window,window_mz<top_of_window)
-        ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
-        ms2_bool = np.logical_and(ms2_window_bool,ms2_rt_bool)
-        # print(sum(ms2_bool))
-        possible_ms2_scans = ms2_spec_idxs[ms2_bool]
- 
-        all_scans = [ms2_ms1_scan_map[i] for i in possible_ms2_scans]
-        
-        ## n scans either side of max
-        idx_of_max =all_scans.index(top_ms1_spec_idx)
-        scans_each_side = np.array(all_scans)[np.arange(max(0,idx_of_max-window_half_width),min(len(all_scans),idx_of_max+window_half_width+1))]
+        # ms2_window_bool = np.logical_and(window_mz>bottom_of_window,window_mz<top_of_window)
+        # ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
+        # ms2_bool = np.logical_and(ms2_window_bool,ms2_rt_bool)
+        # # print(sum(ms2_bool))
+        # possible_ms2_scans = ms2_spec_idxs[ms2_bool]
+        # all_scans = [ms2_ms1_scan_map[i] for i in possible_ms2_scans]
+        # ## n scans either side of max
+        # idx_of_max =all_scans.index(top_ms1_spec_idx)
+        # scans_each_side = np.array(all_scans)[np.arange(max(0,idx_of_max-window_half_width),min(len(all_scans),idx_of_max+window_half_width+1))]
         
         
         if timeplex:
@@ -696,7 +750,8 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             ## join
             # all_scans = sorted(list(set(list(scans_each_side)+list(coeff_scans))))
             ## scans of max of each
-            largest_coeff_scans = list(filtered_decoy_coeffs["Ms1_spec_id"][np.logical_and(filtered_decoy_coeffs["untag_seq"]==key[0],filtered_decoy_coeffs["z"]==key[1])])
+            largest_coeff_scans = list(filtered_decoy_coeffs["Ms1_spec_id"][np.logical_and(filtered_decoy_coeffs["untag_seq"]==key[0],
+                                                                                           filtered_decoy_coeffs["z"]==key[1])])
         
         ## max and min of this list
         max_scan, min_scan = max(largest_coeff_scans), min(largest_coeff_scans)
@@ -722,12 +777,26 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             ## keep decoys mathching to the correct MS1
             offset = config.decoy_mz_offset if "Decoy" in prec_seq else 0
             
-            group_keys.append((prec_seq,prec_z))
-            ms2_vals = {i:min_int for i in possible_ms2_scans}
+            if timeplex:
+                channel_key = (prec_seq,prec_z,time_channel)
+            else:
+                channel_key = (prec_seq,prec_z)
+                
+            group_keys.append(channel_key)
             
-            channel_key = (prec_seq,prec_z)
+            ## create dummy 
+            ms2_vals = {0:0}
+            
             if channel_key in grouped_decoy_coeffs.groups:
-                new_data= grouped_decoy_coeffs.get_group(channel_key)           
+                new_data= grouped_decoy_coeffs.get_group(channel_key)   
+                prec_rt = new_data.rt.iloc[np.argmax(new_data.coeff)]
+                ms2_window_bool = np.logical_and(prec_mz+offset>bottom_of_window,prec_mz+offset<top_of_window)
+                ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
+                ms2_bool = np.logical_and(ms2_window_bool,ms2_rt_bool)
+                # print(sum(ms2_bool))
+                possible_ms2_scans = ms2_spec_idxs[ms2_bool]
+                ms2_vals = {i:min_int for i in possible_ms2_scans}
+            
                 # ms2_vals = {i:j for i,j in zip(new_data["Ms1_spec_id"],new_data["coeff"])}
                 # ms2_vals = {i:j for i,j in zip(new_data["spec_id"],new_data["coeff"])}
                 # plt.plot(ms2_vals.keys(),np.log10(list(ms2_vals.values())))
@@ -739,6 +808,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             
             f = interp1d(list(ms2_vals.keys()), list(ms2_vals.values()), bounds_error=False)
                 
+            
             
             # ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec,use in zip(ms1_spectra,rt_bool) if use}
             ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec in spectra_subset}
@@ -768,10 +838,10 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             all_ms2_vals = {i:min_int for i in all_scans}
             all_iso_vals = [{i:min_int for i in all_scans} for _ in range(len(prec_isotope_traces))]
             
-            for scan in all_scans:
+            for scan,c in zip(all_scans,f(all_scans)):
                 if scan in ms1_vals:
                     all_ms1_vals[scan] = ms1_vals[scan]
-                    all_ms2_vals[scan] = f(scan)
+                    all_ms2_vals[scan] = c#f(scan)
                 # if scan in ms2_vals:
                     # all_ms2_vals[scan] = ms2_vals[scan]
                 for iso_idx in range(len(prec_isotope_traces)):
@@ -849,6 +919,341 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
 
 
 
+
+
+
+
+
+###########################################################################
+###########################################################################
+###########################################################################
+### functionalize the above for multiprocessing
+###########################################################################
+###########################################################################
+###########################################################################
+
+# @profile
+def collect_channel(prec_mz,prec_seq,prec_z,grouped_decoy_coeffs, all_spectra ,all_scans,tag,
+                    rt_bool,mz_ppm,num_iso,window_edges,ms2_rt,ms2_spec_idxs,rt_tol):
+    
+    ms1_spectra = all_spectra.ms1scans
+    
+    
+    # ms2_window_bool = np.logical_and(prec_mz>window_edges[:,0],prec_mz<window_edges[:,1])
+    # ms2_bool = np.logical_and(ms2_window_bool,ms2_rt_bool)
+    # # print(sum(ms2_bool))
+    # possible_ms2_scans = ms2_spec_idxs[ms2_bool]
+    
+    ## keep decoys mathching to the correct MS1
+    offset = config.decoy_mz_offset if "Decoy" in prec_seq else 0
+    
+    
+    # ms2_vals = {i:min_int for i in possible_ms2_scans}
+    
+    ## create dummy 
+    ms2_vals = {0:0}
+    
+    channel_key = (prec_seq,prec_z)
+    if channel_key in grouped_decoy_coeffs.groups:
+        new_data= grouped_decoy_coeffs.get_group(channel_key)       
+        
+        prec_rt = new_data.rt.iloc[np.argmax(new_data.coeff)]
+        ms2_window_bool = np.logical_and(prec_mz>window_edges[:,0],prec_mz<window_edges[:,1])
+        ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
+        ms2_bool = np.logical_and(ms2_window_bool,ms2_rt_bool)
+        possible_ms2_scans = ms2_spec_idxs[ms2_bool]
+        ms2_vals = {i:min_int for i in possible_ms2_scans}
+        
+        for scan,c in zip(new_data["spec_id"],new_data["coeff"]):
+            ms2_vals[scan]=c
+    # else:
+    #     ms2_vals = {}
+        
+    
+    f = interp1d(list(ms2_vals.keys()), list(ms2_vals.values()), bounds_error=False)
+        
+    
+    spectra_subset = [all_spectra.get_by_idx(idx) for idx in all_scans]
+    # ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec,use in zip(ms1_spectra,rt_bool) if use}
+    ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec in spectra_subset}
+    
+    
+    isotopes = iso.precursor_isotopes(prec_seq,prec_z,num_iso)
+    
+    delta_mz = 0
+    if tag.name in prec_seq:
+        delta_mz = prec_mz-isotopes[0].mz
+    for i  in isotopes:
+        i.mz+=delta_mz
+        
+    
+    
+    prec_isotope_traces=[]
+    # iso_ratios.append([i.intensity for i in isotopes])
+    ## note: we have collected similar values for previous channel if the isotopic envelopes are overlapping. 
+    ### However, in cases like diethlyation, isoptopes can differ by > 10 ppm #!!!Maybe investigate wider ppm tol for these cases?
+    for isotope in isotopes[1:]:# we already have the monoisotopic trace
+        # iso_trace = {spec.scan_num:get_trace_int(spec, isotope.mz,rtol=mz_ppm) for spec,use in zip(ms1_spectra,rt_bool) if use}
+        iso_trace = {spec.scan_num:get_trace_int(spec, isotope.mz,rtol=mz_ppm) for spec in spectra_subset}
+        prec_isotope_traces.append(iso_trace)
+     
+    
+    all_ms1_vals = {i:min_int for i in all_scans}
+    all_ms2_vals = {i:min_int for i in all_scans}
+    all_iso_vals = [{i:min_int for i in all_scans} for _ in range(len(prec_isotope_traces))]
+    
+    for scan in all_scans:
+        if scan in ms1_vals:
+            all_ms1_vals[scan] = ms1_vals[scan]
+            all_ms2_vals[scan] = f(scan)
+        # if scan in ms2_vals:
+            # all_ms2_vals[scan] = ms2_vals[scan]
+        for iso_idx in range(len(prec_isotope_traces)):
+            if scan in prec_isotope_traces[iso_idx]:
+                all_iso_vals[iso_idx][scan] = prec_isotope_traces[iso_idx][scan]
+                
+    ms1_traces= [all_ms1_vals,*all_iso_vals]
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        spec_pearsons = [np_pearson_cor(list(all_ms2_vals.values()),list(i.values())).statistic for i in [all_ms1_vals,*all_iso_vals]]
+        # all_pearson.append(stats.pearsonr(list(all_ms2_vals.values()),list(all_ms1_vals.values())).statistic)
+        
+        
+        # ms1_spec_idx = filtered_decoy_coeffs.iloc[fdc_idx]["Ms1_spec_id"]
+        ms1_spec_idx = all_scans[np.argmax(list(all_ms2_vals.values()))]
+        
+        theoretical_pattern = [i.intensity for i in isotopes]
+        obs_pattern = [all_ms1_vals[ms1_spec_idx],*[iso_trace[ms1_spec_idx] for iso_trace in all_iso_vals]]
+        # obs_ratios.append(obs_pattern)
+        
+        isotope_fit = [np_pearson_cor(theoretical_pattern,obs_pattern),theoretical_pattern,obs_pattern]
+    
+    # plt.plot(all_ms2_vals.keys(),all_ms2_vals.values())
+    # plt.plot(all_ms1_vals.keys(),all_ms1_vals.values())
+    # [plt.plot(i.keys(),i.values()) for i in all_iso_vals]
+    # plt.xlim(27300,27800)
+  
+    return isotopes ,ms1_traces, all_ms2_vals, spec_pearsons, isotope_fit
+   
+# @profile
+def fit_group(key,fdc_group,
+              ms1_rt,ms2_rt,ms1_spec_idxs,ms2_spec_idxs,ms2_ms1_scan_map,window_floors,window_ceilings,tag,
+              decoy_coeffs,grouped_decoy_coeffs,all_spectra,filtered_decoy_coeffs,
+              rt_tol, mz_ppm,timeplex):
+    
+    ms1_spectra = all_spectra.ms1scans
+    tag_group = fdc_group.get_group(key)
+    prec_mzs = tag_group["mz"]
+    prec_seqs = tag_group["seq"]
+    prec_z = key[1]
+    largest_id = np.argmax(tag_group["coeff"])
+    top_ms1_spec_idx = list(tag_group["Ms1_spec_id"])[largest_id]
+    prec_rt = list(tag_group["rt"])[largest_id]
+    spec_idx_of_largest =list(tag_group["spec_id"])[largest_id]
+    rt_bool = np.abs(ms1_rt-prec_rt)<rt_tol
+    # print(prec_rt,rt_tol)
+    
+    window_mz = tag_group["window_mz"].iloc[largest_id]
+    # spec = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
+    # mz_ppm=mz_ppm
+    # ms1_spectra=ms1_spectra
+    # rt_bool=rt_bool
+    num_iso =6
+    window_half_width = 10
+    # assert spec.scan_num == ms1_spec_idx
+    
+    ### search for all channels always:
+    channel_dict = get_other_channels((prec_seqs.iloc[largest_id],prec_z), prec_mzs.iloc[largest_id], tag)
+    prec_seqs,prec_mzs = tuple(zip(*channel_dict.values()))
+
+    window_edges = np.stack([window_floors,window_ceilings],1)
+    
+    # ms2_window_bool = np.logical_and(window_mz>window_floors,window_mz<window_ceilings)
+    # ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
+    # ms2_bool = np.logical_and(ms2_window_bool,ms2_rt_bool)
+    # print(sum(ms2_bool))
+    # possible_ms2_scans = ms2_spec_idxs[ms2_bool]
+
+    # all_scans = [ms2_ms1_scan_map[i] for i in possible_ms2_scans]
+    
+    # ## n scans either side of max
+    # idx_of_max =all_scans.index(top_ms1_spec_idx)
+    # scans_each_side = np.array(all_scans)[np.arange(max(0,idx_of_max-window_half_width),min(len(all_scans),idx_of_max+window_half_width+1))]
+    
+    ## scans where coeff>1
+    # coeff_scans = list(decoy_coeffs["Ms1_spec_id"][np.logical_and(decoy_coeffs["untag_seq"]==key[0],decoy_coeffs["z"]==key[1])])
+    
+    # ## join
+    # all_scans = sorted(list(set(list(scans_each_side)+list(coeff_scans))))
+    
+    ## scans of max of each
+    # largest_coeff_scans = list(filtered_decoy_coeffs["Ms1_spec_id"][np.logical_and(filtered_decoy_coeffs["untag_seq"]==key[0],filtered_decoy_coeffs["z"]==key[1])])
+    
+    ## max and min of this list
+    # max_scan, min_scan = max(largest_coeff_scans), min(largest_coeff_scans)
+    # ms1_list_idx_min = list(ms1_spec_idxs).index(min_scan)
+    # ms1_list_idx_max = list(ms1_spec_idxs).index(max_scan)
+    # scans_each_side = np.array(ms1_spec_idxs)[np.arange(max(0,ms1_list_idx_min-window_half_width),min(len(ms1_spectra),ms1_list_idx_max+window_half_width+1))]
+    # all_scans = list(scans_each_side)
+    if timeplex:
+        ## scans where coeff>1
+        coeff_scans = decoy_coeffs["Ms1_spec_id"][np.logical_and.reduce((decoy_coeffs["untag_seq"]==key[0],
+                                                                         decoy_coeffs["z"]==key[1],
+                                                                         decoy_coeffs["time_channel"]==key[2]))]
+        ## join
+        # all_scans = sorted(list(set(list(scans_each_side)+list(coeff_scans))))
+        ## scans of max of each
+        largest_coeff_scans = list(filtered_decoy_coeffs["Ms1_spec_id"][np.logical_and.reduce((filtered_decoy_coeffs["untag_seq"]==key[0],
+                                                                                              filtered_decoy_coeffs["z"]==key[1],
+                                                                                              filtered_decoy_coeffs["time_channel"]==key[2]))])
+        
+    else:
+        ## scans where coeff>1
+        coeff_scans = decoy_coeffs["Ms1_spec_id"][np.logical_and(decoy_coeffs["untag_seq"]==key[0],decoy_coeffs["z"]==key[1])] 
+        ## join
+        # all_scans = sorted(list(set(list(scans_each_side)+list(coeff_scans))))
+        ## scans of max of each
+        largest_coeff_scans = list(filtered_decoy_coeffs["Ms1_spec_id"][np.logical_and(filtered_decoy_coeffs["untag_seq"]==key[0],filtered_decoy_coeffs["z"]==key[1])])
+    
+    ## max and min of this list
+    max_scan, min_scan = max(largest_coeff_scans), min(largest_coeff_scans)
+    ms1_list_idx_min = list(ms1_spec_idxs).index(min_scan)
+    ms1_list_idx_max = list(ms1_spec_idxs).index(max_scan)
+    scans_each_side = np.array(ms1_spec_idxs)[np.arange(max(0,ms1_list_idx_min-window_half_width),min(len(ms1_spectra),ms1_list_idx_max+window_half_width+1))]
+    all_scans = list(scans_each_side)
+    
+    # print(len(all_scans))
+    ms1_traces = []
+    coeff_traces = []
+    all_pearson = []
+    iso_ratios = []
+    group_iso = []
+    group_keys = [] ## collect to ensure we match them up correctly
+      
+    for prec_mz,prec_seq in zip(prec_mzs,prec_seqs):
+        isotopes ,channel_ms1_traces, channel_ms2_traces, spec_pearsons, isotope_fit = collect_channel(prec_mz,prec_seq,prec_z,grouped_decoy_coeffs, all_spectra,all_scans,tag, rt_bool,mz_ppm,num_iso,
+                                                                                                       window_edges,ms2_rt,ms2_spec_idxs,rt_tol)
+        ms1_traces.append(channel_ms1_traces)
+        coeff_traces.append(channel_ms2_traces)
+        all_pearson.append(spec_pearsons)
+        iso_ratios.append(isotope_fit)
+        group_iso.append(isotopes)
+        group_keys.append((prec_seq,prec_z))
+        
+    ### need to reduce the number of spectra we fit to
+    idx_of_max =all_scans.index(top_ms1_spec_idx)
+    scans_to_search = np.array(all_scans)[np.arange(max(0,idx_of_max-window_half_width),min(len(all_scans),idx_of_max+window_half_width+1))]
+    scans_to_search = all_scans
+    vals = []
+    group_pred = []
+    group_obs_peaks=[]
+    group_matrices =[]
+    group_fit_cor =[]
+    ### for ms1_spec_idx in all_scans:
+    for ms1_spec_idx in scans_to_search:
+        spec = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
+        
+        pred_coeff, obs_peaks, fit_matrix = fit_mTRAQ_isotopes(spec,group_iso,mz_ppm)
+        if len(obs_peaks)==0:
+            fit_cor = np.nan
+        else:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fit_cor = np_pearson_cor(np.sum(fit_matrix*pred_coeff,1),obs_peaks)
+        vals.append([pred_coeff,obs_peaks,fit_matrix,fit_cor])
+        
+        group_pred.append(pred_coeff)
+        group_obs_peaks.append(obs_peaks)
+        group_matrices.append(fit_matrix)
+        group_fit_cor.append(fit_cor)
+        
+    # [plt.plot(i.keys(),i.values()) for i in coeff_traces]
+    # spec = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
+    # fitted_ms1 = fit_mTRAQ_isotopes(spec,all_iso,mz_ppm)
+    fit_results = [np.array(group_pred),group_obs_peaks,group_matrices,group_fit_cor,scans_to_search]
+    
+    return fit_results,ms1_traces,coeff_traces,iso_ratios,all_pearson,group_keys
+
+# @profile 
+def ms1_cor_channels_fn(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=None,multiprocess=False,timeplex=False):
+    # print("update")
+    num_iso = 3
+    
+    decoy_coeffs["untag_seq"] = [re.sub(f"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
+    
+    ms1_spectra = all_spectra.ms1scans
+    ms2_spectra = all_spectra.ms2scans
+    
+    ## array of ms1 and ms2 retention time
+    ms2_rt = np.array([i.RT for i in ms2_spectra])
+    ms1_rt = np.array([i.RT for i in ms1_spectra])
+    
+    ## array of scan numbers for ms1 and ms2 spectra
+    ms1_spec_idxs = np.array([i.scan_num for i in ms1_spectra])
+    ms2_spec_idxs = np.array([i.scan_num for i in ms2_spectra])
+    
+    ## get ms2 info for filtering
+    bottom_of_window, top_of_window = np.array([i.ms1window for i in all_spectra.ms2scans]).T
+    ms2_rt = np.array([i.RT for i in all_spectra.ms2scans])
+
+    ## list of scan nums of the closest ms1 scan for each ms2 scan
+    resp_ms1scans = [ms1_spec_idxs[closest_ms1spec(ms2_rt[i], ms1_rt)] for i in range(len(ms2_rt))]
+
+    ## mapping of ms2 scan nums to ms1 scan nums
+    ms2_ms1_scan_map = {spec.scan_num:resp_ms1scans[i] for i,spec in enumerate(all_spectra.ms2scans)}
+
+    grouped_decoy_coeffs = decoy_coeffs.groupby(["seq","z"])
+    fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z"])
+
+    all_ms1= []
+    all_coeff = []
+    all_iso = []
+    all_group_pearson = []
+    all_trace = []
+    all_fitted = []
+    all_group_keys = []
+    
+      
+    all_keys = list(fdc_group.groups)
+    
+    if multiprocess:
+        with multiprocessing.Pool(8) as p:
+            # iso_out = p.starmap(fit_group,tqdm.tqdm(zip(all_seqs,all_frags),total=len(all_seqs)))
+            outputs = list(tqdm.tqdm(p.imap(partial(fit_group,
+                                                    fdc_group=fdc_group,
+                                                    ms1_rt=ms1_rt,
+                                                    ms2_rt=ms2_rt,
+                                                    ms1_spec_idxs=ms1_spec_idxs,
+                                                    ms2_spec_idxs=ms2_spec_idxs,
+                                                    ms2_ms1_scan_map=ms2_ms1_scan_map,
+                                                    window_floors=bottom_of_window,
+                                                    window_ceilings=top_of_window,
+                                                    tag=tag,
+                                                    decoy_coeffs=decoy_coeffs,
+                                                    grouped_decoy_coeffs=grouped_decoy_coeffs,
+                                                    all_spectra=all_spectra,
+                                                    filtered_decoy_coeffs=filtered_decoy_coeffs,
+                                                    rt_tol=rt_tol, 
+                                                    mz_ppm=mz_ppm,
+                                                    timeplex=timeplex),
+                                            all_keys,chunksize=100),total=len(all_keys)))
+    else:
+        for key in tqdm.tqdm(list(fdc_group.groups)):
+            
+            fit_results,ms1_traces,coeff_traces,iso_ratios,all_pearson,group_keys = fit_group(key,fdc_group,
+                          ms1_rt,ms2_rt,ms1_spec_idxs,ms2_spec_idxs,ms2_ms1_scan_map,bottom_of_window,top_of_window,tag,
+                          decoy_coeffs,grouped_decoy_coeffs,all_spectra,filtered_decoy_coeffs,
+                          rt_tol, mz_ppm,timeplex)
+            
+            all_fitted.append(fit_results)
+            all_ms1.append(ms1_traces)
+            all_coeff.append(coeff_traces)
+            all_iso.append(iso_ratios)
+            all_group_pearson.append(all_pearson)
+            all_group_keys.append(group_keys)
+          
+    return all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted
 
 """
 
@@ -983,6 +1388,249 @@ plt.xlabel("Original MS1 Quant")
 plt.ylabel("Isotope Fitted MS1 Quant")
 plt.xlim(2,9)
 plt.ylim(2,9)
+"""
+
+"""   
+
+
+# protect the entry point
+if __name__ == '__main__':
+
+    # with open("/Users/kevinmcdonnell/Programming/jmod_test_data/ms1_quant/all_spectra","rb") as read_file:
+    #     all_spectra =  dill.load(read_file)
+    print("Loading Spectra")
+    all_spectra = load_files.SpectrumFile('/Users/kevinmcdonnell/Programming/Data/Diethyl/2024-08-25_SS_DE-6plex_1000ng_3.mzML')
+    print("Finished")
+    # with open("/Users/kevinmcdonnell/Programming/jmod_test_data/ms1_quant/tag","rb") as read_file:
+    #     tag = dill.load(read_file)
+    from mass_tags import diethyl_6plex
+    tag = diethyl_6plex
+        
+    filtered_decoy_coeffs = pd.read_csv("/Users/kevinmcdonnell/Programming/jmod_test_data/ms1_quant/filtered_decoy_coeffs.csv")
+    decoy_coeffs = pd.read_csv("/Users/kevinmcdonnell/Programming/jmod_test_data/ms1_quant/decoy_coeffs.csv")
+    
+    mz_ppm = 4.057922902890217e-06
+    rt_tol = 7.779594375565848
+    import sys
+    
+    group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=tag)
+    # print(sys.getsizeof(group_p_corrs))
+    # print(sys.getsizeof(group_ms1_traces))
+    # print(sys.getsizeof(group_ms2_traces))
+    # print(sys.getsizeof(group_iso_ratios))
+    # print(sys.getsizeof(group_keys))
+    # print(sys.getsizeof(group_fitted))
+    # print(group_fitted[-1])
+    group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels_fn(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=tag)
+    # print(sys.getsizeof(group_p_corrs))
+    # print(sys.getsizeof(group_ms1_traces))
+    # print(sys.getsizeof(group_ms2_traces))
+    # print(sys.getsizeof(group_iso_ratios))
+    # print(sys.getsizeof(group_keys))
+    # print(sys.getsizeof(group_fitted))
+    # print(group_fitted[-1])
+    
+    # from load_files import Spectrum
+    # prec_mz= 543.42993
+    # spec = Spectrum
+    # spec.mz = np.load("/Users/kevinmcdonnell/Programming/jmod_test_data/ms1_quant/spec_mz.npy")
+    # spec.intens = np.load("/Users/kevinmcdonnell/Programming/jmod_test_data/ms1_quant/spec_intens.npy")
+    
+    # for i in range(10000):
+    #     get_trace_int2(spec,prec_mz,rtol=mz_ppm)
+
+
+
+
+
+fdc = filtered_decoy_coeffs
+
+
+mz_ppm = 4.057922902890217e-06
+# mz_ppm = 20e-06
+### extract the top n keys
+big_n = 2000
+fdc_n = fdc[-big_n:][::-1]
+top_n_keys_d = {tuple([i,j]):k for i,j,k in zip(fdc_n.untag_seq,fdc_n.z,fdc_n.coeff)}
+top_n_keys = list(top_n_keys_d)
+
+all_ms1= []
+all_coeff = []
+all_iso = []
+all_group_pearson = []
+all_trace = []
+all_fitted = []
+all_group_keys = []
+for key in tqdm.tqdm(list(top_n_keys)):
+    
+    fit_results,ms1_traces,coeff_traces,iso_ratios,all_pearson,group_keys = fit_group(key,fdc_group,
+                  ms1_rt,ms2_rt,ms1_spec_idxs,ms2_spec_idxs,ms2_ms1_scan_map,bottom_of_window,top_of_window,tag,
+                  decoy_coeffs,grouped_decoy_coeffs,all_spectra,
+                  rt_tol, mz_ppm)
+    
+    all_fitted.append(fit_results)
+    all_ms1.append(ms1_traces)
+    all_coeff.append(coeff_traces)
+    all_iso.append(iso_ratios)
+    all_group_pearson.append(all_pearson)
+    all_group_keys.append(group_keys)
+
+orgs =np.array(['Human', 'Ecoli', 'Yeast'])
+
+channels = [0,2,4,6,8,10]
+channel_mix = ["A","C","B","D","A","C"]
+tag_name = "diethyl_6plex"
+
+theoretical_yeast_amounts = {"A":6,"B":12,"C":18,"D":24}
+theoretical_human_amounts = {"A":100,"B":100,"C":100,"D":100}
+
+linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(all_group_keys) for key_idx,key in enumerate(keys)}
+linker_dict[("Q(diethyl_6plex-0)ITVNDLPVGR",2)]
+
+idx = 68589
+# idx = 9
+org = list(orgs[[top_n_keys[idx][0] in i for i in all_fasta_seqs]])
+print(org)
+[plt.plot([],label=re.search("\(.*?\)",i[0])[0]) for i in all_group_keys[idx]]
+plt.legend();plt.gca().set_prop_cycle(None)
+plt.title([org,top_n_keys[idx]])
+[plt.plot(all_fitted[idx][-1],i,color=colours[n],linestyle="--") for n,i in enumerate(all_fitted[idx][0].T)] ## ms1 fit
+
+[plt.plot(all_fitted[idx][-1],[i[0][j] for j in all_fitted[idx][-1]],color=colours[n]) for n,i in enumerate(all_ms1[idx])] #Ms1 mono iso of each channel
+[plt.plot(all_fitted[idx][-1],[i[j] for j in all_fitted[idx][-1]],color=colours[n]) for n,i in enumerate(all_coeff[idx])] # coeff predicted
+
+
+predicted_coeffs = np.max([list(i.values()) for i in all_coeff[idx]],axis=1)
+norm_predicted_coeffs = predicted_coeffs/predicted_coeffs[0]
+predicted_ms1 = np.max(np.array([i for i in all_fitted[idx][0]]),axis=0)
+norm_predicted_ms1 = predicted_ms1/predicted_ms1[0]
+obs_mono_ms1 = np.max([list(i[0].values()) for i in all_ms1[idx]],axis=1)
+norm_obs_mono =obs_mono_ms1/obs_mono_ms1[0]
+norm_theoretical = np.array([theoretical_yeast_amounts[i] for i in channel_mix])/6
+print([org,keys[idx]])
+print("Fit MS2"," \t".join(['%.2f'% elem for elem in np.round(norm_predicted_coeffs,2)]))
+print("Fit MS1"," \t".join(['%.2f'% elem for elem in np.round(norm_predicted_ms1,2)]))
+print("Obs MS1"," \t".join(['%.2f'% elem for elem in np.round(norm_obs_mono,2)]))
+print("Theoret"," \t".join(['%.2f'% elem for elem in np.round(norm_theoretical,2)]))
+print()
+
+
+
+
+key = (re.sub("\(.*?\)","",all_group_keys[idx][0][0]),all_group_keys[idx][0][1])
+
+fit_results,ms1_traces,coeff_traces,iso_ratios,all_pearson,group_keys = fit_group(key,fdc_group,
+              ms1_rt,ms2_rt,ms1_spec_idxs,ms2_spec_idxs,ms2_ms1_scan_map,bottom_of_window,top_of_window,tag,
+              decoy_coeffs,grouped_decoy_coeffs,all_spectra,
+              rt_tol, mz_ppm)
+
+
+def scan_rt(scan_num,all_scans,return_rt=True):
+    if return_rt:
+        return all_scans.get_by_idx(scan_num).RT
+    else:
+        return scan_num
+    
+def scan_rts(scan_nums,all_scans,return_rt=True):
+    if type(scan_nums)==int:
+        return scan_rt(scan_nums, all_scans,return_rt)
+    elif type(scan_nums)==list:
+        rts = [scan_rt(i, all_scans,return_rt) for i in scan_nums]
+        return rts
+    else:
+        raise ValueError("Incorrect input type")
+        
+        
+max_intensity = 1.5e8
+plot_rt = True
+[plt.plot(scan_rts(list(all_fitted[idx][-1]),DIAspectra,plot_rt),[i[0][j] for j in all_fitted[idx][-1]],color=colours[n]) for n,i in enumerate(all_ms1[idx])];plt.ylim(0,max_intensity) #Ms1 mono iso of each channelp
+[plt.plot(scan_rts(list(all_fitted[idx][-1]),DIAspectra,plot_rt),[i[1][j] for j in all_fitted[idx][-1]],color=colours[n]) for n,i in enumerate(all_ms1[idx])];plt.ylim(0,max_intensity) #Ms1 mono iso of each channel
+[plt.plot(scan_rts(list(all_fitted[idx][-1]),DIAspectra,plot_rt),[i[2][j] for j in all_fitted[idx][-1]],color=colours[n]) for n,i in enumerate(all_ms1[idx])];plt.ylim(0,max_intensity) #Ms1 mono iso of each channel
+[plt.plot(scan_rts(list(all_fitted[idx][-1]),DIAspectra,plot_rt),[i[3][j] for j in all_fitted[idx][-1]],color=colours[n]) for n,i in enumerate(all_ms1[idx])];plt.ylim(0,max_intensity) #Ms1 mono iso of each channel
+[plt.plot(scan_rts(list(all_fitted[idx][-1]),DIAspectra,plot_rt),[i[4][j] for j in all_fitted[idx][-1]],color=colours[n]) for n,i in enumerate(all_ms1[idx])];plt.ylim(0,max_intensity) #Ms1 mono iso of each channel
+[plt.plot(scan_rts(list(all_fitted[idx][-1]),DIAspectra,plot_rt),[i[5][j] for j in all_fitted[idx][-1]],color=colours[n]) for n,i in enumerate(all_ms1[idx])];plt.ylim(0,max_intensity) #Ms1 mono iso of each channel
+
+
+org = list(orgs[[keys[idx][0] in i for i in all_fasta_seqs]])
+org = ["none"] if org==[] else org
+predicted_coeffs = np.max([list(i.values()) for i in all_coeff[idx]],axis=1)
+norm_predicted_coeffs = predicted_coeffs/predicted_coeffs[0]
+predicted_ms1 = np.max(np.array([i for i in all_fitted[idx][0]]),axis=0)
+norm_predicted_ms1 = predicted_ms1/predicted_ms1[0]
+obs_mono_ms1 = np.max([list(i[0].values()) for i in all_ms1[idx]],axis=1)
+norm_obs_mono =obs_mono_ms1/obs_mono_ms1[0]
+norm_theoretical = np.array([theoretical_yeast_amounts[i] for i in channel_mix])/6
+print([org,keys[idx]])
+print("Fit MS2"," \t".join(['%.2f'% elem for elem in np.round(_func(norm_predicted_coeffs),2)]))
+print("Fit MS1"," \t".join(['%.2f'% elem for elem in np.round(_func(norm_predicted_ms1),2)]))
+print("Obs MS1"," \t".join(['%.2f'% elem for elem in np.round(_func(norm_obs_mono),2)]))
+print("Theoret"," \t".join(['%.2f'% elem for elem in np.round(_func(norm_theoretical),2)]))
+print()
+
+
+print("Fit MS2"," \t".join(['%.2f'% elem for elem in np.round(_func(norm_predicted_coeffs)-_func(norm_theoretical),2)]))
+print("Fit MS1"," \t".join(['%.2f'% elem for elem in np.round(_func(norm_predicted_ms1)-_func(norm_theoretical),2)]))
+print("Obs MS1"," \t".join(['%.2f'% elem for elem in np.round(_func(norm_obs_mono)-_func(norm_theoretical),2)]))
+print("Theoret"," \t".join(['%.2f'% elem for elem in np.round(_func(norm_theoretical)-_func(norm_theoretical),2)]))
+print()
+
+
+# [plt.plot(i[0].keys(),i[0].values()) for i in all_ms1[idx]] #mono iso of each channel
+# [plt.plot(i.keys(),i.values()) for i in all_coeff[idx]]
+all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted=group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted
+
+linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(all_group_keys) for key_idx,key in enumerate(keys)}
+
+all_keys = [(re.sub("\(.*?\)","",i[0][0]),i[0][1]) for i in group_keys]
+
+keys = all_keys
+keys = top_n_keys
+d = {}
+# for idx in range(74648):
+for idx in range(len(keys)):  
+    # org = list(orgs[[all_keys[idx][0] in i for i in all_fasta_seqs]]) 
+    org = list(orgs[[keys[idx][0] in i for i in all_fasta_seqs]])
+    org = ["none"] if org==[] else org
+    predicted_coeffs = np.max([list(i.values()) for i in all_coeff[idx]],axis=1)
+    norm_predicted_coeffs = predicted_coeffs/predicted_coeffs[0]
+    predicted_ms1 = np.max(np.array([i for i in all_fitted[idx][0]]),axis=0)
+    norm_predicted_ms1 = predicted_ms1/predicted_ms1[0]
+    obs_mono_ms1 = np.max([list(i[0].values()) for i in all_ms1[idx]],axis=1)
+    norm_obs_mono =obs_mono_ms1/obs_mono_ms1[0]
+    norm_theoretical = np.array([theoretical_yeast_amounts[i] for i in channel_mix])/6
+    # print([org,keys[idx]])
+    # print("Fit MS2"," \t".join(['%.2f'% elem for elem in np.round(norm_predicted_coeffs,2)]))
+    # print("Fit MS1"," \t".join(['%.2f'% elem for elem in np.round(norm_predicted_ms1,2)]))
+    # print("Obs MS1"," \t".join(['%.2f'% elem for elem in np.round(norm_obs_mono,2)]))
+    # print("Theoret"," \t".join(['%.2f'% elem for elem in np.round(norm_theoretical,2)]))
+    # print()
+    d.setdefault(org[0],{"norm_predicted_coeffs":[],"norm_predicted_ms1":[],"norm_obs_mono":[],"norm_theoretical":[]})
+    d[org[0]]["norm_predicted_coeffs"].append(norm_predicted_coeffs)
+    d[org[0]]["norm_predicted_ms1"].append(norm_predicted_ms1)
+    d[org[0]]["norm_obs_mono"].append(norm_obs_mono)
+    d[org[0]]["norm_theoretical"].append(norm_theoretical)
+
+
+
+_func = np.log2
+
+[plt.hist(i,np.linspace(0,10,20),alpha=.2) for i in np.stack(d["Yeast"]["norm_predicted_coeffs"],1)]
+print([np.nanmedian(i) for i in np.stack(d["Yeast"]["norm_predicted_coeffs"],1)])
+print([np.nanmedian(i) for i in np.stack(d["Yeast"]["norm_predicted_ms1"],1)])
+print([np.nanmedian(i) for i in np.stack(d["Yeast"]["norm_obs_mono"],1)])
+print([np.nanmedian(i) for i in np.stack(d["Yeast"]["norm_theoretical"],1)])
+
+org = "Human"
+print("Fit MS2"," \t".join(['%.2f'% elem for elem in np.round([np.nanmedian(i) for i in _func(np.stack(d[org]["norm_predicted_coeffs"],1))],2)]))
+print("Fit MS1"," \t".join(['%.2f'% elem for elem in np.round([np.nanmedian(i) for i in _func(np.stack(d[org]["norm_predicted_ms1"],1))],2)]))
+print("Obs MS1"," \t".join(['%.2f'% elem for elem in np.round([np.nanmedian(i) for i in _func(np.stack(d[org]["norm_obs_mono"],1))],2)]))
+print("Theoret"," \t".join(['%.2f'% elem for elem in np.round([np.nanmedian(i) for i in _func(np.stack(d[org]["norm_theoretical"],1))],2)]))
+print()
+
+
+
+
+
 
 
 

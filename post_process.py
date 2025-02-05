@@ -10,7 +10,7 @@ import os
 import re
 from load_files import loadSpectra
 from SpecLib import loadSpecLib
-from mass_tags import tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678
+from mass_tags import tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678, diethyl_6plex
 import config
 import iso_functions as iso_f
 import argparse
@@ -18,11 +18,10 @@ import argparse
 
 def run():
     
-    #parser = argparse.ArgumentParser()
+    # parser = argparse.ArgumentParser()
     
-    #parser.add_argument("file")
-    #args = vars(parser.parse_args())
-    
+    # parser.add_argument("file")
+    # args = vars(parser.parse_args())
     
     file = config.args.pp_file
     
@@ -64,9 +63,14 @@ def run():
         elif params["TagName"]=="mTRAQ":
             mass_tag = mTRAQ
         
+        elif params["TagName"]=="diethyl_6plex":
+            mass_tag = diethyl_6plex
+            
+        else:
+            raise ValueError("Unknown Tag")
         config.tag = mass_tag
         
-        library = tag_library(library,mass_tag)
+        # library = tag_library(library,mass_tag)
         
     else:
         # raise ValueError
@@ -76,7 +80,7 @@ def run():
     
     if params["iso"]:
         config.num_iso_peaks = int(float(params["num_iso_peaks"]))
-        library = iso_f.iso_library(library)
+        # library = iso_f.iso_library(library)
     
     unmatched_type = re.search("unmatch([abc])",file.split("/")[-2])[1].upper()
     
@@ -85,7 +89,7 @@ def run():
                  spectra=DIAspectra, 
                  library=library, 
                  mass_tag=mass_tag,
-                 timeplex=bool(params["timeplex"]))
+                 timeplex=eval(params["timeplex"]))
 
 
 

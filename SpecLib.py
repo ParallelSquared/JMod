@@ -11,8 +11,8 @@ import cProfile
 import struct
 import zlib
 import pickle
-import tqdm
 from miscFunctions import split_frag_name, frag_to_peak, specific_frags
+import tqdm
 # load in spec library (tsv)
 # file = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HeLa+K562-1prcGlobProt-5prcLocPep-PeakViewConverted.txt"
 # spec_lib = pd.read_csv(file,delimiter="\t")
@@ -31,46 +31,9 @@ def create_python_lib(spec_lib):
         python_lib[unique_id].setdefault("frags",{})
         frag_type = str(row["frg_type"])+str(row["frg_nr"])+"_"+str(row["frg_z"])
         python_lib[unique_id]["frags"][frag_type]=[row["Q3"],row["relative_intensity"]]
-        # if idx>1117038: #?????
-        #     break
+        
     return python_lib
 
-# Q1	Q3	RT_detected	protein_name	isotype	relative_intensity	stripped_sequence	modification_sequence	prec_z	
-# frg_type	frg_z	frg_nr	iRT	uniprot_id	score	decoy	prec_y	confidence	shared	N	rank	
-# mods	nterm	cterm	ce	triggered_rt	use
-
-
-#####################################################
-#####################   Moved to misc functions  ###################
-
-# def frag_to_peak(frag_dict,return_frags=False):
-#     peaks = np.array(list(frag_dict.values()))
-#     order = np.argsort(peaks[:,0])
-#     if return_frags:
-#         ordered_frags = np.array(list(frag_dict.keys()))[order]
-#         return peaks[order],ordered_frags
-#     else:
-#         return peaks[order]
-
-
-# non_specific_frags = ["b1","b2","y1","y2","y3"]
-# def specific_frags(frag_dict,non_spec =non_specific_frags):
-#     peaks = []
-#     for frag in frag_dict:
-#         frag_type,frag_idx,loss,frag_z = split_frag_name(frag)
-#         if frag_type+str(frag_idx) not in non_spec:
-#             peaks.append(frag_dict[frag])
-    
-#     peaks = np.array(peaks)
-#     order = np.argsort(peaks[:,0])
-#     return peaks[order]
-            
-
-# def ordered_frags(frag_dict):
-#     peaks = np.array(list(frag_dict.values()))
-#     order = np.argsort(peaks[:,0])
-#     frags = list(frag_dict.keys())
-#     return {frags[i]:peaks[i] for i in order}
     
 #####################################################
 
@@ -167,71 +130,64 @@ def load_tsv_speclib(spec_lib_file):
         python_lib = {}
         idx = 0
         for row in csv_reader:
+            row["ModifiedPeptide"] = row["ModifiedPeptide"].strip("_")
             unique_id = (row["ModifiedPeptide"],float(row["PrecursorCharge"]))
             python_lib.setdefault(unique_id,{})
             python_lib[unique_id]["mod_seq"] = row["ModifiedPeptide"]
-            python_lib[unique_id]["seq"] = row["PeptideSequence"]
+            if "StrippedPeptide" in row:
+                python_lib[unique_id]["seq"] = row["StrippedPeptide"]
+            else:
+                python_lib[unique_id]["seq"] = row["PeptideSequence"]
             python_lib[unique_id]["prec_mz"] = float(row["PrecursorMz"])
             python_lib[unique_id]["prec_z"] = float(row["PrecursorCharge"]) 
-            rt = row["Tr_recalibrated"]
+            if "RT" in row:
+                rt = row["RT"]
+            elif "Tr_recalibrated" in row:
+                rt = row["Tr_recalibrated"]
+            elif "iRT" in row:
+                rt = row["iRT"]
+            else:
+                raise ValueError("Unknown retention time column")
             python_lib[unique_id]["iRT"] = None if rt=="" else float(rt)
             python_lib[unique_id].setdefault("frags",{})
+            loss=""
             if "FragmentLossType" in row:
                 loss = str(row["FragmentLossType"])
                 if loss in ["unknown","noloss"]:
                     loss=""
                 else:
                     loss = "-"+loss
-            frag_type = str(row["FragmentType"])+str(row["FragmentSeriesNumber"])+loss+"_"+str(row["FragmentCharge"])
-            python_lib[unique_id]["frags"][frag_type]=[float(row["ProductMz"]),float(row["LibraryIntensity"])]
+            if "FragmentNumber" in row:
+                frag_type = str(row["FragmentType"])+str(row["FragmentNumber"])+loss+"_"+str(row["FragmentCharge"])
+            else:
+                frag_type = str(row["FragmentType"])+str(row["FragmentSeriesNumber"])+loss+"_"+str(row["FragmentCharge"])
+            
+            if "FragmentMz" in row:
+                python_lib[unique_id]["frags"][frag_type]=[float(row["FragmentMz"]),float(row["RelativeIntensity"])]
+            else:
+                python_lib[unique_id]["frags"][frag_type]=[float(row["ProductMz"]),float(row["LibraryIntensity"])]
             if "IonMobility" in row:
                 if row["IonMobility"]!="":
                     python_lib[unique_id]["IonMob"] = float(row["IonMobility"]) 
             
             ### Protein info
-            python_lib[unique_id]["protein_group"] = row["ProteinGroup"]
-            python_lib[unique_id]["protein_name"] = row["ProteinName"]
-            python_lib[unique_id]["genes"] = row["Genes"]
+            if "ProteinGroup" in row:
+                python_lib[unique_id]["protein_group"] = row["ProteinGroup"]
+            if "ProteinName" in row:
+                python_lib[unique_id]["protein_name"] = row["ProteinName"]
+            elif "ProteinID" in row:
+                python_lib[unique_id]["protein_name"] = row["ProteinID"]
+            if "Genes" in row:
+                python_lib[unique_id]["genes"] = row["Genes"]
             
             
             # idx+=1
-            # if idx>1117038:
+            # if idx>111703:
             #     break
         for key in python_lib:
             python_lib[key]["spectrum"],python_lib[key]["ordered_frags"] = frag_to_peak(python_lib[key]["frags"],return_frags=True)
-            python_lib[key]["spec_frags"] = specific_frags(python_lib[key]["frags"])
+            # python_lib[key]["spec_frags"] = specific_frags(python_lib[key]["frags"]) # Note: does not work if only one frag in entry
         return python_lib
-
-# spec_lib = load_tsv_speclib("/Volumes/Lab/s9_library.tsv")
-
-# start_time = time.time()
-# python_lib = load_tsv_lib(file)
-# print(time.time()-start_time)
-
-
-# python_lib = create_python_lib(spec_lib)
-
-# lp = line_profiler.LineProfiler()
-# lp_wrapper = lp(create_python_lib)
-# lp_wrapper(spec_lib)
-# lp.print_stats()
-
-# start_time = time.time()
-# cProfile.run("python_lib = create_python_lib(spec_lib)")
-# print(time.time()-start_time)
-"""
-# import spec lib SQL (speclib)
-file = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HeLa+K562-1prcGlobProt-5prcLocPep-PeakViewConverted.txt.speclib"
-# 'application/octet-stream' file
-spec_lib2 = pd.read_csv(file,delimiter="\t")
-with open(file,"r") as reader:
-    line = reader.readline()
-    print(line)
-    
-""" 
-# Generate spec lib from fasta
-
-##TO DO
 
 
 
@@ -467,8 +423,3 @@ class SpectrumLibrary():
         return spec_lib
         
     
-## Ideas
-#  What if the fragmets and spectrum could be linked to one another
-# Then if we matched a peak we could know what fragments were matched
-# Have it as a dataframe woth named rows?
-# would also help with hyperscore

@@ -39,7 +39,7 @@ def within_tol(x, y, atol, rtol):
 #     if show:
 #         plt.show()
 
-def plot_mz(peak_list=None,show=False,col=None,alpha=None):
+def plot_mz(peak_list=None,show=False,col=None,alpha=None,axis=True,norm=False):
     
     if  peak_list is None:
         print("enter valid peaks")
@@ -51,14 +51,54 @@ def plot_mz(peak_list=None,show=False,col=None,alpha=None):
         else:
             mz,intensity = [i for i in zip(*peak_list)]
     max_intens = max(intensity)
-    plt.vlines(mz, 0, intensity,colors=col,alpha=alpha)
-    plt.ylim(0,max_intens*1.1)
-    plt.xlabel("m/z")
-    plt.ylabel("Intensity")
+    if norm:
+        plt.vlines(mz, 0, intensity/max_intens,colors=col,alpha=alpha)
+    else:
+        plt.vlines(mz, 0, intensity,colors=col,alpha=alpha)
+    if axis:
+        plt.ylim(0,max_intens*1.1)
+        plt.xlabel("m/z")
+        plt.ylabel("Intensity")
+        
+    if show:
+        plt.show()
+        
     
+        
+        
+def plot_mz_inv(peak_list=None,show=False,col=None,alpha=None,axis=True,norm=False):
+    
+    if  peak_list is None:
+        print("enter valid peaks")
+        return None
+    if peak_list is not None:
+        if len(peak_list)==2:
+            mz=peak_list[0]
+            intensity=peak_list[1]
+        else:
+            mz,intensity = [i for i in zip(*peak_list)]
+    max_intens = max(intensity)
+    if norm:
+        plt.vlines(mz, -intensity/max_intens, 0,colors=col,alpha=alpha)
+    else:
+        plt.vlines(mz, -intensity, 0,colors=col,alpha=alpha)
+    if axis:
+        plt.ylim(max_intens*1.1,0)
+        plt.xlabel("m/z")
+        plt.ylabel("Intensity")
+        
     if show:
         plt.show()
     
+def mirror_plot(peak_list1,peak_list2,show=False,col=None,alpha=None):
+        
+    plot_mz(peak_list1,axis=False,norm=True)
+    plot_mz_inv(peak_list2,axis=False,norm=True)
+    xlim = plt.xlim()
+    plt.hlines(0,xlim[0],xlim[1],colors="black",linewidth=.5)
+    
+    plt.xlabel("m/z")
+    plt.ylabel("Intensity")
 
 def plot_trace(rts=None,ints=None):
     if rts is None:

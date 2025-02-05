@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import os
+
 
 names = ["coeff","spec_id","Ms1_spec_id",
          "seq","z","window_mz","rt",
@@ -24,7 +26,11 @@ names = ["coeff","spec_id","Ms1_spec_id",
          "frag_errors",
          "frag_mz",
          "frag_int",
-         "obs_int"
+         "obs_int",
+         "unique_frag_mz",
+         "unique_obs_int",
+         "file_name",
+         "protein"
          ]
 
 dtypes  = {"coeff":np.float32,
@@ -55,7 +61,9 @@ dtypes  = {"coeff":np.float32,
             "frag_errors":str,
             "frag_mz":str,
             "frag_int":str,
-            "obs_int":str
+            "obs_int":str,
+            "file_name":str,
+            "protein":str
             }
 
 
@@ -67,7 +75,7 @@ def get_large_prec(file,
     if timeplex:
         col_names.insert(5,"time_channel")
         dtypes["time_channel"] = np.float32 ## !!! need to fix 
-        
+    # print(col_names)
     decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
     
     
@@ -105,3 +113,37 @@ def get_large_prec(file,
 
 
 
+def read_results(file,
+                   timeplex=False):
+    
+    col_names = list(names)
+    if timeplex:
+        col_names.insert(5,"time_channel")
+        dtypes["time_channel"] = np.float32 ## !!! need to fix 
+    # print(col_names)
+    decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
+    
+    results_folder = os.path.dirname(file)
+    
+    all_fdx = pd.read_csv(results_folder+"/all_IDs.csv")
+    filtered_fdx = pd.read_csv(results_folder+"/filtered_IDs.csv")
+    
+    return decoy_coeffs,all_fdx,filtered_fdx
+
+
+
+def frag_traces(g):
+    traces = {}
+    for idx,row in g.iterrows():
+        spec_id = row.spec_id
+        frag_names = row.frag_names.split(";")
+        frag_mz = np.array(row.frag_mz.split(";"),dtype=np.float32)
+        frag_int = np.array(row.frag_int.split(";"),dtype=np.float32)
+        obs_int = np.array(row.obs_int.split(";"),dtype=np.float32)
+        
+        for i,f in enumerate(frag_names):
+            traces.setdefault(f,[])
+            traces[f].append([spec_id,frag_mz[i],obs_int[i]])
+        
+        
+    

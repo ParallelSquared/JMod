@@ -5,7 +5,7 @@ from pyteomics import mass
 from scipy import signal
 from scipy.optimize import curve_fit
 import config
-
+import line_profiler
 
 def feature_list_rt(DinoDF,rt,rt_tol): 
     # _bool=np.logical_and(DinoDF["rtStart"]-rt_tol<rt,DinoDF["rtEnd"]+rt_tol>rt)
@@ -136,11 +136,6 @@ def closest_feature(mz,rt,dino_features,rt_tol,mz_tol):
       
         
 
-def frag_to_peak(frag_dict):
-    peaks = np.array(list(frag_dict.values()))
-    order = np.argsort(peaks[:,0])
-    return peaks[order]
-
 
 
 
@@ -162,11 +157,40 @@ def closest_ms1spec(ms2rt,ms1rt):
     closest_idx = np.argmin(np.abs(ms1rt-ms2rt))
     return closest_idx
 
+#@profile
+# def closest_peak_diff(mz,spec_mz_list,max_diff=2e-5):
+#     all_diffs = spec_mz_list-mz
+#     smallest_diff = all_diffs[np.argmin(np.abs(all_diffs))]/mz # rel diff
+#     if np.abs(smallest_diff)<max_diff:
+#         return smallest_diff
+#     else: 
+#         return np.nan
+# #@profile   
 def closest_peak_diff(mz,spec_mz_list,max_diff=2e-5):
-    all_diffs = spec_mz_list-mz
-    smallest_diff = all_diffs[np.argmin(np.abs(all_diffs))]/mz # rel diff
-    if np.abs(smallest_diff)<max_diff:
-        return smallest_diff
+    # all_diffs = spec_mz_list-mz
+    # smallest_diff = all_diffs[np.argmin(np.abs(all_diffs))]/mz # rel diff
+    order_idx = np.searchsorted(spec_mz_list, mz)
+    
+    # Handle edge cases for indices at the bounds
+    if order_idx == 0:
+        mz_diff = (spec_mz_list[0]-mz)/mz
+    elif order_idx == len(spec_mz_list):
+        mz_diff = (spec_mz_list[-1]-mz)/mz
+    else:
+        # Compare the closest values on both sides of the searchsorted index
+        left_idx = order_idx - 1
+        right_idx = order_idx
+        
+        # Find the closest value between the two neighboring indices
+        left_diff = spec_mz_list[left_idx] - mz
+        right_diff = spec_mz_list[right_idx] - mz
+        if abs(left_diff) < abs(right_diff):
+            mz_diff = left_diff/mz
+        else:
+            mz_diff = right_diff/mz
+    # print(mz_diff)
+    if (-max_diff)<mz_diff<max_diff:
+        return mz_diff
     else: 
         return np.nan
     
@@ -238,7 +262,10 @@ def change_seq(seq,rules):
         new_seq = "".join([diann_rules[aa] for aa in seq])
     elif rules=="rev":
         new_seq = "".join(seq[:-1][::-1]+seq[-1:])
-    
+    else:
+        raise ValueError("Unavailable rules selected")
+    # elif rules==None:
+    #     new_seq = "".join(seq)
     return new_seq
 
 
@@ -316,7 +343,7 @@ def convert_frags_orig(seq,frags,rules):
 ## update to work for mTRAQ
 ## Note: unsure if this works for modifications
 ####  TO DO:   Need to add tag masses to larger dict with modifications included 
-
+#@profile
 def convert_frags(seq,frags,rules=diann_rules):
     
     new_seq = change_seq(seq=seq,rules=rules)    
@@ -336,6 +363,7 @@ def convert_frags(seq,frags,rules=diann_rules):
     new_frags = {}
     
     for frag in frags:
+        
         ion,charge = frag.split("_")
         ion_type = ion[0]
         ion_nmr_loss = ion[1:]
@@ -343,7 +371,7 @@ def convert_frags(seq,frags,rules=diann_rules):
         ion_nmr = int(ion_nmr_loss_split[0])
         loss = 0
         if len(ion_nmr_loss_split)>1:
-            ion_loss = ion_nmr_loss[1]
+            ion_loss = ion_nmr_loss_split[1]
             try:
                 loss = mass.calculate_mass(ion_loss)
             except:
@@ -470,6 +498,12 @@ def fit_gaussian(data,init_std=None):
 
 
 
+
+# def frag_to_peak(frag_dict):
+#     peaks = np.array(list(frag_dict.values()))
+#     order = np.argsort(peaks[:,0])
+#     return peaks[order]
+
 def frag_to_peak(frag_dict,return_frags=False):
     peaks = np.array(list(frag_dict.values()))
     order = np.argsort(peaks[:,0])
@@ -527,7 +561,6 @@ def cosim(x,y):
     y = np.squeeze(y)
     
     return np.dot(x,y)/(np.sqrt(np.sum(np.power(x,2)))*np.sqrt(np.sum(np.power(y,2))))
-
 
 
 
@@ -601,3 +634,44 @@ def unstring_floats(string,delim=";"):
     assert type(string)==str
     assert type(delim)==str
     return np.array([*map(float,string.split(delim))])
+
+
+
+from sklearn.ensemble import RandomForestClassifier
+def fit_model(data):
+    rf = RandomForestClassifier(n_estimators = 100, max_depth=10)
+    rf.fit(*data)
+    return rf
+
+
+
+from scipy.interpolate import interp1d
+import statsmodels.api as sm
+
+def lowess_fit(x,y,frac=.2, it=3):
+
+    # plt.scatter(x,y,s=1)
+    
+    lowess = sm.nonparametric.lowess(y, x, frac=frac,it=it)
+    
+    # unpack the lowess smoothed points to their values
+    lowess_x = list(zip(*lowess))[0]
+    lowess_y = list(zip(*lowess))[1]
+    
+    # run scipy's interpolation. There is also extrapolation I believe
+    f = interp1d(lowess_x, lowess_y, bounds_error=False,fill_value=(min(lowess_y),max(lowess_y)))
+    
+    return f
+
+
+def fragment_cor(df,didx,fn="cos"):
+    
+    d1={i[0]:i[1] for i in zip(df.iloc[didx].frag_names.split(";"),unstring_floats(df.iloc[didx].obs_int))}    
+    d2={i[0]:i[1] for i in zip(df.iloc[didx].frag_names.split(";"),unstring_floats(df.iloc[didx].frag_int))}
+    # include_frags = {i:j for i,j in d2.items() if j>.05}
+    shared_d = set(d1).intersection(set(d2))
+    # shared_d = {i for i in shared_d for j in include_frags if j  in i}
+    if fn=="cos":
+        return cosim(np.array([d1[i] for i in shared_d]),np.array([d2[i] for i in shared_d]))
+    else: 
+        return np_pearson_cor(np.array([d1[i] for i in shared_d]),np.array([d2[i] for i in shared_d])).statistic

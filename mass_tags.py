@@ -112,16 +112,28 @@ mTRAQ_02468 =   massTag(rules = "nK",
                         channel_names = ["0","2","4","6","8"],
                         name = "mTRAQ_02468")
 
-# print(mTRAQ)
- 
 
 diethyl_6plex =       massTag(rules = "nK",
                         base_mass=56.06260026,
                         delta = [0.0,2.01255348,4.013419349,6.025972839,8.05021396,10.062767459],#,12.06363332,14.07618681],
                         channel_names = ["0","2","4","6","8","10"],#,"12","14"],
                         name = "diethyl_6plex")
- 
 
+
+diethyl_3plex =       massTag(rules = "nK",
+                        base_mass=56.06260026,
+                        delta = [0.0,4.013419349,8.05021396],#,12.06363332,14.07618681],
+                        channel_names = ["0","4","8"],#,"12","14"],
+                        name = "diethyl_3plex")
+ 
+     
+tag6 = massTag(rules = "nK",
+            base_mass=308.1160923903,
+            # delta = 4.0070994,
+            # delta = [4.0070994],
+            delta = [0.0,4.01095605604],#,8.02683870239997],
+            channel_names = ["0","4"],#,"8"],
+            name = "tag6")
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
 def split_frag_name(ion_type):
@@ -263,7 +275,7 @@ def tag_library(library,tag=mTRAQ):
                 
                 lib_entry["frags"][frag] = [mz+(tag_mass*n_tags/int(frag_z)),I]
                 
-            lib_entry["spectrum"] = frag_to_peak(lib_entry["frags"])
+            lib_entry["spectrum"],lib_entry["ordered_frags"] = frag_to_peak(lib_entry["frags"],return_frags=True)
             lib_entry["spec_frags"] = specific_frags(lib_entry["frags"])
             new_lib[new_seq,key[1]] = lib_entry
             
@@ -275,7 +287,8 @@ def tag_library(library,tag=mTRAQ):
 available_tags = {"mTRAQ":mTRAQ,
                   "mTRAQ678":mTRAQ_678,
                   "mTRAQ02468":mTRAQ_02468,
-                  "diethyl_6plex":diethyl_6plex}
+                  "diethyl_6plex":diethyl_6plex,
+                  "diethyl_3plex":diethyl_3plex}
 
 # if config.args.mTRAQ:
 #     config.tag = mTRAQ

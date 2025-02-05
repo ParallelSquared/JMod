@@ -17,13 +17,16 @@ parser.add_argument('-t', '--threads', default=10, type=int)
 parser.add_argument('-p', '--ppm', default=20, type=float)
 parser.add_argument('--ms2_align', action='store_true')
 parser.add_argument('--timeplex', action='store_true')
+parser.add_argument('--num_timeplex', default=0, type=int)
 parser.add_argument('--iso', action='store_true')
-parser.add_argument('--unmatched', default="a", type=str)
+parser.add_argument('--unmatched', default="c", type=str)
 parser.add_argument('--decoy', default="rev", type=str)
 parser.add_argument('--mTRAQ', action='store_true')
 parser.add_argument('--tag', default="", type=str)
 parser.add_argument('--num_iso', default=2, type=float)
 parser.add_argument('--pp_file', default="", type=str)
+parser.add_argument('--timspeak_file', default="", type=str)
+parser.add_argument('-z','--dummy_value', type=str)
 
 
 args = parser.parse_args()
@@ -48,12 +51,12 @@ args = parser.parse_args()
 
 mz_ppm = args.ppm
 mz_tol = mz_ppm*10**(-6)
-ms1_ppm = 10
+ms1_ppm = 20
 ms1_tol = ms1_ppm*10**(-6)
 
-num_timeplex = None
+num_timeplex = args.num_timeplex
 
-rt_tol = 3
+rt_tol = 9
 im_tol = 0.5
 im_merge_tol = 0.005
 rt_width = 1.5
@@ -62,7 +65,7 @@ top_n = 10
 atleast_m = args.atleast_m
 
 top_n_pasef = 10
-atleast_m_pasef = 1
+atleast_m_pasef = 3
 
 max_window_offset = None
 
@@ -86,8 +89,18 @@ opt_im_tol = im_tol
 
 
 
+protein_column = 'protein_name'
+
+
+
 num_iso_peaks = args.num_iso
-min_iso_intensity = 1e-3 ## not derived meeaningfully. Just looked at the minimum value from a library
+min_iso_intensity = 1e-3 ## derived empirically
+
+## how many isotope pearsonR corr to collect
+num_iso_r = 2
+
+## how many isotope traces to collect
+num_iso_ms1 = 6
 
 decoy_mz_offset = 20
 
@@ -113,24 +126,6 @@ score_model = "rf"
 
 fdr_threshold = 0.01
 
-
-#############################################
-##### This causes a circular import
-
-# #### tags here
-
-# from mass_tags import massTag
-# mTRAQ = massTag(rules = "nK",
-#             base_mass=140.0949630177,
-#             delta = 4.0070994,
-#             channel_names = ["0","4","8"],
-#             name = "mTRAQ")
-
-# if args.mTRAQ:
-#     tag = mTRAQ
-
-# else: 
-#     tag = None
 
 #############################################
 

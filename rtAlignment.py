@@ -16,7 +16,7 @@ import Jplot as jp
 import config
 import iso_functions as iso_f
 
-from SpectraFitting import fit_to_lib, fit_to_pasef, fit_timspeak
+from SpectraFitting import fit_to_lib
 from scipy.interpolate import LSQUnivariateSpline as spline
 from scipy.interpolate import UnivariateSpline, InterpolatedUnivariateSpline
 from scipy.optimize import isotonic_regression
@@ -27,14 +27,24 @@ from scipy.optimize import curve_fit
 from scipy import stats
 import warnings
 import dill
+dill.settings['recurse'] = True
 import itertools 
 import h5py
-# import alphatims.bruker
-from mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex
+import copy
+
+from scipy.interpolate import interp1d
+import statsmodels.api as sm
+
+
+from mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
 
 from miscFunctions import feature_list_mz, feature_list_rt, createTolWindows, within_tol,moving_average, \
-    closest_ms1spec, closest_peak_diff,split_frag_name
-                    
+    closest_ms1spec, closest_peak_diff,split_frag_name, unstring_floats, fragment_cor, np_pearson_cor
+
+
+from FinetuneFns import fine_tune_rt, one_hot_encode_sequence
+from read_output import names, dtypes
+
 
 def twostepfit(x,y,n_knots=2,z=None,k1=1):
     if z is None:
@@ -178,24 +188,12 @@ def initstepfit(x,y,n_knots=2,z=None,k1=1):
     return spl3
 
 
-from scipy.interpolate import interp1d
-import statsmodels.api as sm
 
-
-# x = output_rts
-# y = dia_rt
-
-# all_id_rt = [[(i[j][2],i[j][3]),i[j][5],i[j][18]] for i in output for j in range(len(i)) if i[j][0]>10 and i[j][18]>15]
-# all_lib_rts = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
-
-# x = all_lib_rts
-# y = [i[1] for i in all_id_rt]
-
-def lowess_fit(x,y,frac=.2):
+def lowess_fit(x,y,frac=.2, it=3):
 
     # plt.scatter(x,y,s=1)
     
-    lowess = sm.nonparametric.lowess(y, x, frac=frac)
+    lowess = sm.nonparametric.lowess(y, x, frac=frac,it=it)
     
     # unpack the lowess smoothed points to their values
     lowess_x = list(zip(*lowess))[0]
@@ -205,6 +203,8 @@ def lowess_fit(x,y,frac=.2):
     f = interp1d(lowess_x, lowess_y, bounds_error=False,fill_value=(min(lowess_y),max(lowess_y)))
     
     return f
+
+
 
 def get_diff(mz,peaks,window,tol):
     
@@ -250,28 +250,6 @@ def max_intens(peaks,window):
     else:
         return np.zeros(2)
     
-# # find largest peak in each spectrum
-# def get_largest(dia_spectra):
-    
-#     ms1spectra = dia_spectra.ms1scans
-#     ms2spectra = dia_spectra.ms2scans
-#     all_windows = [tuple(i.ms1window) for i in ms2spectra]
-#     set_windows = sorted(set(all_windows))
-#     all_windows = np.stack(all_windows)
-#     min_mz = np.min(all_windows[:,0])
-#     max_mz = np.max(all_windows[:,1])
-    
-#     ms2_ms1_ratio = round(len(ms2spectra)/len(ms1spectra))
-#     mzs=[]
-#     for idx,spec in enumerate(ms1spectra[:100]):
-#         _bool = np.logical_and(spec.mz>min_mz,spec.mz<max_mz)
-#         max_intens_idx = np.argmax(spec.intens[_bool])
-#         max_intens =  spec.intens[_bool][max_intens_idx]
-#         mz_of_max = spec.mz[_bool][max_intens_idx]
-#         mzs.append(mz_of_max)
-#         # ms2_idxs = np.arange(idx*ms2_ms1_ratio,(idx+1)*ms2_ms1_ratio)
-#         # windows = [contains_peak(ms2spectra[i].ms1window,mz_of_max) for i in ms2_idxs]
-#         # np.where(windows)[0][0]
         
 # find largest peak in each spectrum
 def get_largest(dia_spectra):
@@ -297,7 +275,7 @@ def get_largest(dia_spectra):
     top_mzs[:,:,2] = (top_mzs[:,:,2]*ms2_ms1_ratio)+np.arange(ms2_ms1_ratio)[:,np.newaxis]
     return top_mzs.reshape(-1,3)
 
-# def spectra_largest_features(dia_spectra,features):
+
     
     
 def closest_feature(mz,rt,dino_features,rt_tol,mz_tol):
@@ -328,7 +306,7 @@ def closest_feature2(mz,rt,dino_features,rt_tol,mz_tol):
     
     feature_mzs = np.array(dino_features.mz[_bool])
     
-    log_diff = within_tol(mz, feature_mzs, atol=0, rtol=mz_tol) 
+    log_diff = within_tol(mz, feature_mzs, atol=0, rtol=mz_tol)
     idxs = np.where(log_diff[...,0])[0]
     
     
@@ -360,6 +338,8 @@ def closest_spec(dia_rt_mzwin,mz,rt):
     _bool = np.logical_and(dia_rt_mzwin[:,1]<mz,mz<dia_rt_mzwin[:,2])
     contender_idxs = np.where(_bool)
     contenders = dia_rt_mzwin[_bool]
+    if len(contenders)==0: ## should not happen has been observed with mismade acquisition schemes
+        return 0
     closest_idx = contender_idxs[0][np.argmin(np.abs(contenders[:,0]-rt))]
     return closest_idx
     # try:
@@ -380,12 +360,12 @@ def fwhm(stddev):
 ## if there is a background uniform distribution, it will not fit the gaussian well
 # therefore we can subtract the min val in all bins fram all bins and then fit
 ### This seems to work for some data but need to robustly test
-def fit_gaussian(data,init_std=None):
+def fit_gaussian(data,init_std=None,bin_n=50):
     
     data = np.array(data)
     data = data[~np.isnan(data)]
     # Create a histogram
-    hist, bin_edges = np.histogram(data, bins=50, density=True)
+    hist, bin_edges = np.histogram(data, bins=bin_n, density=True)
     
     ### Need to test
     # background = np.min(hist)
@@ -430,6 +410,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # mz_tol,ms1,results_folder,ms2 = (config.ms1_tol,False,None,False) 
     # here spectra are both ms1 and ms2 
     
+    config.n_most_intense_features = int(1e8) # larger than possible, essentually all
+    
     scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
     print("Intitial search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
@@ -454,109 +436,105 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
     top_n_spectra = [ms2spectra[i] for i in top_n]
     
-    # # with multiprocessing.Pool(config.numProc) as p:
-    # #     fit_outputs = list(tqdm.tqdm(p.imap(partial(fit_to_lib,
-    # #                                                 library=librarySpectra,
-    # #                                                 rt_mz=rt_mz,
-    # #                                                 all_keys=all_keys,
-    # #                                                 dino_features=None,
-    # #                                                 rt_filter=False),
-    # #                                         top_n_spectra,chunksize=len(top_n_spectra)//config.numProc),total=len(top_n_spectra)))
+    
+    if dino_features is None:
+    
+        ### redefine "top_n_spectra" to evenly span Rt and m/z
+        np.random.seed(0)
+        top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
         
-   
-    
-    # """
-    
-    
-    ### redefine "top_n_spectra" to evenly span Rt and m/z
-    np.random.seed(0)
-    top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
-    
-    
-    fit_outputs=[]
-    
-    frags = []
-    for idx in tqdm.trange(len(top_n)):
-        if ms2:
-            fit_output,frag_errors = fit_to_lib(top_n_spectra[idx],
-                                    library=librarySpectra,
-                                    rt_mz=rt_mz,
-                                    all_keys=all_keys,
-                                    dino_features=None,
-                                    rt_filter=False,
-                                    return_frags=True,
-                                    ms1_spectra = ms1spectra
-                                    )
-            frags.append(frag_errors)
-        else:
-            fit_output = fit_to_lib(top_n_spectra[idx],
-                                    library=librarySpectra,
-                                    rt_mz=rt_mz,
-                                    all_keys=all_keys,
-                                    dino_features=None,
-                                    rt_filter=False,
-                                    return_frags=False,
-                                    ms1_spectra = ms1spectra
-                                    )
-        fit_outputs.append(fit_output)
-    fit_outputs1=fit_outputs
+        
+        fit_outputs=[]
+        
+        frags = []
+        for idx in tqdm.trange(len(top_n)):
+            if ms2:
+                fit_output,frag_errors = fit_to_lib(top_n_spectra[idx],
+                                        library=librarySpectra,
+                                        rt_mz=rt_mz,
+                                        all_keys=all_keys,
+                                        dino_features=None,
+                                        rt_filter=False,
+                                        return_frags=True,
+                                        ms1_spectra = ms1spectra,
+                                        frac_matched=.8
+                                        )
+                frags.append(frag_errors)
+            else:
+                fit_output = fit_to_lib(top_n_spectra[idx],
+                                        library=librarySpectra,
+                                        rt_mz=rt_mz,
+                                        all_keys=all_keys,
+                                        dino_features=None,
+                                        rt_filter=False,
+                                        return_frags=False,
+                                        ms1_spectra = ms1spectra,
+                                        frac_matched=.8
+                                        )
+            fit_outputs.append(fit_output)
+        fit_outputs1=fit_outputs
     # """
     #################################################################################
-    """
-    all_dia_rt = [i.RT for i in ms2spectra]
-    all_dia_windows = np.array([i.ms1window for i in ms2spectra])
-    lowest_mz = np.min(all_dia_windows,0)[0] # assume window span is constant over time
-    largest_mz = np.max(all_dia_windows,0)[1]
-    mz_bins = np.linspace(lowest_mz,largest_mz,6)
-    
-    ## remove charge 1+ features
-    dino_features = dino_features[dino_features["charge"]!=1]
-    dino_features = dino_features.reset_index(drop=True)
-    sorted_features = np.argsort(-np.array(dino_features.intensityApex))
-    sorted_mz = dino_features.mz[sorted_features]
-    large_feature_indices = sorted_features[np.array(np.logical_and(sorted_mz>lowest_mz,sorted_mz<largest_mz))][:config.n_most_intense_features] 
-    
-    sorted_feature_mz_bins = [sorted_features[np.logical_and(sorted_mz>mz_bins[i],sorted_mz<mz_bins[i+1])] for i in range(len(mz_bins)-1)]
-    large_feature_indices = [j for i in sorted_feature_mz_bins for j in i[:(config.n_most_intense_features//(len(mz_bins)-1))]]
-    
-    lf_rt = np.array(dino_features.rtApex[large_feature_indices])
-    lf_mz = np.array(dino_features.mz[large_feature_indices])
-    print("Finding correct spectra")
-    # lf_spectra = [np.argmin(np.abs(np.array(all_dia_rt)-i)) for i in lf_rt]
-    dia_rt_mzwin = np.array([[i.RT,*i.ms1window] for i in ms2spectra])
-    lf_spectra = [closest_spec(dia_rt_mzwin,i,j) for i,j in zip(lf_mz,lf_rt)] 
-    # mz_int_n = get_largest(dia_spec,tra)
-    fit_outputs2=[]
-    frags = []
-    for idx in tqdm.trange(len(lf_spectra)):
-        if ms2:
-            fit_output,frag_errors = fit_to_lib(ms2spectra[int(lf_spectra[idx])],
-                                                library=librarySpectra,
-                                                rt_mz=rt_mz,
-                                                all_keys=all_keys,
-                                                dino_features=None,
-                                                rt_filter=False,
-                                                ms1_mz=lf_mz[idx],
-                                                return_frags = True,
-                                                ms1_spectra = ms1spectra
-                                                )
-            
-            frags.append(frag_errors)
-        else:
-            
-            fit_output = fit_to_lib(ms2spectra[int(lf_spectra[idx])],
-                                    library=librarySpectra,
-                                    rt_mz=rt_mz,
-                                    all_keys=all_keys,
-                                    dino_features=None,
-                                    rt_filter=False,
-                                    ms1_mz=lf_mz[idx],
-                                    ms1_spectra = ms1spectra
-                                    )
-        fit_outputs2.append(fit_output)
+    # """
+    else:
+        all_dia_rt = [i.RT for i in ms2spectra]
+        all_dia_windows = np.array([i.ms1window for i in ms2spectra])
+        lowest_mz = np.min(all_dia_windows,0)[0] # assume window span is constant over time
+        largest_mz = np.max(all_dia_windows,0)[1]
+        mz_bins = np.linspace(lowest_mz,largest_mz,6)
         
-    fit_outputs = fit_outputs2
-    top_n_spectra = [ms2spectra[i] for i in lf_spectra]
+        ## remove charge 1+ features
+        dino_features = dino_features[dino_features["charge"]!=1]
+        dino_features = dino_features.reset_index(drop=True)
+        sorted_features = np.argsort(-np.array(dino_features.intensityApex))
+        sorted_mz = dino_features.mz[sorted_features]
+        large_feature_indices = sorted_features[np.array(np.logical_and(sorted_mz>lowest_mz,sorted_mz<largest_mz))][:config.n_most_intense_features] 
+        
+        sorted_feature_mz_bins = [sorted_features[np.logical_and(sorted_mz>mz_bins[i],sorted_mz<mz_bins[i+1])] for i in range(len(mz_bins)-1)]
+        large_feature_indices = [j for i in sorted_feature_mz_bins for j in i[:(config.n_most_intense_features//(len(mz_bins)-1))]]
+        
+        lf_rt = np.array(dino_features.rtApex[large_feature_indices])
+        lf_mz = np.array(dino_features.mz[large_feature_indices])
+        # print("Finding correct spectra")
+        # lf_spectra = [np.argmin(np.abs(np.array(all_dia_rt)-i)) for i in lf_rt]
+        dia_rt_mzwin = np.array([[i.RT,*i.ms1window] for i in ms2spectra])
+        lf_spectra = [closest_spec(dia_rt_mzwin,i,j) for i,j in zip(lf_mz,lf_rt)] 
+        # mz_int_n = get_largest(dia_spec,tra)
+        fit_outputs2=[]
+        frags = []
+        for idx in tqdm.trange(len(lf_spectra)):
+            if ms2:
+                fit_output,frag_errors = fit_to_lib(ms2spectra[int(lf_spectra[idx])],
+                                                    library=librarySpectra,
+                                                    rt_mz=rt_mz,
+                                                    all_keys=all_keys,
+                                                    dino_features=None,
+                                                    rt_filter=False,
+                                                    ms1_mz=lf_mz[idx],
+                                                    return_frags = True,
+                                                    ms1_spectra = ms1spectra,
+                                                    frac_matched=.8, ## NB: this may be selcting for smaller peptides
+                                                    ms1_tol=config.ms1_tol
+                                                    )
+                
+                frags.append(frag_errors)
+            else:
+                
+                fit_output = fit_to_lib(ms2spectra[int(lf_spectra[idx])],
+                                        library=librarySpectra,
+                                        rt_mz=rt_mz,
+                                        all_keys=all_keys,
+                                        dino_features=None,
+                                        rt_filter=False,
+                                        ms1_mz=lf_mz[idx],
+                                        ms1_spectra = ms1spectra,
+                                        frac_matched=.8,## NB: this may be selcting for smaller peptides
+                                        ms1_tol=config.ms1_tol
+                                        )
+            fit_outputs2.append(fit_output)
+            
+        fit_outputs = fit_outputs2
+        top_n_spectra = [ms2spectra[i] for i in lf_spectra]
     # """
      ########################################################################
      
@@ -567,9 +545,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     max_ids=[]
     lc_frags_errors=[]
     lc_frags=[]
+    feature_mzs = []
     for idx,fit_output in enumerate(fit_outputs):    
         if fit_output[0][0]!=0:
-            lib_rt.append([librarySpectra[(i[2],i[3])]["iRT"] for i in fit_output])
+            lib_rt.append([librarySpectra[(i[3],i[4])]["iRT"] for i in fit_output])
             dia_rt.append(top_n_spectra[idx].RT)
             output.append(fit_output)
             max_id = np.argmax([i[0] for i in fit_output])
@@ -577,10 +556,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             if ms2:
                 lc_frags_errors.append(frags[idx][0][max_id])
                 lc_frags.append(frags[idx][1][max_id])
-        
+            if dino_features is not None:
+                feature_mzs.append(lf_mz[idx])
     # max_ids = [np.argmax([i[0] for i in j]) for j in output]
     ms1windows = [i.ms1window for i in top_n_spectra]
-    id_keys = [(i[j][2],i[j][3]) for i,j in zip(output,max_ids)]
+    id_keys = [(i[j][3],i[j][4]) for i,j in zip(output,max_ids)]
     id_mzs = [librarySpectra[i]["prec_mz"] for i in id_keys]
     
     # plt.hist(np.log10([i[j][0] for i,j in zip(output,max_ids)]),np.arange(1,9,.3))
@@ -593,33 +573,41 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     min_int = 100#np.median([j[0] for i in output for j in i])
     
-    all_id_rt = [[(i[j][2],i[j][3]),i[j][5]] for i in output for j in range(len(i)) if i[j][0]>min_int]
+    all_id_rt = [[(i[j][3],i[j][4]),i[j][6]] for i in output for j in range(len(i)) if i[j][0]>min_int]
     all_coeff = [i[j][0] for i in output for j in range(len(i)) if i[j][0]>min_int]
     all_id_mzs = [librarySpectra[i[0]]["prec_mz"] for i in all_id_rt]
     
-    all_hyper = [i[j][18] for i in output for j in range(len(i)) if i[j][0]>min_int]
+    all_hyper = [i[j][19] for i in output for j in range(len(i)) if i[j][0]>min_int]
     
     def max_coeff_rt(outputs):
         max_id = np.argmax([i[0] for i in outputs])
         # if outputs[0][0]==0:
         #     return np.nan
         # else:
-        return librarySpectra[(outputs[max_id][2],outputs[max_id][3])]["iRT"]
+        return librarySpectra[(outputs[max_id][3],outputs[max_id][4])]["iRT"]
     
     
     output_rts = np.array([max_coeff_rt(i) for i in output])
     output_coeff = np.array([i[j][0] for i,j in zip(output,max_ids)])
-    output_hyper = np.array([i[j][18] for i,j in zip(output,max_ids)])
+    output_hyper = np.array([i[j][19] for i,j in zip(output,max_ids)])
     all_lib_rts = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
     
+    output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
     
+    # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
+    
+    frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
+    frag_cosines_p = np.array([fragment_cor(output_df,i,fn="p") for i in range(len(output_df))])
+    frag_multiply = frag_cosines*frag_cosines_p
     # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
+    
+    cor_filter = np.ones_like(dia_rt,dtype=bool)
     
     ## 2 step fitting
     # rt_spl = threestepfit(output_rts,dia_rt,1)
     # rt_spl = threestepfit(output_rts,dia_rt,1,z=np.log10(output_coeff))
     # rt_spl = threestepfit(output_rts,dia_rt,1,z=output_hyper)
-    rt_spl = threestepfit(all_lib_rts,[i[1] for i in all_id_rt],1,z=all_hyper)
+    # rt_spl = threestepfit(all_lib_rts,[i[1] for i in all_id_rt],1,z=all_hyper)
     # rt_spl = threestepfit(output_rts,dia_rt,1,z=output_coeff)
     # rt_spl = threestepfit(all_lib_rts,[i[1] for i in all_id_rt],1,z=all_coeff)
     # rt_spl = initstepfit(output_rts,dia_rt,1,z=np.log10(output_coeff))
@@ -627,9 +615,19 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     rt_spl = initstepfit(all_lib_rts,[i[1] for i in all_id_rt],1,z=all_hyper)
     # rt_spl = sgd_fit(output_rts,dia_rt)
     if config.tag is not None and "diethyl" in config.tag.name:
-        rt_spl = lowess_fit(all_lib_rts,[i[1] for i in all_id_rt])
-    # plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)#0,c=output_hyper)
+        if dino_features is not None:
+            # rt_spl = lowess_fit(output_rts,dia_rt)
+            cor_limit = 0.8
+            cor_filter = frag_multiply>cor_limit
+            rt_spl = lowess_fit(np.array(output_rts)[frag_multiply>cor_limit],np.array(dia_rt)[cor_filter])
+        else:
+            rt_spl = lowess_fit(all_lib_rts,[i[1] for i in all_id_rt])
+        
+    # plt.scatter(output_rts,dia_rt,label="Original_RT",s=.5,c=np.log10(output_coeff))
     # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
+    # plt.colorbar(label="log coeff")
+    # # plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)
+    # # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
     # plt.xlabel("Library RT");plt.ylabel("Observed RT");
     
     # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
@@ -637,7 +635,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     converted_rt = rt_spl(output_rts)
     
-    rt_amplitude, rt_mean, rt_stddev = fit_gaussian(dia_rt-converted_rt)
+    rt_amplitude, rt_mean, rt_stddev = fit_gaussian((dia_rt-converted_rt)[cor_filter])
     # rt_spl = twostepfit(all_lib_rts,[i[1] for i in all_id_rt]) # does not work
     
     # mz_spl = twostepfit(id_mzs, diffs)
@@ -657,7 +655,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # diffs = [closest_feature(id_mzs[i],dia_rt[i],dino_features,0,10*1e-6) for i in range(len(id_mzs))]
     
     # feature_mz = [closest_feature2(id_mzs[i],converted_rt[i],dino_features,1,30*1e-6) for i in range(len(id_mzs))]
-    mz_spl = twostepfit(id_mzs,diffs,1)
+    mz_spl = twostepfit(np.array(id_mzs)[cor_filter],np.array(diffs)[cor_filter],1)
     # mz_spl = twostepfit(id_mzs,diffs,1,z=np.log10(output_coeff))
     
     # plt.scatter(all_id_mzs,[i for i in all_diffs],label="Original_RT",s=1)
@@ -666,7 +664,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     def mz_func(mz):
         return mz+(mz_spl(mz)*mz)
     
-    mz_amplitude, mz_mean, mz_stddev = fit_gaussian(diffs-mz_spl(id_mzs))
+    mz_amplitude, mz_mean, mz_stddev = fit_gaussian((diffs-mz_spl(id_mzs))[cor_filter])
     
     
     ### MS2 alignment
@@ -718,7 +716,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     new_ms1_tol = 4*mz_stddev
     print(f"Optimsed ms1 tolerance: {new_ms1_tol}")
     
-    # config.opt_ms1_tol  = new_ms1_tol
+    config.opt_ms1_tol  = new_ms1_tol
     
     if ms2:
         new_ms2_tol = 4*ms2_stddev
@@ -739,7 +737,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             
         ##plot RT alignment
         plt.subplots()
-        plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)
+        plt.scatter(output_rts[cor_filter],np.array(dia_rt)[cor_filter],label="Original_RT",s=.1)
         plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
         # plt.legend()
         plt.xlabel("Library RT")
@@ -749,7 +747,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         
         plt.subplots()
-        plt.scatter(output_rts,dia_rt-rt_spl(output_rts),label="Original_RT",s=1)
+        plt.scatter(np.array(output_rts)[cor_filter],(dia_rt-rt_spl(output_rts))[cor_filter],label="Original_RT",s=.1)
         plt.plot([min(output_rts),max(output_rts)],[0,0],color="r",linestyle="--",alpha=.5)
         plt.plot([min(output_rts),max(output_rts)],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
         plt.plot([min(output_rts),max(output_rts)],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
@@ -762,9 +760,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         
         plt.subplots()
-        vals,bins,_ = plt.hist(dia_rt-rt_spl(output_rts),100)
+        vals,bins,_ = plt.hist((dia_rt-rt_spl(output_rts))[cor_filter],100,density=True)
+        plt.plot(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100),gaussian(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100), rt_amplitude, rt_mean, rt_stddev),label="New RT fit")
         plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
-        plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
+        # plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
         plt.text(config.opt_rt_tol,max(vals),np.round(config.opt_rt_tol,2))
         plt.xlabel("RT difference")
         plt.ylabel("Frequency")
@@ -774,7 +773,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         ##plot mz alignment
         plt.subplots()
-        plt.scatter(id_mzs,diffs,label="Original_MZ",s=1)
+        plt.scatter(np.array(id_mzs)[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=1)
         plt.scatter(id_mzs,mz_spl(id_mzs),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("m/z")
@@ -785,13 +784,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         ## plot mz alignment
         plt.subplots()
-        plt.hist(diffs,100)
+        vals,bins,_ = plt.hist(np.array(diffs)[cor_filter],100,density=True)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs,100,alpha=.5)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_spl(id_mzs))/id_mzs,100,alpha=.5)
-        plt.hist(diffs-mz_spl(id_mzs),100,alpha=.5)
-        plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,50,color="r")
+        plt.hist(np.array(diffs)[cor_filter]-mz_spl(np.array(id_mzs)[cor_filter]),100,alpha=.5,density=True)
+        plt.plot(np.linspace(-config.opt_ms1_tol,config.opt_ms1_tol,100),gaussian(np.linspace(-config.opt_ms1_tol,config.opt_ms1_tol,100), mz_amplitude, mz_mean, mz_stddev),label="New RT fit")        
+        plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,max(vals),color="r")
         # plt.vlines([-4*mz_stddev,4*mz_stddev],0,50,color="g")
-        plt.text(config.opt_ms1_tol,50,f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
+        plt.text(config.opt_ms1_tol,max(vals),f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
         plt.xlabel("m/z difference (relative)")
         plt.ylabel("Frequency")
         # plt.show()
@@ -831,9 +831,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     else:
         return (rt_spl, mz_func)
 
-
-
-
 ###################################################################################################
 ###################################################################################################
 ###################################################################################################
@@ -846,11 +843,24 @@ colours = ["tab:blue","tab:orange","tab:green","tab:red",
 'tab:olive',
 'tab:cyan']
 
+def filter_rts_by_dense(rts,n_bins=20):
+    """
+    Input list of RTs
+    Where they are not dense is probably FPs
+    return bool of those from dense region
+    """
+    hist,bins = np.histogram(rts,n_bins)
+    med = np.mean(hist[hist!=0])
+    where_larger = np.where(hist>med/2)[0]
+    smallest,largest = (bins[where_larger[0]],bins[min(where_larger[-1]+1,len(bins)-1)])
+    return np.logical_and(np.greater(rts,smallest),np.less(rts,largest))
 
 def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False):
     ## for testing
     # mz_tol,ms1,results_folder,ms2 = (config.ms1_tol,False,None,False)
     # here spectra are both ms1 and ms2 
+    
+    config.n_most_intense_features = int(1e8) # larger than possible, essentually all
     
     scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
     print("Intitial search")
@@ -859,6 +869,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     ms1spectra = dia_spectra.ms1scans
     ms2spectra = dia_spectra.ms2scans
     
+    ### array of all MS1 RTs
     ms1_rt = np.array([i.RT for i in ms1spectra])
     
     totalIC = np.array([np.sum(i.intens) for i in ms2spectra])
@@ -870,30 +881,6 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
 
     
     
-    # top_n_spectra = [ms2spectra[i] for i in top_n]
-    # # with multiprocessing.Pool(config.numProc) as p:
-    # #     fit_outputs = list(tqdm.tqdm(p.imap(partial(fit_to_lib,
-    # #                                                 library=librarySpectra,
-    # #                                                 rt_mz=rt_mz,
-    # #                                                 all_keys=all_keys,
-    # #                                                 dino_features=None,
-    # #                                                 rt_filter=False),
-    # #                                         top_n_spectra,chunksize=len(top_n_spectra)//config.numProc),total=len(top_n_spectra)))
-        
-   
-    
-    # fit_outputs=[]
-    # for idx in tqdm.trange(len(top_n)):
-    #     fit_output = fit_to_lib(top_n_spectra[idx],
-    #                             library=librarySpectra,
-    #                             rt_mz=rt_mz,
-    #                             all_keys=all_keys,
-    #                             dino_features=None,
-    #                             rt_filter=False,
-    #                             )
-    #     fit_outputs.append(fit_output)
-    # fit_outputs1=fit_outputs
-    
     #################################################################################
     all_dia_rt = [i.RT for i in ms2spectra]
     all_dia_windows = np.array([i.ms1window for i in ms2spectra])
@@ -901,20 +888,27 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     largest_mz = np.max(all_dia_windows,0)[1]
     mz_bins = np.linspace(lowest_mz,largest_mz,6)
     
+    
+    ## sort identified peptide features by intensity
     sorted_features = np.argsort(-np.array(dino_features.intensityApex))
     sorted_mz = dino_features.mz[sorted_features]
     large_feature_indices = sorted_features[np.array(np.logical_and(sorted_mz>lowest_mz,sorted_mz<largest_mz))][:config.n_most_intense_features] 
     
-    sorted_feature_mz_bins = [sorted_features[np.logical_and(sorted_mz>mz_bins[i],sorted_mz<mz_bins[i+1])] for i in range(len(mz_bins)-1)]
-    large_feature_indices = [j for i in sorted_feature_mz_bins for j in i[:(config.n_most_intense_features//(len(mz_bins)-1))]]
+    # sorted_feature_mz_bins = [sorted_features[np.logical_and(sorted_mz>mz_bins[i],sorted_mz<mz_bins[i+1])] for i in range(len(mz_bins)-1)]
+    # large_feature_indices = [j for i in sorted_feature_mz_bins for j in i[:(config.n_most_intense_features//(len(mz_bins)-1))]]
     
     lf_rt = np.array(dino_features.rtApex[large_feature_indices])
     lf_mz = np.array(dino_features.mz[large_feature_indices])
+    ## order bt Rt so first column is first in list
+    rt_order = np.argsort(lf_rt)
+    lf_rt = lf_rt[rt_order]
+    lf_mz = lf_mz[rt_order]
     print("Finding correct spectra")
     # lf_spectra = [np.argmin(np.abs(np.array(all_dia_rt)-i)) for i in lf_rt]
     dia_rt_mzwin = np.array([[i.RT,*i.ms1window] for i in ms2spectra])
     lf_spectra = [closest_spec(dia_rt_mzwin,i,j) for i,j in zip(lf_mz,lf_rt)] 
     # mz_int_n = get_largest(dia_spec,tra)
+    print("Searching largest Features")
     fit_outputs2=[]
     frags = []
     for idx in tqdm.trange(len(lf_spectra)):
@@ -955,9 +949,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     max_ids=[]
     lc_frags_errors=[]
     lc_frags=[]
+    feature_mzs = []
     for idx,fit_output in enumerate(fit_outputs):    
         if fit_output[0][0]!=0:
-            lib_rt.append([librarySpectra[(i[2],i[3])]["iRT"] for i in fit_output])
+            lib_rt.append([librarySpectra[(i[3],i[4])]["iRT"] for i in fit_output])
             dia_rt.append(top_n_spectra[idx].RT)
             output.append(fit_output)
             max_id = np.argmax([i[0] for i in fit_output])
@@ -965,15 +960,18 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
             if ms2:
                 lc_frags_errors.append(frags[idx][0][max_id])
                 lc_frags.append(frags[idx][1][max_id])
-        
+            if dino_features is not None:
+                feature_mzs.append(lf_mz[idx])
     # max_ids = [np.argmax([i[0] for i in j]) for j in output]
     ms1windows = [i.ms1window for i in top_n_spectra]
-    id_keys = [(i[j][2],i[j][3]) for i,j in zip(output,max_ids)]
+    id_keys = [(i[j][3],i[j][4]) for i,j in zip(output,max_ids)]
+    id_keys_clean = id_keys#[(re.sub("\(tag6-\d\)","",i[j][3]),i[j][4]) for i,j in zip(output,max_ids)]
     id_mzs = [librarySpectra[i]["prec_mz"] for i in id_keys]
     
     
-    all_id_rt = [[(i[j][2],i[j][3]),i[j][5]] for i in output for j in range(len(i)) if i[j][0]>10]
+    all_id_rt = [[(i[j][3],i[j][4]),i[j][6]] for i in output for j in range(len(i)) if i[j][0]>10]
     all_coeff = [i[j][0] for i in output for j in range(len(i)) if i[j][0]>10]
+    all_id_frac_lib = [i[j][8] for i in output for j in range(len(i)) if i[j][0]>10]
     all_id_mzs = [librarySpectra[i[0]]["prec_mz"] for i in all_id_rt]
     
     
@@ -982,35 +980,58 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         # if outputs[0][0]==0:
         #     return np.nan
         # else:
-        return librarySpectra[(outputs[max_id][2],outputs[max_id][3])]["iRT"]
+        return librarySpectra[(outputs[max_id][3],outputs[max_id][4])]["iRT"]
     
     
     output_rts = np.array([max_coeff_rt(i) for i in output])
-    output_hyper = np.array([i[j][18] for i,j in zip(output,max_ids)])
-    output_seqs = np.array([i[j][2:4] for i,j in zip(output,max_ids)])
+    output_hyper = np.array([i[j][19] for i,j in zip(output,max_ids)])
+    output_coeff = np.array([i[j][0] for i,j in zip(output,max_ids)])
+    output_frac_lib = np.array([i[j][8] for i,j in zip(output,max_ids)])
+    output_seqs = np.array([i[j][3:5] for i,j in zip(output,max_ids)])
     all_lib_rts = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
     
     
-    
+    #### create dictionary for each key and it's positions
+    key_dict = {}
+    for i, key in enumerate(id_keys_clean):
+        key_dict.setdefault(key,[])
+        key_dict[key].append(i)
+        
     ## find keys that appear more than once
     multiples = []
     multiples_idxs = []
     num_multiples = []
+    channels = []
+    multiples_hyper = []
+    multiples_coeff = []
+    multiples_seqs = []
+    multiples_zs = []
+    
     searched = set()
     for key in set(id_keys):
+        # break
+        # clean_key = (re.sub("\(tag6-\d\)","",key[0]),key[1])
+        # orig_key= key
+        # key = clean_key
         if key in searched:
             continue
         else:
-            key_pos = np.where([i==key for i in id_keys])[0]
+            key_pos = key_dict[key]##np.where([i==key for i in id_keys])[0]
             if len(key_pos)>1:
                 multiple_rts = np.array([dia_rt[i] for i in key_pos])
+                multiples_hyper.append(np.array([output_hyper[i] for i in key_pos]))
+                multiples_coeff.append(np.array([output_coeff[i] for i in key_pos]))
                 order = np.argsort(multiple_rts)
+                order = np.arange(len(multiple_rts))
                 multiples.append(multiple_rts[order])
-                multiples_idxs.append(key_pos[order])
+                multiples_idxs.append(np.array(key_pos)[order])
                 num_multiples.append(len(key_pos))
+                # channels.append([re.findall("\(tag6-(\d+)\)",id_keys[i][0])[0] for i in key_pos])
+                multiples_seqs.append([id_keys[i][0] for i in key_pos])
+                multiples_zs.append([id_keys[i][1] for i in key_pos])
             searched.update(key)
     
-    if config.num_timeplex is None:
+    if config.num_timeplex==0:
         timeplex = stats.mode(num_multiples).mode
     else:
         timeplex = config.num_timeplex
@@ -1020,11 +1041,25 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # plt.hist(time_diffs,np.linspace(-1,5,40))
     # plt.xlabel("TimePLEX offset")
     
-    # plt.scatter([i[0] for i in multiples if len(i)==timeplex],time_diffs,s=1)
+    # plt.scatter(np.concatenate([i[0:2] for i in multiples if len(i)==timeplex]),time_diffs,s=1,edgecolors="none")
     # plt.ylabel("TimePLEX offset")
-    # plt.xlabel("T0 RT")
+    # plt.xlabel("RT")
     
+    ## for enantiomers
+    # plt.scatter([i[np.argsort(j)][0] for i,j in zip(multiples,channels) if len(i)==timeplex and "8" not in j and len(set(j))==2],
+    #             np.concatenate([np.diff(i[np.argsort(j)]) for i,j in zip(multiples,channels) if len(i)==timeplex and "8" not in j and len(set(j))==2]),
+    #             # c=np.log10([np.sum(i) for i,j in zip(multiples_hyper,channels) if len(i)==timeplex and "8" not in j and len(set(j))==2]),
+    #             s=1)
+    # plt.xlabel("RT of d0")
+    # plt.ylabel("RT d4 - RT d0")
+    # plt.ylim(-5,5)
     
+    # df = pd.DataFrame([(*i[np.argsort(j)],float(np.diff(i[np.argsort(j)])),re.sub("\(tag6-\d\)","",np.array(k)[np.argsort(j)][0]),np.array(l)[np.argsort(j)][0]) for i,j,k,l in
+    #  zip(multiples,channels,multiples_seqs,multiples_zs) 
+    #  if len(i)==timeplex and "8" not in  j and len(set(j))==2],columns = ["RTd0","RTd4","RTdelta","seq","z"])
+    # df.to_csv("/Volumes/Lab/KMD/timeplex/T6/StereoData/multiples_45min.csv")
+    # plt.scatter([i[0] for i in multiples if len(i)==timeplex],[i[1] for i in multiples if len(i)==timeplex],s=1)
+        
     # t1 = np.array([[dia_rt[i[0]],output_rts[i[0]]] for i in multiples_idxs])
     # t2 = np.array([[dia_rt[i[1]],output_rts[i[1]]] for i in multiples_idxs])
     
@@ -1035,7 +1070,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     gaussian_fits = []
     for idx in range(timeplex):
         lib_rt_range = [np.percentile(rt_mz[:,0],5),np.percentile(rt_mz[:,0],95)]
-        t1 = np.array([[dia_rt[i[idx]],output_rts[i[idx]],output_hyper[i[idx]]] for i in multiples_idxs if len(i)==timeplex and output_rts[i[idx]]>lib_rt_range[0] and output_rts[i[idx]]<lib_rt_range[1]])
+        ### array of (obs_rt, lib_rt, hyperscore)
+        t1 = np.array([[dia_rt[i[idx]],output_rts[i[idx]],output_hyper[i[idx]],id_mzs[i[idx]],output_coeff[i[idx]],output_frac_lib[i[idx]]] for i in multiples_idxs if len(i)==timeplex and output_rts[i[idx]]>lib_rt_range[0] and output_rts[i[idx]]<lib_rt_range[1]])
         t1_s = [output_seqs[i[idx]] for i in multiples_idxs if len(i)==timeplex and output_rts[i[idx]]>lib_rt_range[0] and output_rts[i[idx]]<lib_rt_range[1]]
         # t1 = np.array([[dia_rt[i[idx]],output_rts[i[idx]],output_hyper[i[idx]]] for i in multiples_idxs if len(i)==timeplex])
         rt_spl = threestepfit(t1[:,1],t1[:,0],1,t1[:,2])
@@ -1047,21 +1083,145 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         converted_rts.append(converted_rt)
         gaussian_fits.append(fit_gaussian(t1[:,0]-converted_rt))
     
+    # for idx in range(timeplex):
+    #     plt.scatter(t_vals[idx][:,1],t_vals[idx][:,0],s=1,c=colours[idx],edgecolor="none",label=f"T{str(idx)}")
+    #     plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1]),s=1,c=colours[idx],edgecolor="none",label=f"T{str(idx)}")
+    # plt.xlabel("Library RT")
+    # plt.ylabel("Observed RT")
+    # plt.ylim(0,60)
+    ########################################################################################################
+    #########################################################################################################
+    #########################################################################################################
+    
+    
+    ## only uses peptides within certain tolerance (Assume most of these are true nad exclude incorrect outliers)
+    # _bool = np.abs(rt_diffs)<(4*rt_stddev)
+    # ### Could also change to those with the expectd offset when observed
+    # rt_offsets = np.array([i[0] for i in t_vals[1]])-[i[0] for i in t_vals[0]]
+    # rt_offsets2 = np.array([i[0] for i in t_vals[2]])-[i[0] for i in t_vals[1]] ## for column 2 vs 3
+    all_rt_offsets = [np.array([i[0] for i in t_vals[idx+1]])-[i[0] for i in t_vals[idx]] 
+                      for idx in range(timeplex-1)]
+    offset_tolerance = 1 ## 1 minute
+    # expected_offset = stats.mode(np.round(all_rt_offsets[0][all_rt_offsets[0]>.5],1)).mode
+    exp_offsets = [stats.mode(np.round(rt_off[rt_off>.5],1)).mode for rt_off in all_rt_offsets] ## ensure it's around zero
+    diff_bool = np.abs(all_rt_offsets[0]-exp_offsets[0])<offset_tolerance
+    all_diff_bools = [np.abs(all_rt_offsets[idx]-exp_offsets[idx])<offset_tolerance for idx in range(timeplex-1)]
+    # plt.scatter(np.array([i[1] for i in t_vals[0]])[diff_bool],np.array([i[0] for i in t_vals[0]])[diff_bool],s=1)
+    # plt.scatter(np.array([i[1] for i in t_vals[1]])[diff_bool],np.array([i[0] for i in t_vals[1]])[diff_bool],s=1)
+    
+    # for idx in range(timeplex):
+    #     # plt.subplots()
+    #     plt.scatter(np.array([i[1] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools])],np.array([i[0] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools])],s=1,c=colours[idx],edgecolor="none",label=f"T{str(idx)}")
+    # plt.xlabel("Library RT")
+    # plt.ylabel("Observed RT")
+    # plt.ylim(0,60)
+    
+    ## fit to the "zeroth" column
+    f = lowess_fit(np.array([i[1] for i in t_vals[1]])[diff_bool],np.array([i[0] for i in t_vals[0]])[diff_bool])
+    
+    # plt.scatter([i[1] for i in t_vals[0]],[i[0] for i in t_vals[0]],s=1)
+    # plt.scatter([i[1] for i in t_vals[0]],f([i[1] for i in t_vals[0]]),s=1)
+    
+    # rt_diffs = f([i[1] for i in t_vals[1]])-[i[0] for i in t_vals[0]]
+    # rt_amplitude, rt_mean, rt_stddev = fit_gaussian(rt_diffs)
+    
+    # vals,bins,_ = plt.hist(rt_diffs,np.linspace(-10,10,150),density=True)
+    # plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
+    # plt.hist(rt_diffs[np.abs(rt_diffs)<(4*rt_stddev)],50,density=True,alpha=.5)
+    
+    
+    ## use observed rt for fine_tuning
+    grouped_df = pd.DataFrame({'Stripped.Sequence':[librarySpectra[(i[0],float(i[1]))]["seq"] for i in t_seqs[0]],"RT":[i[0] for i in t_vals[0]]})[diff_bool]
+    data_split, models, convertor = fine_tune_rt(grouped_df,qc_plots=True,results_path=results_folder)
+    
+    # all_seqs_onehot = [one_hot_encode_sequence(seq) for seq in grouped_df['Stripped.Sequence']]
+    # all_seqs_onehot = [one_hot_encode_sequence(i[0]) for i in t_seqs[0]]
+    # predictions = np.mean([model.predict(np.array(all_seqs_onehot)) for model in models],axis=0)
+    
+    
+    # plt.scatter(f1(convertor(predictions)).flatten(),[i[0] for i in t_vals[0]],s=1)
+    # plt.scatter(f1(convertor(predictions)).flatten(),[i[0] for i in t_vals[1]],s=1)
+    
+    
+    ### Note: I need to return an updated library not just the rt_spl
+    ### Or else return the models used to predict the RT
+    
+    
+    updatedLibrary = copy.deepcopy(librarySpectra)
+    all_lib_keys = list(librarySpectra)
+    all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
+    all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
+    
+    for key,rt in zip(all_lib_keys,all_new_lib_rts):
+        updatedLibrary[key]["iRT"] = rt
+        
+    
+    # ## get keys from t_vals and recreate scatter plot
+    # keys = [(i,float(j)) for i,j in t_seqs[0]]
+    # plt.scatter(f1(convertor([updatedLibrary[key]["iRT"] for key in keys])),[i[0] for i in t_vals[0]],s=1)
+    # plt.plot([10,50],[10,50])
+    # plt.scatter(f1(convertor([updatedLibrary[key]["iRT"] for key in keys])),[i[0] for i in t_vals[1]],s=1)
+    # plt.plot([10,50],[13,53])
+    
+    ### recalculate RT_spls...
+    keys = [(i,float(j)) for i,j in t_seqs[0]]
+    ## take 95% to decrease effect of ends inlfuencing predictions
+    t0_rts = np.array([updatedLibrary[key]["iRT"] for key in keys])
+    # rt_filter_bool = np.logical_and(t0_rts>np.percentile(t0_rts,1),t0_rts<np.percentile(t0_rts,95))
+    rt_filter_bool = filter_rts_by_dense(t0_rts,30)
+    rt_spls = []
+    for idx in range(timeplex):
+        # rt_spl = threestepfit([updatedLibrary[key]["iRT"] for key in keys],[i[0] for i in t_vals[0]],1)
+        rt_spl = lowess_fit(np.array([updatedLibrary[key]["iRT"] for key in keys])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
+                            np.array([i[0] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],frac=.4)
+        rt_spls.append(rt_spl)
+    
+    # for idx in range(timeplex):
+    #     # plt.subplots()
+    #     test_bool = np.logical_and(diff_bool,rt_filter_bool)
+    #     plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[test_bool],np.array([i[0] for i in t_vals[idx]])[test_bool],c=colours[idx],s=1,edgecolor="none") 
+    #     plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[test_bool],rt_spls[idx](np.array([updatedLibrary[key]["iRT"] for key in keys]))[test_bool],c=colours[idx],s=1,alpha=.2) 
+    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys]),np.array([i[0] for i in t_vals[1]]),s=1,alpha=.2)    
+    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[diff_bool],np.array([i[0] for i in t_vals[0]])[diff_bool],s=1,alpha=.2)
+    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[test_bool],np.array([i[0] for i in t_vals[0]])[test_bool],s=1,alpha=.2)
+    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[diff_bool],np.array([i[0] for i in t_vals[1]])[diff_bool],s=1,alpha=.2)
+    # # plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys]),s=1)
+    
+
+    
     # ## just use T0
     # export_df = pd.DataFrame({"obs_rt":np.concatenate([t_vals[0][:,0],t_vals[1][:,0]]),
     #                           "lib_rt":np.concatenate([t_vals[0][:,1],t_vals[1][:,1]]),
     #                           "seq":[i[0] for i in t_seqs[0]]+[i[0] for i in t_seqs[1]],
     #                           "charge":[i[1] for i in t_seqs[0]]+[i[1] for i in t_seqs[1]]})
-    # export_df.to_csv("/Volumes/Lab/KMD/For_JD/AllFeatures.csv")
+    
+    # export_df = pd.DataFrame({"obs_rt_0":t_vals[0][:,0],
+    #                           "obs_rt_1":t_vals[1][:,0],
+    #                           "lib_rt":t_vals[0][:,1],
+    #                           "seq":[i[0] for i in t_seqs[0]],
+    #                           "charge":[i[1] for i in t_seqs[0]]})
+    # export_df.to_csv("/Volumes/Lab/KMD/For_JD/T6doublets.csv")
     
     
     ## combined gausian fit
-    rt_amplitude, rt_mean, rt_stddev = fit_gaussian(np.concatenate([t[:,0]-c_rt for t,c_rt in zip(t_vals,converted_rts)]))
+    # rt_amplitude, rt_mean, rt_stddev = fit_gaussian(np.concatenate([t[:,0]-c_rt for t,c_rt in zip(t_vals,converted_rts)]))
+    # f = lowess_fit([i[1] for i in t_vals[0]],[i[0] for i in t_vals[0]])
+    # f1 = lowess_fit(convertor(predictions).flatten(),[i[0] for i in t_vals[0]],frac=.4)
+    rt_amplitude, rt_mean, rt_stddev = fit_gaussian(rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])[diff_bool]-np.array([i[0] for i in t_vals[0]])[diff_bool],bin_n=100)
     
+    # vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],np.linspace(-10,10,150),density=True,label="Old RT")
+    # vals,bins,_ = plt.hist((rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
+    # plt.plot(np.linspace(-5,5,100),gaussian(np.linspace(-5,5,100), rt_amplitude, rt_mean, rt_stddev),label="New RT fit")
+    # plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals))
+    # plt.legend()
+    ### vals,bins,_ = plt.hist(np.abs(rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
+   
     ## NB: Only for timeplex=2
     ## computes differences between the fit lines of both plexes
-    prediction_diffs = np.abs(rt_spls[1](t_vals[1][:,1])-rt_spls[0](t_vals[1][:,1]))
-
+    prediction_diffs = np.abs(rt_spls[1]([updatedLibrary[key]["iRT"] for key in keys])-rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys]))
+    all_prediction_diffs = []
+    for idx in range(timeplex-1):
+        all_prediction_diffs.append(np.abs(rt_spls[idx+1]([updatedLibrary[key]["iRT"] for key in keys])-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])))
     #####  Assume that the mz error is independent of timeplex
     resp_ms1scans = [closest_ms1spec(dia_rt[i], ms1_rt) for i in range(len(dia_rt))]
     diffs = [closest_peak_diff(mz, ms1spectra[i].mz) for i,mz in zip(resp_ms1scans,id_mzs)]
@@ -1069,11 +1229,43 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     mz_spl = twostepfit(id_mzs,diffs,1)
     
     
-    def mz_func(mz):
-        return mz+(mz_spl(mz)*mz)
     
-    mz_amplitude, mz_mean, mz_stddev = fit_gaussian(diffs-mz_spl(id_mzs))
     
+    
+    ################################################
+    ########### correct mz errors wrt RT    ########
+    ################################################
+    
+    rts = np.array([updatedLibrary[(i[0],float(i[1]))]["iRT"] for i in output_seqs])#np.array([i[0] for i in t_vals[0]])
+    # rt_filter_bool = filter_rts_by_dense(rts,30)
+    # rt_filter_bool = np.logical_and(rts>15,rts<30)
+    rt_mz_filter_bool = np.array(output_frac_lib)>.9 # use as proxy for correct IDs
+    f_rt_mz = lowess_fit(rts[rt_mz_filter_bool],np.array(diffs)[rt_mz_filter_bool],.2)
+    # plt.scatter(rts[rt_filter_bool],np.array(diffs)[rt_filter_bool],label="Original_MZ",s=1,alpha=.1)
+    # plt.scatter(dia_rt,f_rt_mz(dia_rt),s=1,alpha=.2)
+    
+    # plt.scatter(id_mzs,diffs,label="Original_MZ",s=1,alpha=.1)
+    # plt.scatter(id_mzs,diffs-f_rt_mz(dia_rt),label="Original_MZ",s=1,alpha=.1)
+    
+    # mz_spl = twostepfit(np.array(id_mzs)[rt_filter_bool],(diffs-f_rt_mz(dia_rt))[r t_filter_bool],1)
+    mz_spl = lowess_fit(np.array(id_mzs)[rt_mz_filter_bool],(diffs-f_rt_mz(dia_rt))[rt_mz_filter_bool])
+    # plt.scatter(id_mzs,diffs-f_rt_mz(dia_rt),label="Original_MZ",s=1,alpha=.1)
+    # plt.scatter(id_mzs,mz_spl(id_mzs),label="Original_MZ",s=1,alpha=.1)
+    # plt.hlines(0,400,900)
+
+    def mz_func(mz,rt):
+        return mz+((mz_spl(mz)+f_rt_mz(rt))*mz)
+    
+    # orig_mzs = id_mzs+(diffs*np.array(id_mzs))
+    # plt.hist(((mz_func(id_mzs,rts)-orig_mzs)/id_mzs)[rt_filter_bool],100)
+    
+    corrected_mz_diffs = (diffs-(f_rt_mz(rts)+mz_spl(id_mzs)))[rt_mz_filter_bool]
+    mz_amplitude, mz_mean, mz_stddev = fit_gaussian(corrected_mz_diffs)
+    
+    # plt.hist(np.array(diffs)[rt_filter_bool],100,density=True)
+    # vals,bins,_ = plt.hist(corrected_mz_diffs,100,alpha=.5,density=True)
+    # plt.plot(bins,gaussian(bins, mz_amplitude, mz_mean, mz_stddev))
+    # plt.vlines(0,0,max(vals))
     
     ### MS2 alignment
     if ms2:
@@ -1086,6 +1278,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         ms2_amplitude, ms2_mean, ms2_stddev = fit_gaussian(all_frag_errors-ms2_spl(all_frags))
     
    
+    
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
     new_rt_tol = 4*rt_stddev
     print(f"Optimsed RT tolerance: {new_rt_tol}")
@@ -1108,10 +1301,14 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     # config.rt_tol_spl = rt_tol_fn
     
+    # ensure there is no overlap
+    # if new_rt_tol>np.median(time_diffs)/2:
+    min_prediction_diff = np.min(prediction_diffs)
+    min_prediction_diff = np.min([np.min(i) for i in prediction_diffs])
     
-    if new_rt_tol>np.median(time_diffs)/2:
+    if new_rt_tol>min_prediction_diff/2:
         print("Warning; Library RTs overlapping")
-        new_rt_tol = (np.min(prediction_diffs)/2)*.99 # ensure no overlap
+        new_rt_tol = (min_prediction_diff/2)*.99 # ensure no overlap
         print(f"Reseting tolerance to {new_rt_tol}")
     
     
@@ -1156,21 +1353,35 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         ##plot RT alignment
         plt.subplots()
         for idx in range(timeplex):
-            plt.scatter(t_vals[idx][:,1],t_vals[idx][:,0],s=1,c=colours[idx],alpha=.2)
-            plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1]),s=1,label=f"T{str(idx)}",c=colours[idx])
-            plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
-            plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
+            plt.scatter(t_vals[idx][:,1],t_vals[idx][:,0],s=1,c=colours[idx],alpha=.2,label=f"T{str(idx)}")
+            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1]),s=1,label=f"T{str(idx)}",c=colours[idx])
+            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
+            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
             # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
             # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
         plt.legend(markerscale=10)
         plt.xlabel("Library RT")
         plt.ylabel("Observed RT")
         # plt.show()
+        plt.savefig(results_folder+"/OriginalRTfit.png",dpi=600,bbox_inches="tight")
+            
+        ### want this later
+        plt.subplots()
+        for idx in range(timeplex):
+            plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[np.logical_and(diff_bool,rt_filter_bool)],np.array([i[0] for i in t_vals[idx]])[np.logical_and(diff_bool,rt_filter_bool)],s=1,label=f"T{str(idx)}",alpha=.2)
+            # plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]),s=1,label=f"T{str(idx)}",c=colours[idx])
+            plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
+            plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])-config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
+            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
+            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
+        plt.legend(markerscale=10)
+        plt.xlabel("Library RT")
+        plt.ylabel("Observed RT")
         plt.savefig(results_folder+"/RTfit.png",dpi=600,bbox_inches="tight")
         
         plt.subplots()
         for idx in range(timeplex):
-            vals,bins,_ =plt.hist(t_vals[idx][:,0]-rt_spls[idx](t_vals[idx][:,1]),100,alpha=.5,label=f"T{str(idx)}")
+            vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[np.logical_and(diff_bool,rt_filter_bool)],100,alpha=.5,label=f"T{str(idx)}")
             # rt_stddev = gaussian_fits[idx][-1]
         x_scale = np.diff(plt.xlim())[0]
         plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
@@ -1184,11 +1395,11 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         plt.subplots()
         for idx in range(timeplex):
-            if idx==1:
-                offset = prediction_diffs
+            if idx!=0:
+                offset = all_prediction_diffs[idx-1]
             else:
                 offset = 0
-            vals,bins,_ =plt.hist(t_vals[idx][:,0]-rt_spls[idx](t_vals[idx][:,1])+offset,100,alpha=.5,label=f"T{str(idx)}")
+            vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+offset)[np.logical_and(diff_bool,rt_filter_bool)],100,alpha=.5,label=f"T{str(idx)}")
             # rt_stddev = gaussian_fits[idx][-1]
             plt.vlines([-config.opt_rt_tol+np.median(offset),config.opt_rt_tol+np.median(offset)],0,max(vals),color="r")
         x_scale = np.diff(plt.xlim())[0]
@@ -1197,11 +1408,21 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.legend()  
         plt.xlabel("RT difference")
         plt.ylabel("Frequency") 
+        plt.savefig(results_folder+"/Rterrors.png",dpi=600,bbox_inches="tight")
+        
+        
+        plt.subplots()
+        vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],np.linspace(-10,10,150),density=True,label="Old RT")
+        plt.hist((rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
+        plt.plot(np.linspace(-5,5,100),gaussian(np.linspace(-5,5,100), rt_amplitude, rt_mean, rt_stddev),label="New RT fit")
+        plt.legend()
+        plt.xlabel("RT alignment errors")
+        plt.savefig(results_folder+"/RtAlignmentErrors.png",dpi=600,bbox_inches="tight")
         # plt.show()
         
-        fig, ax = plt.subplots(nrows = timeplex)        
+        fig, ax = plt.subplots(nrows = timeplex, figsize=(7.2, 3.6*timeplex))        
         for idx,row in enumerate(ax):
-            row.scatter(t_vals[idx][:,1],t_vals[idx][:,0]-rt_spls[idx](t_vals[idx][:,1]),label="Original_RT",s=.1)
+            row.scatter(np.array(t_vals[idx][:,1])[np.logical_and(diff_bool,rt_filter_bool)],np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[np.logical_and(diff_bool,rt_filter_bool)],label="Original_RT",s=.1)
             row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[0,0],color="r",linestyle="--",alpha=.5)
             row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
             row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
@@ -1216,7 +1437,17 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         ##plot mz alignment
         plt.subplots()
-        plt.scatter(id_mzs,diffs,label="Original_MZ",s=1)
+        plt.scatter(rts,diffs,label="Original_MZ",s=1,alpha=5/((len(dia_rt)//1000)+1))
+        plt.scatter(rts,f_rt_mz(rts),label="Predicted_MZ",s=1)
+        # plt.legend()
+        plt.xlabel("Updated RT")
+        plt.ylabel("m/z difference (relative)")
+        # plt.show()
+        plt.savefig(results_folder+"/MZrtfit.png",dpi=600,bbox_inches="tight")
+        
+        ##plot mz alignment
+        plt.subplots()
+        plt.scatter(id_mzs,diffs-f_rt_mz(rts),label="Original_MZ",s=1,alpha=5/((len(dia_rt)//1000)+1))
         plt.scatter(id_mzs,mz_spl(id_mzs),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("m/z")
@@ -1227,13 +1458,13 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         ## plot mz alignment
         plt.subplots()
-        plt.hist(diffs,100)
+        plt.hist(np.array(diffs)[rt_mz_filter_bool],100)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs,100,alpha=.5)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_spl(id_mzs))/id_mzs,100,alpha=.5)
-        plt.hist(diffs-mz_spl(id_mzs),100,alpha=.5)
-        plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,50,color="r")
+        vals,bins,_ = plt.hist((diffs-mz_spl(id_mzs)-f_rt_mz(rts))[rt_mz_filter_bool],100,alpha=.5)
+        plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,max(vals)*.8,color="r")
         # plt.vlines([-4*mz_stddev,4*mz_stddev],0,50,color="g")
-        plt.text(config.opt_ms1_tol,50,f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
+        plt.text(config.opt_ms1_tol,max(vals)*.8,f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
         plt.xlabel("m/z difference (relative)")
         plt.ylabel("Frequency")
         # plt.show()
@@ -1271,334 +1502,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     if ms2:
         return (rt_spls, mz_func, ms2_func)
     else:
-        return (rt_spls, mz_func)
+        return (rt_spls, mz_func), updatedLibrary
 
 
 
-
-
-
-###################################################################################################
-###################################################################################################
-###################################################################################################
-# import alphatims.bruker
-# data = alphatims.bruker.TimsTOF("/Users/kevinmcdonnell/Programming/Data/2023_10_23_QC_LF_DIA_timsTOF_Slot2-20_1_893.d/")
-# librarySpectra = load_tsv_speclib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/tims_library_dec_23.tsv")
-
-# diann_file = "/Volumes/Lab/KMD/timsLibrary/report.tsv"
-# report = pd.read_csv(diann_file,delimiter="\t")
-
-# for idx,key  in enumerate(zip(report["Modified.Sequence"],report["Precursor.Charge"])):
-#     if key in librarySpectra:
-#         librarySpectra[key]["iRT"] = report["RT"][idx]
-#         librarySpectra[key]["IonMob"] = report["IM"][idx]
-        
-# prec_index_dict = {i:j for i,j in zip(data.fragment_frames.Frame,data.fragment_frames.Precursor)}
-# mz_tol= 20e-6
-
-def align_pasef(data,librarySpectra,prec_index_dict,mz_tol,im_merge_tol = None, ms1=False,results_folder=None):
-    
-    print("Intitial search")
-    
-    
-    ## temp: Move these to config file
-    num_frames_to_check = 40
-    num_scans_to_check = 20
-
-    num_frames = data.frame_max_index
-    num_scans = np.mean(data.frames.NumScans.to_numpy(),dtype=int)
-    
-    frames_to_check = np.array(((np.arange(num_frames_to_check)+.5)/num_frames_to_check)*num_frames,dtype=int)
-    scans_to_check = np.array(((np.arange(num_scans_to_check)+.5)/num_scans_to_check)*num_scans,dtype=int)
-    
-    # check if ms1 only scan => Move to next scan
-    for i,frame in enumerate(frames_to_check):
-        if frame%data.precursor_max_index==1:
-            frames_to_check[i]+=1
-            
-
-    all_keys = list(librarySpectra)
-    rt_mz_im = np.array([[i["iRT"], i["prec_mz"], i["IonMob"]] for i in librarySpectra.values()])
-
-    frame_scan_pairs = [(f,s) for f in frames_to_check for s in scans_to_check]
-    
-    fit_outputs = []
-    for frame,scan in tqdm.tqdm(frame_scan_pairs):
-    
-
-        fit_output = fit_to_pasef(frame_scan=[frame,scan],
-                                  AllData=data,
-                                  library=librarySpectra,
-                                  rt_mz_im=rt_mz_im,
-                                  all_keys=all_keys,
-                                  prec_index_dict=prec_index_dict,
-                                  rt_filter=False,
-                                  im_merge_tol=im_merge_tol)
-        
-        fit_outputs.append(fit_output)
-        
-    
-     
-    dia_rt = []
-    lib_rt = []
-    dia_im = []
-    lib_im = []
-    output=[]
-    max_ids=[]
-    for idx,fit_output in enumerate(fit_outputs):    
-        if fit_output[0][0]!=0:
-            lib_rt.append([librarySpectra[(i[2],i[3])]["iRT"] for i in fit_output])
-            dia_rt.append(data.rt_values[frame_scan_pairs[idx][0]])
-            lib_im.append([librarySpectra[(i[2],i[3])]["IonMob"] for i in fit_output])
-            dia_im.append(data.mobility_values[frame_scan_pairs[idx][1]])
-            output.append(fit_output)
-            max_ids.append(np.argmax([i[0] for i in fit_output]))
-    
-    # max_ids = [np.argmax([i[0] for i in j]) for j in output]
-    # ms1windows = [i.ms1window for i in top_n_spectra]
-    id_keys = [(i[j][2],i[j][3]) for i,j in zip(output,max_ids)]
-    id_mzs = [librarySpectra[i]["prec_mz"] for i in id_keys]
-        
-    def max_coeff_val(outputs,val="iRT"):
-        max_id = np.argmax([i[0] for i in outputs])
-        # if outputs[0][0]==0:
-        #     return np.nan
-        # else:
-        return librarySpectra[(outputs[max_id][2],outputs[max_id][3])][val]
-    
-    
-    output_rts = np.array([max_coeff_val(i) for i in output])
-
-    rt_spl = threestepfit(output_rts,dia_rt,1)
-    
-    converted_rt = rt_spl(output_rts)
-    
-    rt_amplitude, rt_mean, rt_stddev = fit_gaussian(dia_rt-converted_rt)
-    
-    new_rt_tol = 4*rt_stddev
-    print(f"Optimsed RT tolerance: {new_rt_tol}")
-    config.opt_rt_tol = new_rt_tol
-    
-    output_ims = np.array([max_coeff_val(i,"IonMob") for i in output])
-    im_spl = threestepfit(output_ims,dia_im,1)
-    converted_im = im_spl(output_ims)
-    
-    im_amplitude, im_mean, im_stddev = fit_gaussian(dia_im-converted_im)
-    new_im_tol = 4*im_stddev
-    print(f"Optimsed IM tolerance: {new_im_tol}")
-    config.opt_im_tol = new_im_tol
-    
-    
-    
-    if results_folder is not None:
-        
-        
-        ### Save functions
-        with open(results_folder+"/rt_spl","wb") as dill_file:
-            dill.dump(rt_spl,dill_file)
-            
-        with open(results_folder+"/im_spl","wb") as dill_file:
-            dill.dump(im_spl,dill_file)
-        
-        # with open(results_folder+"/mz_func","wb") as dill_file:
-        #     dill.dump(mz_func,dill_file)
-        
-        # if ms2:
-        #     with open(results_folder+"/ms2_func","wb") as dill_file:
-        #         dill.dump(ms2_func,dill_file)
-        
-        ##plot RT alignment
-        plt.subplots()
-        plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)
-        plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
-        plt.legend()
-        plt.xlabel("Library RT")
-        plt.ylabel("Observed RT")
-        # plt.show()
-        plt.savefig(results_folder+"/RTfit.png",dpi=600,bbox_inches="tight")
-        
-        plt.subplots()
-        vals,bins,_,=plt.hist(dia_rt-rt_spl(output_rts),100)
-        plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
-        # plt.vlines([-4*rt_stddev,4*rt_stddev],0,50,color="g")
-        plt.text(config.opt_rt_tol,max(vals),np.round(config.opt_rt_tol,2))
-        plt.xlabel("RT difference")
-        plt.ylabel("Frequency")
-        # plt.show()
-        plt.savefig(results_folder+"/RTdiff.png",dpi=600,bbox_inches="tight")
-        
-        
-        ##plot IM alignment
-        plt.subplots()
-        plt.scatter(output_ims,dia_im,label="Original_IM",s=1)
-        plt.scatter(output_ims,im_spl(output_ims),label="Predicted_IM",s=1)
-        plt.legend()
-        plt.xlabel("Library IM")
-        plt.ylabel("Observed IM")
-        # plt.show()
-        plt.savefig(results_folder+"/imfit.png",dpi=600,bbox_inches="tight")
-        
-        plt.subplots()
-        vals,bins,_,=plt.hist(dia_im-im_spl(output_ims),100)
-        plt.vlines([-config.opt_im_tol,config.opt_im_tol],0,max(vals),color="r")
-        # plt.vlines([-4*im_stddev,4*im_stddev],0,50,color="g")
-        plt.text(config.opt_im_tol,max(vals),np.round(config.opt_im_tol,3))
-        plt.xlabel("IM difference")
-        plt.ylabel("Frequency")
-        # plt.show()
-        plt.savefig(results_folder+"/imdiff.png",dpi=600,bbox_inches="tight")
-        
-    return (rt_spl, im_spl)
-
-def align_timspeak(fragment_clusters,librarySpectra,prec_index_dict,mz_tol,im_merge_tol = None, ms1=False,results_folder=None):
-    
-    rt_width = config.rt_width
-    all_keys = list(librarySpectra)
-    rt_mz_im = np.array([[i["iRT"], i["prec_mz"], i["IonMob"]] for i in librarySpectra.values()])
-    
-    num_scans = 100
-    
-    rt_range = [np.floor(np.min(fragment_clusters["rt_weighted_average"])),
-                np.ceil(np.max(fragment_clusters["rt_weighted_average"]))]
-   
-    quad_mz_pairs = sorted(set([(i,j) for i,j in zip(fragment_clusters.quad_low_mz_values,fragment_clusters.quad_high_mz_values) if i>0]))# remove ms1 peaks
-
-    
-    rt_quad_pairs = [(rt,quad_pair) for rt in range(int(rt_range[0]),int(rt_range[1])) for quad_pair in quad_mz_pairs]
-    
-    np.random.seed(0)
-    random_idxs = np.random.choice(range(len(rt_quad_pairs)),num_scans,replace=False)
-    
-    rt_quad_pairs_random = [rt_quad_pairs[i] for i in random_idxs]
-    
-    fit_outputs = []
-    for rt_quad in tqdm.tqdm(rt_quad_pairs_random):
-    
-        
-        fit_output = fit_timspeak(rt_quad,
-                                  library=librarySpectra,
-                                  rt_mz_im=rt_mz_im,
-                                  all_keys=all_keys,
-                                  fragment_clusters=fragment_clusters,
-                                  rt_width=rt_width,
-                                  rt_tol=None,
-                                  mz_tol=2e-5,
-                                  im_tol=0.05)
-        fit_outputs.append(fit_output)
-        
-    
-    
-    return
-
-
-
-
-"""
-    
-    ##########################################################################
-    sorted_idxs = np.argsort(output_rts)
-    sort_rts = np.array(output_rts)[sorted_idxs]
-    sort_dia_rts = np.array(dia_rt)[sorted_idxs]
-    knots = quantiles(sort_rts,n=2)
-    spl = spline(sort_rts,sort_dia_rts,knots)
-    
-    # find outliers and remove
-    _bool = abs(spl(sort_rts)-sort_dia_rts)<20
-    spl2 = spline(sort_rts[_bool],sort_dia_rts[_bool],knots)
-    
-    plt.scatter(sort_rts,sort_dia_rts,label="Orginal_RT")
-    plt.scatter(sort_rts,rt_spl(sort_rts),label="Predicted_RT") 
-    plt.xlabel("Library RT")
-    plt.ylabel("Observed RT")
-    plt.legend()
-    
-    vals,bins,_ = plt.hist(sort_rts-sort_dia_rts,100,label="Orginal_RT")
-    plt.hist(rt_spl(sort_rts)-sort_dia_rts,bins,alpha=.5,label="Predicted_RT")
-    plt.xlabel("Difference between lib and obs RT")
-    plt.ylabel("Frequency")
-    plt.legend()
-    # plt.show()
-    
-    x=id_mzs
-    y=diffs
-    y_exists = np.isfinite(y)
-    x_exists = np.isfinite(x)*y_exists
-    x=np.array(x)[x_exists]
-    y=np.array(y)[x_exists]
-    y_range = np.max(y)-np.min(y)
-    sorted_idxs = np.argsort(x)
-    sort_x = np.array(x)[sorted_idxs]
-    sort_y = np.array(y)[sorted_idxs]
-    knots = quantiles(sort_x,n=2)
-    spl = spline(sort_x,sort_y,knots)
-    
-    plt.scatter(np.array(id_mzs)+diffs,diffs)
-    plt.xlabel("Observed m/z")
-    plt.ylabel("Difference to observed MS1 peak")
-    
-    plt.scatter(dia_rt,diffs)
-    plt.xlabel("Observed RT")
-    plt.ylabel("Difference to observed MS1 peak")
-    
-    # find outliers and remove; points over 1/4 of the y range away from prediction
-    _bool = abs(spl(sort_x)-sort_y)<(y_range/4)
-    spl2 = spline(sort_x[_bool],sort_y[_bool],knots)
-    
-    mz_spl = twostepfit(id_mzs, diffs)
-    plt.scatter(id_mzs,diffs)
-    plt.scatter(sort_x[_bool],sort_y[_bool])
-    plt.scatter(id_mzs,spl(id_mzs))
-    plt.scatter(id_mzs,spl2(id_mzs))
-    
-    plt.scatter(output_rts,id_mzs,diffs)
-    plt.scatter(output_rts,mz_spl(output_rts))
-    
-
-def func(x,a,b,c):
-    return (a*np.array(x[0]))+(b*np.array(x[1]))+c
-
-x=np.array(output_rts)
-y=np.array(id_mzs)
-z=np.array(diffs)
-z_exists = np.isfinite(z)
-
-parameters, covariance = curve_fit(func, [x[z_exists],y[z_exists] ], z[z_exists])
-
-model_x_data = np.linspace(min(x), max(x), 30)
-model_y_data = np.linspace(min(y), max(y), 30)
-X, Y = np.meshgrid(model_x_data, model_y_data)
-# calculate Z coordinate array
-Z = func(np.array([X, Y]), *parameters)
-fig = plt.figure()
-# setup 3d object
-#ax = Axes3D(fig)
-ax=fig.add_subplot(111,projection='3d')
-# plot surface
-# ax.plot_surface(X, Y, Z)
-ax.scatter(x,y,z,c=z)
-ax.set_xlabel("RT")
-ax.set_ylabel("m/z")
-ax.set_zlabel("m/z Difference")
-
-
-z_pred = func([x,y],*parameters)
-vals,bins,_=plt.hist(diffs,100)
-plt.hist(z_pred,bins,alpha=.5)
-
-diffs = [get_diff(mz, ms1spectra[ms1_idx].mz, window, mz_tol) for  mz,ms1_idx,window in zip(id_mzs,top_n_ms1,ms1windows)]
-
-
-original_mz = np.array(y[z_exists])+(z[z_exists]*y[z_exists])
-pred_diff = func([x[z_exists],y[z_exists]],*parameters)*y[z_exists]
-pred_mz = y[z_exists]+pred_diff
-pred_mz = mz_func(y[z_exists],x[z_exists])
-# pred_mz = original_mz-(func([x[z_exists],y[z_exists]],*parameters)*y[z_exists])
-# plt.scatter(original_mz,pred_mz)
-vals,bins,_=plt.hist(diffs,50,label="Original")
-# plt.hist(pred_mz-y[z_exists],bins,alpha=.5,label="Predicted")
-plt.hist((original_mz-pred_mz)/pred_mz,bins,alpha=.5,label="Predicted")
-plt.xlabel("m/z difference")
-plt.ylabel("Frequency")
-plt.legend()
-
-# """

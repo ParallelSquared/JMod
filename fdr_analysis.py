@@ -9,9 +9,12 @@ Created on Fri Aug 23 09:38:40 2024
 
 from read_output import get_large_prec
 
+from sklearn.model_selection import KFold
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_curve,auc 
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.neural_network import MLPClassifier
+from sklearn import preprocessing
 from scipy import stats
 import xgboost as xgb
 
@@ -31,7 +34,7 @@ from SpecLib import loadSpecLib
 
 from mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 import iso_functions as iso_f
-
+from miscFunctions import fragment_cor
 
 import config
 
@@ -76,11 +79,12 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
    
     print("Performing MS1 Quantitation") 
     
-    all_keys = list(lp)
+    if timeplex:
+        all_keys = [(i,j,k) for i,j,k in zip(fdc.seq,fdc.z,fdc.time_channel)]
+    else:
+        all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
     
-    
-    
-    
+        
     if mass_tag:
         fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
         group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels(DIAspectra, 
@@ -123,8 +127,12 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     
     
     fdc["ms1_cor"] = [i[0] for i in p_corrs]
-    fdc["iso1_cor"] = [i[1] for i in p_corrs]
-    fdc["iso2_cor"] = [i[2] for i in p_corrs]
+    
+    for idx in range(config.num_iso_r):
+        iso_num = idx+1
+        fdc[f"iso{iso_num}_cor"] = [i[iso_num] for i in p_corrs]
+    # fdc["iso1_cor"] = [i[1] for i in p_corrs]
+    # fdc["iso2_cor"] = [i[2] for i in p_corrs]
     
     fdc["traceproduct"] = np.log10(fdc["ms1_cor"]*fdc["iso1_cor"]*fdc["iso2_cor"]+1e-6)
     
@@ -137,12 +145,132 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     fdc["MS1_Int"] = [np.linalg.lstsq(np.array(i[1])[:,np.newaxis], i[2])[0][0] for i in iso_ratios]
     
     # X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
-
+    fdc["all_ms1_specs"] = [";".join(map(str,trace[0].keys())) for trace in ms1_traces]
+    for i in range(config.num_iso_ms1):
+        fdc[f"all_ms1_iso{i}vals"] = [";".join(map(str,trace[i].values())) for trace in ms1_traces]
+    # fdc["ms2_trace"] = [";".join(map(str,trace.values())) for trace in ms2_traces]
     return fdc
 
 
 
-def score_precurors(fdc,model_type="rf",fdr_t=0.01, folder=None):
+class model_instance():
+    def __init__(self,model_type):
+        self.mode_type = model_type
+        
+    def predict(self,X):
+        pred = self.__predict_fn__(X)
+            
+        if len(pred.shape)==2:
+            output = pred[:,1]
+        else:
+            output = pred
+        return output
+        
+        
+class score_model():
+    
+    def __init__(self,model_type,n_splits=5,folder=None):
+        self.model_type=model_type
+        self.n_splits = n_splits
+        self.folder = folder
+                
+    def run_model(self,X,y):
+        if self.model_type=="rf":
+            
+            ### Random Forest
+            def fit_model(X,y,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    m.model = RandomForestClassifier(n_estimators = 100, max_depth=10,n_jobs=-1)
+                    m.model.fit(X,y)
+                    m.__predict_fn__ = m.model.predict_proba
+                    
+                    if self.folder:
+                        plt.subplots()
+                        plt.barh(X.columns,m.model.feature_importances_)
+                        plt.title("Feature Importance")
+                        plt.savefig(self.folder+f"/RF{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
+                    
+                    return m
+                
+            # self.model = fit_model(X,y)
+            
+        
+        elif self.model_type=="lda":
+            
+            ## Linear Disriminant Analysis
+            def fit_model(X,y,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    m.model = LinearDiscriminantAnalysis()
+                    m.model.fit(X,y)
+                    m.__predict_fn__ = m.model.predict_proba
+                    return m
+                
+            # self.model = fit_model(X,y)
+            
+            
+        elif self.model_type == "xg":
+            
+            ## XGBoost
+            def fit_model(X,y,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    dTrain = xgb.DMatrix(X,y)
+                    param = {'max_depth': 2, 'eta': 1, 'objective': 'binary:logistic'}
+                    param['nthread'] = 4
+                    param['eval_metric'] = 'auc'
+                    
+                    m.model = xgb.train(param, dtrain=dTrain)
+                    def xg_predict(X):
+                        X_convert = xgb.DMatrix(X)
+                        return m.model.predict(X_convert)
+                    m.__predict_fn__ = xg_predict
+                    
+                    if self.folder:
+                        plt.subplots()
+                        fi = m.model.get_score(importance_type="gain")
+                        plt.barh(X.columns,[fi[i] if i in fi else 0 for i in X.columns])
+                        plt.title("Feature Importance")
+                        plt.savefig(self.folder+f"/XGBoost{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
+                    
+                    
+                    return m
+                
+            # self.model = fit_model(X,y)
+        
+            
+        elif self.model_type == "nn":
+            X = preprocessing.StandardScaler().fit(X).transform(X)
+            ## Neural network
+            def fit_model(X,y):
+                    m = model_instance(model_type=self.model_type)
+                    m.model = MLPClassifier((32,16,8,4),activation="relu")
+                    m.model.fit(X,y)
+                    m.__predict_fn__ = m.model.predict_proba
+                    return m
+                
+        else:
+            raise ValueError("Unsupported model type")
+            
+        kf = KFold(n_splits=self.n_splits,shuffle=True)
+        k_orders = [i for i in kf.split(X,y)]
+        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
+
+        data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]]] for i in k_orders] # put data into folds
+
+
+        self.models = []
+        self.predictions=[]
+        model_idx=0
+        for X_train, X_test, y_train, y_test in tqdm.tqdm(data_splits):
+            m = fit_model(X_train,y_train,idx=model_idx)
+            self.models.append(m)
+            self.predictions.append(m.predict(X_test))
+            model_idx+=1
+            
+        return np.concatenate(self.predictions)[rev_order]
+    
+    
+    
+def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     """
     
 
@@ -174,39 +302,22 @@ def score_precurors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     y = np.array(_bool,dtype=int)
     
     # exclude necessary columns
-    X = fdc.drop(['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 'untag_seq', 'decoy'], axis=1)
-    
+    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
+                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
+                  'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',
+                  "unique_frag_mz",
+                  "unique_obs_int",
+                  "file_name",
+                  "protein"]
+    X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
+    # print(X.columns)
     X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
         
-    if model_type=="rf":
-        ### Random Forest
-        rf = RandomForestClassifier(n_estimators = 100, max_depth=10)
-        rf.fit(X,y)
-        
-        ### Do I want to save this???
-        if folder:
-            plt.barh(X.columns,rf.feature_importances_)
-            plt.title("Feature Importance")
-            plt.savefig(folder+"/RF_feature_importance.png",dpi=600,bbox_inches="tight")
+    sc_model = score_model(model_type,folder=folder)
+    pred = sc_model.run_model(X, y)
     
-        pred = rf.predict_proba(X);model_name="Random Forest"
-        
-    elif model_type=="lda":
-        ## Linear Disriminant Analysis
-        clf = LinearDiscriminantAnalysis()
-        clf.fit(X, y)
-        pred = clf.predict_proba(X);model_name="Linear Discriminant Analysis"
-        
-    if model_type == "xg":
-        
-        ## XGBoost
-        dTrain = xgb.DMatrix(X,y)
-        param = {'max_depth': 2, 'eta': 1, 'objective': 'binary:logistic'}
-        param['nthread'] = 4
-        param['eval_metric'] = 'auc'
-        
-        bst = xgb.train(param, dtrain=dTrain)
-        pred = bst.predict(dTrain);model_name="XGBoost"
+    model_name= model_type
+    
         
         
     ###############################################################################################
@@ -325,8 +436,8 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
     ## Add additional features
     # X["prec_z"] = fdc["z"]
-    fdc["pep_len"] = [len(re.findall("([A-Z](?:\(.*?\))?)",i.split("_")[-1])) for i in fdc["seq"]]
-    fdc["stripped_seq"] = np.array([re.sub("\(.*?\)","",i) for i in fdc["seq"]])
+    fdc["stripped_seq"] = np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in fdc["seq"]])
+    fdc["pep_len"] = [len(re.findall("([A-Z](?:\(.*?\))?)",re.sub("Decoy","",i))) for i in fdc["stripped_seq"]]
     # X["rt"] = fdc["rt"]
     # X["coeff"] = fdc["coeff"]
     fdc["sq_rt_error"] = np.power(fdc["rt_error"],2)
@@ -334,12 +445,18 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
     
     fdx = ms1_quant(fdc, lp, dc, mass_tag, spectra, mz_ppm, rt_tol, timeplex)
-    fdx = score_precurors(fdx,config.score_model,config.fdr_threshold,folder=results_folder)
+    fdx = score_precursors(fdx,config.score_model,config.fdr_threshold,folder=results_folder)
     
     fdx["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdx["untag_seq"],fdx["z"])]
 
-
-    if mass_tag:
+    if timeplex:
+        if mass_tag:
+            tag_name = mass_tag.name
+            fdx["channel"] = [str(int(t))+"_"+re.findall(f"{tag_name}-(\d+)",i)[0] for i,t in zip(fdx.seq,fdx.time_channel)]
+        else:
+            fdx["channel"] = fdx["time_channel"]
+            
+    elif mass_tag:
         tag_name = mass_tag.name
         ## mTRAQ label
         fdx["channel"] = [int(re.findall(f"{tag_name}-(\d+)",i)[0]) for i in fdx.seq]

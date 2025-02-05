@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import re
 import pickle
 
-
 # NB this may not work for all mzml files!!!
 class Spectrum:
 
@@ -28,10 +27,10 @@ class Spectrum:
         self.scan_num = int(re.search("scan=(\d+)",self.id)[1])
         self.level=scan["ms level"]
         self.RT = scan['scanList']['scan'][0]["scan start time"]
+        self.injection_time = scan["scanList"]["scan"][0]["ion injection time"]/1000 # assume milliseconds
         self.mz = scan["m/z array"]
-        self.intens = scan["intensity array"]
+        self.intens = scan["intensity array"]#/self.injection_time # Normalize by injection time
         self.scanwindow = [scan["scanList"]["scan"][0]["scanWindowList"]["scanWindow"][0][i] for i in ["scan window lower limit","scan window upper limit"]]
-        
         if self.level==2:
             self.collision_energy = scan["precursorList"]["precursor"][0]["activation"]["collision energy"]
             isolationWindow = scan["precursorList"]["precursor"][0]["isolationWindow"]
@@ -96,6 +95,4 @@ def loadSpectra(mzml_file):
     print("finished")
     
     return spectra
-
-
 
