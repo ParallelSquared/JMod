@@ -661,7 +661,7 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
                        *all_features[j],
                        *all_ms2_frags[j],
                        config.args.mzml,
-                       library[(all_spec_ids[i][0],all_spec_ids[i][1])][config.protein_column] if return_prot else "NA" ]
+                       library[(re.sub("Decoy_","",all_spec_ids[i][0]),all_spec_ids[i][1],all_spec_ids[i][2])][config.protein_column] if return_prot else "NA" ]
                        for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
         
         else:
