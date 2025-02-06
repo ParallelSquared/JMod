@@ -106,13 +106,20 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
         iso_ratios = [group_iso_ratios[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
         extracted_keys = [group_keys[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
         extracted_fitted = [group_fitted[linker_dict[key][0]][0][:,linker_dict[key][1]] for key in all_keys]
+        extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in all_keys]
         extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in all_keys]
         
         
         fdc["plexfitMS1"] = [np.max(i) for i in extracted_fitted]
         fdc["plexfitMS1_p"] = [j[np.argmax(i)].statistic  if type(j[np.argmax(i)])!=float else 0 for i,j in zip(extracted_fitted,extracted_fitted_p)]
     
-    
+        plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+        plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
+        plexfit_ps = [[i[k].statistic if type(i[k])!=float else 0 for k in j] for i,j in zip(extracted_fitted_p,plexfittrace_idxs)]
+        # fdc["plexfitMS1_new"] = [np.max(i) for i in plexfittrace]
+        fdc["plexfittrace"] = [";".join(map(str,i)) for i in plexfittrace] ###spec ids come from ms2_traces
+        fdc["plexfit_ps"] = [";".join(map(str,i)) for i in plexfit_ps]
+        
     else:
         fdc["untag_seq"] = fdc["seq"]
         p_corrs, ms1_traces, ms2_traces, iso_ratios = ms1_cor(DIAspectra, 
@@ -304,7 +311,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     # exclude necessary columns
     drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
                   'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
-                  'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',
+                  'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps",
                   "unique_frag_mz",
                   "unique_obs_int",
                   "file_name",

@@ -56,7 +56,7 @@ if __name__=="__main__":
     
     ms2_align = "MS2align" if config.args.ms2_align else ""
     results_folder_name = "_".join([spec_file_name,
-                                    lib_file_name+"Update030225",
+                                    lib_file_name+"Update060225",
                                     f"{config.mz_ppm}ppm",
                                     f"{config.atleast_m}m",
                                     f"unmatch{config.unmatched_fit_type}",

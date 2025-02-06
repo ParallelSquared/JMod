@@ -650,6 +650,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
     print("Fitting tagged channels together")
     
     decoy_coeffs["untag_seq"] = [re.sub(f"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
+    decoy_coeffs["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(decoy_coeffs["untag_seq"],decoy_coeffs["z"])]
     
     ms1_spectra = all_spectra.ms1scans
     ms2_spectra = all_spectra.ms2scans
@@ -772,6 +773,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         obs_ratios = []
         group_iso = []
         group_keys = [] ## collect to ensure we match them up correctly
+        all_channel_scans = []
         for prec_mz,prec_seq in zip(prec_mzs,prec_seqs):
             
             ## keep decoys mathching to the correct MS1
@@ -789,9 +791,14 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             
             if channel_key in grouped_decoy_coeffs.groups:
                 new_data= grouped_decoy_coeffs.get_group(channel_key)   
+                ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
                 prec_rt = new_data.rt.iloc[np.argmax(new_data.coeff)]
                 ms2_window_bool = np.logical_and(prec_mz+offset>bottom_of_window,prec_mz+offset<top_of_window)
-                ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
+                
+                min_rt = np.minimum(prec_rt-rt_tol,np.min(new_data.rt)*.99)
+                max_rt = np.maximum(prec_rt+rt_tol,np.max(new_data.rt)*1.01)
+                ms2_rt_bool = np.logical_and(ms2_rt>=min_rt,ms2_rt<=max_rt)
+                
                 ms2_bool = np.logical_and(ms2_window_bool,ms2_rt_bool)
                 # print(sum(ms2_bool))
                 possible_ms2_scans = ms2_spec_idxs[ms2_bool]
@@ -853,8 +860,26 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             # plt.plot(all_ms1_vals.keys(),func(all_ms1_vals.values()),label="Monoiso")
             # plt.plot(all_iso_vals[0].keys(),func(all_iso_vals[0].values()),label="1st Iso")
             # plt.plot(all_iso_vals[1].keys(),func(all_iso_vals[1].values()),label="2nd Iso") 
-        
-        
+            # plt.plot(all_iso_vals[2].keys(),func(all_iso_vals[2].values()),label="2nd Iso") 
+            ###plt.plot(ms2_vals.keys(),func(ms2_vals.values()),label="Coeffs")
+            
+            ## use monoiso ms1 prec mz to find the elution ms1 peak
+            if ms2_vals=={0:0}:
+                ms1_index_of_max = top_ms1_spec_idx ## should I just use the max of MS1???? Need to look into again
+            else:
+                # ms1_index_of_max = new_data.Ms1_spec_id.iloc[np.argmax(new_data.coeff)]
+                ms1_keys = list(all_ms1_vals.keys())
+                ms1_index_of_max = ms1_keys[np.argmax(f(ms1_keys))]
+                
+            ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), list(all_ms1_vals.values()), ms1_index_of_max)
+            
+            ## redefine all_scans to keep only thoe from the above peak
+            channel_scans = all_scans[all_scans.index(ms1_peak_edge_idxs[0]):all_scans.index(ms1_peak_edge_idxs[1])+1]
+            all_ms1_vals = {i:all_ms1_vals[i] for i in channel_scans}
+            all_iso_vals = [{i:iso_vals[i] for i in channel_scans} for iso_vals in all_iso_vals]
+            all_ms2_vals = {i:all_ms2_vals[i] for i in channel_scans}
+            
+            all_channel_scans.append(channel_scans)
             ms1_traces.append([all_ms1_vals,*all_iso_vals])
             coeff_traces.append(all_ms2_vals)
             with warnings.catch_warnings():
@@ -864,7 +889,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
                 all_pearson.append(spec_pearsons)
                 
                 # ms1_spec_idx = filtered_decoy_coeffs.iloc[fdc_idx]["Ms1_spec_id"]
-                ms1_spec_idx = all_scans[np.argmax(list(all_ms2_vals.values()))]
+                ms1_spec_idx = channel_scans[np.argmax(list(all_ms2_vals.values()))]
                 
                 theoretical_pattern = [i.intensity for i in isotopes]
                 obs_pattern = [all_ms1_vals[ms1_spec_idx],*[iso_trace[ms1_spec_idx] for iso_trace in all_iso_vals]]
@@ -881,6 +906,8 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         ### need to reduce the number of spectra we fit to
         idx_of_max =all_scans.index(top_ms1_spec_idx)
         scans_to_search = np.array(all_scans)[np.arange(max(0,idx_of_max-window_half_width),min(len(all_scans),idx_of_max+window_half_width+1))]
+        ### fit to those from each channel
+        scans_to_search = np.sort(np.unique(np.concatenate(all_channel_scans)))
         vals = []
         group_pred = []
         group_obs_peaks=[]
