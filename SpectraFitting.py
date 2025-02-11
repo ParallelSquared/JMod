@@ -295,7 +295,7 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
     # what are the first mz of these peak groups
     merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
     # print(merged_coords)
-    
+
     
     # NB - should we not sum the intensities?????
     # merged_intensities = [np.mean(dia_spectrum[np.where(merged_coords_idxs==i)[0],1]) for i in np.unique(merged_coords_idxs)]
