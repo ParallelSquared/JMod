@@ -413,7 +413,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     config.n_most_intense_features = int(1e8) # larger than possible, essentually all
     
     scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
-    print("Intitial search")
+    print("Initial search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
     ms1spectra = dia_spectra.ms1scans
@@ -863,7 +863,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     config.n_most_intense_features = int(1e8) # larger than possible, essentually all
     
     scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
-    print("Intitial search")
+    print("Initial search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
     ms1spectra = dia_spectra.ms1scans
