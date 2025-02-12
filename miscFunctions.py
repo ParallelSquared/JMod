@@ -303,6 +303,7 @@ def convert_frags_orig(seq,frags,rules):
             mz = mass.fast_mass(new_seq[:ion_nmr],ion_type,int(charge))
         
         #Seems to be bug?
+        #Looks fixed in `convert_frags. Maybe delete convert_frags_orig?`
         #If ion_nmr was 3, then new_seq[ion_nmr:] would not produce the y3 ion. 
         #For example: 
         #test_pep = "PEPTIDE"
@@ -358,11 +359,14 @@ def convert_frags(seq,frags,rules=diann_rules):
     
     new_seq = change_seq(seq=seq,rules=rules)    
     
+    #"PEPT(mod)IDE" -> "['P', 'E', 'P', 'T(mod)', 'I', 'D', 'E']"
     split_seq = re.findall("([A-Z](?:\(.*?\))?)",new_seq)
     
+    #['P', 'E', 'P', 'T(mod)', 'I', 'D', 'E'] -> [[], [], [], ['mod'], [], [], []]
     mods = [re.findall("\((.*?)\)",i) for i in split_seq]
     
     ## assume AA is the first 
+    #['P', 'E', 'P', 'T(mod)', 'I', 'D', 'E'] -> ['P', 'E', 'P', 'T', 'I', 'D', 'E']
     unmod_seq = [i[0] for i in split_seq]
     
     if config.tag:

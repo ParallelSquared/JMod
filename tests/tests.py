@@ -41,5 +41,12 @@ class TestChangeSeq(unittest.TestCase):
         with self.assertRaises(ValueError):
             change_seq(seq, "invalid_rule")
 
+class TestConvertFrags(unittest.TestCase):
+    def test_string_input_reverse(self):
+        """Test reverse rule with a string input"""
+        seq = "PEPTIDE"
+        result = change_seq(seq, "rev")
+        self.assertEqual(result, "DITPEPE")  # Reverse all but last letter
+
 if __name__ == '__main__':
     unittest.main()
