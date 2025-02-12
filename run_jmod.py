@@ -27,6 +27,13 @@ from fdr_analysis import process_data
 
 if __name__=="__main__":
             
+    # Add this at the start of your main block
+    if config.args.test:
+        #To run in test mode
+        #> python run_jmod.py --test
+        import unittest
+        unittest.main(module='tests.tests', argv=['dummy'])
+        exit()  # Exit after running tests
 
     print(config.args)
     
@@ -71,7 +78,9 @@ if __name__=="__main__":
     #results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
     #results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
     #results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
-    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_02122025"
+    #results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_02122025"
+    #results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_B_02122025"
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_C_02122025"
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     if not os.path.exists(results_folder_path):
         os.mkdir(results_folder_path)

@@ -27,6 +27,7 @@ parser.add_argument('--num_iso', default=2, type=float)
 parser.add_argument('--pp_file', default="", type=str)
 parser.add_argument('--timspeak_file', default="", type=str)
 parser.add_argument('-z','--dummy_value', type=str)
+parser.add_argument('--test', action='store_true', help='Run test suite')
 
 
 args = parser.parse_args()

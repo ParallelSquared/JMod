@@ -302,6 +302,16 @@ def convert_frags_orig(seq,frags,rules):
         if ion_type=="b":
             mz = mass.fast_mass(new_seq[:ion_nmr],ion_type,int(charge))
         
+        #Seems to be bug?
+        #If ion_nmr was 3, then new_seq[ion_nmr:] would not produce the y3 ion. 
+        #For example: 
+        #test_pep = "PEPTIDE"
+        #test_pep[:3] = "TIDE"
+        #but y3 should be "IDE"
+        #Need to subtract `ion_nmr` from the length of the peptide so 
+        #ion_nmr = 3
+        #test_pep[:(len(test_pep - ion_nmr))] = "IDE"
+
         if ion_type=="y":
             mz = mass.fast_mass(new_seq[ion_nmr:],ion_type,int(charge))
 
