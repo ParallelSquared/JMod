@@ -10,6 +10,7 @@ Created on Fri Aug 23 09:38:40 2024
 from read_output import get_large_prec
 
 from sklearn.model_selection import KFold
+from sklearn.model_selection import GroupKFold #This is so that each protein is only represented in one CV fold 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_curve,auc 
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -180,14 +181,18 @@ class score_model():
         self.model_type=model_type
         self.n_splits = n_splits
         self.folder = folder
-                
-    def run_model(self,X,y):
+        print("n_splits is ", n_splits)
+    def run_model(self,X,y,protein_names):
         if self.model_type=="rf":
             
             ### Random Forest
             def fit_model(X,y,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    m.model = RandomForestClassifier(n_estimators = 100, max_depth=10,n_jobs=-1)
+                    m.model = RandomForestClassifier(
+                        n_estimators = 100, 
+                        max_depth=10,
+                        #max_samples = 0.5,
+                        n_jobs=-1)
                     m.model.fit(X,y)
                     m.__predict_fn__ = m.model.predict_proba
                     
@@ -257,10 +262,20 @@ class score_model():
         else:
             raise ValueError("Unsupported model type")
             
-        kf = KFold(n_splits=self.n_splits,shuffle=True)
-        k_orders = [i for i in kf.split(X,y)]
-        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
 
+        #kf = KFold(n_splits=self.n_splits,shuffle=True) old way
+
+        gfk = GroupKFold(n_splits = self.n_splits)
+        groups = protein_names #Get the protein column
+
+        #May be an odd scenario where number of proteins is less than number of CV folds 
+        n_proteins = len(groups.unique())
+        if n_proteins < self.n_splits:
+            raise ValueError(f"Number of unique proteins ({n_proteins}) must be >= number of folds ({self.n_splits})")
+
+        #k_orders = [i for i in kf.split(X,y)] old way
+        k_orders = [i for i in gfk.split(X, y, groups=groups)]
+        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
         data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]]] for i in k_orders] # put data into folds
 
 
@@ -309,19 +324,53 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     y = np.array(_bool,dtype=int)
     
     # exclude necessary columns
-    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
-                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
-                  'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps",
-                  "unique_frag_mz",
-                  "unique_obs_int",
-                  "file_name",
-                  "protein"]
+    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 
+                'window_mz',
+                "mz",
+                "mz_error",
+                "sq_mz_error",
+                'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
+                'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
+                'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps",
+                "unique_frag_mz",
+                "unique_obs_int",
+                "protein",  
+                "file_name",
+                #'coeff', 
+                #'z', 
+                #'rt', 
+                #'num_lib', 
+                #'frac_lib_int', 
+                #'frac_dia_int',
+                #  'rt_error', 
+                #  'frac_int_matched', 
+                #  'frac_int_pred', 
+                #  'spec_r2', 
+                #  'prec_r2',
+                #  'prec_r2_uniq', 
+                #'frac_int_uniq', 
+                #'frac_int_uniq_pred', 
+                #'hyperscore',
+                #'frac_int_matched_pred', 
+                #'frac_int_matched_pred_sigcoeff', 
+                #'cosine',
+                #'pep_len', 
+                #'sq_rt_error',
+                 #    'ms1_cor', 
+                 #'iso1_cor', 
+                 #    'iso2_cor',
+                 #   'traceproduct',
+                 #    'iso_cor', 
+                 #    'MS1_Int'
+                  ]
+    protein_names = fdc['protein']
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
-    # print(X.columns)
+    print("X Columns: \n")
+    print(X.columns)
     X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
         
     sc_model = score_model(model_type,folder=folder)
-    pred = sc_model.run_model(X, y)
+    pred = sc_model.run_model(X, y, protein_names)
     
     model_name= model_type
     

@@ -398,7 +398,7 @@ def convert_frags(seq,frags,rules=diann_rules):
 
         new_frags[frag] = [mz, frags[frag][1]]
 
-    return new_frags
+    return frags#don't change frags just change precursor m/z by 20?#new_frags
 
 
 def hyperscore(frag_list,matches):
