@@ -325,8 +325,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     
     # exclude necessary columns
     drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 
-                    'window_mz',
-                    "mz",
+                'window_mz',
+                "mz",
                 "mz_error",
                 "sq_mz_error",
                 'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
@@ -356,12 +356,12 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                 #'cosine',
                 #'pep_len', 
                 #'sq_rt_error',
-                 #    'ms1_cor', 
-                 #'iso1_cor', 
-                 #    'iso2_cor',
-                 #   'traceproduct',
-                 #    'iso_cor', 
-                 #    'MS1_Int'
+                #'ms1_cor', 
+                #'iso1_cor', 
+                #'iso2_cor',
+                #'traceproduct',
+                #'iso_cor', 
+                #'MS1_Int'
                   ]
     protein_names = fdc['protein']
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)

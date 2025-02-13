@@ -396,9 +396,9 @@ def convert_frags(seq,frags,rules=diann_rules):
         if ion_type=="y":
             mz = mass.fast_mass(unmod_seq[-ion_nmr:],ion_type,int(charge)) - loss + sum(tag_masses[-ion_nmr:])
 
-        #new_frags[frag] = [mz, frags[frag][1]]
+        new_frags[frag] = [mz, frags[frag][1]]
         #new_frags[frag] = [0.0, 1.0]
-    return frags
+    return new_frags#frags
 
 
 def hyperscore(frag_list,matches):

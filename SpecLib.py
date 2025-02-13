@@ -285,19 +285,19 @@ def create_decoy_lib(library,rules):
     
     decoy_lib =copy.deepcopy(library) # create copy so we do not change the original
     
-    #for key in tqdm.tqdm(decoy_lib):
-    #    entry = decoy_lib[key]
-    #    
-    #    entry["seq"] = change_seq(key[0],rules)
-    #    if config.args.decoy=="rev": ## this will have the same mz as many correct mathces and therefore a really good ms1 isotope corr
-    #        entry["prec_mz"] -= config.decoy_mz_offset
-    #        
-    #    entry["frags"] = convert_frags(key[0], entry["frags"],rules)
-    #    
-    #    if config.args.iso:
-    #        entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(key[0], entry["frags"])
-    #    else:
-    #        entry["spectrum"], entry["ordered_frags"] = frag_to_peak(entry["frags"],return_frags=True)
+    for key in tqdm.tqdm(decoy_lib):
+        entry = decoy_lib[key]
+        
+        entry["seq"] = change_seq(key[0],rules)
+        if config.args.decoy=="rev": ## this will have the same mz as many correct mathces and therefore a really good ms1 isotope corr
+            entry["prec_mz"] -= config.decoy_mz_offset
+            
+        entry["frags"] = convert_frags(key[0], entry["frags"],rules)
+        
+        if config.args.iso:
+            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(key[0], entry["frags"])
+        else:
+            entry["spectrum"], entry["ordered_frags"] = frag_to_peak(entry["frags"],return_frags=True)
             
             
     return decoy_lib

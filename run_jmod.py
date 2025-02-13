@@ -88,8 +88,11 @@ if __name__=="__main__":
     results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_K_02122025" #new_frags[frag] = [0.0, 1.0] ln 400 miscFunctions.py in convert_frags()
     results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_L_02122025" #return frags ln 401 miscFunctions.py convert_frags()
     results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_M_02122025" #return frags ln 401 miscFunctions.py convert_frags() & decoy_mz_offset = 0 ln 106 config.py
-    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_N_02122025" #return frags ln 401 miscFunctions.py convert_frags() & decoy_mz_offset = 0 ln 106 config.py
-  
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_N_02122025" # decoys exact match to targets. eddited create_decoy_lib() to make no edits to the library
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_O_02122025" # #new_frags[frag] = [0.0, 1.0] ln 400 miscFunctions.py in convert_frags() double check
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_Q_02122025" # removed features that might be treated differently between targets and decoys
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_R_02122025" # no restrictions
+
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     if not os.path.exists(results_folder_path):
         os.mkdir(results_folder_path)
