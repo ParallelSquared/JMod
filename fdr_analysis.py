@@ -325,8 +325,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     
     # exclude necessary columns
     drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 
-                'window_mz',
-                "mz",
+                    'window_mz',
+                    "mz",
                 "mz_error",
                 "sq_mz_error",
                 'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 

@@ -85,6 +85,11 @@ if __name__=="__main__":
     #results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_F_02122025"
     results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_H_02122025"
     results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_I_02122025" #only 2 frag is
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_K_02122025" #new_frags[frag] = [0.0, 1.0] ln 400 miscFunctions.py in convert_frags()
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_L_02122025" #return frags ln 401 miscFunctions.py convert_frags()
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_M_02122025" #return frags ln 401 miscFunctions.py convert_frags() & decoy_mz_offset = 0 ln 106 config.py
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_N_02122025" #return frags ln 401 miscFunctions.py convert_frags() & decoy_mz_offset = 0 ln 106 config.py
+  
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     if not os.path.exists(results_folder_path):
         os.mkdir(results_folder_path)
