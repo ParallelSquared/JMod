@@ -14,7 +14,7 @@ from miscFunctions import frag_to_peak
 
 
 
-## split up the fragment name (b/y)(-loss)(frag index)_charge
+## split up the fragment name (b/y)(frag index)(-loss)_charge
 def split_frag_name(ion_type):
     frag_name,frag_z = ion_type.split("_")
     loss_check = frag_name.split("-")

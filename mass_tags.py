@@ -56,7 +56,7 @@ class massTag():
         
         self.channel_names = channel_names
         
-        if type(delta)!= list or len(delta)<2:
+        if type(delta)!= list and len(delta)<2:
             self.channel_masses =(np.arange(self.n_channels)*delta)+base_mass
         else:
             assert len(delta)==len(self.channel_names), "Channel names and deltas do not match"
@@ -131,8 +131,8 @@ tag6 = massTag(rules = "nK",
             base_mass=308.1160923903,
             # delta = 4.0070994,
             # delta = [4.0070994],
-            delta = [0.0,4.01095605604],#,8.02683870239997],
-            channel_names = ["0","4"],#,"8"],
+            delta = [8.02683870239997],#[0.0,4.01095605604],#,8.02683870239997],
+            channel_names = ["8"],#["0","4"],#,"8"],
             name = "tag6")
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
@@ -276,7 +276,8 @@ def tag_library(library,tag=mTRAQ):
                 lib_entry["frags"][frag] = [mz+(tag_mass*n_tags/int(frag_z)),I]
                 
             lib_entry["spectrum"],lib_entry["ordered_frags"] = frag_to_peak(lib_entry["frags"],return_frags=True)
-            lib_entry["spec_frags"] = specific_frags(lib_entry["frags"])
+            if "spec_frags" in library[key]:
+                lib_entry["spec_frags"] = specific_frags(lib_entry["frags"])
             new_lib[new_seq,key[1]] = lib_entry
             
         
@@ -288,7 +289,8 @@ available_tags = {"mTRAQ":mTRAQ,
                   "mTRAQ678":mTRAQ_678,
                   "mTRAQ02468":mTRAQ_02468,
                   "diethyl_6plex":diethyl_6plex,
-                  "diethyl_3plex":diethyl_3plex}
+                  "diethyl_3plex":diethyl_3plex,
+                  "tag6":tag6}
 
 # if config.args.mTRAQ:
 #     config.tag = mTRAQ

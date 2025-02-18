@@ -622,8 +622,13 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             rt_spl = lowess_fit(np.array(output_rts)[frag_multiply>cor_limit],np.array(dia_rt)[cor_filter])
         else:
             rt_spl = lowess_fit(all_lib_rts,[i[1] for i in all_id_rt])
+    if config.tag is not None and "tag6" in config.tag.name:
+        cor_limit = 0.8
+        hyper_cutoff = np.percentile(output_hyper,80)
+        cor_filter = np.logical_and(frag_multiply>cor_limit,output_hyper>hyper_cutoff)
+        rt_spl = lowess_fit(np.array(output_rts)[cor_filter],np.array(dia_rt)[cor_filter])
         
-    # plt.scatter(output_rts,dia_rt,label="Original_RT",s=.5,c=np.log10(output_coeff))
+    # plt.scatter(output_rts[cor_filter],np.array(dia_rt)[cor_filter],label="Original_RT",s=.5,c=np.log10(output_hyper)[cor_filter])
     # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
     # plt.colorbar(label="log coeff")
     # # plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)
