@@ -217,7 +217,10 @@ def create_entries(centroid_breaks,
     # peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_intensities[i][(coords[i]%2)==1])>0.5 and np.sum(top_ten[i]%2)>atleast_m and ms1_peak[i] and top_ten[i][0]%2==1 and np.sum(top_ten[i][:3]%2==1)>=2]
     # peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(top_ten[i]%2)>atleast_m and ms1_peak[i]]
     # peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_intensities[i][(coords[i]%2)==1])>0.5 and np.sum(top_ten[i]%2)>atleast_m and ms1_peak[i]]
-    peaks_in_dia = [i for i in range(len(candidate_peaks)) if (all_norm_intensities[i][(coords[i]%2)==1]).sum()>0.5 and (top_ten[i]%2).sum()>atleast_m and ms1_peak[i]]
+    if config.match_ms1:
+        peaks_in_dia = [i for i in range(len(candidate_peaks)) if (all_norm_intensities[i][(coords[i]%2)==1]).sum()>config.frac_lib_matched and (top_ten[i]%2).sum()>atleast_m and ms1_peak[i]]
+    else:
+       peaks_in_dia = [i for i in range(len(candidate_peaks)) if (all_norm_intensities[i][(coords[i]%2)==1]).sum()>config.frac_lib_matched and (top_ten[i]%2).sum()>atleast_m]
     
     pep_cand_loc = [coords[i] for i in peaks_in_dia]
     pep_cand_list = [candidate_peaks[i] for i in peaks_in_dia]
@@ -468,28 +471,39 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
         obs_frag_int = [dia_spectrum[ref_spec_row_indices_split[i],1] for i in range(len(ref_spec_row_indices_split))]
         frag_names = [library[i]["ordered_frags"][j] for i,j in zip(ref_pep_cand,lib_peaks_matched)]
         
-        if decoy and len(decoy_spec_row_indices_split)>0:
-            decoy_spec_row_indices = np.concatenate(decoy_spec_row_indices_split)
-            decoy_spec_col_indices = np.concatenate(decoy_spec_col_indices_split)+np.max(ref_spec_col_indices)+1
-            decoy_spec_values = np.concatenate(decoy_spec_values_split)
-            decoy_frag_errors = [np.array(bin_centers[decoy_spec_row_indices_split[i]]-decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]])/bin_centers[decoy_spec_row_indices_split[i]] for i in range(len(decoy_lib_peaks_matched))]
-            decoy_lib_frag_mz = [decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
-            decoy_lib_frag_int = [decoy_pep_cand_list[i][:,1][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
-            decoy_obs_frag_int = [dia_spectrum[decoy_spec_row_indices_split[i],1] for i in range(len(decoy_spec_row_indices_split))]
-            decoy_frag_names =  [decoy_sorted_frags[i][decoy_lib_peaks_matched[idx]] for idx,i in enumerate(decoy_peaks_in_dia)]
-        else:
-            decoy_spec_row_indices_split=[] ## needs to be improved
-            decoy_spec_values_split=[] ## needs to be improved
-            decoy_spec_row_indices=np.array([],dtype=int)
-            decoy_spec_col_indices=np.array([],dtype=int)
-            decoy_spec_values=np.array([],dtype=int)
-            decoy_frag_errors = []#np.array([],dtype=float)
-            decoy_lib_frag_mz = []#np.array([],dtype=float)
-            decoy_lib_frag_int = []
-            decoy_obs_frag_int = []
-            decoy_frag_names = []
-            
-            
+    else:
+        ref_spec_row_indices=np.array([],dtype=int)
+        ref_spec_col_indices=np.array([],dtype=int)
+        ref_spec_values=np.array([],dtype=int)
+        frag_errors = []#np.array([],dtype=float)
+        lib_frag_mz = []#np.array([],dtype=float)
+        lib_frag_int = []
+        obs_frag_int = []
+        frag_names = []
+        
+        
+    if decoy and len(decoy_spec_row_indices_split)>0:
+        decoy_spec_row_indices = np.concatenate(decoy_spec_row_indices_split)
+        decoy_spec_col_indices = np.concatenate(decoy_spec_col_indices_split)+np.max(ref_spec_col_indices)+1
+        decoy_spec_values = np.concatenate(decoy_spec_values_split)
+        decoy_frag_errors = [np.array(bin_centers[decoy_spec_row_indices_split[i]]-decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]])/bin_centers[decoy_spec_row_indices_split[i]] for i in range(len(decoy_lib_peaks_matched))]
+        decoy_lib_frag_mz = [decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
+        decoy_lib_frag_int = [decoy_pep_cand_list[i][:,1][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
+        decoy_obs_frag_int = [dia_spectrum[decoy_spec_row_indices_split[i],1] for i in range(len(decoy_spec_row_indices_split))]
+        decoy_frag_names =  [decoy_sorted_frags[i][decoy_lib_peaks_matched[idx]] for idx,i in enumerate(decoy_peaks_in_dia)]
+    else:
+        decoy_spec_row_indices_split=[] ## needs to be improved
+        decoy_spec_values_split=[] ## needs to be improved
+        decoy_spec_row_indices=np.array([],dtype=int)
+        decoy_spec_col_indices=np.array([],dtype=int)
+        decoy_spec_values=np.array([],dtype=int)
+        decoy_frag_errors = []#np.array([],dtype=float)
+        decoy_lib_frag_mz = []#np.array([],dtype=float)
+        decoy_lib_frag_int = []
+        decoy_obs_frag_int = []
+        decoy_frag_names = []
+        
+    if len(decoy_spec_row_indices_split)>0 or len(ref_spec_row_indices_split)>0:
         # what peaks from the spectrum are matched by library peps
         unique_row_idxs = np.unique(np.concatenate((ref_spec_row_indices,decoy_spec_row_indices)))
         unique_row_idxs = np.array(np.sort(unique_row_idxs),dtype=int)
@@ -607,7 +621,7 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
             unique_row_indices_split_decoy = [[peak_idx_convertor[j] in single_matched_rows for j in i] for i in decoy_spec_row_indices_split]
             unique_frags_decoy = [i[j] for i,j in zip(decoy_lib_frag_mz,unique_row_indices_split_decoy)]
             unique_frags_int_decoy = [i[j] for i,j in zip(decoy_obs_frag_int,unique_row_indices_split_decoy)]
-            
+                
         ####################################
             
     #Select non-zero coeffs
