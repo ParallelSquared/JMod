@@ -61,8 +61,6 @@ im_tol = 0.5
 im_merge_tol = 0.005
 rt_width = 1.5
 
-top_n = 10
-atleast_m = args.atleast_m
 
 top_n_pasef = 10
 atleast_m_pasef = 3
@@ -102,7 +100,18 @@ num_iso_r = 2
 ## how many isotope traces to collect
 num_iso_ms1 = 6
 
+## how much to offset the decoy prec mz
 decoy_mz_offset = 20
+
+
+
+### filters for picking spectra to fit
+frac_lib_matched = 0.5
+match_ms1 = True
+top_n = 10
+atleast_m = args.atleast_m
+
+
 
 
 ## How to deal with unmatched intensity:
