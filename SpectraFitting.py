@@ -457,6 +457,7 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
        
     frag_errors = []
     lib_frag_mz = []
+    decoy_col_offset = 0
     
     if len(ref_spec_row_indices_split)>0 and len(ref_spec_col_indices_split)>0 and len(ref_spec_values_split)>0:
         
@@ -471,6 +472,8 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
         obs_frag_int = [dia_spectrum[ref_spec_row_indices_split[i],1] for i in range(len(ref_spec_row_indices_split))]
         frag_names = [library[i]["ordered_frags"][j] for i,j in zip(ref_pep_cand,lib_peaks_matched)]
         
+        decoy_col_offset = np.max(ref_spec_col_indices)+1 
+        
     else:
         ref_spec_row_indices=np.array([],dtype=int)
         ref_spec_col_indices=np.array([],dtype=int)
@@ -484,7 +487,7 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
         
     if decoy and len(decoy_spec_row_indices_split)>0:
         decoy_spec_row_indices = np.concatenate(decoy_spec_row_indices_split)
-        decoy_spec_col_indices = np.concatenate(decoy_spec_col_indices_split)+np.max(ref_spec_col_indices)+1
+        decoy_spec_col_indices = np.concatenate(decoy_spec_col_indices_split)+decoy_col_offset
         decoy_spec_values = np.concatenate(decoy_spec_values_split)
         decoy_frag_errors = [np.array(bin_centers[decoy_spec_row_indices_split[i]]-decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]])/bin_centers[decoy_spec_row_indices_split[i]] for i in range(len(decoy_lib_peaks_matched))]
         decoy_lib_frag_mz = [decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
@@ -520,12 +523,16 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
         # not_dia_values = np.array([np.sum([norm_intensities[idx][peak_idx] for peak_idx in range(len(norm_intensities[idx])) if ref_pep_cand_loc[idx][peak_idx]%2==0])
         #                           for idx in range(len(norm_intensities))])
        
-        
-        not_dia_row_indices,not_dia_col_indices,not_dia_values = unmatched_peaks(norm_intensities=norm_intensities,
-                                                                                 pep_cand_loc=ref_pep_cand_loc,
-                                                                                 last_row=max(unique_row_idxs)+1,
-                                                                                 fit_type=config.unmatched_fit_type)
-        
+        if len(ref_spec_row_indices_split)>0:
+            not_dia_row_indices,not_dia_col_indices,not_dia_values = unmatched_peaks(norm_intensities=norm_intensities,
+                                                                                     pep_cand_loc=ref_pep_cand_loc,
+                                                                                     last_row=max(unique_row_idxs)+1,
+                                                                                     fit_type=config.unmatched_fit_type)
+        else:
+            not_dia_row_indices=np.array([],dtype=np.int32)
+            not_dia_col_indices=np.array([],dtype=np.int32)
+            not_dia_values=np.array([],dtype=np.int32)
+            
         if decoy and len(decoy_spec_row_indices_split)>0:
             decoy_not_dia_row_indices,decoy_not_dia_col_indices,decoy_not_dia_values = unmatched_peaks(norm_intensities=norm_decoy_intensities,
                                                                                                          pep_cand_loc=decoy_pep_cand_loc,
@@ -541,7 +548,7 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
         ref_sparse_values = np.append(ref_spec_values,not_dia_values)
         
         decoy_sparse_row_indices = np.append(decoy_spec_row_indices,decoy_not_dia_row_indices)
-        decoy_sparse_col_indices = np.append(decoy_spec_col_indices,decoy_not_dia_col_indices+max(ref_spec_col_indices)+1)
+        decoy_sparse_col_indices = np.append(decoy_spec_col_indices,decoy_not_dia_col_indices+decoy_col_offset)
         decoy_sparse_values = np.append(decoy_spec_values,decoy_not_dia_values)
         
         
@@ -637,7 +644,8 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
     if len(non_zero_coeffs)>0:
         lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
         if decoy:
-            decoy_spec_ids = [decoy_pep_cand[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[int(max(ref_sparse_col_indices))+1+i] != 0]
+            updated_decoy_offset = int(max(ref_sparse_col_indices))+1 if len(ref_sparse_col_indices)>0 else 0
+            decoy_spec_ids = [decoy_pep_cand[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
         
             all_spec_ids = lib_spec_ids+decoy_spec_ids
             all_features = np.concatenate((features,decoy_features))
