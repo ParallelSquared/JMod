@@ -123,7 +123,7 @@ if __name__=="__main__":
                         ms2=config.args.ms2_align)
         rt_spl,mz_func = funcs[:2]
         # rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
-        rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"])] for i in spectrumLibrary.values()])
+        rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
 
 
     all_keys = list(spectrumLibrary)

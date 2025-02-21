@@ -83,3 +83,31 @@ for i in range(len(all_fasta_seqs)):
 
 # # all_fasta_seqs.append(fasta_seqs)
 # all_protein_names.append(proteins)
+
+
+##### create pep to protein dictionary
+
+# # pep_to_prot = {}
+
+# for fasta_file in fasta_files[:1]:
+#     fasta_seqs = set()
+#     proteins =set()
+#     pep_to_prot = {}
+#     prot_num=0
+#     with fasta.read(fasta_file) as db:
+#           for entry in db:
+#             # break
+#             prot_num+=1
+#             protein= re.search("[a-z]{2}\|(.*)?\|",entry.description)[1]
+#             peps = parser.cleave(entry.sequence,rule=rule,
+#                                   missed_cleavages=max_num_missed_cleavage,
+#                                   min_length=5,
+#                                   max_length=45)
+#             # peps = {re.sub("I","L",i) for i in peps}
+            
+#             for pep in peps:
+#                 pep_to_prot.setdefault(pep,"")
+#                 pep_to_prot[pep]+=protein+";"
+            
+            
+            

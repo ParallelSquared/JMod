@@ -375,7 +375,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     score_order = np.argsort(-output)
     orig_order = np.argsort(score_order)
     decoy_order = fdc["decoy"][score_order]
-    frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
+    frac_decoy = 2*np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
     # plt.plot(frac_decoy)
     T = output[score_order[np.searchsorted(frac_decoy,0.01)]]
 
