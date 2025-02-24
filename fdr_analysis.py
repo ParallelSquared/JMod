@@ -279,19 +279,22 @@ class score_model():
     
 def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     """
-    
-
     Parameters
     ----------
-    fdc : pandas.Dataframe
+    fdc : pandas.DataFrame
         All PSMs identified.
-    model_type : string [lda, rf, xg]
-                 Type of ML model used to discriminate targets and decoys
-                 
+    model_type : string [autogluon]
+                 Type of ML model used to discriminate targets and decoys.
+                 Only 'autogluon' is supported in this implementation.
+    fdr_t : float
+        False discovery rate threshold.
+    folder : str, optional
+        Folder path for saving plots.
+
     Returns
     -------
-    None.
-
+    fdc : pandas.DataFrame
+        Updated dataframe with prediction values and Q-values.
     """
 
     assert model_type in ["lda", "rf", "xg"], 'model_type must be one of ["lda", "rf", "xg"]'
@@ -375,7 +378,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     score_order = np.argsort(-output)
     orig_order = np.argsort(score_order)
     decoy_order = fdc["decoy"][score_order]
-    frac_decoy = 2*np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
+    frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
     # plt.plot(frac_decoy)
     T = output[score_order[np.searchsorted(frac_decoy,0.01)]]
 

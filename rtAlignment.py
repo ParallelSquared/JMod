@@ -25,6 +25,7 @@ from miscFunctions import within_tol
 from scipy import signal
 from scipy.optimize import curve_fit
 from scipy import stats
+from sklearn.metrics import auc
 import warnings
 import dill
 dill.settings['recurse'] = True
@@ -349,9 +350,8 @@ def closest_spec(dia_rt_mzwin,mz,rt):
     #     print(mz,rt)
     #     return 0
     
-
 def gaussian(x, amplitude, mean, stddev):
-    return amplitude * np.exp(-((x - mean) / 2 / stddev) ** 2)
+    return (amplitude/ (np.abs(stddev) * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mean) / stddev) ** 2)
 
 def fwhm(stddev):
     return 2 * np.sqrt(2 * np.log(2)) * stddev
@@ -1174,19 +1174,106 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # plt.scatter(f1(convertor(predictions)).flatten(),[i[0] for i in t_vals[1]],s=1)
     
     
+    
+    
+    ### compare original empirical RTs to fintuned RTs
+    
+    
+    ### recalculate RT_spls...
+    keys = [(i,float(j)) for i,j in t_seqs[0]]
+    
+    lib_seqs = [one_hot_encode_sequence(librarySpectra[key]["seq"]) for key in keys]
+    new_lib_rts = convertor(np.mean([model.predict(np.array(lib_seqs)) for model in models],axis=0).flatten())
+    
+    t0_rts = new_lib_rts
+    ## take 95% to decrease effect of ends inlfuencing predictions
+    # rt_filter_bool = np.logical_and(t0_rts>np.percentile(t0_rts,1),t0_rts<np.percentile(t0_rts,95))
+    rt_filter_bool = filter_rts_by_dense(t0_rts,30)
+    rt_spls = []
+    for idx in range(timeplex):
+        # rt_spl = threestepfit([updatedLibrary[key]["iRT"] for key in keys],[i[0] for i in t_vals[0]],1)
+        rt_spl = lowess_fit(t0_rts[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
+                            np.array([i[0] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],frac=.2)
+        rt_spls.append(rt_spl)
+    
+    # for idx in range(timeplex):
+    #     # plt.subplots()
+    #     test_bool = np.logical_and(diff_bool,rt_filter_bool)
+    #     plt.scatter(t0_rts[test_bool],np.array([i[0] for i in t_vals[idx]])[test_bool],c=colours[idx],s=1,edgecolor="none") 
+    #     plt.scatter(t0_rts[test_bool],rt_spls[idx](t0_rts)[test_bool],c=colours[idx],s=1,alpha=.2) 
+    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys]),np.array([i[0] for i in t_vals[1]]),s=1,alpha=.2)    
+    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[diff_bool],np.array([i[0] for i in t_vals[0]])[diff_bool],s=1,alpha=.2)
+    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[test_bool],np.array([i[0] for i in t_vals[0]])[test_bool],s=1,alpha=.2)
+    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[diff_bool],np.array([i[0] for i in t_vals[1]])[diff_bool],s=1,alpha=.2)
+    # # plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys]),s=1)
+    
+    ### compare to empirical fit
+    emp_rt_spls = []
+    for idx in range(timeplex):
+        # rt_spl = threestepfit([updatedLibrary[key]["iRT"] for key in keys],[i[0] for i in t_vals[0]],1)
+        rt_spl = lowess_fit(np.array(t_vals[idx][:,1])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
+                            np.array(t_vals[idx][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],frac=.2)
+        emp_rt_spls.append(rt_spl)
+
+    # for idx in range(timeplex):
+    #     # plt.subplots()
+    #     plt.scatter(np.array(t_vals[idx][:,1])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
+    #                         np.array(t_vals[idx][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
+    #                         c=colours[idx],s=1,edgecolor="none") 
+    #     plt.scatter(np.array(t_vals[idx][:,1])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
+    #                 emp_rt_spls[idx](np.array(t_vals[idx][:,1]))[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
+    #                 c=colours[idx],s=1,alpha=.2) 
+    
+    
+    all_emp_diffs = np.concatenate([emp_rt_spls[i](np.array(t_vals[idx][:,1]))[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array(t_vals[i][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])] for i in range(timeplex)])
+    # kde = stats.gaussian_kde(all_emp_diffs,.01)
+    # plt.plot(np.linspace(-10,10,200),kde(np.linspace(-10,10,200)))
+    # plt.hist(np.abs(all_emp_diffs),np.linspace(-10,10,200))
+    # plt.xlabel("Empirical RT error")
+    
+    all_pred_diffs = np.concatenate([rt_spls[i](t0_rts)[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array([i[0] for i in t_vals[i]])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])] for i in range(timeplex)])
+    # plt.hist(np.abs(all_pred_diffs),np.linspace(-10,10,200))
+    # plt.xlabel("Predicted RT error")
+    
+    # np.percentile(np.abs(all_emp_diffs), 50)
+    # np.percentile(np.abs(all_pred_diffs), 50)
+    
+    
+    limit=10 ## exlcude RT diffs larger than this (outliers)
+    data = sorted(np.abs(all_emp_diffs)[np.abs(all_emp_diffs)<limit])
+    p = 1. * np.arange(len(data)) / (len(data) - 1)
+    # plt.plot(data,p,label="Empirical RT")
+    emp_cdf_auc = auc(data,p)
+    data = sorted(np.abs(all_pred_diffs)[np.abs(all_pred_diffs)<limit])
+    p = 1. * np.arange(len(data)) / (len(data) - 1)
+    # plt.plot(data,p,label="Predicted RT")
+    pred_cdf_auc = auc(data,p)
+    # plt.legend()
+    # plt.xlabel("RT difference")
+    # plt.ylabel("Fraction of Precursors")
+    
+    
+    
+    
+    
     ### Note: I need to return an updated library not just the rt_spl
     ### Or else return the models used to predict the RT
     
     
     updatedLibrary = copy.deepcopy(librarySpectra)
     all_lib_keys = list(librarySpectra)
-    all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
-    all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
     
-    for key,rt in zip(all_lib_keys,all_new_lib_rts):
-        updatedLibrary[key]["iRT"] = rt
+    if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
+        all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
+        all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
         
-    
+        for key,rt in zip(all_lib_keys,all_new_lib_rts):
+            updatedLibrary[key]["iRT"] = rt
+            
+    else: ### empirical are better
+        ## keep the library RTs the same
+        ## update the splines
+        rt_spls = emp_rt_spls
     # ## get keys from t_vals and recreate scatter plot
     # keys = [(i,float(j)) for i,j in t_seqs[0]]
     # plt.scatter(f1(convertor([updatedLibrary[key]["iRT"] for key in keys])),[i[0] for i in t_vals[0]],s=1)
@@ -1194,31 +1281,6 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # plt.scatter(f1(convertor([updatedLibrary[key]["iRT"] for key in keys])),[i[0] for i in t_vals[1]],s=1)
     # plt.plot([10,50],[13,53])
     
-    ### recalculate RT_spls...
-    keys = [(i,float(j)) for i,j in t_seqs[0]]
-    ## take 95% to decrease effect of ends inlfuencing predictions
-    t0_rts = np.array([updatedLibrary[key]["iRT"] for key in keys])
-    # rt_filter_bool = np.logical_and(t0_rts>np.percentile(t0_rts,1),t0_rts<np.percentile(t0_rts,95))
-    rt_filter_bool = filter_rts_by_dense(t0_rts,30)
-    rt_spls = []
-    for idx in range(timeplex):
-        # rt_spl = threestepfit([updatedLibrary[key]["iRT"] for key in keys],[i[0] for i in t_vals[0]],1)
-        rt_spl = lowess_fit(np.array([updatedLibrary[key]["iRT"] for key in keys])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
-                            np.array([i[0] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],frac=.4)
-        rt_spls.append(rt_spl)
-    
-    # for idx in range(timeplex):
-    #     # plt.subplots()
-    #     test_bool = np.logical_and(diff_bool,rt_filter_bool)
-    #     plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[test_bool],np.array([i[0] for i in t_vals[idx]])[test_bool],c=colours[idx],s=1,edgecolor="none") 
-    #     plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[test_bool],rt_spls[idx](np.array([updatedLibrary[key]["iRT"] for key in keys]))[test_bool],c=colours[idx],s=1,alpha=.2) 
-    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys]),np.array([i[0] for i in t_vals[1]]),s=1,alpha=.2)    
-    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[diff_bool],np.array([i[0] for i in t_vals[0]])[diff_bool],s=1,alpha=.2)
-    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[test_bool],np.array([i[0] for i in t_vals[0]])[test_bool],s=1,alpha=.2)
-    # plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[diff_bool],np.array([i[0] for i in t_vals[1]])[diff_bool],s=1,alpha=.2)
-    # # plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys]),s=1)
-    
-
     
     # ## just use T0
     # export_df = pd.DataFrame({"obs_rt":np.concatenate([t_vals[0][:,0],t_vals[1][:,0]]),
@@ -1240,12 +1302,22 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # f1 = lowess_fit(convertor(predictions).flatten(),[i[0] for i in t_vals[0]],frac=.4)
     rt_amplitude, rt_mean, rt_stddev = fit_gaussian(rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])[diff_bool]-np.array([i[0] for i in t_vals[0]])[diff_bool],bin_n=100)
     
+    emp_rt_amplitude, emp_rt_mean, emp_rt_stddev = fit_gaussian(emp_rt_spls[0](np.array(t_vals[0][:,1]))[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array(t_vals[0][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],bin_n=100)
+    
+    
+    
     # vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],np.linspace(-10,10,150),density=True,label="Old RT")
     # vals,bins,_ = plt.hist((rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
     # plt.plot(np.linspace(-5,5,100),gaussian(np.linspace(-5,5,100), rt_amplitude, rt_mean, rt_stddev),label="New RT fit")
+    # # plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals))
+    # # plt.legend()
+    # ### vals,bins,_ = plt.hist(np.abs(rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
+    
+    # vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],np.linspace(-10,10,150),density=True,label="Old RT")
+    # vals,bins,_ = plt.hist(emp_rt_spls[0](np.array(t_vals[0][:,1]))[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array(t_vals[0][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],bins,alpha=.5,density=True,label="New RT")
+    # plt.plot(np.linspace(-5,5,100),gaussian(np.linspace(-5,5,100),  emp_rt_amplitude, emp_rt_mean, emp_rt_stddev),label="New RT fit")
     # plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals))
-    # plt.legend()
-    ### vals,bins,_ = plt.hist(np.abs(rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
+    
    
     ## NB: Only for timeplex=2
     ## computes differences between the fit lines of both plexes
@@ -1311,7 +1383,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
    
     
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
-    new_rt_tol = 4*rt_stddev
+    new_rt_tol = 4*np.abs(rt_stddev)
     print(f"Optimsed RT tolerance: {new_rt_tol}")
     
     # ## ensure there is no overlap
@@ -1382,9 +1454,13 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
                 dill.dump(ms2_func,dill_file)
             
         ##plot RT alignment
+        filter_bool = np.logical_and.reduce([*all_diff_bools,rt_filter_bool])
+        
         plt.subplots()
         for idx in range(timeplex):
-            plt.scatter(t_vals[idx][:,1],t_vals[idx][:,0],s=1,c=colours[idx],alpha=.2,label=f"T{str(idx)}")
+            plt.scatter(np.array(t_vals[idx][:,1])[filter_bool],
+                        np.array(t_vals[idx][:,0])[filter_bool],
+                        s=1,c=colours[idx], alpha=.2,label=f"T{str(idx)}")
             # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1]),s=1,label=f"T{str(idx)}",c=colours[idx])
             # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
             # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
@@ -1399,7 +1475,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         ### want this later
         plt.subplots()
         for idx in range(timeplex):
-            plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[np.logical_and(diff_bool,rt_filter_bool)],np.array([i[0] for i in t_vals[idx]])[np.logical_and(diff_bool,rt_filter_bool)],s=1,label=f"T{str(idx)}",alpha=.2)
+            plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[filter_bool],np.array([i[0] for i in t_vals[idx]])[filter_bool],s=1,label=f"T{str(idx)}",alpha=.2)
             # plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]),s=1,label=f"T{str(idx)}",c=colours[idx])
             plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
             plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])-config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
@@ -1412,7 +1488,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         plt.subplots()
         for idx in range(timeplex):
-            vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[np.logical_and(diff_bool,rt_filter_bool)],100,alpha=.5,label=f"T{str(idx)}")
+            vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[filter_bool],100,alpha=.5,label=f"T{str(idx)}")
             # rt_stddev = gaussian_fits[idx][-1]
         x_scale = np.diff(plt.xlim())[0]
         plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
@@ -1430,7 +1506,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
                 offset = all_prediction_diffs[idx-1]
             else:
                 offset = 0
-            vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+offset)[np.logical_and(diff_bool,rt_filter_bool)],100,alpha=.5,label=f"T{str(idx)}")
+            vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+offset)[filter_bool],100,alpha=.5,label=f"T{str(idx)}")
             # rt_stddev = gaussian_fits[idx][-1]
             plt.vlines([-config.opt_rt_tol+np.median(offset),config.opt_rt_tol+np.median(offset)],0,max(vals),color="r")
         x_scale = np.diff(plt.xlim())[0]
@@ -1443,8 +1519,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         
         plt.subplots()
-        vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],np.linspace(-10,10,150),density=True,label="Old RT")
-        plt.hist((rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
+        vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[filter_bool],np.linspace(-10,10,150),density=True,label="Old RT")
+        plt.hist((rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[filter_bool],bins,alpha=.5,density=True,label="New RT")
         plt.plot(np.linspace(-5,5,100),gaussian(np.linspace(-5,5,100), rt_amplitude, rt_mean, rt_stddev),label="New RT fit")
         plt.legend()
         plt.xlabel("RT alignment errors")
@@ -1453,7 +1529,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         fig, ax = plt.subplots(nrows = timeplex, figsize=(7.2, 3.6*timeplex))        
         for idx,row in enumerate(ax):
-            row.scatter(np.array(t_vals[idx][:,1])[np.logical_and(diff_bool,rt_filter_bool)],np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[np.logical_and(diff_bool,rt_filter_bool)],label="Original_RT",s=.1)
+            row.scatter(np.array(t_vals[idx][:,1])[filter_bool],np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[filter_bool],label="Original_RT",s=.1)
             row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[0,0],color="r",linestyle="--",alpha=.5)
             row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
             row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)

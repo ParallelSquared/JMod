@@ -70,7 +70,7 @@ if __name__=="__main__":
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
     results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
-    results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
+    # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     if not os.path.exists(results_folder_path):
         os.mkdir(results_folder_path)
