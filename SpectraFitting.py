@@ -403,7 +403,8 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
         converted_frags = [decoy_library[i]["frags"] for i in mass_window_candidates]
         decoy_sorted_frags = [decoy_library[i]["ordered_frags"] for i in mass_window_candidates]
         candidate_decoy_peaks = [decoy_library[i]["spectrum"] for i in mass_window_candidates]
-        decoy_mz = np.array([decoy_library[i]["prec_mz"] for i in mass_window_candidates])
+        # decoy_mz = np.array([decoy_library[i]["prec_mz"] for i in mass_window_candidates])
+        decoy_mz = rt_mz[:,1][window_idxs] - config.decoy_mz_offset
     
         decoy_top_n_idxs = [decoy_library[i]['top_n'] for i in mass_window_candidates]
         

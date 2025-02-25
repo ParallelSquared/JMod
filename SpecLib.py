@@ -289,8 +289,9 @@ def create_decoy_lib(library,rules):
         entry = decoy_lib[key]
         
         entry["seq"] = change_seq(key[0],rules)
-        if config.args.decoy=="rev": ## this will have the same mz as many correct mathces and therefore a really good ms1 isotope corr
-            entry["prec_mz"] -= config.decoy_mz_offset
+        #!!! To change;
+        # if config.args.decoy=="rev": ## this will have the same mz as many correct matches and therefore a really good ms1 isotope corr
+        #     entry["prec_mz"] -= config.decoy_mz_offset
             
         entry["frags"] = convert_frags(key[0], entry["frags"],rules)
         
