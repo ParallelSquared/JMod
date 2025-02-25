@@ -296,7 +296,7 @@ def create_decoy_lib(library,rules):
         entry["frags"] = convert_frags(key[0], entry["frags"],rules)
         
         if config.args.iso:
-            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(key[0], entry["frags"])
+            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(entry["seq"], entry["frags"])
         else:
             entry["spectrum"], entry["ordered_frags"] = frag_to_peak(entry["frags"],return_frags=True)
             
