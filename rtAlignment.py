@@ -609,8 +609,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         rt_spl = lowess_fit(np.array(output_rts)[cor_filter],np.array(dia_rt)[cor_filter])
     else:
         hyper_cutoff = np.percentile(all_hyper,80)
-        cor_filter = all_hyper>hyper_cutoff
-        rt_spl = initstepfit(np.array(all_lib_rts)[cor_filter],np.array([i[1] for i in all_id_rt])[cor_filter],1,z=np.array(all_hyper)[cor_filter])
+        all_cor_filter = all_hyper>hyper_cutoff
+        cor_filter = output_hyper>hyper_cutoff
+        rt_spl = initstepfit(np.array(all_lib_rts)[all_cor_filter],np.array([i[1] for i in all_id_rt])[all_cor_filter],1,z=np.array(all_hyper)[all_cor_filter])
         
         
         
