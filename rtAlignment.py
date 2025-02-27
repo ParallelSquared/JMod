@@ -19,7 +19,7 @@ import iso_functions as iso_f
 from SpectraFitting import fit_to_lib
 from scipy.interpolate import LSQUnivariateSpline as spline
 from scipy.interpolate import UnivariateSpline, InterpolatedUnivariateSpline
-from scipy.optimize import isotonic_regression
+#from scipy.optimize import isotonic_regression
 from statistics import quantiles
 from miscFunctions import within_tol
 from scipy import signal
@@ -32,6 +32,7 @@ dill.settings['recurse'] = True
 import itertools 
 import h5py
 import copy
+from kneed import KneeLocator
 
 from scipy.interpolate import interp1d
 import statsmodels.api as sm
@@ -609,9 +610,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         rt_spl = lowess_fit(np.array(output_rts)[cor_filter],np.array(dia_rt)[cor_filter])
     else:
         hyper_cutoff = np.percentile(all_hyper,80)
-        all_cor_filter = all_hyper>hyper_cutoff
-        cor_filter = output_hyper>hyper_cutoff
-        rt_spl = initstepfit(np.array(all_lib_rts)[all_cor_filter],np.array([i[1] for i in all_id_rt])[all_cor_filter],1,z=np.array(all_hyper)[all_cor_filter])
+        cor_filter = all_hyper>hyper_cutoff
+        rt_spl = initstepfit(np.array(all_lib_rts)[cor_filter],np.array([i[1] for i in all_id_rt])[cor_filter],1,z=np.array(all_hyper)[cor_filter])
         
         
         
@@ -1252,8 +1252,41 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # plt.legend()
     # plt.xlabel("RT difference")
     # plt.ylabel("Fraction of Precursors")
+        
+
+    ### JD added 2/26/2025
+    # Compute empirical CDF
+    limit = 10  # Exclude RT diffs larger than this (outliers)
+    emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
+    emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
     
+    # Compute predicted CDF
+    pred_data = np.sort(np.abs(all_pred_diffs)[np.abs(all_pred_diffs) < limit])
+    pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
     
+    # Apply the KneeLocator method to find the elbow for empirical CDF
+    kneedle_emp = KneeLocator(emp_data, emp_p, curve="concave", direction="increasing")
+    elbow_emp_x = kneedle_emp.knee
+    elbow_emp_y = emp_p[np.argmin(np.abs(emp_data - elbow_emp_x))]
+    
+    # Apply the KneeLocator method to find the elbow for predicted CDF
+    kneedle_pred = KneeLocator(pred_data, pred_p, curve="concave", direction="increasing")
+    elbow_pred_x = kneedle_pred.knee
+    elbow_pred_y = pred_p[np.argmin(np.abs(pred_data - elbow_pred_x))]
+    
+    # Plot the CDFs with elbow points
+    plt.figure(figsize=(8, 5))
+    plt.plot(emp_data, emp_p, label="Original CDF", linestyle='--')
+    plt.plot(pred_data, pred_p, label="Finetuned CDF", linestyle='-')
+    plt.scatter(elbow_emp_x, elbow_emp_y, color='red', label=f'Original Elbow at {elbow_emp_x:.2f}', zorder=3)
+    plt.scatter(elbow_pred_x, elbow_pred_y, color='blue', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
+    plt.xlabel("RT Differences")
+    plt.ylabel("Cumulative Probability")
+    plt.legend()
+    plt.title("Finding an optimal RT library")
+    #plt.show()
+    plt.savefig(results_folder+"/OriginalLibRTs_vs_FineTunedRTs_CDF.png",dpi=600,bbox_inches="tight")
+
     
     
     
@@ -1304,8 +1337,14 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     rt_amplitude, rt_mean, rt_stddev = fit_gaussian(rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])[diff_bool]-np.array([i[0] for i in t_vals[0]])[diff_bool],bin_n=100)
     
     emp_rt_amplitude, emp_rt_mean, emp_rt_stddev = fit_gaussian(emp_rt_spls[0](np.array(t_vals[0][:,1]))[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array(t_vals[0][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],bin_n=100)
-    
-    
+
+
+    #JD added 2/26/2025
+    if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
+        rt_stddev = elbow_pred_x
+    else:
+        rt_stddev = elbow_emp_x
+
     
     # vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],np.linspace(-10,10,150),density=True,label="Old RT")
     # vals,bins,_ = plt.hist((rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
@@ -1384,8 +1423,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
    
     
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
-    new_rt_tol = 4*np.abs(rt_stddev)
-    print(f"Optimsed RT tolerance: {new_rt_tol}")
+    new_rt_tol = 1.5*np.abs(rt_stddev)
+    print(f"Using 2x the knee of the iRT CDFs for RT tolerance...")
+
+    print(f"Optimised RT tolerance: {new_rt_tol}")
     
     # ## ensure there is no overlap
     # obs_rt_range = [min(dia_rt),max(dia_rt)]

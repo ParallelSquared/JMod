@@ -27,6 +27,7 @@ parser.add_argument('--num_iso', default=2, type=float)
 parser.add_argument('--pp_file', default="", type=str)
 parser.add_argument('--timspeak_file', default="", type=str)
 parser.add_argument('-z','--dummy_value', type=str)
+parser.add_argument('--plexDIA', action='store_true') #only used for feature engineering of plexDIA data for target/decoy classification
 
 
 args = parser.parse_args()
@@ -101,7 +102,7 @@ num_iso_r = 2
 num_iso_ms1 = 6
 
 ## how much to offset the decoy prec mz
-decoy_mz_offset = 20
+decoy_mz_offset = 0
 
 
 
@@ -125,7 +126,7 @@ unmatched_fit_type = args.unmatched
 """
 
 
-score_model = "rf"
+score_model = "ag"
 """
 3 options:
     rf: Random Forest

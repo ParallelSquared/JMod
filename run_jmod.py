@@ -56,20 +56,20 @@ if __name__=="__main__":
     
     ms2_align = "MS2align" if config.args.ms2_align else ""
     results_folder_name = "_".join([spec_file_name,
-                                    lib_file_name+"Update060225",
+                                    lib_file_name+"Update_02262025_JD_FDR_",
                                     f"{config.mz_ppm}ppm",
                                     f"{config.atleast_m}m",
                                     f"unmatch{config.unmatched_fit_type}",
                                     f"DECOY{config.args.decoy}",
                                     *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,is_timeplex,dummy_val]))])
     
-    results_folder_path = "/Users/kevinmcdonnell/Programming/Python/Jmod/Results/"+results_folder_name
+    #results_folder_path = "/Users/kevinmcdonnell/Programming/Python/Jmod/Results/"+results_folder_name
     print(results_folder_name)
     # print(config.args.tag)
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
+    #results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     if not os.path.exists(results_folder_path):
