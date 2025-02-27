@@ -277,7 +277,439 @@ class score_model():
     
     
     
-def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
+from autogluon.tabular import TabularPredictor
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc
+import tqdm
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.utils import resample
+from scipy.stats import gaussian_kde
+
+# def score_precursors_JD_works_02202025(fdc, model_type="ag", fdr_t=0.01, folder=None):
+#     """
+#     Parameters
+#     ----------
+#     fdc : pandas.DataFrame
+#         All PSMs identified.
+#     model_type : string [autogluon]
+#                  Type of ML model used to discriminate targets and decoys.
+#                  Only 'autogluon' is supported in this implementation.
+#     fdr_t : float
+#         False discovery rate threshold.
+#     folder : str, optional
+#         Folder path for saving plots.
+
+#     Returns
+#     -------
+#     fdc : pandas.DataFrame
+#         Updated dataframe with prediction values and Q-values.
+#     """
+#     assert model_type == "ag", 'model_type must be "autogluon"'
+#     print("Scoring IDs")
+    
+
+#     fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])
+ 
+
+#     _bool = np.logical_and(~fdc["decoy"],fdc.coeff>1)
+
+#     ## define our features and labels for the model
+#     y = np.array(_bool,dtype=int)
+#     fdc['y_count'] = fdc['frag_names'].str.count('y')
+#     fdc['b_count'] = fdc['frag_names'].str.count('b')
+#     fdc['yb_count'] = fdc['b_count'] + fdc['y_count']
+#     fdc['y_minus_b_count'] = fdc['b_count'] - fdc['y_count']
+#     fdc['y_fraction'] = fdc['y_count']/(fdc['b_count'] + fdc['y_count'])
+#     fdc['coeff_MS1_Int_ratio'] = np.log10(fdc['coeff']+1) - np.log10(fdc['MS1_Int']+1)
+#     fdc['coeff_x_MS1_Int'] = np.log10(fdc['coeff']+1) + np.log10(fdc['MS1_Int']+1)
+#     fdc['abs_rt_error'] = np.abs(fdc['rt_error'])
+
+#     fdc['mass'] = fdc['z']*fdc['mz']
+#     fdc['ends_with_K'] = fdc['stripped_seq'].apply(lambda x: 1 if x.endswith('K') else 0)
+    
+#         # Count decoys and targets
+#     num_decoys = fdc["decoy"].sum()  
+#     num_targets = len(fdc) - num_decoys  
+    
+#     # Compute sample weights
+#     decoy_weight = 1.0  # Decoys always have weight 1
+#     target_weight = num_decoys / num_targets if num_targets > 0 else 1.0  # Avoid division by zero
+    
+#     # Assign sample weights
+#     fdc = fdc.copy()  # Avoid SettingWithCopyWarning
+#     fdc["sample_weight"] = fdc["decoy"].apply(lambda x: decoy_weight if x else target_weight)
+
+#     # exclude necessary columns
+#     # dat_keep = fdc[['MS1_Int',"iso_cor","traceproduct","iso1_cor","iso2_cor","ms1_cor","sq_mz_error","sq_rt_error","pep_len","mz",
+#     #                "cosine","frac_int_matched_pred_sigcoeff","frac_int_matched_pred","hyperscore","frac_int_uniq_pred",
+#     #                "frac_int_uniq","prec_r2","spec_r2","frac_int_matched","rt_error","mz_error","frac_dia_int","frac_lib_int",
+#     #                "num_lib","rt","z","coeff","decoy","y_count","b_count","yb_count","y_minus_b_count","coeff_x_MS1_Int",
+#     #                "y_fraction","coeff_MS1_Int_ratio","mass","ends_with_K","sample_weight"]]
+
+#     dat_keep = fdc[["iso_cor","traceproduct","iso1_cor","iso2_cor","sq_mz_error","sq_rt_error","pep_len","mz",
+#                    "cosine","frac_int_matched_pred_sigcoeff","frac_int_matched_pred","hyperscore","frac_int_uniq_pred",
+#                    "frac_int_uniq","prec_r2","spec_r2","frac_int_matched","rt_error","mz_error","frac_dia_int","frac_lib_int",
+#                    "num_lib","rt","z","coeff","decoy","y_count","b_count","yb_count","y_minus_b_count",
+#                    "y_fraction","mass","ends_with_K","abs_rt_error","sample_weight"]]
+
+
+#     #estimate RT densities using Gaussian KDE
+#     rt_decoy = dat_keep[dat_keep['decoy'] == True]['rt']
+#     rt_non_decoy = dat_keep[dat_keep['decoy'] == False]['rt']
+    
+#     kde_decoy = gaussian_kde(rt_decoy)
+#     kde_non_decoy = gaussian_kde(rt_non_decoy)
+    
+#     density_decoy = kde_decoy(dat_keep['rt'])
+#     density_non_decoy = kde_non_decoy(dat_keep['rt'])
+    
+#     # Compute the ratio of densities (decoy / non-decoy)
+#     # Handle division by zero by replacing zeros with a small value
+#     density_non_decoy = np.where(density_non_decoy == 0, 1e-10, density_non_decoy)
+#     dat_keep['density_ratio'] = density_decoy / density_non_decoy
+#     dat_keep['density_diff'] = density_decoy - density_non_decoy
+    
+#     _bool = np.logical_and(~dat_keep["decoy"], dat_keep["coeff"] > 1)
+#     y = np.array(_bool, dtype=int)
+        
+
+    
+#     X = dat_keep.drop(columns=['decoy']) 
+#     X = X.fillna(0)  
+    
+#     y = np.array(~dat_keep["decoy"], dtype=int)
+#     X['label'] = y  
+
+#     X = X.astype({col: 'float32' for col in X.select_dtypes('float64').columns})
+
+#     hyperparams = {
+#         'NN_TORCH': {},
+#         'FASTAI': {},
+#         'GBM': {},
+#         'CAT': {},
+#     }
+
+#     predictor = TabularPredictor(label='label', eval_metric='precision',sample_weight="sample_weight").fit(
+#         train_data=X,
+#         num_bag_folds=10,  #10-fold bagging
+#         presets='high_quality',
+#         hyperparameters = hyperparams,
+#         time_limit=900 #seconds
+        
+#     )
+
+#     # out of fold predictions
+#     oof_predictions = predictor.predict_proba_oof()
+#     output = oof_predictions.iloc[:, 1]  # Use probabilities for the positive class
+    
+#     model_name = "AutoGluon"
+
+
+    
+#     # Calculate ROC and threshold for FDR
+#     fpr, tpr, _ = roc_curve(y, output)
+#     score_order = np.argsort(-output)
+#     orig_order = np.argsort(score_order)
+#     decoy_order = fdc["decoy"][score_order]
+#     frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
+#     T = output[score_order[np.searchsorted(frac_decoy, fdr_t)]]
+    
+#     print()
+#     print("#IDs at 1% FDR:", np.sum(output > T))
+#     above_t = output > T
+#     fdc["PredVal"] = output
+#     fdc["Qvalue"] = frac_decoy[orig_order]
+    
+#     # Plot results if folder is specified
+#     if folder:
+#         plt.subplots()
+#         y_log = False
+#         vals, bins, _ = plt.hist(output, 50, log=y_log, label="All")
+#         plt.hist(output[y.astype(bool)], bins, alpha=.5, log=y_log, label="Targets")
+#         plt.hist(output[~y.astype(bool)], bins, alpha=.5, log=y_log, label="Decoys")
+#         plt.legend()
+#         plt.title(model_name)
+#         plt.vlines(T, 0, max(vals))
+#         plt.savefig(folder + "/ModelScore.png", dpi=600, bbox_inches="tight")
+#         for feat in ['rt_error', 'mz_error']:
+#             func = np.array
+#             plt.subplots()
+#             vals, bins, _ = plt.hist(func([i for i in fdc[feat]]), 40, label="All")
+#             vals, bins, _ = plt.hist(func([i for i in fdc[feat][above_t]]), bins, alpha=.5, label=">Threshold")
+#             vals, bins, _ = plt.hist(func([i for i in fdc[feat][~above_t]]), bins, alpha=.5, label="<Threshold")
+#             plt.xlabel(feat)
+#             plt.ylabel("Frequency")
+#             plt.title(model_name)
+#             plt.legend()
+#             plt.savefig(folder + f"/{feat}_error.png", dpi=600, bbox_inches="tight")
+
+#     #checking feature importance from training data which should probably be ok, but test data might be better. Though, this will show what the model(s) used to fit the actual data.
+
+#     X_sample = X.sample(frac=0.3, random_state=123) #speed up by only taking 30% of data for feature importance computations
+#     feature_importance = predictor.feature_importance(X_sample)
+#     feature_importance = feature_importance.sort_values(by="importance", ascending=False)
+        
+#     print("Feature Importances:")
+#     print(feature_importance)
+#     # Plot results if folder is specified
+#     if folder:
+#         plt.figure(figsize=(11, 8.5))
+#         plt.barh(feature_importance.index, feature_importance["importance"], color='blue')
+#         plt.xlabel("Importance")
+#         plt.ylabel("Features")
+#         plt.title("AutoGluon feature importances")
+#         plt.gca().invert_yaxis()
+#         plt.savefig(folder + "/Feature_Importance_AG.png", dpi=600, bbox_inches="tight")
+        
+#     return fdc    
+
+
+
+
+
+
+# # Function to compute fraction of matched frag_int
+# def compute_fraction(frag_int, unique_frag_mz, frag_mz):
+#     # Convert to string and split safely
+#     frag_int_list = list(map(float, str(frag_int).split(";")))
+#     frag_mz_list = list(map(float, str(frag_mz).split(";")))
+#     unique_frag_mz_list = set(map(float, str(unique_frag_mz).split(";")))  # Convert to set for fast lookup
+
+#     # Sum of all fragment intensities
+#     total_intensity = sum(frag_int_list)
+
+#     # Find matching intensities
+#     matched_intensity = sum(intensity for mz, intensity in zip(frag_mz_list, frag_int_list) if mz in unique_frag_mz_list)
+
+#     # Compute fraction
+#     return matched_intensity / total_intensity if total_intensity > 0 else 0
+
+# # Apply function to DataFrame
+
+
+
+# def score_precursors(fdc, model_type="ag", fdr_t=0.01, folder=None):
+#     """
+#     Perform ML-based precursor scoring for each unique time_channel if it exists,
+#     otherwise, apply a different function.
+    
+#     Parameters
+#     ----------
+#     fdc : pandas.DataFrame
+#         All PSMs identified.
+#     model_type : string
+#         Type of ML model used to discriminate targets and decoys (only 'autogluon' supported).
+#     fdr_t : float
+#         False discovery rate threshold.
+#     folder : str, optional
+#         Folder path for saving plots.
+
+#     Returns
+#     -------
+#     fdc : pandas.DataFrame
+#         Updated dataframe with prediction values and Q-values.
+#     """
+#     assert model_type == "ag", 'model_type must be "autogluon"'
+#     print("Scoring IDs")
+    
+#     fdc["frac_lib_int_unique"] = fdc.apply(lambda row: compute_fraction(row["frag_int"], row["unique_frag_mz"], row["frag_mz"]), axis=1)
+
+#     fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])
+    
+#     fdc['y_count'] = fdc['frag_names'].str.count('y')
+#     fdc['b_count'] = fdc['frag_names'].str.count('b')
+#     fdc['yb_count'] = fdc['b_count'] + fdc['y_count']
+#     fdc['y_minus_b_count'] = fdc['b_count'] - fdc['y_count']
+#     fdc['y_fraction'] = fdc['y_count'] / (fdc['b_count'] + fdc['y_count'])
+#     fdc['coeff_MS1_Int_ratio'] = np.log10(fdc['coeff'] + 1) - np.log10(fdc['MS1_Int'] + 1)
+#     fdc['coeff_x_MS1_Int'] = np.log10(fdc['coeff'] + 1) + np.log10(fdc['MS1_Int'] + 1)
+#     dat['abs_rt_error'] = np.abs(dat['rt_error']+0.0001)
+#     dat['abs_mz_error'] = np.abs(dat['mz_error']+0.0000000001)
+#     dat["unique_obs_int_counts"] = dat["unique_obs_int"].apply(lambda x: len(x.split(";")) if pd.notna(x) and x.strip() != "" else 0)
+#     dat["obs_int_counts"] = dat["obs_int"].apply(lambda x: len(x.split(";")) if pd.notna(x) and x.strip() != "" else 0)
+#     dat["ratio_uniqueObs_TotalObs"] = dat['unique_obs_int_counts']/(dat['unique_obs_int_counts']+dat['obs_int_counts'])
+#     dat['mass'] = dat['z']*dat['mz']
+#     fdc['ends_with_K'] = fdc['stripped_seq'].apply(lambda x: 1 if x.endswith('K') else 0)
+    
+#     if 'time_channel' in fdc.columns:
+#         results = []
+#         for time_channel in fdc['time_channel'].unique():
+#             print(f"Processing time_channel: {time_channel}")
+#             subset_fdc = fdc[fdc['time_channel'] == time_channel].copy()
+#             subset_fdc_reset = subset_fdc.reset_index()
+#             results.append(process_time_channel(subset_fdc_reset, model_type, fdr_t, folder, time_channel))
+#         return pd.concat(results)
+#     else:
+#         return score_precursors_JD_works_02202025(fdc)
+
+
+
+
+# def process_time_channel(subset_fdc, model_type, fdr_t, folder, time_channel):
+#     """ Function to process each time_channel subset. """
+#     num_decoys = subset_fdc["decoy"].sum()  
+#     num_targets = len(subset_fdc) - num_decoys  
+#     target_weight = num_decoys / num_targets if num_targets > 0 else 1.0  
+    
+#     subset_fdc["sample_weight"] = subset_fdc["decoy"].apply(lambda x: 1.0 if x else target_weight)
+#     mean_abs_rt_error = subset_fdc['abs_rt_error'].mean()
+#     subset_fdc["sample_weight"] = subset_fdc["sample_weight"]*(subset_fdc["abs_rt_error"]+mean_abs_rt_error)#*(1/dat_keep["frac_lib_int"])#*dat_keep["abs_mz_error"]
+
+#     dat_keep = subset_fdc[['MS1_Int',#"iso_cor","cosine", these increase FDR (iso_cor and cosine)
+#                 "traceproduct","iso1_cor","iso2_cor","ms1_cor","sq_mz_error","sq_rt_error","pep_len","mz",
+#                "frac_int_matched_pred_sigcoeff","frac_int_matched_pred","hyperscore","frac_int_uniq_pred",
+#                "frac_int_uniq","prec_r2","spec_r2","frac_int_matched","rt_error","mz_error","frac_dia_int","frac_lib_int",#"coeff_x_MS1_Int",
+#                 'abs_rt_error','abs_mz_error','mass',
+#                 'unique_obs_int_counts', 'frac_lib_int_unique', 'obs_int_counts', 'ratio_uniqueObs_TotalObs',
+#                "num_lib","rt","z","coeff","decoy","sample_weight"]].copy()
+
+    
+#     # dat_keep = subset_fdc[["traceproduct", "iso1_cor", "iso2_cor", "sq_mz_error", "sq_rt_error", "pep_len", "mz",
+#     #                        "frac_int_matched_pred_sigcoeff", "frac_int_matched_pred", "hyperscore", "frac_int_uniq_pred",
+#     #                        "frac_int_uniq", "prec_r2", "spec_r2", "frac_int_matched", "rt_error", "mz_error", "frac_dia_int", "frac_lib_int",
+#     #                        "num_lib", "rt", "z", "coeff", "decoy", "y_count", "b_count", "yb_count", "y_minus_b_count", 
+#     #                        #"iso_cor","cosine", these increase FDR (iso_cor and cosine)
+#     #                        "coeff_MS1_Int_ratio", "coeff_x_MS1_Int",
+                           
+#     #                        "y_fraction", "mass", "ends_with_K", "abs_rt_error","sample_weight"]].copy()
+    
+#     kde_decoy = gaussian_kde(dat_keep[dat_keep['decoy'] == True]['rt'])
+#     kde_non_decoy = gaussian_kde(dat_keep[dat_keep['decoy'] == False]['rt'])
+    
+#     density_decoy = kde_decoy(dat_keep['rt'])
+#     density_non_decoy = kde_non_decoy(dat_keep['rt'])
+#     density_non_decoy = np.where(density_non_decoy == 0, 1e-10, density_non_decoy)
+    
+#     dat_keep.loc[:,'density_ratio'] = density_decoy / density_non_decoy
+#     dat_keep.loc[:,'density_diff'] = density_decoy - density_non_decoy
+    
+#     y = np.array(~dat_keep["decoy"], dtype=int)
+#     X_temp = dat_keep.drop(columns=['decoy']).fillna(0).astype({col: 'float32' for col in dat_keep.select_dtypes('float64').columns})
+#     scaler = MinMaxScaler(feature_range=(0, 1))
+#     X = scaler.fit_transform(X_temp)
+#     X = pd.DataFrame(X, columns=X_temp.columns)
+#     X['label'] = y  
+
+#     hyperparams = {
+#         'NN_TORCH': {},
+#         'FASTAI': {},
+#         'GBM': {},
+#         'CAT': {},
+#     }
+    
+#     predictor = TabularPredictor(label='label', eval_metric='precision', sample_weight="sample_weight").fit(
+#         train_data=X, 
+#         num_bag_folds=10, 
+#         presets='high_quality', 
+#         hyperparameters=hyperparams, 
+#         time_limit=900
+#     )
+    
+#     oof_predictions = predictor.predict_proba_oof()
+#     output = oof_predictions.iloc[:, 1]
+    
+#     fpr, tpr, _ = roc_curve(y, output)
+#     score_order = np.argsort(-output)
+#     orig_order = np.argsort(score_order)
+#     decoy_order = subset_fdc["decoy"][score_order]
+#     frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
+#     T = output[score_order[np.searchsorted(frac_decoy, fdr_t)]]
+    
+#     #print("#IDs at 1% FDR:", np.sum(output > T))
+#     above_t = output > T
+    
+#     subset_fdc["PredVal"] = output
+#     subset_fdc["Qvalue"] = frac_decoy[orig_order]
+#     print("#IDs at 1% FDR: ",(subset_fdc["Qvalue"] < 0.01).sum())
+
+#     if folder:
+#         plt.subplots()
+#         y_log=False
+#         vals,bins,_ = plt.hist(output,50,log=y_log,label="All")
+#         plt.hist(output[y.astype(bool)],bins,alpha=.5,log=y_log,label="Targets")
+#         plt.hist(output[~y.astype(bool)],bins,alpha=.5,log=y_log,label="Decoys")
+#         plt.legend()
+#         plt.title(f"Model Score - {time_channel}")
+#         plt.vlines(T,0,max(vals))
+#         plt.savefig(f"{folder}/ModelScore_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+        
+        
+        
+#         feat = 'rt_error'
+#         func = np.array#np.log10#
+#         plt.subplots()
+#         vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat]]),40,label="All")
+#         # plt.hist([],[])
+#         vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat][above_t]]),bins,alpha=.5,label=">Threshold")
+#         vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat][~above_t]]),bins,alpha=.5,label="<Threshold")
+#         plt.xlabel(feat)
+#         plt.ylabel("Frequency")
+#         plt.title(f"RT Error... TP{time_channel}")
+#         plt.legend()
+#         plt.savefig(f"{folder}/RT_Error_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+        
+                
+#         feat = 'mz_error'
+#         func = np.array#np.log10#
+#         plt.subplots()
+#         vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat]]),40,label="All")
+#         # plt.hist([],[])
+#         vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat][above_t]]),bins,alpha=.5,label=">Threshold")
+#         vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat][~above_t]]),bins,alpha=.5,label="<Threshold")
+#         plt.xlabel(feat)
+#         plt.ylabel("Frequency")
+#         plt.title(f"MZ Error... TP{time_channel}")
+#         plt.legend()
+#         plt.savefig(f"{folder}/MZ_Error_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+    
+#     # # Plot results if folder is specified
+#     # if folder:
+#     #     plt.figure()
+#     #     plt.hist(output, 50, label="All")
+#     #     plt.hist(output[y.astype(bool)], alpha=0.5, label="Targets")
+#     #     plt.hist(output[~y.astype(bool)], alpha=0.5, label="Decoys")
+#     #     plt.legend()
+#     #     plt.title(f"Model Score - {time_channel}")
+#     #     plt.savefig(f"{folder}/ModelScore_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+            
+#     #     for feat in ['rt_error', 'mz_error']:
+#     #         plt.figure()
+#     #         plt.hist(subset_fdc[feat], bins=40, label="All")
+#     #         plt.hist(subset_fdc[feat][above_t], alpha=0.5, label=">Threshold")
+#     #         plt.hist(subset_fdc[feat][~above_t], alpha=0.5, label="<Threshold")
+#     #         plt.xlabel(feat)
+#     #         plt.ylabel("Frequency")
+#     #         plt.legend()
+#     #         plt.title(f"{feat} - {time_channel}")
+#     #         plt.savefig(f"{folder}/{feat}_error_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+
+#     #checking feature importance from training data which should probably be ok, but test data might be better. Though, this will show what the model(s) used to fit the actual data.
+
+#     X_sample = X.sample(frac=0.3, random_state=123) #speed up by only taking 30% of data for feature importance computations
+#     feature_importance = predictor.feature_importance(X_sample)
+#     feature_importance = feature_importance.sort_values(by="importance", ascending=False)
+        
+#     print("Feature Importances:")
+#     print(feature_importance)
+#     # Plot results if folder is specified
+#     if folder:
+#         plt.figure(figsize=(11, 8.5))
+#         plt.barh(feature_importance.index, feature_importance["importance"], color='blue')
+#         plt.xlabel("Importance")
+#         plt.ylabel("Features")
+#         plt.title("AutoGluon feature importances")
+#         plt.gca().invert_yaxis()
+#         plt.savefig(folder + f"/Feature_Importance_AG_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+    
+#     return subset_fdc
+
+
+
+
+
+
+def score_precursors_JD_works_02202025(fdc, model_type="ag", fdr_t=0.01, folder=None):
     """
     Parameters
     ----------
@@ -296,110 +728,106 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     fdc : pandas.DataFrame
         Updated dataframe with prediction values and Q-values.
     """
-
-    assert model_type in ["lda", "rf", "xg"], 'model_type must be one of ["lda", "rf", "xg"]'
-    
+    assert model_type == "ag", 'model_type must be "autogluon"'
     print("Scoring IDs")
     
-    ## What precursors are labeled as decoys
-    fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])
+    if config.args.plexDIA:
+        fdc = plexDIA_feature_engineering(fdc)
     
+ 
+    num_decoys = fdc["decoy"].sum()  
+    num_targets = len(fdc) - num_decoys  
+    target_weight = num_decoys / num_targets if num_targets > 0 else 1.0  
     
-    ## We consider decoys and targets with v small coeffs to be from the null distributiom
-    _bool = np.logical_and(~fdc["decoy"],fdc.coeff>1)
+    fdc["sample_weight"] = fdc["decoy"].apply(lambda x: 1.0 if x else target_weight)
+    mean_abs_rt_error = fdc['abs_rt_error'].mean()
+    fdc["sample_weight"] = fdc["sample_weight"]*(fdc["abs_rt_error"]+mean_abs_rt_error)#*(1/dat_keep["frac_lib_int"])#*dat_keep["abs_mz_error"]
+
+    plexDIA_features = (
+        "abs_diff_rt_from_median", "diff_coeff_from_median", "diff_frac_int_uniq_pred_from_median", "diff_frac_dia_int_from_median",
+        "abs_diff_mz_error_from_median", "abs_diff_frac_int_uniq_from_median", "diff_frac_lib_int_from_median",
+        "num_channels_greater0_coeff", "num_channels_greater0_frac_int_uniq_pred", "num_channels_greater0_frac_dia_int", 
+        "num_channels_greater0_frac_int_uniq", "num_channels_greater0_frac_lib_int",
+        "channels_matched"
+    )
     
-    ## define our features and labels for the model
-    y = np.array(_bool,dtype=int)
+    keep_features = (
+       # "iso_cor", "cosine" (more IDs but higher FDR)
+        "traceproduct", "iso1_cor", "iso2_cor", "sq_mz_error", "sq_rt_error", "pep_len", "mz",
+        "frac_int_matched_pred_sigcoeff", "frac_int_matched_pred", "hyperscore", "frac_int_uniq_pred",
+        "frac_int_uniq", "prec_r2", "spec_r2", "frac_int_matched", "rt_error", "mz_error", "frac_dia_int", "frac_lib_int",
+        "num_lib", "rt", "z", "coeff", "decoy", "y_count", "b_count", "yb_count", "y_minus_b_count",
+        "y_fraction", "mass", "ends_with_K", "abs_rt_error", "sample_weight",
+        "coeff_MS1_Int_ratio",'unique_obs_int_counts', 'obs_int_counts','ratio_uniqueObs_TotalObs'
+
+    )
     
-    # exclude necessary columns
-    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
-                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
-                  'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec",
-                  "unique_frag_mz",
-                  "unique_obs_int",
-                  "file_name",
-                  "protein"]
-    X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
-    # print(X.columns)
-    X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
-        
-    sc_model = score_model(model_type,folder=folder)
-    pred = sc_model.run_model(X, y)
+    # Conditionally combine features
+    combined_features = keep_features + (plexDIA_features if config.args.plexDIA else ())
     
-    model_name= model_type
+    # Filter DataFrame based on selected features
+    dat_keep = fdc[list(combined_features)]  # Convert tuple to list for indexing
     
-        
-        
-    ###############################################################################################
-    ########################  Analysis the predictions    ######################################
+
+    kde_decoy = gaussian_kde(dat_keep[dat_keep['decoy'] == True]['rt'])
+    kde_non_decoy = gaussian_kde(dat_keep[dat_keep['decoy'] == False]['rt'])
     
+    density_decoy = kde_decoy(dat_keep['rt'])
+    density_non_decoy = kde_non_decoy(dat_keep['rt'])
+    density_non_decoy = np.where(density_non_decoy == 0, 1e-10, density_non_decoy)
+    dat_keep = dat_keep.copy()
+    dat_keep.loc[:,'density_ratio'] = density_decoy / density_non_decoy
+    dat_keep.loc[:,'density_diff'] = density_decoy - density_non_decoy
     
+    y = np.array(~dat_keep["decoy"], dtype=int)
+    X_temp = dat_keep.drop(columns=['decoy']).fillna(0).astype({col: 'float32' for col in dat_keep.select_dtypes('float64').columns})
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    X = scaler.fit_transform(X_temp)
+    X = pd.DataFrame(X, columns=X_temp.columns)
+    X['label'] = y  
+
+    hyperparams = {
+        'NN_TORCH': {},
+        'FASTAI': {},
+        'GBM': {},
+        'CAT': {},
+    }
     
+    predictor = TabularPredictor(label='label', eval_metric='precision', sample_weight="sample_weight").fit(
+        train_data=X, 
+        num_bag_folds=10, 
+        presets='high_quality', 
+        hyperparameters=hyperparams, 
+        time_limit=900
+    )
     
-    if len(pred.shape)==2:
-        output = pred[:,1]
-    else:
-        output = pred
-        
-        
-        
-    ## Use the scores to estimate the #IDs as 1% FDR
+    oof_predictions = predictor.predict_proba_oof()
+    output = oof_predictions.iloc[:, 1]
     
     fpr, tpr, _ = roc_curve(y, output)
-    # plt.subplots()
-    # plt.plot(fpr,tpr)
-    # print("AUC: ",np.round(auc(fpr,tpr),3))
-    
-    
-    
-    # ordered_scores = sorted(output)[::-1]
-    
-    ## note this is slow
-    ## count down to find optimal FDR but then just use every Nth score to get a nice plot
-    # fdr = []
-    # threshold = []
-    # interval = 1
-    # for idx,s in enumerate(tqdm.tqdm(ordered_scores)):
-    #     if idx%interval==0:
-    #         ## SCORES IN INCREASING ORDER
-    #         # fdr.append(np.sum(np.greater_equal(pred[~y.astype(bool),1],s))/np.sum(np.greater_equal(pred[:,1],s)))
-            
-    #         # Scores decreasing
-    #         val = np.sum(np.greater_equal(output[~y.astype(bool)],s))/np.sum(np.greater_equal(output,s))
-    #         fdr.append(val)
-    #         if val<.01:
-    #             # if threshold==[]:
-    #             threshold = [ordered_scores[idx-1],s]
-    #         else:
-    #             interval=10
-    
-    
-    ## FASTER VERSION OF ABOVE
     score_order = np.argsort(-output)
     orig_order = np.argsort(score_order)
     decoy_order = fdc["decoy"][score_order]
     frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
-    # plt.plot(frac_decoy)
-    T = output[score_order[np.searchsorted(frac_decoy,0.01)]]
-
-    print()
-    print("#IDs at 1% FDR:", np.sum(output>T))
+    T = output[score_order[np.searchsorted(frac_decoy, fdr_t)]]
     
-    above_t = output>T
+    #print("#IDs at 1% FDR:", np.sum(output > T))
+    above_t = output > T
+    
     fdc["PredVal"] = output
     fdc["Qvalue"] = frac_decoy[orig_order]
-    
+    print("#IDs at 1% FDR: ",(fdc["Qvalue"] < 0.01).sum())
+
     if folder:
-        
         plt.subplots()
         y_log=False
         vals,bins,_ = plt.hist(output,50,log=y_log,label="All")
         plt.hist(output[y.astype(bool)],bins,alpha=.5,log=y_log,label="Targets")
         plt.hist(output[~y.astype(bool)],bins,alpha=.5,log=y_log,label="Decoys")
         plt.legend()
-        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        plt.title(f"Model Score")
         plt.vlines(T,0,max(vals))
-        plt.savefig(folder+"/ModelScore.png",dpi=600,bbox_inches="tight")
+        plt.savefig(f"{folder}/ModelScore.png", dpi=600, bbox_inches="tight")
         
         
         
@@ -412,9 +840,9 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][~above_t]]),bins,alpha=.5,label="<Threshold")
         plt.xlabel(feat)
         plt.ylabel("Frequency")
-        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        plt.title(f"RT Error")
         plt.legend()
-        plt.savefig(folder+"/RT_error.png",dpi=600,bbox_inches="tight")
+        plt.savefig(f"{folder}/RT_Error.png", dpi=600, bbox_inches="tight")
         
                 
         feat = 'mz_error'
@@ -426,12 +854,280 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][~above_t]]),bins,alpha=.5,label="<Threshold")
         plt.xlabel(feat)
         plt.ylabel("Frequency")
-        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        plt.title(f"MZ Error")
         plt.legend()
-        plt.savefig(folder+"/mz_error.png",dpi=600,bbox_inches="tight")
+        plt.savefig(f"{folder}/MZ_Error.png", dpi=600, bbox_inches="tight")
+    
+ 
+    X_sample = X.sample(frac=0.3, random_state=123) #speed up by only taking 30% of data for feature importance computations
+    feature_importance = predictor.feature_importance(X_sample)
+    feature_importance = feature_importance.sort_values(by="importance", ascending=False)
+        
+    print("Feature Importances:")
+    print(feature_importance)
+    # Plot results if folder is specified
+    if folder:
+        plt.figure(figsize=(11, 8.5))
+        plt.barh(feature_importance.index, feature_importance["importance"], color='blue')
+        plt.xlabel("Importance")
+        plt.ylabel("Features")
+        plt.title("AutoGluon feature importances")
+        plt.gca().invert_yaxis()
+        plt.savefig(folder + f"/Feature_Importance_AG.png", dpi=600, bbox_inches="tight")
     
     return fdc
 
+
+
+
+
+
+# Function to compute fraction of matched frag_int
+def compute_fraction(frag_int, unique_frag_mz, frag_mz):
+    # Convert to string and split safely
+    frag_int_list = list(map(float, str(frag_int).split(";")))
+    frag_mz_list = list(map(float, str(frag_mz).split(";")))
+    unique_frag_mz_list = set(map(float, str(unique_frag_mz).split(";")))  # Convert to set for fast lookup
+
+    # Sum of all fragment intensities
+    total_intensity = sum(frag_int_list)
+
+    # Find matching intensities
+    matched_intensity = sum(intensity for mz, intensity in zip(frag_mz_list, frag_int_list) if mz in unique_frag_mz_list)
+
+    # Compute fraction
+    return matched_intensity / total_intensity if total_intensity > 0 else 0
+
+# Apply function to DataFrame
+
+
+
+def score_precursors(fdc, model_type="ag", fdr_t=0.01, folder=None):
+    """
+    Perform ML-based precursor scoring for each unique time_channel if it exists,
+    otherwise, apply a different function.
+    
+    Parameters
+    ----------
+    fdc : pandas.DataFrame
+        All PSMs identified.
+    model_type : string
+        Type of ML model used to discriminate targets and decoys (only 'autogluon' supported).
+    fdr_t : float
+        False discovery rate threshold.
+    folder : str, optional
+        Folder path for saving plots.
+
+    Returns
+    -------
+    fdc : pandas.DataFrame
+        Updated dataframe with prediction values and Q-values.
+    """
+    assert model_type == "ag", 'model_type must be "autogluon"'
+    print("Scoring IDs")
+    
+    fdc["frac_lib_int_unique"] = fdc.apply(lambda row: compute_fraction(row["frag_int"], row["unique_frag_mz"], row["frag_mz"]), axis=1)
+
+    fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])
+    
+    fdc['y_count'] = fdc['frag_names'].str.count('y')
+    fdc['b_count'] = fdc['frag_names'].str.count('b')
+    fdc['yb_count'] = fdc['b_count'] + fdc['y_count']
+    fdc['y_minus_b_count'] = fdc['b_count'] - fdc['y_count']
+    fdc['y_fraction'] = fdc['y_count'] / (fdc['b_count'] + fdc['y_count'])
+    fdc['coeff_MS1_Int_ratio'] = np.log10(fdc['coeff'] + 1) - np.log10(fdc['MS1_Int'] + 1)
+    fdc['coeff_x_MS1_Int'] = np.log10(fdc['coeff'] + 1) + np.log10(fdc['MS1_Int'] + 1)
+    fdc['abs_rt_error'] = np.abs(fdc['rt_error']+0.0001)
+    fdc['abs_mz_error'] = np.abs(fdc['mz_error']+0.0000000001)
+    fdc["unique_obs_int_counts"] = fdc["unique_obs_int"].apply(lambda x: len(x.split(";")) if pd.notna(x) and x.strip() != "" else 0)
+    fdc["obs_int_counts"] = fdc["obs_int"].apply(lambda x: len(x.split(";")) if pd.notna(x) and x.strip() != "" else 0)
+    fdc["ratio_uniqueObs_TotalObs"] = fdc['unique_obs_int_counts']/(fdc['unique_obs_int_counts']+fdc['obs_int_counts'])
+    fdc['mass'] = fdc['z']*fdc['mz']
+    fdc['ends_with_K'] = fdc['stripped_seq'].apply(lambda x: 1 if x.endswith('K') else 0)
+    
+    if 'time_channel' in fdc.columns:
+        results = []
+        for time_channel in fdc['time_channel'].unique():
+            print(f"Processing time_channel: {time_channel}")
+            subset_fdc = fdc[fdc['time_channel'] == time_channel].copy()
+            subset_fdc_reset = subset_fdc.reset_index()
+            results.append(process_time_channel(subset_fdc_reset, model_type, fdr_t, folder, time_channel))
+        return pd.concat(results)
+    else:
+        return score_precursors_JD_works_02202025(fdc)
+
+
+
+
+def process_time_channel(subset_fdc, model_type, fdr_t, folder, time_channel):
+    """ Function to process each time_channel subset. """
+
+    
+    if config.args.plexDIA:
+        subset_fdc = plexDIA_feature_engineering(subset_fdc)
+    
+    num_decoys = subset_fdc["decoy"].sum()  
+    num_targets = len(subset_fdc) - num_decoys  
+    target_weight = num_decoys / num_targets if num_targets > 0 else 1.0  
+    
+    subset_fdc["sample_weight"] = subset_fdc["decoy"].apply(lambda x: 1.0 if x else target_weight)
+    mean_abs_rt_error = subset_fdc['abs_rt_error'].mean()
+    subset_fdc["sample_weight"] = subset_fdc["sample_weight"]*(subset_fdc["abs_rt_error"]+mean_abs_rt_error)#*(1/dat_keep["frac_lib_int"])#*dat_keep["abs_mz_error"]
+
+    plexDIA_features = (
+        "abs_diff_rt_from_median", "diff_coeff_from_median", "diff_frac_int_uniq_pred_from_median", "diff_frac_dia_int_from_median",
+        "abs_diff_mz_error_from_median", "abs_diff_frac_int_uniq_from_median", "diff_frac_lib_int_from_median",
+        "num_channels_greater0_coeff", "num_channels_greater0_frac_int_uniq_pred", "num_channels_greater0_frac_dia_int", 
+        "num_channels_greater0_frac_int_uniq", "num_channels_greater0_frac_lib_int",
+        "channels_matched"
+    )
+    
+    keep_features = (
+        # "iso_cor", "cosine" (more IDs but higher FDR)
+        "traceproduct", "iso1_cor", "iso2_cor", "sq_mz_error", "sq_rt_error", "pep_len", "mz",
+        "frac_int_matched_pred_sigcoeff", "frac_int_matched_pred", "hyperscore", "frac_int_uniq_pred",
+        "frac_int_uniq", "prec_r2", "spec_r2", "frac_int_matched", "rt_error", "mz_error", "frac_dia_int", "frac_lib_int",
+        "num_lib", "rt", "z", "coeff", "decoy", "y_count", "b_count", "yb_count", "y_minus_b_count",
+        "y_fraction", "mass", "ends_with_K", "abs_rt_error", "sample_weight",
+        "coeff_MS1_Int_ratio",'unique_obs_int_counts', 'obs_int_counts','ratio_uniqueObs_TotalObs'
+    )
+    
+    # Conditionally combine features
+    combined_features = keep_features + (plexDIA_features if config.args.plexDIA else ())
+    
+    # Filter DataFrame based on selected features
+    dat_keep = subset_fdc[list(combined_features)]  # Convert tuple to list for indexing
+
+    
+    kde_decoy = gaussian_kde(dat_keep[dat_keep['decoy'] == True]['rt'])
+    kde_non_decoy = gaussian_kde(dat_keep[dat_keep['decoy'] == False]['rt'])
+    
+    density_decoy = kde_decoy(dat_keep['rt'])
+    density_non_decoy = kde_non_decoy(dat_keep['rt'])
+    density_non_decoy = np.where(density_non_decoy == 0, 1e-10, density_non_decoy)
+    dat_keep = dat_keep.copy()
+    dat_keep.loc[:,'density_ratio'] = density_decoy / density_non_decoy
+    dat_keep.loc[:,'density_diff'] = density_decoy - density_non_decoy
+    
+    y = np.array(~dat_keep["decoy"], dtype=int)
+    X_temp = dat_keep.drop(columns=['decoy']).fillna(0).astype({col: 'float32' for col in dat_keep.select_dtypes('float64').columns})
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    X = scaler.fit_transform(X_temp)
+    X = pd.DataFrame(X, columns=X_temp.columns)
+    X['label'] = y  
+
+    hyperparams = {
+        'NN_TORCH': {},
+        'FASTAI': {},
+        'GBM': {},
+        'CAT': {},
+    }
+    
+    predictor = TabularPredictor(label='label', eval_metric='precision', sample_weight="sample_weight").fit(
+        train_data=X, 
+        num_bag_folds=10, 
+        presets='high_quality', 
+        hyperparameters=hyperparams, 
+        time_limit=900
+    )
+    
+    oof_predictions = predictor.predict_proba_oof()
+    output = oof_predictions.iloc[:, 1]
+    
+    fpr, tpr, _ = roc_curve(y, output)
+    score_order = np.argsort(-output)
+    orig_order = np.argsort(score_order)
+    decoy_order = subset_fdc["decoy"][score_order]
+    frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
+    T = output[score_order[np.searchsorted(frac_decoy, fdr_t)]]
+    
+    #print("#IDs at 1% FDR:", np.sum(output > T))
+    above_t = output > T
+    
+    subset_fdc["PredVal"] = output
+    subset_fdc["Qvalue"] = frac_decoy[orig_order]
+    print("#IDs at 1% FDR: ",(subset_fdc["Qvalue"] < 0.01).sum())
+
+    if folder:
+        plt.subplots()
+        y_log=False
+        vals,bins,_ = plt.hist(output,50,log=y_log,label="All")
+        plt.hist(output[y.astype(bool)],bins,alpha=.5,log=y_log,label="Targets")
+        plt.hist(output[~y.astype(bool)],bins,alpha=.5,log=y_log,label="Decoys")
+        plt.legend()
+        plt.title(f"Model Score - {time_channel}")
+        plt.vlines(T,0,max(vals))
+        plt.savefig(f"{folder}/ModelScore_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+        
+        
+        
+        feat = 'rt_error'
+        func = np.array#np.log10#
+        plt.subplots()
+        vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat]]),40,label="All")
+        # plt.hist([],[])
+        vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat][above_t]]),bins,alpha=.5,label=">Threshold")
+        vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat][~above_t]]),bins,alpha=.5,label="<Threshold")
+        plt.xlabel(feat)
+        plt.ylabel("Frequency")
+        plt.title(f"RT Error... TP{time_channel}")
+        plt.legend()
+        plt.savefig(f"{folder}/RT_Error_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+        
+                
+        feat = 'mz_error'
+        func = np.array#np.log10#
+        plt.subplots()
+        vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat]]),40,label="All")
+        # plt.hist([],[])
+        vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat][above_t]]),bins,alpha=.5,label=">Threshold")
+        vals,bins,_ = plt.hist(func([i for i in subset_fdc[feat][~above_t]]),bins,alpha=.5,label="<Threshold")
+        plt.xlabel(feat)
+        plt.ylabel("Frequency")
+        plt.title(f"MZ Error... TP{time_channel}")
+        plt.legend()
+        plt.savefig(f"{folder}/MZ_Error_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+    
+    # # Plot results if folder is specified
+    # if folder:
+    #     plt.figure()
+    #     plt.hist(output, 50, label="All")
+    #     plt.hist(output[y.astype(bool)], alpha=0.5, label="Targets")
+    #     plt.hist(output[~y.astype(bool)], alpha=0.5, label="Decoys")
+    #     plt.legend()
+    #     plt.title(f"Model Score - {time_channel}")
+    #     plt.savefig(f"{folder}/ModelScore_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+            
+    #     for feat in ['rt_error', 'mz_error']:
+    #         plt.figure()
+    #         plt.hist(subset_fdc[feat], bins=40, label="All")
+    #         plt.hist(subset_fdc[feat][above_t], alpha=0.5, label=">Threshold")
+    #         plt.hist(subset_fdc[feat][~above_t], alpha=0.5, label="<Threshold")
+    #         plt.xlabel(feat)
+    #         plt.ylabel("Frequency")
+    #         plt.legend()
+    #         plt.title(f"{feat} - {time_channel}")
+    #         plt.savefig(f"{folder}/{feat}_error_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+
+    #checking feature importance from training data which should probably be ok, but test data might be better. Though, this will show what the model(s) used to fit the actual data.
+
+    X_sample = X.sample(frac=0.3, random_state=123) #speed up by only taking 30% of data for feature importance computations
+    feature_importance = predictor.feature_importance(X_sample)
+    feature_importance = feature_importance.sort_values(by="importance", ascending=False)
+        
+    print("Feature Importances:")
+    print(feature_importance)
+    # Plot results if folder is specified
+    if folder:
+        plt.figure(figsize=(11, 8.5))
+        plt.barh(feature_importance.index, feature_importance["importance"], color='blue')
+        plt.xlabel("Importance")
+        plt.ylabel("Features")
+        plt.title("AutoGluon feature importances")
+        plt.gca().invert_yaxis()
+        plt.savefig(folder + f"/Feature_Importance_AG_TP{time_channel}.png", dpi=600, bbox_inches="tight")
+    
+    return subset_fdc
 
 
 def process_data(file,spectra,library,mass_tag=None,timeplex=False):
