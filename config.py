@@ -101,7 +101,7 @@ num_iso_r = 2
 num_iso_ms1 = 6
 
 ## how much to offset the decoy prec mz
-decoy_mz_offset = 20
+decoy_mz_offset = 0
 
 
 
