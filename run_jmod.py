@@ -72,6 +72,16 @@ if __name__=="__main__":
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
     results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
+
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_AD_02122025" #Test w/ from from kevin main branch Feb 26 2025
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_AF_02122025" #added scribe score back 
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_AG_02122025" #add max matched residuals and gof stats
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_AH_02122025" #corrected   
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_AI_02122025" #fitted manhattan. good success. is most important feature now in the rf
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_AJ_02122025" #decoy_mz_offset to 0
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_AK_02122025" #fix gof statistic
+    results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_AL_02122025" #max unmatched_residual
+    #results_folder_path = "/Users/nathanwamsley/Data/Results/jmod_tests/init_test_AK_02122025" #try to fix gof statistic which seems broken?
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     if not os.path.exists(results_folder_path):

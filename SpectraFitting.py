@@ -29,11 +29,269 @@ def get_closest_ms1(prec_rt,ms1_spectra):
 
 import line_profiler
 
+def get_scribe(
+    row_idx_split,
+    col_idx_split,
+    prec_val_split,
+    val_obs
+):
+    """
+    Calculate Scribe scores for each precursor (Searle, Shannon, Wilburn, 2023, PMID: 36695531)
+    
+    This function computes the Scribe score, which measures spectral similarity by comparing
+    the normalized distribution of fragment ion intensities between predicted and observed spectra.
+    Lower scores indicate better matches.
+    
+    Args:
+        row_idx_split (list): List of arrays containing row indices for each precursor's fragments.
+        col_idx_split (list): List of arrays containing column indices for each precursor.
+        prec_val_split (list): List of arrays containing predicted intensity values for each precursor's fragments.
+        val_obs (numpy.ndarray): Array of observed intensity values.
+        
+    Returns:
+        numpy.ndarray: Array of SCRIBE scores for each precursor, one score per precursor.
+    """
+    n = len(row_idx_split)
+    if n > 0:
+        #Sum of sqrt of predicted fragment intensities for each precursor/column
+        h_sqrt_sum = np.zeros(n)
+        #Sum of sqrt of observed fragment intensities for each precursor/column
+        x_sqrt_sum = np.zeros(n)
+        scribe_scores = np.zeros(n)
+        for j in range(n):
+            for (i, val) in zip(row_idx_split[j], prec_val_split[j]):
+                h_sqrt_sum[j] += np.sqrt(val)
+                x_sqrt_sum[j] += np.sqrt(val_obs[i])
+        
+        for j in range(n):
+            for (i, val) in zip(row_idx_split[j], prec_val_split[j]):
+                scribe_scores[j] += (
+                    (np.sqrt(val)/h_sqrt_sum[j]) - 
+                    (np.sqrt(val_obs[i])/x_sqrt_sum[j])
+                )**2
+
+        return scribe_scores
+    else:
+        return np.zeros(0)
+
+def get_residuals(
+    ref_sparse_val,  # sparse values for reference data
+    ref_sparse_row,  # sparse rows for reference data
+    ref_sparse_col,  # sparse cols for reference data
+    decoy_sparse_val,  # sparse values for decoy data
+    decoy_sparse_row,  # sparse rows for decoy data
+    decoy_sparse_col,  # sparse cols for decoy data
+    val_obs,  # observed values. the 'b' in Ax = b
+    coeffs,  # coefficients. the 'x' in Ax = b
+):
+    """
+    Calculate residuals (Ax - b) and prediction values for both reference and decoy data.
+    
+    This function computes the predicted values by multiplying sparse matrix representations 
+    of reference and decoy data by the coefficient vector, then calculates residuals 
+    as the difference between observed and predicted values.
+    
+    Args:
+        ref_sparse_val (list): List of arrays with sparse values for reference data.
+        ref_sparse_row (list): List of arrays with sparse row indices for reference data.
+        ref_sparse_col (list): List of arrays with sparse column indices for reference data.
+        decoy_sparse_val (list): List of arrays with sparse values for decoy data.
+        decoy_sparse_row (list): List of arrays with sparse row indices for decoy data.
+        decoy_sparse_col (list): List of arrays with sparse column indices for decoy data.
+        val_obs (numpy.ndarray): Observed values (the 'b' in Ax = b).
+        coeffs (numpy.ndarray): Coefficients from the fit (the 'x' in Ax = b).
+        
+    Returns:
+        tuple: A tuple containing:
+            - residuals (numpy.ndarray): Residuals between observed and predicted values.
+            - y_pred (numpy.ndarray): Predicted values calculated as A*x.
+    """
+    
+    def _compute_prediction(sparse_val, sparse_row, sparse_col, coeff_array, y_pred):
+        """Helper function to compute predictions for a set of sparse data"""
+        for j in range(len(sparse_row)):
+            for row, col, val in zip(sparse_row[j], sparse_col[j], sparse_val[j]):
+                y_pred[row] += val * coeff_array[col]
+        return y_pred
+    
+    coeffs = np.asarray(coeffs).ravel()
+    N = len(val_obs)  # Number of rows in the sparse matrix (A)
+    
+    # Initialize prediction array
+    y_pred = np.zeros(N)
+    
+    # Compute predictions for reference data
+    y_pred = _compute_prediction(ref_sparse_val, ref_sparse_row, ref_sparse_col, coeffs, y_pred)
+    
+    # Add predictions for decoy data
+    y_pred = _compute_prediction(decoy_sparse_val, decoy_sparse_row, decoy_sparse_col, coeffs, y_pred)
+    
+    # Compute residuals
+    #r = np.zeros_like(y_pred)
+    
+    # Residuals for matched peaks (where we have observations)
+    r = val_obs - y_pred
+
+    return r, y_pred
+
+def max_matched_residual(
+    row_idx_split,
+    residuals
+):
+    """
+    Find the maximum residual for each precursor's matched peaks.
+    
+    This function finds the largest residual value among the matched peaks
+    for each precursor, which can indicate the worst-fit fragment.
+    
+    Args:
+        row_idx_split (list): List of arrays containing row indices for each precursor's fragments.
+        residuals (numpy.ndarray): Array of residuals between observed and predicted values.
+        
+    Returns:
+        numpy.ndarray: Array of maximum residual values for each precursor.
+    """
+    n = len(row_idx_split)
+    if n > 0:
+        max_matched_residuals = np.zeros(n)
+        for j in range(n):
+            for (i, val) in zip(row_idx_split[j], residuals):
+                if val > max_matched_residuals[j]:
+                    max_matched_residuals[j] = val
+        return max_matched_residuals
+    else:
+        return np.zeros(0)
+
+def gof_stat(
+    row_idx_split,
+    col_idx_split,
+    val_split,
+    residuals,
+    val_obs,
+    coeffs
+):
+
+    """
+    Calculate goodness-of-fit statistics and maximum residuals for each precursor.
+    
+    This function computes several metrics to assess fit quality:
+    1. Overall goodness-of-fit statistic based on sum of residuals to sum of fitted peaks
+    2. Maximum residual for matched peaks (peaks with observed intensity)
+    3. Maximum residual for unmatched peaks (peaks with near-zero observed intensity)
+    
+    All metrics are log-transformed and normalized by the sum of fitted peaks.
+    
+    Args:
+        row_idx_split (list): List of arrays containing row indices for each precursor's fragments.
+        col_idx_split (list): List of arrays containing column indices for each precursor.
+        val_split (list): List of arrays containing predicted intensity values for each precursor's fragments.
+        residuals (numpy.ndarray): Array of residuals between observed and predicted values.
+        val_obs (numpy.ndarray): Array of observed intensity values.
+        coeffs (numpy.ndarray): Coefficients from the fit.
+        
+    Returns:
+        tuple: A tuple containing:
+            - result (numpy.ndarray): Goodness-of-fit score for each precursor (log2 of residuals/fitted).
+            - max_unmatched_residuals (numpy.ndarray): Maximum residual for unmatched peaks, normalized and log-transformed.
+            - max_matched_residuals (numpy.ndarray): Maximum residual for matched peaks, normalized and log-transformed.
+    """
+    coeffs = np.asarray(coeffs).ravel()
+    n = len(row_idx_split)
+    if n > 0:
+        sum_of_residuals = np.zeros(n)
+        sum_of_fitted_peaks = np.zeros(n)
+        result = np.zeros(n)
+        max_unmatched_residuals = np.zeros(n)
+        max_matched_residuals = np.zeros(n)
+        for j in range(n):
+            max_unmatched_residual = 0.0
+            max_matched_residual = 0.0
+            for (row_idx, col_idx, val) in zip(row_idx_split[j], col_idx_split[j], val_split[j]):
+                r = abs(residuals[row_idx])
+                sum_of_residuals[j] += r
+                sum_of_fitted_peaks[j] += abs(coeffs[col_idx]*val)
+                if (val_obs[row_idx] > 1e-6):
+                    if r > max_matched_residual:
+                        max_matched_residual = r
+                elif (val_obs[row_idx] < 1e-6):
+                    if r > max_unmatched_residual:
+                        max_unmatched_residual = r
+            max_unmatched_residuals[j] = max_unmatched_residual
+            max_matched_residuals[j] = max_matched_residual
+
+        #Handle bad values         
+        for j in range(n):
+            if sum_of_fitted_peaks[j] == 0:
+                sum_of_fitted_peaks[j] = 1e-6
+            if sum_of_residuals[j] == 0:
+                sum_of_residuals[j] = 1e-6  # Perfect agreement (no residuals, no signal)
+            result[j] = np.log2(sum_of_residuals[j] / sum_of_fitted_peaks[j])
+            max_matched_residuals[j] = np.log2(max_matched_residuals[j]/(sum_of_fitted_peaks[j] + 1e-10) + 1e-10)
+            max_unmatched_residuals[j] = np.log2(max_unmatched_residuals[j]/(sum_of_fitted_peaks[j] + 1e-10) + 1e-10)
+        return result, max_unmatched_residuals, max_matched_residuals 
+    else:
+        return np.zeros(0), np.zeros(0), np.zeros(0)
+
+def get_manhattan_distance(
+    row_idx_split,
+    col_idx_split,
+    prec_val_split,
+    val_obs,
+    y_pred  # Changed from coeffs to y_pred
+):
+    """
+    Calculate the fitted Manhattan distance between predicted and observed values for each precursor.
+    
+    Manhattan distance is the sum of absolute differences between predicted and observed values,
+    normalized by the sum of observed values and log-transformed. Better fits have higher (less negative) values.
+    
+    Args:
+        row_idx_split (list): List of arrays containing row indices for each precursor's fragments.
+        col_idx_split (list): List of arrays containing column indices for each precursor.
+        prec_val_split (list): List of arrays containing predicted intensity values for each precursor's fragments.
+        val_obs (numpy.ndarray): Array of observed intensity values.
+        y_pred (numpy.ndarray): Array of predicted values after applying coefficients.
+        
+    Returns:
+        numpy.ndarray: Array of fitted Manhattan distances for each precursor, log-transformed and negated
+                      so that higher values indicate better fits.
+    """
+    n = len(row_idx_split)
+    N = len(val_obs)
+    if (n > 0) & (N > 0):
+        manhattan_distances = np.zeros(n)
+        x_sums = np.zeros(n)
+        
+        for j in range(n):
+            for i, row in enumerate(row_idx_split[j]):
+                # Sum observed intensities for normalization
+                x_sums[j] += val_obs[row]
+                # Calculate Manhattan distance using predicted values
+                manhattan_distances[j] += abs(y_pred[row] - val_obs[row])
+            
+            # Normalize and transform
+            if x_sums[j] > 0 and manhattan_distances[j] > 0:
+                manhattan_distances[j] = -np.log2(manhattan_distances[j] / x_sums[j])
+            else:
+                # Handle edge cases
+                if x_sums[j] == 0:
+                    manhattan_distances[j] = np.finfo(np.float32).max  # Bad fit
+                else:  # manhattan_distances[j] == 0
+                    manhattan_distances[j] = np.finfo(np.float32).min  # Perfect fit
+                
+        return manhattan_distances
+    else:
+        return np.zeros(0)
+
 #@profile
 def get_features(
     rt_mz,
     ref_spec_values_split,
     ref_spec_row_indices_split,
+    ref_spec_col_indices_split,
+    decoy_spec_values_split,
+    decoy_spec_row_indices_split,
+    decoy_spec_col_indices_split,
     ref_peaks_in_dia,
     dia_spectrum,
     prec_rt,
@@ -50,6 +308,51 @@ def get_features(
     prec_frags,
     ms1_error):
     
+    scribe_scores = get_scribe(
+        ref_spec_row_indices_split,
+        ref_spec_col_indices_split,
+        ref_spec_values_split,
+        dia_spectrum[:,1]
+    )
+
+    residuals, y_pred = get_residuals(
+        ref_spec_values_split,
+        ref_spec_row_indices_split,
+        ref_spec_col_indices_split,
+        decoy_spec_values_split,
+        decoy_spec_row_indices_split,
+        decoy_spec_col_indices_split,
+        dia_spectrum[:,1],
+        lib_coefficients
+    )
+    # Then use y_pred for the manhattan distance
+    manhattan_distances = get_manhattan_distance(
+        ref_spec_row_indices_split,
+        ref_spec_col_indices_split,
+        ref_spec_values_split,
+        dia_spectrum[:,1],
+        y_pred  # Pass y_pred instead of lib_coefficients
+    )
+    #max_matched_residuals = max_matched_residual(
+    #    ref_spec_row_indices_split,
+    #    residuals 
+    #)
+    gof_stats, max_unmatched_residuals, max_matched_residuals = gof_stat(
+        ref_spec_row_indices_split,
+        ref_spec_col_indices_split,
+        ref_spec_values_split,
+        residuals,
+        dia_spectrum[:,1],
+        lib_coefficients
+    )
+    # Add our new function call
+    manhattan_distances = get_manhattan_distance(
+        ref_spec_row_indices_split,
+        ref_spec_col_indices_split,
+        ref_spec_values_split,
+        dia_spectrum[:,1],
+        y_pred
+    )
     ### features 
     num_lib_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched])
     frac_lib_intensity = [np.sum(i) for i in ref_spec_values_split] # all ints sum to 1 so these give frac
@@ -119,6 +422,11 @@ def get_features(
                           frac_unique_pred,
                           frac_dia_intensity_pred,
                           hyperscores,
+                          scribe_scores,
+                          max_unmatched_residuals,
+                          max_matched_residuals,
+                          gof_stats,
+                          manhattan_distances,
                           frac_int_matched_pred,
                           frac_int_matched_pred_sigcoeff,
                           large_coeff_cosine,
@@ -581,6 +889,10 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
         features = get_features(rt_mz[window_idxs[ref_peaks_in_dia]],
                                 ref_spec_values_split,
                                 ref_spec_row_indices_split,
+                                ref_spec_col_indices_split,
+                                decoy_spec_values_split,
+                                decoy_spec_row_indices_split,
+                                decoy_spec_col_indices_split,
                                 ref_peaks_in_dia,
                                 dia_spectrum,
                                 prec_rt,
@@ -609,6 +921,10 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
             decoy_features = get_features(np.stack([rt_mz[window_idxs[decoy_peaks_in_dia],0],decoy_mz[decoy_peaks_in_dia]],1),
                                           decoy_spec_values_split,
                                             decoy_spec_row_indices_split,
+                                            decoy_spec_col_indices_split,
+                                            ref_spec_values_split,
+                                            ref_spec_row_indices_split,
+                                            ref_spec_col_indices_split,
                                             decoy_peaks_in_dia,
                                             dia_spectrum,
                                             prec_rt,
@@ -1043,7 +1359,7 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
                rt_tol = config.rt_tol,
                ms1_tol = config.ms1_tol,
                mz_tol = config.mz_tol):
-    
+    print("AAAAAAAAA")
     spec_idx=dia_spec.scan_num
     
     # mz_tol = config.mz_tol
