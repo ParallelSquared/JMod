@@ -892,8 +892,9 @@ def plexDIA_feature_engineering(fdc):
     # fdc["abs_diff_frac_int_uniq_pred_from_median"].fillna(fdc["abs_diff_frac_int_uniq_pred_from_median"].mean(), inplace=True)
 
     # pivot_df = fdc.pivot(index=["untag_prec",'decoy'], columns="channel", values="frac_int_uniq_pred")
-    
+    fdc["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdc["untag_seq"],fdc["z"])]
     fdc["median_rt"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
+    fdc["channels_matched"] = fdc.groupby("untag_prec")["untag_prec"].transform("count")
     fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
     fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
     fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
@@ -941,9 +942,8 @@ def plexDIA_feature_engineering(fdc):
     fdc['num_channels_greater0_frac_int_uniq'] = fdc.groupby("untag_prec")['frac_int_uniq'].transform(lambda x: (x > 0).sum())
     fdc['num_channels_greater0_frac_lib_int'] = fdc.groupby("untag_prec")['frac_lib_int'].transform(lambda x: (x > 0).sum())
 
-
-
     return fdc
+
 
 
 
