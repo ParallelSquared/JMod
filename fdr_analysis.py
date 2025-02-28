@@ -879,6 +879,71 @@ def score_precursors_JD_works_02202025(fdc, model_type="ag", fdr_t=0.01, folder=
 
 
 
+def plexDIA_feature_engineering(fdc):
+    # fdc["median_rt"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
+    # fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
+    # fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
+    # fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
+    
+    
+    # fdc["median_frac_int_uniq_pred"] = fdc.groupby(["untag_prec"])['frac_int_uniq_pred'].transform("median")
+    # fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq_pred"] = pd.NA
+    # fdc["abs_diff_frac_int_uniq_pred_from_median"] = fdc['frac_int_uniq_pred']-fdc['median_frac_int_uniq_pred']
+    # fdc["abs_diff_frac_int_uniq_pred_from_median"].fillna(fdc["abs_diff_frac_int_uniq_pred_from_median"].mean(), inplace=True)
+
+    # pivot_df = fdc.pivot(index=["untag_prec",'decoy'], columns="channel", values="frac_int_uniq_pred")
+    
+    fdc["median_rt"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
+    fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
+    fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
+    
+    
+    fdc["median_coeff"] = fdc.groupby(["untag_prec"])['coeff'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_coeff"] = pd.NA
+    fdc["diff_coeff_from_median"] = np.log10(fdc['coeff']+1) - np.log10(fdc['median_coeff']+1)
+    fdc["diff_coeff_from_median"].fillna(fdc["diff_coeff_from_median"].mean(), inplace=True)
+    
+    
+    fdc["median_frac_int_uniq_pred"] = fdc.groupby(["untag_prec"])['frac_int_uniq_pred'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq_pred"] = pd.NA
+    fdc["diff_frac_int_uniq_pred_from_median"] = fdc['frac_int_uniq_pred'] - fdc['median_frac_int_uniq_pred']
+    fdc["diff_frac_int_uniq_pred_from_median"].fillna(fdc["diff_frac_int_uniq_pred_from_median"].mean(), inplace=True)
+    
+    
+    fdc["median_frac_dia_int"] = fdc.groupby(["untag_prec"])['frac_dia_int'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_frac_dia_int"] = pd.NA
+    fdc["diff_frac_dia_int_from_median"] = fdc['frac_dia_int'] - fdc['median_frac_dia_int']
+    fdc["diff_frac_dia_int_from_median"].fillna(fdc["diff_frac_dia_int_from_median"].mean(), inplace=True)
+    
+    
+    fdc["median_mz_error"] = fdc.groupby(["untag_prec"])['mz_error'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_mz_error"] = pd.NA
+    fdc["abs_diff_mz_error_from_median"] = np.abs(fdc['mz_error'] - fdc['median_mz_error'])
+    fdc["abs_diff_mz_error_from_median"].fillna(fdc["abs_diff_mz_error_from_median"].mean(), inplace=True)
+    
+    
+    fdc["median_frac_int_uniq"] = fdc.groupby(["untag_prec"])['frac_int_uniq'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq"] = pd.NA
+    fdc["abs_diff_frac_int_uniq_from_median"] = fdc['frac_int_uniq'] - fdc['median_frac_int_uniq']
+    fdc["abs_diff_frac_int_uniq_from_median"].fillna(fdc["abs_diff_frac_int_uniq_from_median"].mean(), inplace=True)
+    
+    
+    fdc["median_frac_lib_int"] = fdc.groupby(["untag_prec"])['frac_lib_int'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_frac_lib_int"] = pd.NA
+    fdc["diff_frac_lib_int_from_median"] = fdc['frac_lib_int'] - fdc['median_frac_lib_int']
+    fdc["diff_frac_lib_int_from_median"].fillna(fdc["diff_frac_lib_int_from_median"].mean(), inplace=True)
+    
+    # Count number of entries with 'frac_int_uniq_pred' > 0
+    fdc['num_channels_greater0_coeff'] = fdc.groupby("untag_prec")['coeff'].transform(lambda x: (x > 0).sum())
+    fdc['num_channels_greater0_frac_int_uniq_pred'] = fdc.groupby("untag_prec")['frac_int_uniq_pred'].transform(lambda x: (x > 0).sum())
+    fdc['num_channels_greater0_frac_dia_int'] = fdc.groupby("untag_prec")['frac_dia_int'].transform(lambda x: (x > 0).sum())
+    fdc['num_channels_greater0_frac_int_uniq'] = fdc.groupby("untag_prec")['frac_int_uniq'].transform(lambda x: (x > 0).sum())
+    fdc['num_channels_greater0_frac_lib_int'] = fdc.groupby("untag_prec")['frac_lib_int'].transform(lambda x: (x > 0).sum())
+
+
+
+    return fdc
 
 
 
