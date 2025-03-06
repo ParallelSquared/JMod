@@ -807,7 +807,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # plt.hist(np.power(stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1))-emp_p,2),bins,alpha=.5)
     
     
-    
+
     ###Apply the KneeLocator method to find the elbow for empirical CDF
     # kneedle_emp = KneeLocator(emp_data, emp_p, curve="concave", direction="increasing",S=25)
     # elbow_emp_x = kneedle_emp.knee
@@ -817,6 +817,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # kneedle_pred = KneeLocator(pred_data, pred_p, curve="concave", direction="increasing",S=25)
     # elbow_pred_x = kneedle_pred.knee
     # elbow_pred_y = pred_p[np.argmin(np.abs(pred_data - elbow_pred_x))]
+
     
     #plt.show()
     
@@ -1035,7 +1036,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         
         
-        
+
         # stop
         # Plot the CDFs with elbow points
         
@@ -1071,8 +1072,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         plt.savefig(results_folder+"/RTelbows.png",dpi=600,bbox_inches="tight")
         
         
-        
-        
+
         ##plot mz alignment
         plt.subplots()
         plt.scatter(np.array(id_mzs)[cor_filter],(diffs-f_rt_mz(converted_rt))[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(dia_rt)[cor_filter])//1000)+1)))
