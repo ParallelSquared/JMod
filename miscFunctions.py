@@ -196,6 +196,110 @@ def closest_peak_diff(mz,spec_mz_list,max_diff=2e-5):
     
     
 
+# def parse_peptide(seq):
+#     ### extract all [] or () from seq with preceding AA
+#     close_d = {"[":"]","(":")"}
+#     new_seq = []
+#     s_idx=0
+#     current= ""
+#     b_count = 0
+#     while s_idx<len(seq):
+#         s= seq[s_idx]
+#         if s_idx==0 and s not in "[(":
+#             current=s
+#         elif s_idx!=0 and s not in "[(":
+#             new_seq.append(current)
+#             current= s
+        
+#         elif s in "[(":
+#             b_count +=1
+#             opener = s
+#             current+=s
+#             while s!=close_d[opener] and b_count!=0:
+#                 if s==close_d[opener]:
+#                     b_count-=1
+#                 elif s in "[(":
+#                     b_count+=1
+#                 s_idx+=1
+#                 s= seq[s_idx]
+#                 current+=s
+#         s_idx+=1
+
+#     if current!=new_seq[-1]:
+#         new_seq.append(current)
+    
+#     return new_seq
+
+def parse_peptide(seq):
+    ### extract all [] or () from seq with preceding AA
+    close_d = {"[": "]", "(": ")"}
+    new_seq = []
+    s_idx = 0
+    current = ""
+
+    while s_idx < len(seq):
+        s = seq[s_idx]
+
+        if s in "[(":
+            # Handle modifications in brackets
+            opener = s
+            bracket_content = s
+            s_idx += 1
+            while s_idx < len(seq) and seq[s_idx] != close_d[opener]:
+                bracket_content += seq[s_idx]
+                s_idx += 1
+            bracket_content += seq[s_idx]  # Add closing bracket
+
+            if current:  
+                current += bracket_content  # Attach modification to the preceding letter
+            else:  
+                new_seq.append(bracket_content)  # Handle edge cases where the sequence starts with a modification
+
+        else:
+            if current:
+                new_seq.append(current)  # Save previous character/modification
+            current = s  # Start a new character
+
+        s_idx += 1
+
+    if current:  # Append the last residue
+        new_seq.append(current)
+
+    return new_seq
+    
+
+def extract_mod(AA):
+    ### extract all [] or () from AA
+    close_d = {"[":"]","(":")"}
+    mods = []
+    s_idx=0
+    current= ""
+    b_count = 0
+    while s_idx<len(AA):
+        s= AA[s_idx]
+        if s_idx==0 and s not in "[(":
+            pass
+        elif s_idx!=0 and s not in "[(":
+            mods.append(current)
+            current= s
+        
+        elif s in "[(":
+            b_count +=1
+            opener = s
+            current+=s
+            while s!=close_d[opener] and b_count!=0:
+                if s==close_d[opener]:
+                    b_count-=1
+                elif s in "[(":
+                    b_count+=1
+                s_idx+=1
+                s= AA[s_idx]
+                current+=s
+            mods.append(current)
+            current= ""
+        s_idx+=1
+    return mods
+        
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
 def split_frag_name(ion_type):
     frag_name,frag_z = ion_type.split("_")
@@ -233,39 +337,68 @@ diann_rules = {
                  'D':'E'
                  }
 
-def change_seq(seq,rules):
-    # seq: list of AAs
-    # frags: dictionary of frags
+# def change_seq(seq,rules):
+#     # seq: list of AAs
+#     # frags: dictionary of frags
     
-    if type(seq)==str:
-        seq = re.findall("[A-Z](?<!\([A-Z])",seq)
-    else:
-        seq = [re.sub("\(.*\)","",aa) for aa in seq]
+#     if type(seq)==str:
+#         seq = re.findall("[A-Z](?<!\([A-Z])",seq)
+#     else:
+#         seq = [re.sub("\(.*\)","",aa) for aa in seq]
         
-    if rules=="diann":
-        new_seq = "".join([diann_rules[aa] for aa in seq])
-    elif rules=="rev":
-        new_seq = "".join(seq[:-1][::-1]+seq[-1:])
+#     if rules=="diann":
+#         new_seq = "".join([diann_rules[aa] for aa in seq])
+#     elif rules=="rev":
+#         new_seq = "".join(seq[:-1][::-1]+seq[-1:])
     
-    return new_seq
+#     return new_seq
+
+
+# def change_seq(seq,rules):
+#     # seq: list of AAs
+#     # frags: dictionary of frags
+#     # re.findall("([A-Z](?:\(.*?\))?)",peptide)
+#     if type(seq)==str:
+#         seq = re.findall("([A-Z](?:\(.*?\))?)",seq)
+#     else:
+#         seq = [re.sub("\(.*\)","",aa) for aa in seq]
+        
+#     if rules=="diann":
+#         new_seq = "".join([diann_rules[aa] for aa in seq])
+#     elif rules=="rev":
+#         new_seq = "".join(seq[:-1][::-1]+seq[-1:])
+#     else:
+#         raise ValueError("Unavailable rules selected")
+#     # elif rules==None:
+#     #     new_seq = "".join(seq)
+#     return new_seq
 
 def change_seq(seq,rules):
     # seq: list of AAs
     # frags: dictionary of frags
     # re.findall("([A-Z](?:\(.*?\))?)",peptide)
     if type(seq)==str:
-        seq = re.findall("([A-Z](?:\(.*?\))?)",seq)
-    else:
-        seq = [re.sub("\(.*\)","",aa) for aa in seq]
+        seq = parse_peptide(seq)
+    # else:
+    #     seq = [re.sub("\(.*\)","",aa) for aa in seq]
         
+    tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
+    seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
+    mods = [extract_mod(i) for i in seq]
+    ## assume AA is the first 
+    untag_seq = [i[0] for i in seq]
+    
     if rules=="diann":
-        new_seq = "".join([diann_rules[aa] for aa in seq])
+        new_split_seq = [diann_rules[aa] for aa in seq]
     elif rules=="rev":
-        new_seq = "".join(seq[:-1][::-1]+seq[-1:])
+        new_split_seq = seq[:-1][::-1]+seq[-1:]
     else:
         raise ValueError("Unavailable rules selected")
     # elif rules==None:
     #     new_seq = "".join(seq)
+    
+    new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq,tags)])
+    
     return new_seq
 
 
@@ -348,15 +481,19 @@ def convert_frags(seq,frags,rules=diann_rules):
     
     new_seq = change_seq(seq=seq,rules=rules)    
     
-    split_seq = re.findall("([A-Z](?:\(.*?\))?)",new_seq)
+    split_seq = parse_peptide(new_seq)
     
-    mods = [re.findall("\((.*?)\)",i) for i in split_seq]
+    tags = [[t.strip("()") for t in re.findall(f"(\({config.tag.name}.*?\))",i)] for i in split_seq]
+    split_seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in split_seq]
     
+    close_d = {"[":"]","(":")"}
+    mods = [[m.strip(m[0]+close_d[m[0]]) for m in extract_mod(i)] for i in split_seq]
+    mod_masses = [sum([config.diann_mods[j]  for j in i if j in config.diann_mods]) for i in mods]
     ## assume AA is the first 
     unmod_seq = [i[0] for i in split_seq]
     
     if config.tag:
-    	tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in mods]
+    	tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in tags]
     else:
     	tag_masses = [0 for i in mods]
         
@@ -377,10 +514,10 @@ def convert_frags(seq,frags,rules=diann_rules):
             except:
                 loss=0
         if ion_type=="b":
-            mz = mass.fast_mass(unmod_seq[:ion_nmr],ion_type,int(charge)) - loss + sum(tag_masses[:ion_nmr])
+            mz = mass.fast_mass(unmod_seq[:ion_nmr],ion_type,int(charge)) - (loss/float(charge)) + ((sum(tag_masses[:ion_nmr]) +sum(mod_masses[:ion_nmr]))/float(charge))
         
         if ion_type=="y":
-            mz = mass.fast_mass(unmod_seq[-ion_nmr:],ion_type,int(charge)) - loss + sum(tag_masses[-ion_nmr:])
+            mz = mass.fast_mass(unmod_seq[-ion_nmr:],ion_type,int(charge)) - (loss/float(charge)) + ((sum(tag_masses[-ion_nmr:]) +sum(mod_masses[-ion_nmr:]))/float(charge))  
 
         new_frags[frag] = [mz, frags[frag][1]]
 
@@ -675,3 +812,5 @@ def fragment_cor(df,didx,fn="cos"):
         return cosim(np.array([d1[i] for i in shared_d]),np.array([d2[i] for i in shared_d]))
     else: 
         return np_pearson_cor(np.array([d1[i] for i in shared_d]),np.array([d2[i] for i in shared_d])).statistic
+    
+    
