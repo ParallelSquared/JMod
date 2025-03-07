@@ -410,6 +410,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "plexfittrace_ps_all",
                   "unique_frag_mz", "untag_prec",
                   "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor",
+                  "unique_frag_mz",
+                  "unique_obs_int",
                   "file_name",
                   "protein"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
