@@ -1,7 +1,7 @@
 
 import config
 
-
+import dill
 import numpy as np
 import argparse
 import os
@@ -42,6 +42,7 @@ if __name__=="__main__":
 
     use_rt = "RT" if config.args.use_rt else ""
     iso = f"iso{config.num_iso_peaks}" if config.args.iso else ""
+    lib_frac = f"iso{config.args.lib_frac}"
     mTRAQ = "mTRAQ" if config.args.mTRAQ else ""
     tag = config.args.tag
     is_timeplex = "timeplex" if config.args.timeplex else ""
@@ -56,11 +57,12 @@ if __name__=="__main__":
     
     ms2_align = "MS2align" if config.args.ms2_align else ""
     results_folder_name = "_".join([spec_file_name,
-                                    lib_file_name+"Update060225",
+                                    lib_file_name+"Update280225",
                                     f"{config.mz_ppm}ppm",
                                     f"{config.atleast_m}m",
                                     f"unmatch{config.unmatched_fit_type}",
                                     f"DECOY{config.args.decoy}",
+                                    f"libfrac{config.args.lib_frac}",
                                     *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,is_timeplex,dummy_val]))])
     
     results_folder_path = "/Users/kevinmcdonnell/Programming/Python/Jmod/Results/"+results_folder_name
@@ -119,8 +121,8 @@ if __name__=="__main__":
 
         
     else:    
-        funcs = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
-                        ms2=config.args.ms2_align)
+        funcs,spectrumLibrary = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
+                                        ms2=config.args.ms2_align)
         rt_spl,mz_func = funcs[:2]
         # rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
@@ -166,7 +168,11 @@ if __name__=="__main__":
             if key[:2] != "__" and key not in config_exclude:
                 write_file.writelines(f"{key}: {item}\n")
     
-    
+    with open(results_folder_path+"/slib","wb") as dill_file:
+        slib = dill.dump(spectrumLibrary,dill_file)   
+      
+    with open(results_folder_path+"/dlib","wb") as dill_file:
+        dlib = dill.dump(decoy_lib,dill_file)   
     
     ######################################################
     ### Start the search
