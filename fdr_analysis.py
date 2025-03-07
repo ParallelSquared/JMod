@@ -34,7 +34,7 @@ from SpecLib import loadSpecLib
 
 from mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 import iso_functions as iso_f
-from miscFunctions import fragment_cor
+from miscFunctions import fragment_cor,unstring_floats
 
 import config
 
@@ -165,6 +165,10 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     
     fdc["MS1_Area"]=[auc(list(map(float,fdc.all_ms1_specs.iloc[idx].split(";"))),list(map(float,fdc.all_ms1_iso0vals.iloc[idx].split(";")))) for idx in range(len(fdc))]
 
+    frag_errors = [unstring_floats(mz) for mz in fdc.frag_errors]
+    median  = np.median(np.concatenate([i for i in frag_errors]))
+    fdc["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
+    
     return fdc
 
 
