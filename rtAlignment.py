@@ -813,10 +813,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # elbow_emp_x = kneedle_emp.knee
     # elbow_emp_y = emp_p[np.argmin(np.abs(emp_data - elbow_emp_x))]
     
-    # # Apply the KneeLocator method to find the elbow for predicted CDF
-    # kneedle_pred = KneeLocator(pred_data, pred_p, curve="concave", direction="increasing",S=25)
-    # elbow_pred_x = kneedle_pred.knee
-    # elbow_pred_y = pred_p[np.argmin(np.abs(pred_data - elbow_pred_x))]
+
+    ###Apply the KneeLocator method to find the elbow for empirical CDF
+    # kneedle_emp = KneeLocator(emp_data, emp_p, curve="concave", direction="increasing",S=25)
+    # elbow_emp_x = kneedle_emp.knee
+    # elbow_emp_y = emp_p[np.argmin(np.abs(emp_data - elbow_emp_x))]
+    
 
     
     #plt.show()
