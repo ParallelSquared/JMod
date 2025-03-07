@@ -656,6 +656,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     lc_frags_errors=[]
     lc_frags=[]
     feature_mzs = []
+    feature_idxs = []
     for idx,fit_output in enumerate(fit_outputs):    
         if fit_output[0][0]!=0:
             lib_rt.append([librarySpectra[(i[3],i[4])]["iRT"] for i in fit_output])
@@ -668,6 +669,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                 lc_frags.append(frags[idx][1][max_id])
             if dino_features is not None:
                 feature_mzs.append(lf_mz[idx])
+                feature_idxs.append(large_feature_indices[idx])
     # max_ids = [np.argmax([i[0] for i in j]) for j in output]
     ms1windows = [i.ms1window for i in top_n_spectra]
     id_keys = [(i[j][3],i[j][4]) for i,j in zip(output,max_ids)]
@@ -806,15 +808,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     
     
-    # Apply the KneeLocator method to find the elbow for empirical CDF
-    kneedle_emp = KneeLocator(emp_data, emp_p, curve="concave", direction="increasing",S=25)
-    elbow_emp_x = kneedle_emp.knee
-    elbow_emp_y = emp_p[np.argmin(np.abs(emp_data - elbow_emp_x))]
+    ###Apply the KneeLocator method to find the elbow for empirical CDF
+    # kneedle_emp = KneeLocator(emp_data, emp_p, curve="concave", direction="increasing",S=25)
+    # elbow_emp_x = kneedle_emp.knee
+    # elbow_emp_y = emp_p[np.argmin(np.abs(emp_data - elbow_emp_x))]
     
-    # Apply the KneeLocator method to find the elbow for predicted CDF
-    kneedle_pred = KneeLocator(pred_data, pred_p, curve="concave", direction="increasing",S=25)
-    elbow_pred_x = kneedle_pred.knee
-    elbow_pred_y = pred_p[np.argmin(np.abs(pred_data - elbow_pred_x))]
+    # # Apply the KneeLocator method to find the elbow for predicted CDF
+    # kneedle_pred = KneeLocator(pred_data, pred_p, curve="concave", direction="increasing",S=25)
+    # elbow_pred_x = kneedle_pred.knee
+    # elbow_pred_y = pred_p[np.argmin(np.abs(pred_data - elbow_pred_x))]
     
     #plt.show()
     
@@ -878,9 +880,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     ################################################
     
     
-    f_rt_mz = lowess_fit(converted_rt[cor_filter],np.array(diffs)[cor_filter],.2)
-    # plt.scatter(rts[rt_filter_bool],np.array(diffs)[rt_filter_bool],label="Original_MZ",s=1,alpha=.1)
-    # plt.scatter(dia_rt,f_rt_mz(dia_rt),s=1,alpha=.2)
+    f_rt_mz = lowess_fit(converted_rt[cor_filter],np.array(diffs)[cor_filter],.05)
+    # plt.scatter(converted_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=.1,alpha=.5)
+    # plt.scatter(converted_rt[cor_filter],f_rt_mz(dia_rt),s=1,alpha=.2)
     
     # plt.scatter(id_mzs,diffs,label="Original_MZ",s=1,alpha=.1)
     # plt.scatter(id_mzs,diffs-f_rt_mz(dia_rt),label="Original_MZ",s=1,alpha=.1)
@@ -1034,17 +1036,41 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         
         
+        # stop
         # Plot the CDFs with elbow points
+        
+        plt.subplots()
         plt.figure(figsize=(8, 5))
-        plt.plot(emp_data, emp_p, label="Original CDF", linestyle='--')
+        plt.plot(emp_data, emp_p, label="Original CDF", linestyle='-')
         plt.plot(pred_data, pred_p, label="Finetuned CDF", linestyle='-')
-        plt.scatter(elbow_emp_x, elbow_emp_y, color='blue', label=f'Original Elbow at {elbow_emp_x:.2f}', zorder=3)
-        plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
+        # plt.scatter(elbow_emp_x, elbow_emp_y, color='blue', label=f'Original Elbow at {elbow_emp_x:.2f}', zorder=3)
+        # plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
+        
+        emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
+        plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0])
+        emp_exp_999 = stats.expon.ppf(.999,scale=emp_abs_errors_med/np.log(2))
+        plt.scatter([emp_exp_999], [.999],c=colours[0],label=f"Emp Expon {emp_exp_999:.2f}",marker="*")
+        plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)),linestyle=":",color=colours[0])
+        emp_gauss_999 = stats.halfnorm.ppf(.999,scale=emp_abs_errors_med*1.4826)
+        plt.scatter([emp_gauss_999], [.999],c=colours[0],label=f"Emp Gauss {emp_gauss_999:.2f}")
+        
+        pred_abs_errors_med = np.median(np.abs(all_pred_diffs[all_pred_diffs<limit]-np.median(all_pred_diffs[all_pred_diffs<limit])))
+        plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),linestyle="--",color=colours[1])
+        pred_exp_999 = stats.expon.ppf(.999,scale=pred_abs_errors_med/np.log(2))
+        plt.scatter([pred_exp_999], [.999],c=colours[1],label=f"Pred Expon {pred_exp_999:.2f}",marker="*")
+        plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),linestyle=":",color=colours[1])
+        pred_gauss_999 = stats.halfnorm.ppf(.999,scale=pred_abs_errors_med*1.4826)
+        plt.scatter([pred_gauss_999], [.999],c=colours[1],label=f"Pred Gauss {pred_gauss_999:.2f}")
+        
+        plt.vlines(boundary,0,1,colors="r",linestyle="--",label="Boundary")
+        
         plt.xlabel("RT Differences")
         plt.ylabel("Cumulative Probability")
         plt.legend()
         plt.title("Finding an optimal RT library")
         plt.savefig(results_folder+"/RTelbows.png",dpi=600,bbox_inches="tight")
+        
+        
         
         
         ##plot mz alignment
@@ -1476,20 +1502,50 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # np.percentile(np.abs(all_pred_diffs), 50)
     
     
-    limit=10 ## exlcude RT diffs larger than this (outliers)
-    data = sorted(np.abs(all_emp_diffs)[np.abs(all_emp_diffs)<limit])
-    p = 1. * np.arange(len(data)) / (len(data) - 1)
-    # plt.plot(data,p,label="Empirical RT")
-    emp_cdf_auc = auc(data,p)
-    data = sorted(np.abs(all_pred_diffs)[np.abs(all_pred_diffs)<limit])
-    p = 1. * np.arange(len(data)) / (len(data) - 1)
-    # plt.plot(data,p,label="Predicted RT")
-    pred_cdf_auc = auc(data,p)
+    # limit=5 ## exlcude RT diffs larger than this (outliers)
+    # data = sorted(np.abs(all_emp_diffs)[np.abs(all_emp_diffs)<limit])
+    # p = 1. * np.arange(len(data)) / (len(data) - 1)
+    # # plt.plot(data,p,label="Empirical RT")
+    # emp_cdf_auc = auc(data,p)
+    # data = sorted(np.abs(all_pred_diffs)[np.abs(all_pred_diffs)<limit])
+    # p = 1. * np.arange(len(data)) / (len(data) - 1)
+    # # plt.plot(data,p,label="Predicted RT")
+    # pred_cdf_auc = auc(data,p)
+    # # plt.legend()
+    # # plt.xlabel("RT difference")
+    # # plt.ylabel("Fraction of Precursors")
+    
+    limit=3 ## exlcude RT diffs larger than this (outliers)
+    emp_data_filter = all_emp_diffs[np.abs(all_emp_diffs) < limit]
+    emp_data = np.sort(np.abs(emp_data_filter))
+    emp_data = np.append(emp_data,limit)
+    emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
+    emp_cdf_auc = auc(emp_data,emp_p)
+    pred_data_filter = all_pred_diffs[np.abs(all_pred_diffs) < limit]
+    pred_data = np.sort(np.abs(pred_data_filter))
+    pred_data = np.append(pred_data,limit)
+    pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
+    pred_cdf_auc = auc(pred_data,pred_p)
+    
+    # plt.plot(emp_data,emp_p,label="Empirical RT",color=colours[0])
+    # plt.plot(pred_data,pred_p,label="Predicted RT",color=colours[1])
     # plt.legend()
     # plt.xlabel("RT difference")
     # plt.ylabel("Fraction of Precursors")
     
-    
+    # percentile =.999
+    # emp_abs_errors_med = np.median(np.abs(emp_data_filter[emp_data_filter<limit]-np.median(emp_data_filter[emp_data_filter<limit])))
+    # pred_abs_errors_med = np.median(np.abs(pred_data_filter[pred_data_filter<limit]-np.median(pred_data_filter[pred_data_filter<limit])))
+    # plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),label="Emp Expon",linestyle="--",color=colours[0])
+    # plt.scatter([stats.expon.ppf(percentile,scale=emp_abs_errors_med/np.log(2))], [percentile],c=colours[0],marker="*")
+    # plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)),label="Emp Gauss",linestyle=":",color=colours[0])
+    # plt.scatter([stats.halfnorm.ppf(percentile,scale=emp_abs_errors_med*1.4826)], [percentile],c=colours[0])
+    # plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),label="Pred Expon",linestyle="--",color=colours[1])
+    # plt.scatter([stats.expon.ppf(percentile,scale=pred_abs_errors_med/np.log(2))], [percentile],c=colours[1],marker="*")
+    # plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),label="Pred Gauss",linestyle=":",color=colours[1])
+    # plt.scatter([stats.halfnorm.ppf(percentile,scale=pred_abs_errors_med*1.4826)], [percentile],c=colours[1])
+    # plt.legend()
+    # plt.xlim(0-limit*.05,limit*1.05)
     
     
     
@@ -1501,6 +1557,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     all_lib_keys = list(librarySpectra)
     
     if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
+        boundary = fit_errors(all_pred_diffs,limit)
         all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
         all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
         
@@ -1509,6 +1566,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
             
     else: ### empirical are better
         ## keep the library RTs the same
+        boundary = fit_errors(all_emp_diffs,limit)
         ## update the splines
         rt_spls = emp_rt_spls
     # ## get keys from t_vals and recreate scatter plot
@@ -1620,7 +1678,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
    
     
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
-    new_rt_tol = 4*np.abs(rt_stddev)
+    new_rt_tol =boundary# 4*np.abs(rt_stddev)
     print(f"Optimsed RT tolerance: {new_rt_tol}")
     
     # ## ensure there is no overlap
@@ -1771,12 +1829,48 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
             row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
             row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
             row.set_ylabel(f"RT Residuals (T{idx})")
+            row.set_ylim(-5,5)
         # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
         # plt.legend()
         plt.xlabel("Updated Library RT")
         # plt.ylabel("RT Residuals")
         # plt.show()
         plt.savefig(results_folder+"/RtResidual.png",dpi=600,bbox_inches="tight")
+        
+        
+        # Plot the CDFs with elbow points
+        plt.subplots()
+        plt.figure(figsize=(8, 5))
+        plt.plot(emp_data, emp_p, label="Original CDF", linestyle='-')
+        plt.plot(pred_data, pred_p, label="Finetuned CDF", linestyle='-')
+        # plt.scatter(elbow_emp_x, elbow_emp_y, color='blue', label=f'Original Elbow at {elbow_emp_x:.2f}', zorder=3)
+        # plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
+        
+        emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
+        plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0])
+        emp_exp_999 = stats.expon.ppf(.999,scale=emp_abs_errors_med/np.log(2))
+        plt.scatter([emp_exp_999], [.999],c=colours[0],label=f"Emp Expon {emp_exp_999:.2f}",marker="*")
+        plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)),linestyle=":",color=colours[0])
+        emp_gauss_999 = stats.halfnorm.ppf(.999,scale=emp_abs_errors_med*1.4826)
+        plt.scatter([emp_gauss_999], [.999],c=colours[0],label=f"Emp Gauss {emp_gauss_999:.2f}")
+        
+        pred_abs_errors_med = np.median(np.abs(all_pred_diffs[all_pred_diffs<limit]-np.median(all_pred_diffs[all_pred_diffs<limit])))
+        plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),linestyle="--",color=colours[1])
+        pred_exp_999 = stats.expon.ppf(.999,scale=pred_abs_errors_med/np.log(2))
+        plt.scatter([pred_exp_999], [.999],c=colours[1],label=f"Pred Expon {pred_exp_999:.2f}",marker="*")
+        plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),linestyle=":",color=colours[1])
+        pred_gauss_999 = stats.halfnorm.ppf(.999,scale=pred_abs_errors_med*1.4826)
+        plt.scatter([pred_gauss_999], [.999],c=colours[1],label=f"Pred Gauss {pred_gauss_999:.2f}")
+        
+        plt.vlines(boundary,0,1,colors="r",linestyle="--",label="Boundary")
+        
+        plt.xlabel("RT Differences")
+        plt.ylabel("Cumulative Probability")
+        plt.legend()
+        plt.title("Finding an optimal RT library")
+        plt.savefig(results_folder+"/RTelbows.png",dpi=600,bbox_inches="tight")
+        
+        
         
         
         ##plot mz alignment
