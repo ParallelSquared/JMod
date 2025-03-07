@@ -9,7 +9,7 @@ import copy
 
 from iso_functions import split_frag_name, fragment_seq
 
-from miscFunctions import frag_to_peak, specific_frags
+from miscFunctions import frag_to_peak, specific_frags,parse_peptide
 
 """
 ## Load in the library
@@ -131,9 +131,37 @@ tag6 = massTag(rules = "nK",
             base_mass=308.1160923903,
             # delta = 4.0070994,
             # delta = [4.0070994],
-            delta = [8.02683870239997],#[0.0,4.01095605604],#,8.02683870239997],
-            channel_names = ["8"],#["0","4"],#,"8"],
+            delta = [0.0],#,4.01095605604],#,8.02683870239997],
+            channel_names = ["0"],#["0","4"],#,"8"],
             name = "tag6")
+ 
+     
+tag6lys = massTag(rules = "nK",
+            base_mass=464.24235,
+            # delta = 4.0070994,
+            # delta = [4.0070994],
+            delta = [0.0],#,4.01095605604],#,8.02683870239997],
+            channel_names = ["0"],#["0","4"],#,"8"],
+            name = "tag6lys")
+ 
+     
+tag6arg = massTag(rules = "nK",
+            base_mass=464.2172,
+            # delta = 4.0070994,
+            # delta = [4.0070994],
+            delta = [0.0],#,4.01095605604],#,8.02683870239997],
+            channel_names = ["0"],#["0","4"],#,"8"],
+            name = "tag6arg")
+ 
+     
+tag6pip = massTag(rules = "nK",
+            base_mass=434.1954,
+            # delta = 4.0070994,
+            # delta = [4.0070994],
+            delta = [0.0],#,4.01095605604],#,8.02683870239997],
+            channel_names = ["0"],#["0","4"],#,"8"],
+            name = "tag6pip")
+
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
 def split_frag_name(ion_type):
@@ -215,7 +243,8 @@ def tag_library(library,tag=mTRAQ):
         
         peptide = key[0]
         peptide = "".join(peptide)
-        split_peptide = re.findall("([A-Z](?:\(.*?\))?)",peptide)
+        # split_peptide = re.findall("([A-Z](?:\(.*?\))?)",peptide)
+        split_peptide = parse_peptide(peptide)
         
         
         
@@ -290,7 +319,10 @@ available_tags = {"mTRAQ":mTRAQ,
                   "mTRAQ02468":mTRAQ_02468,
                   "diethyl_6plex":diethyl_6plex,
                   "diethyl_3plex":diethyl_3plex,
-                  "tag6":tag6}
+                  "tag6":tag6,
+                  "tag6pip":tag6pip,
+                  "tag6lys":tag6lys,
+                  "tag6arg":tag6arg}
 
 # if config.args.mTRAQ:
 #     config.tag = mTRAQ
