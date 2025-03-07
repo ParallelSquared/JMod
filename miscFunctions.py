@@ -496,7 +496,6 @@ def convert_frags(seq,frags,rules=diann_rules):
     else:
         tags = [[] for i in seq]
 
-
     close_d = {"[":"]","(":")"}
     mods = [[m.strip(m[0]+close_d[m[0]]) for m in extract_mod(i)] for i in split_seq]
     mod_masses = [sum([config.diann_mods[j]  for j in i if j in config.diann_mods]) for i in mods]
