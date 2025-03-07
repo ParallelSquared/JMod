@@ -25,12 +25,49 @@ def split_frag_name(ion_type):
     frag_idx = int(frag_name[1:])
     
     return frag_type,frag_idx,loss,frag_z
+
+def parse_peptide(seq):
+    ### extract all [] or () from seq with preceding AA
+    close_d = {"[":"]","(":")"}
+    new_seq = []
+    s_idx=0
+    current= ""
+    b_count = 0
+    while s_idx<len(seq):
+        s= seq[s_idx]
+        if s_idx==0 and s not in "[(":
+            current=s
+        elif s_idx!=0 and s not in "[(":
+            new_seq.append(current)
+            current= s
+        
+        elif s in "[(":
+            b_count +=1
+            opener = s
+            current+=s
+            while s!=close_d[opener] and b_count!=0:
+                if s==close_d[opener]:
+                    b_count-=1
+                elif s in "[(":
+                    b_count+=1
+                s_idx+=1
+                s= seq[s_idx]
+                current+=s
+        s_idx+=1
+
+    if current!=new_seq[-1]:
+        new_seq.append(current)
+    
+    return new_seq
+
+    
     
 ### First get the AA sequence and modifications of the fragment
 def fragment_seq(peptide, ion_type):
     
     peptide = "".join(peptide)
-    split_peptide = re.findall("([A-Z](?:\(.*?\))?)",peptide)
+    # split_peptide = re.findall("([A-Z](?:\(.*?\))?)",peptide)
+    split_peptide = parse_peptide(peptide)
     
     ### capture anything in brakets as a modification
     mods = re.finditer("\((.*?)\)",peptide)
@@ -143,6 +180,38 @@ def gen_isotopes_dict(seq,frags):
             if True:#new_intensity > config.min_iso_intensity:
                 frag_iso = "" if iso_idx==0 else "_iso"+str(iso_idx)
                 new_frags[frag+frag_iso] = [iso.mz+tag_mz,new_intensity]
+                
+    return frag_to_peak(new_frags,return_frags=True)
+
+
+def gen_isotopes_dict(seq,frags):
+    new_frags = {}
+    for frag in frags:
+        mz,intensity = frags[frag]
+        split_frag_seq,frag_info = fragment_seq(seq,frag)
+        loss = "-"+frag_info[2] if frag_info[2] else frag_info[2]
+        ion_type = frag_info[0] + loss
+        frag_comp = get_seq_comp(split_frag_seq, ion_type)
+        frag_z = int(frag_info[3])
+        
+        
+        if config.tag:
+            tags = [t for aa in split_frag_seq for t in re.findall(f"\(({config.tag.name}.*?)\)",aa)]
+            tag_mz = np.sum([config.tag.mass_dict[t] for t  in tags])/frag_z
+        else:
+            tag_mz = 0
+        
+        isotopes = isotopic_variants(frag_comp,
+                                     npeaks=config.num_iso_peaks,
+                                     charge = frag_z)
+        mono_iso_peak = isotopes[0]
+        for iso_idx,iso in enumerate(isotopes):
+            new_intensity = intensity*(iso.intensity/mono_iso_peak.intensity)
+            if True:#new_intensity > config.min_iso_intensity:
+                frag_iso = "" if iso_idx==0 else "_iso"+str(iso_idx)
+                # new_frags[frag+frag_iso] = [mz+iso_diff+tag_mz,new_intensity]
+                iso_diff = iso.mz - mono_iso_peak.mz
+                new_frags[frag+frag_iso] = [mz+iso_diff,new_intensity]
                 
     return frag_to_peak(new_frags,return_frags=True)
 

@@ -26,6 +26,7 @@ parser.add_argument('--tag', default="", type=str)
 parser.add_argument('--num_iso', default=2, type=float)
 parser.add_argument('--pp_file', default="", type=str)
 parser.add_argument('--timspeak_file', default="", type=str)
+parser.add_argument('--lib_frac', default=.5, type=float)
 parser.add_argument('-z','--dummy_value', type=str)
 
 
@@ -104,9 +105,20 @@ num_iso_ms1 = 6
 decoy_mz_offset = 0
 
 
+### moving average window MS1 trace
+smoothing_window = 3
+
+### additional scans beyond MS1 peak found
+additional_scans = 0
+
+## min number of scans???
+
+
+### test
+test_var = "test_1"
 
 ### filters for picking spectra to fit
-frac_lib_matched = 0.5
+frac_lib_matched = args.lib_frac
 match_ms1 = True
 top_n = 10
 atleast_m = args.atleast_m

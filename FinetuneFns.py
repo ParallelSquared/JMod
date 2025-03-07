@@ -94,7 +94,7 @@ def train_models(models,train_data,results_folder=None):
     all_history = []
     for i, model in enumerate(models):
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4), loss='mae')
-        history = model.fit(np.array(X_train), Y_train, epochs=50, batch_size=24, validation_split=0.1, callbacks=[early_stopping])
+        history = model.fit(np.array(X_train), Y_train, epochs=50, batch_size=24, validation_split=0.1, callbacks=[early_stopping],verbose=1)
         all_history.append(history)
         if results_folder:        
             model.save(results_folder+f'/iRT_updated_model{i}')
@@ -130,7 +130,7 @@ def fine_tune_rt(grouped_df,
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_mTRAQ_09182024_"
         
     elif config.tag.name=="diethyl_6plex":
-        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_DiEthyl_11052024_0"
+        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_DiEthyl_11052024_"
         
         
     elif config.tag.name=="tag6":
