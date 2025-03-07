@@ -14,6 +14,7 @@ import os
 from scipy import stats
 
 from miscFunctions import  closest_ms1spec, curve_fit, gaussian, createTolWindows,np_pearson_cor
+import miscFunctions as mf
 from pyteomics import mass
 from read_output import get_large_prec
 
@@ -110,7 +111,40 @@ def get_trace_int_old(spec,mz,atol=0,rtol=0,base=min_int):
 #     return start_idx, end_idx
 
 
+def localize_ID(x,min_int=min_int):
+    """
+    Given coefficients, estimate most likely position of correct ID
+    - if possible have more the one consecutive coeff
+    - Then/else return position of max coeff
+    
+    Returns
+    -------
+    Position
+    """
+    arr = x.copy()
+    non_zero =arr>min_int
+    where_non_zero = np.where(non_zero==1)[0]
+    num_consecutive = (moving_average(non_zero, 3)*3)[where_non_zero]
+    if len(num_consecutive)>0 and any(num_consecutive!=1):
+        arr[where_non_zero[num_consecutive==1]]=0
+    return np.argmax(arr)
+    
 
+def remove_non_consecutive(x,min_int=min_int):
+    """
+    Given coefficients, if at least some have consequtive scans, remove singles
+    
+    Returns
+    -------
+    values with singles set to min_int
+    """
+    arr = x.copy()
+    non_zero =arr>min_int
+    where_non_zero = np.where(non_zero==1)[0]
+    num_consecutive = (moving_average(non_zero, 3)*3)[where_non_zero]
+    if len(num_consecutive)>0 and any(num_consecutive!=1):
+        arr[where_non_zero[num_consecutive==1]]=0
+    return arr
     
     
     
@@ -164,7 +198,8 @@ def get_ms1_peak(x,y,idx):
     closest_idx = np.argmin(np.abs(idx-peak_idxs))
 
     peak_idx = peaks[closest_idx]
-    peak_edge_idxs = [peak_attr["left_bases"][closest_idx],peak_attr["right_bases"][closest_idx]]
+    peak_edge_idxs = [max(0,peak_attr["left_bases"][closest_idx]-config.additional_scans),min(len(x)-1,peak_attr["right_bases"][closest_idx]+config.additional_scans)]
+    # peak_edge_idxs = [peak_attr["left_bases"][closest_idx],peak_attr["right_bases"][closest_idx]]
     
     return x[peak_idx],x[peak_edge_idxs]
     
@@ -284,7 +319,9 @@ def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeple
             for iso_idx in range(len(prec_isotope_traces)):
                 if scan in prec_isotope_traces[iso_idx]:
                     all_iso_vals[iso_idx][scan] = prec_isotope_traces[iso_idx][scan]
-                    
+         
+        ms1_keys = list(all_ms1_vals.keys())
+        ms1_index_of_max = ms1_keys[np.argmax(mf.moving_average(f(ms1_keys),config.smoothing_window))]
         ## use monoiso ms1 prec mz to find the elution ms1 peak
         ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), list(all_ms1_vals.values()), ms1_index_of_max)
         
@@ -673,7 +710,7 @@ def get_other_channels(prec,mz,tag):
 # @profile
 def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=None,timeplex=False):
     print("Fitting tagged channels together")
-    
+    print(config.args.dummy_value)
     decoy_coeffs["untag_seq"] = [re.sub(f"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
     decoy_coeffs["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(decoy_coeffs["untag_seq"],decoy_coeffs["z"])]
     
@@ -799,6 +836,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         group_iso = []
         group_keys = [] ## collect to ensure we match them up correctly
         all_channel_scans = []
+        fs = []
         for prec_mz,prec_seq in zip(prec_mzs,prec_seqs):
             
             ## keep decoys mathching to the correct MS1
@@ -837,10 +875,12 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             # else:
             #     ms2_vals = {}
                 
-            
-            f = interp1d(list(ms2_vals.keys()), list(ms2_vals.values()), bounds_error=False)
+            if config.args.dummy_value=="orig":
+                f = interp1d(list(ms2_vals.keys()), np.array(list(ms2_vals.values())), bounds_error=False)
+            else:
+                f = interp1d(list(ms2_vals.keys()), remove_non_consecutive(np.array(list(ms2_vals.values()))), bounds_error=False)
                 
-            
+            fs.append(f)
             
             # ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec,use in zip(ms1_spectra,rt_bool) if use}
             ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec in spectra_subset}
@@ -885,8 +925,9 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             # plt.plot(all_ms1_vals.keys(),func(all_ms1_vals.values()),label="Monoiso")
             # plt.plot(all_iso_vals[0].keys(),func(all_iso_vals[0].values()),label="1st Iso")
             # plt.plot(all_iso_vals[1].keys(),func(all_iso_vals[1].values()),label="2nd Iso") 
-            # plt.plot(all_iso_vals[2].keys(),func(all_iso_vals[2].values()),label="2nd Iso") 
-            ###plt.plot(ms2_vals.keys(),func(ms2_vals.values()),label="Coeffs")
+            # plt.plot(all_iso_vals[2].keys(),func(all_iso_vals[2].values()),label="3rd Iso") 
+            # plt.plot(ms2_vals.keys(),func(ms2_vals.values()),label="Coeffs")
+            # plt.plot(list(ms2_vals.keys()),func(f(list(ms2_vals.keys()))))
             
             ## use monoiso ms1 prec mz to find the elution ms1 peak
             if ms2_vals=={0:0}:
@@ -894,8 +935,12 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             else:
                 # ms1_index_of_max = new_data.Ms1_spec_id.iloc[np.argmax(new_data.coeff)]
                 ms1_keys = list(all_ms1_vals.keys())
-                ms1_index_of_max = ms1_keys[np.argmax(f(ms1_keys))]
-                
+                if config.args.dummy_value=="orig":
+                    ms1_index_of_max = ms1_keys[np.argmax(f(ms1_keys))]
+                else:
+                    ms1_index_of_max = ms1_keys[np.argmax(mf.moving_average(f(ms1_keys),config.smoothing_window))] #gets interpolated coeff for all MS1 scans
+                    
+   
             ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), list(all_ms1_vals.values()), ms1_index_of_max)
             
             ## redefine all_scans to keep only thoe from the above peak
@@ -926,7 +971,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         #     plt.plot(d.keys(),func(d.values()),color=c,label="Coeffs")
         # for d,c in zip(ms1_traces,colours):
         #     plt.plot(d[0].keys(),func(d[0].values()),color=c,label="Coeffs",linestyle="--")
-        # plt.xlim(35000,36300)
+        ## plt.xlim(35000,36300)
             
         ### need to reduce the number of spectra we fit to
         idx_of_max =all_scans.index(top_ms1_spec_idx)
