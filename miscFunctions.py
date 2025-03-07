@@ -381,13 +381,13 @@ def change_seq(seq,rules):
         seq = parse_peptide(seq)
     # else:
     #     seq = [re.sub("\(.*\)","",aa) for aa in seq]
-    
+
     if config.tag:   
        tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
        seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
     else:
         tags = [[] for i in seq]
-        
+
     mods = [extract_mod(i) for i in seq]
     ## assume AA is the first 
     untag_seq = [i[0] for i in seq]
