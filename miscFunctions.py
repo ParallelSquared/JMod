@@ -809,8 +809,24 @@ def lowess_fit(x,y,frac=.2, it=3):
 
 def fragment_cor(df,didx,fn="cos"):
     
-    d1={i[0]:i[1] for i in zip(df.iloc[didx].frag_names.split(";"),unstring_floats(df.iloc[didx].obs_int))}    
-    d2={i[0]:i[1] for i in zip(df.iloc[didx].frag_names.split(";"),unstring_floats(df.iloc[didx].frag_int))}
+    #d1={i[0]:i[1] for i in zip(df.iloc[didx].frag_names.split(";"),unstring_floats(df.iloc[didx].obs_int))}    
+    #d2={i[0]:i[1] for i in zip(df.iloc[didx].frag_names.split(";"),unstring_floats(df.iloc[didx].frag_int))}
+        # Find the column indices based on their names
+    try:
+        frag_names_idx = df.columns.get_loc("frag_names")
+        obs_int_idx = df.columns.get_loc("obs_int")
+        frag_int_idx = df.columns.get_loc("frag_int")
+        
+        # Use positions instead of names
+        d1 = {i[0]:i[1] for i in zip(df.iloc[didx, frag_names_idx].split(";"), 
+                                     unstring_floats(df.iloc[didx, obs_int_idx]))}
+        d2 = {i[0]:i[1] for i in zip(df.iloc[didx, frag_names_idx].split(";"), 
+                                     unstring_floats(df.iloc[didx, frag_int_idx]))}
+        
+        # Rest of function...
+    except (KeyError, AttributeError):
+        # Return default value if columns not found
+        return 0
     # include_frags = {i:j for i,j in d2.items() if j>.05}
     shared_d = set(d1).intersection(set(d2))
     # shared_d = {i for i in shared_d for j in include_frags if j  in i}
