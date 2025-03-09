@@ -1292,23 +1292,75 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
         
         hyperscores = [hyperscore(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
         
+            
+        scribe_scores = get_scribe(
+            ref_spec_row_indices_split,
+            ref_spec_col_indices_split,
+            ref_spec_values_split,
+            dia_spectrum[:,1]
+        )
+    
+        residuals, y_pred = get_residuals(
+            ref_spec_values_split,
+            ref_spec_row_indices_split,
+            ref_spec_col_indices_split,
+            [],
+            [],
+            [],
+            dia_spectrum[:,1],
+            lib_coefficients
+        )
+        # Then use y_pred for the manhattan distance
+        manhattan_distances = get_manhattan_distance(
+            ref_spec_row_indices_split,
+            ref_spec_col_indices_split,
+            ref_spec_values_split,
+            dia_spectrum[:,1],
+            y_pred  # Pass y_pred instead of lib_coefficients
+        )
+        #max_matched_residuals = max_matched_residual(
+        #    ref_spec_row_indices_split,
+        #    residuals 
+        #)
+        gof_stats, max_unmatched_residuals, max_matched_residuals = gof_stat(
+            ref_spec_row_indices_split,
+            ref_spec_col_indices_split,
+            ref_spec_values_split,
+            residuals,
+            dia_spectrum[:,1],
+            lib_coefficients
+        )
+        # Add our new function call
+        manhattan_distances = get_manhattan_distance(
+            ref_spec_row_indices_split,
+            ref_spec_col_indices_split,
+            ref_spec_values_split,
+            dia_spectrum[:,1],
+            y_pred
+        )
+        
         features = np.stack([num_lib_peaks_matched,
-                              frac_lib_intensity,
-                              frac_dia_intensity,
-                              rel_error,
-                              rt_error,
-                              frac_int_matched,
-                              frac_int_pred,
-                              r2all,
-                              r2_lib_spec,
-                              r2_unique,
-                              frac_unique_pred,
-                              frac_dia_intensity_pred,
-                              hyperscores,
-                              frac_int_matched_pred,
-                              frac_int_matched_pred_sigcoeff,
-                              large_coeff_cosine,
-                              rt_mz[:,1][window_idxs[ref_peaks_in_dia]]
+                            frac_lib_intensity,
+                            frac_dia_intensity,
+                            rel_error,
+                            rt_error,
+                            frac_int_matched,
+                            frac_int_pred,
+                            r2all,
+                            r2_lib_spec,
+                            r2_unique,
+                            frac_unique_pred,
+                            frac_dia_intensity_pred,
+                            hyperscores,
+                            scribe_scores,
+                            max_unmatched_residuals,
+                            max_matched_residuals,
+                            gof_stats,
+                            manhattan_distances,
+                            frac_int_matched_pred,
+                            frac_int_matched_pred_sigcoeff,
+                            large_coeff_cosine,
+                            rt_mz[:,1][window_idxs[ref_peaks_in_dia]]
                                 ],-1)
         
         

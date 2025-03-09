@@ -82,6 +82,8 @@ batch_size = 1000
 n_most_intense = 400
 n_most_intense_features = 10000
 
+rt_percentile = .95
+
 opt_rt_tol = rt_tol # set as default to start
 opt_ms1_tol = ms1_tol 
 opt_im_tol = im_tol
