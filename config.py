@@ -28,6 +28,8 @@ parser.add_argument('--pp_file', default="", type=str)
 parser.add_argument('--timspeak_file', default="", type=str)
 parser.add_argument('--lib_frac', default=.5, type=float)
 parser.add_argument('-z','--dummy_value', type=str)
+parser.add_argument('--plexDIA', action='store_true')
+
 
 
 args = parser.parse_args()
