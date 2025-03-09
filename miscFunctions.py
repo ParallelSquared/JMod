@@ -380,20 +380,14 @@ def change_seq(seq,rules):
     if type(seq)==str:
         seq = parse_peptide(seq)
     # else:
-    #     seq = [re.sub("\(.*\)","",aa) for aa in seq]
-<<<<<<< HEAD
-
-=======
->>>>>>> 4262551 (Update miscFunctions.py)
+    #     seq = [re.sub("\(.*\)","",aa) for aa in seq]\
+        
     if config.tag:   
        tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
        seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
     else:
         tags = [[] for i in seq]
-<<<<<<< HEAD
-
-=======
->>>>>>> 4262551 (Update miscFunctions.py)
+        
     mods = [extract_mod(i) for i in seq]
     ## assume AA is the first 
     untag_seq = [i[0] for i in seq]
@@ -492,26 +486,16 @@ def convert_frags(seq,frags,rules=diann_rules):
     new_seq = change_seq(seq=seq,rules=rules)    
     
     split_seq = parse_peptide(new_seq)
-<<<<<<< HEAD
-
-=======
->>>>>>> 4262551 (Update miscFunctions.py)
+    
     if config.tag:   
        #tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
        #seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
        tags = [[t.strip("()") for t in re.findall(f"(\({config.tag.name}.*?\))",i)] for i in split_seq]
        split_seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in split_seq]
-<<<<<<< HEAD
 
     else:
         tags = [[] for i in seq]
 
-=======
-    
-    else:
-        tags = [[] for i in seq]
-    
->>>>>>> 4262551 (Update miscFunctions.py)
     close_d = {"[":"]","(":")"}
     mods = [[m.strip(m[0]+close_d[m[0]]) for m in extract_mod(i)] for i in split_seq]
     mod_masses = [sum([config.diann_mods[j]  for j in i if j in config.diann_mods]) for i in mods]

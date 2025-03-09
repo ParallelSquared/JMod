@@ -1050,6 +1050,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         # plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
         
         emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
+
         plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0],label="Emp Expon CDF")
         emp_exp_999 = stats.expon.ppf(percentile,scale=emp_abs_errors_med/np.log(2))
         plt.scatter([emp_exp_999], [percentile],c=colours[0],label=f"Emp Expon {percentile}: {emp_exp_999:.2f}",marker="*")
@@ -1531,8 +1532,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
     pred_cdf_auc = auc(pred_data,pred_p)
     
+
     percentile = config.rt_percentile
     
+
     # plt.plot(emp_data,emp_p,label="Empirical RT",color=colours[0])
     # plt.plot(pred_data,pred_p,label="Predicted RT",color=colours[1])
     # plt.legend()
@@ -1563,7 +1566,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     all_lib_keys = list(librarySpectra)
     
     if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
+
         boundary = fit_errors(all_pred_diffs,limit,percentile)
+
         all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
         all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
         
@@ -1572,7 +1577,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
             
     else: ### empirical are better
         ## keep the library RTs the same
+
         boundary = fit_errors(all_emp_diffs,limit,percentile)
+
         ## update the splines
         rt_spls = emp_rt_spls
     # ## get keys from t_vals and recreate scatter plot
@@ -1853,6 +1860,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         # plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
         
         emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
+
         plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0],label="Emp Expon CDF")
         emp_exp_999 = stats.expon.ppf(percentile,scale=emp_abs_errors_med/np.log(2))
         plt.scatter([emp_exp_999], [percentile],c=colours[0],label=f"Emp Expon {percentile}: {emp_exp_999:.2f}",marker="*")
@@ -1867,7 +1875,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),linestyle=":",color=colours[1],label="Pred Norm CDF")
         pred_gauss_999 = stats.halfnorm.ppf(percentile,scale=pred_abs_errors_med*1.4826)
         plt.scatter([pred_gauss_999], [percentile],c=colours[1],label=f"Pred Norm {percentile}: {pred_gauss_999:.2f}")
-        
+
         plt.vlines(boundary,0,1,colors="r",linestyle="--",label="Boundary")
         
         plt.xlabel("RT Differences")
