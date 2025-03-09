@@ -413,7 +413,7 @@ def exp_cdf(x, loc, mean):
     return stats.expon.cdf(x,loc=loc,scale=mean)
 
 
-def fit_errors(errors,limit=10):
+def fit_errors(errors,limit=10,percentile=.999):
     ### try to fit half gaussian or exponential to absolute rt errors
     
     errors_filtered = np.array(errors)[np.array(errors)<limit]
@@ -434,11 +434,11 @@ def fit_errors(errors,limit=10):
     ### pick best and return boundary
     if e_cdf_sq_err<g_cdf_sq_err:
         scale_param = mad/np.log(2)
-        boundary = stats.expon.ppf(.999,loc=0,scale=scale_param)
+        boundary = stats.expon.ppf(percentile,loc=0,scale=scale_param)
         print("Fitted Exponential to RT errors")
     else:
         scale_param = mad*1.4826
-        boundary = stats.halfnorm.ppf(.999,loc=0,scale=scale_param)
+        boundary = stats.halfnorm.ppf(percentile,loc=0,scale=scale_param)
         print("Fitted Gaussian to RT errors")
         
     # print(boundary)
@@ -705,7 +705,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     all_lib_rts = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
     
     output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
-    
+    if results_folder is not None:
+        output_df.to_csv(results_folder+"/firstSearch.csv", index=False)
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
     
     frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
@@ -782,6 +783,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
     pred_cdf_auc = auc(pred_data,pred_p)
     
+    percentile = config.rt_percentile
+    
     # plt.plot(emp_data,emp_p,label="Empirical RT",color=colours[0])
     # plt.plot(pred_data,pred_p,label="Predicted RT",color=colours[1])
     # plt.legend()
@@ -829,7 +832,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
         # boundary = elbow_pred_x
-        boundary = fit_errors(all_pred_diffs,limit)
+        boundary = fit_errors(all_pred_diffs,limit,percentile)
         rt_spl = pred_rt_spl
         all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
         all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
@@ -839,7 +842,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             
     else: ### empirical are better
         # boundary = elbow_emp_x
-        boundary = fit_errors(all_emp_diffs,limit)
+        boundary = fit_errors(all_emp_diffs,limit,percentile)
         ## keep the library RTs and splines the same
         rt_spl = emp_rt_spl
         
@@ -1050,20 +1053,21 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         # plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
         
         emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
-        plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0])
-        emp_exp_999 = stats.expon.ppf(.999,scale=emp_abs_errors_med/np.log(2))
-        plt.scatter([emp_exp_999], [.999],c=colours[0],label=f"Emp Expon {emp_exp_999:.2f}",marker="*")
-        plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)),linestyle=":",color=colours[0])
-        emp_gauss_999 = stats.halfnorm.ppf(.999,scale=emp_abs_errors_med*1.4826)
-        plt.scatter([emp_gauss_999], [.999],c=colours[0],label=f"Emp Gauss {emp_gauss_999:.2f}")
+        plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0],label="Emp Expon CDF")
+        emp_exp_999 = stats.expon.ppf(percentile,scale=emp_abs_errors_med/np.log(2))
+        plt.scatter([emp_exp_999], [percentile],c=colours[0],label=f"Emp Expon {percentile}: {emp_exp_999:.2f}",marker="*")
+        plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)),linestyle=":",color=colours[0],label="Emp Norm CDF")
+        emp_gauss_999 = stats.halfnorm.ppf(percentile,scale=emp_abs_errors_med*1.4826)
+        plt.scatter([emp_gauss_999], [percentile],c=colours[0],label=f"Emp Norm {percentile}: {emp_gauss_999:.2f}")
         
         pred_abs_errors_med = np.median(np.abs(all_pred_diffs[all_pred_diffs<limit]-np.median(all_pred_diffs[all_pred_diffs<limit])))
-        plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),linestyle="--",color=colours[1])
-        pred_exp_999 = stats.expon.ppf(.999,scale=pred_abs_errors_med/np.log(2))
-        plt.scatter([pred_exp_999], [.999],c=colours[1],label=f"Pred Expon {pred_exp_999:.2f}",marker="*")
-        plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),linestyle=":",color=colours[1])
-        pred_gauss_999 = stats.halfnorm.ppf(.999,scale=pred_abs_errors_med*1.4826)
-        plt.scatter([pred_gauss_999], [.999],c=colours[1],label=f"Pred Gauss {pred_gauss_999:.2f}")
+        plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),linestyle="--",color=colours[1],label="Pred Exp CDF")
+        pred_exp_999 = stats.expon.ppf(percentile,scale=pred_abs_errors_med/np.log(2))
+        plt.scatter([pred_exp_999], [percentile],c=colours[1],label=f"Pred Expon {percentile}: {pred_exp_999:.2f}",marker="*")
+        plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),linestyle=":",color=colours[1],label="Pred Norm CDF")
+        pred_gauss_999 = stats.halfnorm.ppf(percentile,scale=pred_abs_errors_med*1.4826)
+        plt.scatter([pred_gauss_999], [percentile],c=colours[1],label=f"Pred Norm {percentile}: {pred_gauss_999:.2f}")
+        
         
         plt.vlines(boundary,0,1,colors="r",linestyle="--",label="Boundary")
         
@@ -1529,6 +1533,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
     pred_cdf_auc = auc(pred_data,pred_p)
     
+    percentile = config.rt_percentile
+    
     # plt.plot(emp_data,emp_p,label="Empirical RT",color=colours[0])
     # plt.plot(pred_data,pred_p,label="Predicted RT",color=colours[1])
     # plt.legend()
@@ -1559,7 +1565,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     all_lib_keys = list(librarySpectra)
     
     if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
-        boundary = fit_errors(all_pred_diffs,limit)
+        boundary = fit_errors(all_pred_diffs,limit,percentile)
         all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
         all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
         
@@ -1568,7 +1574,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
             
     else: ### empirical are better
         ## keep the library RTs the same
-        boundary = fit_errors(all_emp_diffs,limit)
+        boundary = fit_errors(all_emp_diffs,limit,percentile)
         ## update the splines
         rt_spls = emp_rt_spls
     # ## get keys from t_vals and recreate scatter plot
@@ -1849,20 +1855,20 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         # plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
         
         emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
-        plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0])
-        emp_exp_999 = stats.expon.ppf(.999,scale=emp_abs_errors_med/np.log(2))
-        plt.scatter([emp_exp_999], [.999],c=colours[0],label=f"Emp Expon {emp_exp_999:.2f}",marker="*")
-        plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)),linestyle=":",color=colours[0])
-        emp_gauss_999 = stats.halfnorm.ppf(.999,scale=emp_abs_errors_med*1.4826)
-        plt.scatter([emp_gauss_999], [.999],c=colours[0],label=f"Emp Gauss {emp_gauss_999:.2f}")
+        plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0],label="Emp Expon CDF")
+        emp_exp_999 = stats.expon.ppf(percentile,scale=emp_abs_errors_med/np.log(2))
+        plt.scatter([emp_exp_999], [percentile],c=colours[0],label=f"Emp Expon {percentile}: {emp_exp_999:.2f}",marker="*")
+        plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)),linestyle=":",color=colours[0],label="Emp Norm CDF")
+        emp_gauss_999 = stats.halfnorm.ppf(percentile,scale=emp_abs_errors_med*1.4826)
+        plt.scatter([emp_gauss_999], [percentile],c=colours[0],label=f"Emp Norm {percentile}: {emp_gauss_999:.2f}")
         
         pred_abs_errors_med = np.median(np.abs(all_pred_diffs[all_pred_diffs<limit]-np.median(all_pred_diffs[all_pred_diffs<limit])))
-        plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),linestyle="--",color=colours[1])
-        pred_exp_999 = stats.expon.ppf(.999,scale=pred_abs_errors_med/np.log(2))
-        plt.scatter([pred_exp_999], [.999],c=colours[1],label=f"Pred Expon {pred_exp_999:.2f}",marker="*")
-        plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),linestyle=":",color=colours[1])
-        pred_gauss_999 = stats.halfnorm.ppf(.999,scale=pred_abs_errors_med*1.4826)
-        plt.scatter([pred_gauss_999], [.999],c=colours[1],label=f"Pred Gauss {pred_gauss_999:.2f}")
+        plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),linestyle="--",color=colours[1],label="Pred Exp CDF")
+        pred_exp_999 = stats.expon.ppf(percentile,scale=pred_abs_errors_med/np.log(2))
+        plt.scatter([pred_exp_999], [percentile],c=colours[1],label=f"Pred Expon {percentile}: {pred_exp_999:.2f}",marker="*")
+        plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),linestyle=":",color=colours[1],label="Pred Norm CDF")
+        pred_gauss_999 = stats.halfnorm.ppf(percentile,scale=pred_abs_errors_med*1.4826)
+        plt.scatter([pred_gauss_999], [percentile],c=colours[1],label=f"Pred Norm {percentile}: {pred_gauss_999:.2f}")
         
         plt.vlines(boundary,0,1,colors="r",linestyle="--",label="Boundary")
         
