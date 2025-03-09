@@ -288,7 +288,84 @@ class score_model():
             model_idx+=1
             
         return np.concatenate(self.predictions)[rev_order]
+
+
+def plex_features(fdc):
+
+    if config.args.timeplex & config.args.plexDIA:
+        fdc["median_rt"] = fdc.groupby(["untag_prec","time_channel"])['rt'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
+        fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
+        fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
+
+        fdc["median_rt_run"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_rt_run"] = pd.NA
+        fdc["abs_diff_rt_from_median_run"] = np.abs(fdc['rt'] - fdc['median_rt_run'])
+        fdc["abs_diff_rt_from_median_run"].fillna(fdc["abs_diff_rt_from_median_run"].mean(), inplace=True)
+
+    if config.args.timeplex and not config.args.plexDIA: #get difference in RTs between timeplexes
+        fdc["median_rt_run"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_rt_run"] = pd.NA
+        fdc["abs_diff_rt_from_median_run"] = np.abs(fdc['rt'] - fdc['median_rt_run'])
+        fdc["abs_diff_rt_from_median_run"].fillna(fdc["abs_diff_rt_from_median_run"].mean(), inplace=True)
+
+    if config.args.plexDIA and not config.args.timeplex: #get difference in RTs wihtin a plex
+        fdc["median_rt"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
+        fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
+        fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
+        
     
+    fdc["median_abs_rt_error"] = fdc.groupby(["untag_prec"])["rt_error"].transform(lambda x: np.abs(x).median())
+
+    fdc["median_coeff"] = fdc.groupby(["untag_prec"])['coeff'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_coeff"] = pd.NA
+    fdc["diff_coeff_from_median"] = np.log10(fdc['coeff']+1) - np.log10(fdc['median_coeff']+1)
+    fdc["diff_coeff_from_median"].fillna(fdc["diff_coeff_from_median"].mean(), inplace=True)
+    
+    
+    
+    fdc["median_frac_int_uniq_pred"] = fdc.groupby(["untag_prec"])['frac_int_uniq_pred'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq_pred"] = pd.NA
+    fdc["diff_frac_int_uniq_pred_from_median"] = fdc['frac_int_uniq_pred'] - fdc['median_frac_int_uniq_pred']
+    fdc["diff_frac_int_uniq_pred_from_median"].fillna(fdc["diff_frac_int_uniq_pred_from_median"].mean(), inplace=True)
+    
+    
+    
+    fdc["median_frac_dia_int"] = fdc.groupby(["untag_prec"])['frac_dia_int'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_frac_dia_int"] = pd.NA
+    fdc["diff_frac_dia_int_from_median"] = fdc['frac_dia_int'] - fdc['median_frac_dia_int']
+    fdc["diff_frac_dia_int_from_median"].fillna(fdc["diff_frac_dia_int_from_median"].mean(), inplace=True)
+    
+    
+    
+    fdc["median_mz_error"] = fdc.groupby(["untag_prec"])['mz_error'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_mz_error"] = pd.NA
+    fdc["abs_diff_mz_error_from_median"] = np.abs(fdc['mz_error'] - fdc['median_mz_error'])
+    fdc["abs_diff_mz_error_from_median"].fillna(fdc["abs_diff_mz_error_from_median"].mean(), inplace=True)
+    
+    
+    fdc["median_frac_int_uniq"] = fdc.groupby(["untag_prec"])['frac_int_uniq'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq"] = pd.NA
+    fdc["abs_diff_frac_int_uniq_from_median"] = fdc['frac_int_uniq'] - fdc['median_frac_int_uniq']
+    fdc["abs_diff_frac_int_uniq_from_median"].fillna(fdc["abs_diff_frac_int_uniq_from_median"].mean(), inplace=True)
+    
+    
+    fdc["median_frac_lib_int"] = fdc.groupby(["untag_prec"])['frac_lib_int'].transform("median")
+    fdc.loc[fdc["channels_matched"] == 1, "median_frac_lib_int"] = pd.NA
+    fdc["diff_frac_lib_int_from_median"] = fdc['frac_lib_int'] - fdc['median_frac_lib_int']
+    fdc["diff_frac_lib_int_from_median"].fillna(fdc["diff_frac_lib_int_from_median"].mean(), inplace=True)
+    
+    
+    
+    # Count number of entries with 'frac_int_uniq_pred' > 0
+    fdc['num_channels_greater0_coeff'] = fdc.groupby("untag_prec")['coeff'].transform(lambda x: (x > 0).sum())
+    fdc['num_channels_greater0_frac_int_uniq_pred'] = fdc.groupby("untag_prec")['frac_int_uniq_pred'].transform(lambda x: (x > 0).sum())
+    fdc['num_channels_greater0_frac_dia_int'] = fdc.groupby("untag_prec")['frac_dia_int'].transform(lambda x: (x > 0).sum())
+    fdc['num_channels_greater0_frac_int_uniq'] = fdc.groupby("untag_prec")['frac_int_uniq'].transform(lambda x: (x > 0).sum())
+    fdc['num_channels_greater0_frac_lib_int'] = fdc.groupby("untag_prec")['frac_lib_int'].transform(lambda x: (x > 0).sum())
+
+    return fdc
     
     
 def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
@@ -317,7 +394,9 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     
     ## What precursors are labeled as decoys
     fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])
-    
+
+    if config.args.timeplex or config.args.plexDIA:
+        fdc = plex_features(fdc)
     
     ## We consider decoys and targets with v small coeffs to be from the null distributiom
     _bool = np.logical_and(~fdc["decoy"],fdc.coeff>1)
@@ -330,6 +409,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
                   'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
                   "plexfittrace_ps_all",
+                  "unique_frag_mz", "untag_prec",
+                  "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor",
                   "unique_frag_mz",
                   "unique_obs_int",
                   "file_name",
@@ -449,6 +530,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
 
 
+
 def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
     results_folder = os.path.dirname(file)
@@ -468,11 +550,17 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     fdc["sq_rt_error"] = np.power(fdc["rt_error"],2)
     fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
     
-    
+
     fdx = ms1_quant(fdc, lp, dc, mass_tag, spectra, mz_ppm, rt_tol, timeplex)
-    fdx = score_precursors(fdx,config.score_model,config.fdr_threshold,folder=results_folder)
+
     
     fdx["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdx["untag_seq"],fdx["z"])]
+    channel_matches_counts = fdx["untag_prec"].value_counts()
+    channel_matches_counts_dict = {i:j for i,j in zip(channel_matches_counts.index,channel_matches_counts)}
+    fdx["channels_matched"] = [channel_matches_counts_dict[i] for i in fdx["untag_prec"]]
+    
+    fdx = score_precursors(fdx,config.score_model,config.fdr_threshold,folder=results_folder)
+    
 
     if timeplex:
         if mass_tag:
@@ -493,11 +581,6 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
     # have possible reannotate woth fasta here
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
-    
-    
-    channel_matches_counts = fdx["untag_prec"].value_counts()
-    channel_matches_counts_dict = {i:j for i,j in zip(channel_matches_counts.index,channel_matches_counts)}
-    fdx["channels_matched"] = [channel_matches_counts_dict[i] for i in fdx["untag_prec"]]
 
     
     ## save to results folder
