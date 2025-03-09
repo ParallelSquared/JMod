@@ -337,8 +337,33 @@ def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeple
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             spec_pearsons = [0]*num_iso
-            if len(all_scans)>2:
-                spec_pearsons = [stats.pearsonr(list(all_ms2_vals.values()),list(i.values())).statistic for i in [all_ms1_vals,*all_iso_vals]]
+            if len(all_scans) > 2:
+                try:
+                    # Get the arrays that will be used for correlation
+                    ms2_values = np.array(list(all_ms2_vals.values()), dtype=float)
+                    
+                    # For debugging, identify any problematic values before calculation
+                    if not np.all(np.isfinite(ms2_values)):
+                        bad_indices = np.where(~np.isfinite(ms2_values))[0]
+                        bad_scans = list(all_ms2_vals.keys())[bad_indices[0]]
+                        print(f"Warning: Non-finite MS2 value detected at scan {bad_scans}")
+                    
+                    # Calculate correlations with validity check
+                    spec_pearsons = []
+                    for i in [all_ms1_vals, *all_iso_vals]:
+                        ms1_values = np.array(list(i.values()), dtype=float)
+                        
+                        # Only use finite values for correlation
+                        valid_mask = np.isfinite(ms2_values) & np.isfinite(ms1_values)
+                        if np.sum(valid_mask) >= 2:
+                            result = stats.pearsonr(ms2_values[valid_mask], ms1_values[valid_mask]).statistic
+                            spec_pearsons.append(0.0 if not np.isfinite(result) else result)
+                        else:
+                            spec_pearsons.append(0.0)
+                except Exception as e:
+                    # Fallback with debug info
+                    print(f"Error in Pearson calculation: {str(e)}")
+                    spec_pearsons = [0]*num_iso
             # all_pearson.append(stats.pearsonr(list(all_ms2_vals.values()),list(all_ms1_vals.values())).statistic)
             all_pearson.append(spec_pearsons)
             
