@@ -44,6 +44,7 @@ if __name__=="__main__":
     iso = f"iso{config.num_iso_peaks}" if config.args.iso else ""
     lib_frac = f"iso{config.args.lib_frac}"
     mTRAQ = "mTRAQ" if config.args.mTRAQ else ""
+    plexDIA = "plexDIA" if config.args.plexDIA else ""
     tag = config.args.tag
     is_timeplex = "timeplex" if config.args.timeplex else ""
     dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
@@ -63,7 +64,7 @@ if __name__=="__main__":
                                     f"unmatch{config.unmatched_fit_type}",
                                     f"DECOY{config.args.decoy}",
                                     f"libfrac{config.args.lib_frac}",
-                                    *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,is_timeplex,dummy_val]))])
+                                    *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,plexDIA,is_timeplex,dummy_val]))])
     
     results_folder_path = "/Users/kevinmcdonnell/Programming/Python/Jmod/Results/"+results_folder_name
     print(results_folder_name)
