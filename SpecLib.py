@@ -179,6 +179,8 @@ def load_tsv_speclib(spec_lib_file):
                 python_lib[unique_id]["protein_name"] = row["ProteinID"]
             if "Genes" in row:
                 python_lib[unique_id]["genes"] = row["Genes"]
+            if "UniprotID" in row:
+                python_lib[unique_id]["UniprotID"] = row["UniprotID"]
             
             
             # idx+=1

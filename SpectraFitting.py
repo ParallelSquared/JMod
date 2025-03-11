@@ -11,7 +11,7 @@ from pyteomics import mass
 import re
 
 import sparse_nnls
-
+from read_output import names
 import config
 
 from miscFunctions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
@@ -954,9 +954,9 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
     non_zero_coeffs_idxs = [i for i,c in enumerate(lib_coefficients) if c!=0]
     # print(f"N: {len(lib_coefficients)}, {len(non_zero_coeffs)}")
     if config.args.timeplex:
-        output = [[0,spec_idx,ms1_spec.scan_num,0,0,-1,prec_mz,prec_rt,*np.zeros(16)]]
+        output = [[0,spec_idx,ms1_spec.scan_num,0,0,-1,prec_mz,prec_rt,*np.zeros(len(names)-7)]]
     else:
-        output = [[0,spec_idx,ms1_spec.scan_num,0,0,prec_mz,prec_rt,*np.zeros(16)]]
+        output = [[0,spec_idx,ms1_spec.scan_num,0,0,prec_mz,prec_rt,*np.zeros(len(names)-7)]]
     
     if len(non_zero_coeffs)>0:
         lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
@@ -1371,7 +1371,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
     non_zero_coeffs = [c for c in lib_coefficients if c!=0]
     non_zero_coeffs_idxs = [i for i,c in enumerate(lib_coefficients) if c!=0]
     
-    output = [[0,spec_idx,0,0,prec_mz,prec_rt,*np.zeros(15)]]
+    output = [[0,spec_idx,0,0,prec_mz,prec_rt,*np.zeros(len(names)-6)]]
     
     if len(non_zero_coeffs)>0:
         lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
@@ -1382,6 +1382,8 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
                                                                         lib_frag_mz,
                                                                         lib_frag_int,
                                                                         obs_frag_int)]
+        
+        return_prot = config.protein_column in library[next(iter(library))]
         output = [[non_zero_coeffs[i],
                    spec_idx,
                    ms1_spec.scan_num,
@@ -1390,7 +1392,10 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
                    prec_mz,
                    prec_rt,
                    *all_features[j],
-                   *all_ms2_frags[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
+                   *all_ms2_frags[j],
+                   config.args.mzml,
+                   library[(re.sub("Decoy_","",all_spec_ids[i][0]),all_spec_ids[i][1])][config.protein_column] if return_prot else "NA" ]
+                   for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
         
         # output = [[non_zero_coeffs[i],
         #            spec_idx,
@@ -1794,7 +1799,7 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
     non_zero_coeffs = [c for c in lib_coefficients if c!=0]
     non_zero_coeffs_idxs = [i for i,c in enumerate(lib_coefficients) if c!=0]
     
-    output = [[0,spec_idx,0,0,prec_mz,prec_rt,*np.zeros(15)]]
+    output = [[0,spec_idx,ms1_spec.scan_num,0,0,prec_mz,prec_rt,*np.zeros(len(names)-7)]]
     
     if len(non_zero_coeffs)>0:
         lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]

@@ -134,6 +134,14 @@ tag6 = massTag(rules = "nK",
             delta = [0.0],#,4.01095605604],#,8.02683870239997],
             channel_names = ["0"],#["0","4"],#,"8"],
             name = "tag6")
+
+tag6_5plex = massTag(rules = "nK",
+            base_mass=308.1160923903,
+            # delta = 4.0070994,
+            # delta = [4.0070994],
+            delta = [0.0, 2.0067096756, 4.01095605604, 6.0201290268,8.0268387024],#,8.02683870239997],
+            channel_names = ["0","2","4","6","8",],#["0","4"],#,"8"],
+            name = "tag6_5plex")
  
      
 tag6lys = massTag(rules = "nK",
@@ -320,6 +328,7 @@ available_tags = {"mTRAQ":mTRAQ,
                   "diethyl_6plex":diethyl_6plex,
                   "diethyl_3plex":diethyl_3plex,
                   "tag6":tag6,
+                  "tag6_5plex":tag6_5plex,
                   "tag6pip":tag6pip,
                   "tag6lys":tag6lys,
                   "tag6arg":tag6arg}
