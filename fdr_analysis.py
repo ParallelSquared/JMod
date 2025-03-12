@@ -75,19 +75,26 @@ def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];
 #     return fdc
 
 
-def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
+def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     # X = fdc.iloc[:,6:-5]
    
     print("Performing MS1 Quantitation") 
     
+    fdc = dat[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
+    
+    #only quantify confident precs
+    if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
+        fdc = fdc[fdc["BestChannel_Qvalue"] < 0.01].reset_index(drop=True)
+
     if timeplex:
         all_keys = [(i,j,k) for i,j,k in zip(fdc.seq,fdc.z,fdc.time_channel)]
     else:
         all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
-    
+
+
         
     if mass_tag:
-        fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
+        #fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
         group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels(DIAspectra, 
                                                                                                                         fdc, 
                                                                                                                         dc, 
@@ -127,16 +134,15 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
         fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
 
     else:
-        fdc["untag_seq"] = fdc["seq"]
+        #fdc["untag_seq"] = fdc["seq"]
         p_corrs, ms1_traces, ms2_traces, iso_ratios = ms1_cor(DIAspectra, 
                                                                 fdc, 
                                                                 dc, 
                                                                 mz_ppm=mz_ppm, 
                                                                 rt_tol = rt_tol,
                                                                 timeplex=timeplex)
-        
-    
-    
+
+
     
     
     fdc["ms1_cor"] = [i[0] for i in p_corrs]
@@ -165,12 +171,23 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     
     fdc["MS1_Area"]=[auc(list(map(float,fdc.all_ms1_specs.iloc[idx].split(";"))),list(map(float,fdc.all_ms1_iso0vals.iloc[idx].split(";")))) for idx in range(len(fdc))]
 
-    frag_errors = [unstring_floats(mz) for mz in fdc.frag_errors]
-    median  = np.median(np.concatenate([i for i in frag_errors]))
-    fdc["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
-    
 
-    return fdc
+        # Define selected columns that we want to merge
+    selected_cols = [
+        "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps",
+        "plexfittrace_spec_all", "plexfittrace_all", "plexfittrace_ps_all",
+        "plex_Area", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
+        "all_ms1_specs", "MS1_Area"
+    ]
+    
+    # Ensure we only select columns that actually exist in fdc
+    existing_cols = [col for col in selected_cols if col in fdc.columns]
+    
+    # Perform the merge safely
+    dat = dat.merge(fdc[["untag_prec", "channel"] + existing_cols], how="left", on=["untag_prec", "channel"]).fillna(0)
+
+
+    return dat
 
 
 
@@ -204,12 +221,19 @@ class score_model():
                     m.model = RandomForestClassifier(n_estimators = 100, max_depth=10,n_jobs=-1)
                     m.model.fit(X,y)
                     m.__predict_fn__ = m.model.predict_proba
-                    
+
                     if self.folder:
-                        plt.subplots()
-                        plt.barh(X.columns,m.model.feature_importances_)
-                        plt.title("Feature Importance")
-                        plt.savefig(self.folder+f"/RF{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
+                        feature_importance = m.model.feature_importances_
+                        sorted_indices = np.argsort(feature_importance)  
+                        sorted_features = np.array(X.columns)[sorted_indices]  
+                        sorted_importance = feature_importance[sorted_indices]  
+                    
+                        fig, ax = plt.subplots(figsize=(8, len(X.columns)*0.3))                    
+                        ax.barh(sorted_features, sorted_importance)
+                        ax.set_title("Feature Importance")
+                    
+                        # Save plot
+                        plt.savefig(self.folder + f"/RF{idx}_feature_importance.png", dpi=600, bbox_inches="tight")
                     
                     return m
                 
@@ -292,80 +316,97 @@ class score_model():
 
 def plex_features(fdc):
 
-    if config.args.timeplex & config.args.plexDIA:
-        fdc["median_rt"] = fdc.groupby(["untag_prec","time_channel"])['rt'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
-        fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
-        fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
-
-        fdc["median_rt_run"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_rt_run"] = pd.NA
-        fdc["abs_diff_rt_from_median_run"] = np.abs(fdc['rt'] - fdc['median_rt_run'])
-        fdc["abs_diff_rt_from_median_run"].fillna(fdc["abs_diff_rt_from_median_run"].mean(), inplace=True)
-
-    if config.args.timeplex and not config.args.plexDIA: #get difference in RTs between timeplexes
-        fdc["median_rt_run"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_rt_run"] = pd.NA
-        fdc["abs_diff_rt_from_median_run"] = np.abs(fdc['rt'] - fdc['median_rt_run'])
-        fdc["abs_diff_rt_from_median_run"].fillna(fdc["abs_diff_rt_from_median_run"].mean(), inplace=True)
-
-    if config.args.plexDIA and not config.args.timeplex: #get difference in RTs wihtin a plex
-        fdc["median_rt"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
-        fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
-        fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
+    if config.args.no_transfer:
+            return fdc
+    else: 
+        print("Using joint information across channels for precursor scoring")
+        if config.args.timeplex & config.args.plexDIA:
+            fdc["median_rt"] = fdc.groupby(["untag_prec","time_channel"])['rt'].transform("median")
+            fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
+            fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
+            fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
+    
+            fdc["median_rt_run"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
+            fdc.loc[fdc["channels_matched"] == 1, "median_rt_run"] = pd.NA
+            fdc["abs_diff_rt_from_median_run"] = np.abs(fdc['rt'] - fdc['median_rt_run'])
+            fdc["abs_diff_rt_from_median_run"].fillna(fdc["abs_diff_rt_from_median_run"].mean(), inplace=True)
+    
+        if config.args.timeplex and not config.args.plexDIA: #get difference in RTs between timeplexes
+            fdc["median_rt_run"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
+            fdc.loc[fdc["channels_matched"] == 1, "median_rt_run"] = pd.NA
+            fdc["abs_diff_rt_from_median_run"] = np.abs(fdc['rt'] - fdc['median_rt_run'])
+            fdc["abs_diff_rt_from_median_run"].fillna(fdc["abs_diff_rt_from_median_run"].mean(), inplace=True)
+    
+        if config.args.plexDIA and not config.args.timeplex: #get difference in RTs wihtin a plex
+            fdc["median_rt"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
+            fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
+            fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
+            fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
+            
         
+        fdc["median_abs_rt_error"] = fdc.groupby(["untag_prec"])["rt_error"].transform(lambda x: np.abs(x).median())
     
-    fdc["median_abs_rt_error"] = fdc.groupby(["untag_prec"])["rt_error"].transform(lambda x: np.abs(x).median())
+        fdc["median_coeff"] = fdc.groupby(["untag_prec"])['coeff'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_coeff"] = pd.NA
+        fdc["diff_coeff_from_median"] = np.log10(fdc['coeff']+1) - np.log10(fdc['median_coeff']+1)
+        fdc["diff_coeff_from_median"].fillna(fdc["diff_coeff_from_median"].mean(), inplace=True)
+        
+        
+        
+        fdc["median_frac_int_uniq_pred"] = fdc.groupby(["untag_prec"])['frac_int_uniq_pred'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq_pred"] = pd.NA
+        fdc["diff_frac_int_uniq_pred_from_median"] = fdc['frac_int_uniq_pred'] - fdc['median_frac_int_uniq_pred']
+        fdc["diff_frac_int_uniq_pred_from_median"].fillna(fdc["diff_frac_int_uniq_pred_from_median"].mean(), inplace=True)
+        
+        
+        
+        fdc["median_frac_dia_int"] = fdc.groupby(["untag_prec"])['frac_dia_int'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_frac_dia_int"] = pd.NA
+        fdc["diff_frac_dia_int_from_median"] = fdc['frac_dia_int'] - fdc['median_frac_dia_int']
+        fdc["diff_frac_dia_int_from_median"].fillna(fdc["diff_frac_dia_int_from_median"].mean(), inplace=True)
+        
+        
+        
+        fdc["median_mz_error"] = fdc.groupby(["untag_prec"])['mz_error'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_mz_error"] = pd.NA
+        fdc["abs_diff_mz_error_from_median"] = np.abs(fdc['mz_error'] - fdc['median_mz_error'])
+        fdc["abs_diff_mz_error_from_median"].fillna(fdc["abs_diff_mz_error_from_median"].mean(), inplace=True)
+        
+        
+        fdc["median_frac_int_uniq"] = fdc.groupby(["untag_prec"])['frac_int_uniq'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq"] = pd.NA
+        fdc["abs_diff_frac_int_uniq_from_median"] = fdc['frac_int_uniq'] - fdc['median_frac_int_uniq']
+        fdc["abs_diff_frac_int_uniq_from_median"].fillna(fdc["abs_diff_frac_int_uniq_from_median"].mean(), inplace=True)
+        
+        
+        fdc["median_frac_lib_int"] = fdc.groupby(["untag_prec"])['frac_lib_int'].transform("median")
+        fdc.loc[fdc["channels_matched"] == 1, "median_frac_lib_int"] = pd.NA
+        fdc["diff_frac_lib_int_from_median"] = fdc['frac_lib_int'] - fdc['median_frac_lib_int']
+        fdc["diff_frac_lib_int_from_median"].fillna(fdc["diff_frac_lib_int_from_median"].mean(), inplace=True)
+        
+        
+        
+        # Count number of entries with 'frac_int_uniq_pred' > 0
+        fdc['num_channels_greater0_coeff'] = fdc.groupby("untag_prec")['coeff'].transform(lambda x: (x > 0).sum())
+        fdc['num_channels_greater0_frac_int_uniq_pred'] = fdc.groupby("untag_prec")['frac_int_uniq_pred'].transform(lambda x: (x > 0).sum())
+        fdc['num_channels_greater0_frac_dia_int'] = fdc.groupby("untag_prec")['frac_dia_int'].transform(lambda x: (x > 0).sum())
+        fdc['num_channels_greater0_frac_int_uniq'] = fdc.groupby("untag_prec")['frac_int_uniq'].transform(lambda x: (x > 0).sum())
+        fdc['num_channels_greater0_frac_lib_int'] = fdc.groupby("untag_prec")['frac_lib_int'].transform(lambda x: (x > 0).sum())
+        
+        #fdc["channels_matched_seq"] = fdc.groupby("untag_seq")["untag_seq"].transform("count")
+        # fdc["summed_coeff"] = fdc.groupby("untag_prec")['coeff'].transform("sum")
+        # fdc["summed_frac_int_uniq_pred"] = fdc.groupby("untag_prec")['coeff'].transform("sum")
+        # fdc["summed_frac_dia_int"] = fdc.groupby("untag_prec")['frac_dia_int'].transform("sum")
+        # fdc["summed_mz_error"] = fdc.groupby("untag_prec")['frac_dia_int'].transform("sum")
+        # fdc["summed_frac_int_uniq"] = fdc.groupby("untag_prec")['frac_int_uniq'].transform("sum")
+        # fdc["summed_frac_lib_int"] = fdc.groupby("untag_prec")['frac_lib_int'].transform("sum")
 
-    fdc["median_coeff"] = fdc.groupby(["untag_prec"])['coeff'].transform("median")
-    fdc.loc[fdc["channels_matched"] == 1, "median_coeff"] = pd.NA
-    fdc["diff_coeff_from_median"] = np.log10(fdc['coeff']+1) - np.log10(fdc['median_coeff']+1)
-    fdc["diff_coeff_from_median"].fillna(fdc["diff_coeff_from_median"].mean(), inplace=True)
-    
-    
-    
-    fdc["median_frac_int_uniq_pred"] = fdc.groupby(["untag_prec"])['frac_int_uniq_pred'].transform("median")
-    fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq_pred"] = pd.NA
-    fdc["diff_frac_int_uniq_pred_from_median"] = fdc['frac_int_uniq_pred'] - fdc['median_frac_int_uniq_pred']
-    fdc["diff_frac_int_uniq_pred_from_median"].fillna(fdc["diff_frac_int_uniq_pred_from_median"].mean(), inplace=True)
-    
-    
-    
-    fdc["median_frac_dia_int"] = fdc.groupby(["untag_prec"])['frac_dia_int'].transform("median")
-    fdc.loc[fdc["channels_matched"] == 1, "median_frac_dia_int"] = pd.NA
-    fdc["diff_frac_dia_int_from_median"] = fdc['frac_dia_int'] - fdc['median_frac_dia_int']
-    fdc["diff_frac_dia_int_from_median"].fillna(fdc["diff_frac_dia_int_from_median"].mean(), inplace=True)
-    
-    
-    
-    fdc["median_mz_error"] = fdc.groupby(["untag_prec"])['mz_error'].transform("median")
-    fdc.loc[fdc["channels_matched"] == 1, "median_mz_error"] = pd.NA
-    fdc["abs_diff_mz_error_from_median"] = np.abs(fdc['mz_error'] - fdc['median_mz_error'])
-    fdc["abs_diff_mz_error_from_median"].fillna(fdc["abs_diff_mz_error_from_median"].mean(), inplace=True)
-    
-    
-    fdc["median_frac_int_uniq"] = fdc.groupby(["untag_prec"])['frac_int_uniq'].transform("median")
-    fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq"] = pd.NA
-    fdc["abs_diff_frac_int_uniq_from_median"] = fdc['frac_int_uniq'] - fdc['median_frac_int_uniq']
-    fdc["abs_diff_frac_int_uniq_from_median"].fillna(fdc["abs_diff_frac_int_uniq_from_median"].mean(), inplace=True)
-    
-    
-    fdc["median_frac_lib_int"] = fdc.groupby(["untag_prec"])['frac_lib_int'].transform("median")
-    fdc.loc[fdc["channels_matched"] == 1, "median_frac_lib_int"] = pd.NA
-    fdc["diff_frac_lib_int_from_median"] = fdc['frac_lib_int'] - fdc['median_frac_lib_int']
-    fdc["diff_frac_lib_int_from_median"].fillna(fdc["diff_frac_lib_int_from_median"].mean(), inplace=True)
-    
-    
-    
-    # Count number of entries with 'frac_int_uniq_pred' > 0
-    fdc['num_channels_greater0_coeff'] = fdc.groupby("untag_prec")['coeff'].transform(lambda x: (x > 0).sum())
-    fdc['num_channels_greater0_frac_int_uniq_pred'] = fdc.groupby("untag_prec")['frac_int_uniq_pred'].transform(lambda x: (x > 0).sum())
-    fdc['num_channels_greater0_frac_dia_int'] = fdc.groupby("untag_prec")['frac_dia_int'].transform(lambda x: (x > 0).sum())
-    fdc['num_channels_greater0_frac_int_uniq'] = fdc.groupby("untag_prec")['frac_int_uniq'].transform(lambda x: (x > 0).sum())
-    fdc['num_channels_greater0_frac_lib_int'] = fdc.groupby("untag_prec")['frac_lib_int'].transform(lambda x: (x > 0).sum())
+        # fdc["summed_manhattan_distances"] = fdc.groupby("untag_prec")['manhattan_distances'].transform("sum")
+        # fdc["summed_gof_stats"] = fdc.groupby("untag_prec")['gof_stats'].transform("sum")
+        # fdc["summed_max_matched_residuals"] = fdc.groupby("untag_prec")['max_matched_residuals'].transform("sum")
+        # fdc["summed_scribe_scores"] = fdc.groupby("untag_prec")['scribe_scores'].transform("sum")
 
-    return fdc
+        return fdc
     
     
 def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
@@ -392,8 +433,6 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     
     print("Scoring IDs")
     
-    ## What precursors are labeled as decoys
-    fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])
 
     if config.args.timeplex or config.args.plexDIA:
         fdc = plex_features(fdc)
@@ -410,7 +449,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
                   "plexfittrace_ps_all",
                   "unique_frag_mz", "untag_prec",
-                  "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor",
+                  "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor","plexfitMS1","plexfitMS1_p","plex_Area", "untag_prec","channel","time_channel",
                   "unique_frag_mz",
                   "unique_obs_int",
                   "file_name",
@@ -423,8 +462,9 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     pred = sc_model.run_model(X, y)
     
     model_name= model_type
-    
-        
+
+    ####### make sure to not have these in the model (bc they are left out in decoys) #######
+       # "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps","plexfittrace_spec_all","plexfittrace_all","plexfittrace_ps_all","plex_Area","ms1_cor","traceproduct","iso_cor","MS1_Int","all_ms1_specs","MS1_Area"
         
     ###############################################################################################
     ########################  Analysis the predictions    ######################################
@@ -530,6 +570,92 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
 
 
+def compute_protein_FDR(df):
+    print("Computing Protein FDR")
+
+  
+    df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)
+    df_seqchargeqvals = df[df["Qvalue"] < 0.01].copy().reset_index(drop=True) #filter
+    df_seqchargeqvals["maxPredval"] = df_seqchargeqvals.groupby(["protein", "decoy"])["PredVal"].transform("max")
+    df_seqchargeqvals = df_seqchargeqvals.drop_duplicates(subset=["protein", "decoy"]).reset_index(drop=True)
+    
+    # Rank by descending maxPredval and compute accum_decoys & Protein_Qvalue
+    df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False).reset_index(drop=True)
+    df_seqchargeqvals["prot_rank"] = df_seqchargeqvals.index + 1  # Equivalent to row_number()
+    df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["decoy"].cumsum()
+    df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["accum_decoys"] / df_seqchargeqvals["prot_rank"]
+    
+    # Filter for non-decoy proteins and select distinct protein values
+    df_seqchargeqvals_distinct = (
+        df_seqchargeqvals[df_seqchargeqvals["decoy"] == False]
+        .drop_duplicates(subset=["protein"])
+        [["protein", "Protein_Qvalue"]]
+    )
+    
+    df = df.drop(columns=["Protein_Qvalue"], errors="ignore")
+    df = df.merge(df_seqchargeqvals_distinct, on="protein", how="left")
+        
+    df_counts_prec = (
+        df[(df["decoy"] == False) & (df["Qvalue"] < 0.01)]
+        .drop_duplicates(subset=["run_chan", "untag_prec"])
+        .groupby(["file_name", "channel"])
+        .size()
+        .reset_index(name="Precursor_IDs")
+    )
+    print("Number of precursors at 1% FDR:")
+    print(df_counts_prec.to_string(index=False))
+    
+
+    df_counts_prots = (
+        df[(df["Protein_Qvalue"] < 0.01) & (df["decoy"] == False) & (df["Qvalue"] < 0.01)]
+        .drop_duplicates(subset=["run_chan", "protein"])
+        .groupby(["run_chan","channel"])
+        .size()
+        .reset_index(name="Protein_IDs")
+    )
+    print("\nNumber of proteins at 1% FDR:")
+    print(df_counts_prots.to_string(index=False))
+
+
+    
+    # if config.args.plexDIA:
+    #     if config.args.timeplex:
+    #         df["BestChannel_Protein_Qvalue"] = df.groupby(["time_channel", "protein", "decoy"])["Protein_Qvalue"].transform("min")
+    #     else:
+    #         df["BestChannel_Protein_Qvalue"] = df.groupby(["file_name", "protein", "decoy"])["Protein_Qvalue"].transform("min")
+
+    if config.args.plexDIA:
+        print("\nAfter plexDIA identification propagation based on best channel Q-value:")
+        # Compute number of precursor IDs at 1% FDR
+        df_counts_prec = (
+            df[(df["decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
+            .drop_duplicates(subset=["run_chan", "untag_prec"])
+            .groupby(["file_name", "channel"])
+            .size()
+            .reset_index(name="Precursor_IDs")
+        )
+        
+        # Print precursor ID counts
+        print("Number of precursors at 1% FDR (best channel):")
+        print(df_counts_prec.to_string(index=False))
+        
+        # Compute number of protein IDs at 1% FDR
+        df_counts_prots = (
+            df[(df["Protein_Qvalue"] < 0.01) & (df["decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
+            .drop_duplicates(subset=["run_chan", "protein"])
+            .groupby(["run_chan", "channel"])
+            .size()
+            .reset_index(name="Protein_IDs")
+        )
+        
+        # Print protein ID counts
+        print("\nNumber of proteins at 1% FDR (best channel):")
+        print(df_counts_prots.to_string(index=False))
+
+
+    return df
+
+
 
 def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
@@ -539,50 +665,93 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
     lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=timeplex)
     
-    
+    # if "seq" not in fdc.columns:
+    #     raise KeyError("Column 'seq' is missing in fdc. Check data loading step.")
+
     
     ## Add additional features
     # X["prec_z"] = fdc["z"]
+   # print(fdc.columns)  # Ensure 'seq' is in fdc
+
     fdc["stripped_seq"] = np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in fdc["seq"]])
     fdc["pep_len"] = [len(re.findall("([A-Z](?:\(.*?\))?)",re.sub("Decoy","",i))) for i in fdc["stripped_seq"]]
     # X["rt"] = fdc["rt"]
     # X["coeff"] = fdc["coeff"]
     fdc["sq_rt_error"] = np.power(fdc["rt_error"],2)
     fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
-    
 
-    fdx = ms1_quant(fdc, lp, dc, mass_tag, spectra, mz_ppm, rt_tol, timeplex)
+    if mass_tag:
+        fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
+    else:
+        fdc["untag_seq"] = fdc["seq"]
+    #print(fdc.columns)  # Ensure 'seq' is in fdc
 
-    
-    fdx["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdx["untag_seq"],fdx["z"])]
-    channel_matches_counts = fdx["untag_prec"].value_counts()
+       
+    fdc["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdc["untag_seq"],fdc["z"])]
+    channel_matches_counts = fdc["untag_prec"].value_counts()
     channel_matches_counts_dict = {i:j for i,j in zip(channel_matches_counts.index,channel_matches_counts)}
-    fdx["channels_matched"] = [channel_matches_counts_dict[i] for i in fdx["untag_prec"]]
-    
-    fdx = score_precursors(fdx,config.score_model,config.fdr_threshold,folder=results_folder)
-    
+    fdc["channels_matched"] = [channel_matches_counts_dict[i] for i in fdc["untag_prec"]]
 
+    
     if timeplex:
         if mass_tag:
             tag_name = mass_tag.name
-            fdx["channel"] = [str(int(t))+"_"+re.findall(f"{tag_name}-(\d+)",i)[0] for i,t in zip(fdx.seq,fdx.time_channel)]
+            fdc["channel"] = [str(int(t))+"_"+re.findall(f"{tag_name}-(\d+)",i)[0] for i,t in zip(fdc.seq,fdc.time_channel)]
         else:
-            fdx["channel"] = fdx["time_channel"]
+            fdc["channel"] = fdc["time_channel"]
             
     elif mass_tag:
         tag_name = mass_tag.name
         ## mTRAQ label
-        fdx["channel"] = [int(re.findall(f"{tag_name}-(\d+)",i)[0]) for i in fdx.seq]
-    
-    
+        fdc["channel"] = [int(re.findall(f"{tag_name}-(\d+)",i)[0]) for i in fdc.seq]
 
-    fdx["last_aa"] = [i[-1] for i in fdx["stripped_seq"]]
-    fdx["seq_len"] = [len(i) for i in fdx["stripped_seq"]]
+    else: 
+        fdc["channel"] = 0 #if LF
+
+    #this was previously in ms1_quant function.. we need it for the target/decoy classification
+    frag_errors = [unstring_floats(mz) for mz in fdc.frag_errors]
+    median  = np.median(np.concatenate([i for i in frag_errors]))
+    fdc["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
+
+    ## What precursors are labeled as decoys
+    fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])
+
+    
+    minfraclib_toscore = getattr(config.args, "score_lib_frac", 0) 
+    fdx_toscore = fdc[fdc['frac_lib_int'].fillna(0) >= minfraclib_toscore].reset_index(drop=True)
+    
+    fin = score_precursors(fdx_toscore,config.score_model,config.fdr_threshold,folder=results_folder)
+    new_columns = [col for col in fin.columns if col not in fdc.columns and col not in ["untag_prec", "channel"]]
+    fdx = fdc.merge(fin[["untag_prec", "channel"] + new_columns], how="left", on=["untag_prec", "channel"])
+
+    ##fill NA's appropriately
+    fdx['PredVal'] = fdx['PredVal'].fillna(0)  
+    fdx['Qvalue'] = fdx['Qvalue'].fillna(1)     
+
+
+    # if config.args.plexDIA:
+    #     if config.args.timeplex:
+    #         fdx["BestChannel_Qvalue"] = fdx.groupby(["time_channel", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a plexDIA set for each timechannel
+    #     else:
+    #         fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a plexDIA set
+    
+    if config.args.plexDIA or config.args.timeplex:
+        fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a run
+    else:
+        fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
+
+    
+    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, spectra, mz_ppm, rt_tol, timeplex)
+
+
+    fdx_quant["last_aa"] = [i[-1] for i in fdx_quant["stripped_seq"]]
+    fdx_quant["seq_len"] = [len(i) for i in fdx_quant["stripped_seq"]]
     
     # have possible reannotate woth fasta here
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
+    fdx_quant = compute_protein_FDR(fdx_quant)
 
     
     ## save to results folder
-    fdx.to_csv(results_folder+"/all_IDs.csv",index=False)
-    fdx[np.logical_and(~fdx["decoy"],fdx["Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
+    fdx_quant.to_csv(results_folder+"/all_IDs.csv",index=False)
+    fdx_quant[np.logical_and(~fdx_quant["decoy"],fdx_quant["Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)

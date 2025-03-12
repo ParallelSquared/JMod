@@ -29,7 +29,10 @@ parser.add_argument('--timspeak_file', default="", type=str)
 parser.add_argument('--lib_frac', default=.5, type=float)
 parser.add_argument('-z','--dummy_value', type=str)
 parser.add_argument('--plexDIA', action='store_true')
-parser.add_argument('--use_emp_rt', action='store_true')
+parser.add_argument('--use_emp_rt', action='store_true') #use original library RTs
+parser.add_argument('--unfiltered_quant', action='store_false') #by default it will only do MS1 quant on precursors with best channel qvalue < 0.01
+parser.add_argument('--score_lib_frac', default=.5, type=float) #minimum frac_lib_int that a precursor must have to score
+parser.add_argument('--no_transfer', action='store_true') #by default use shared channel information for precursor scoring
 
 
 
