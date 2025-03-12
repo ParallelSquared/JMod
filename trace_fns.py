@@ -710,9 +710,28 @@ def get_other_channels(prec,mz,tag):
 # @profile
 def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=None,timeplex=False):
     print("Fitting tagged channels together")
-    print(config.args.dummy_value)
     decoy_coeffs["untag_seq"] = [re.sub(f"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
     decoy_coeffs["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(decoy_coeffs["untag_seq"],decoy_coeffs["z"])]
+    
+    if "med_frag_error" not in decoy_coeffs.columns:
+        frag_errors = [mf.unstring_floats(mz) if mz==mz else [] for mz in decoy_coeffs.frag_errors]
+        median  = np.median(np.concatenate([i for i in frag_errors]))
+        decoy_coeffs["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
+    
+    if "abs_rt_error" not in decoy_coeffs.columns:
+        decoy_coeffs["abs_rt_error"] = np.abs(decoy_coeffs.rt_error)
+    
+    if "abs_mz_error" not in decoy_coeffs.columns:
+        decoy_coeffs["abs_mz_error"] = np.abs(decoy_coeffs.mz_error)
+        
+    print(config.num_iso_ms1)
+    ## features where bigger is better 
+    greater_features =["hyperscore","frag_cosines_p","frag_cosines_p","manhattan_distances","coeff","frac_lib_int"]
+    greater_features_present = [i for i in greater_features if i in decoy_coeffs.columns and np.ptp(decoy_coeffs[i][~np.isnan(decoy_coeffs[i])])>0]
+    
+    lesser_features =["scribe_scores","gof_stats","max_matched_residuals","med_frag_error","abs_mz_error","abs_rt_error"]
+    lesser_features_present = [i for i in lesser_features if i in decoy_coeffs.columns and np.ptp(decoy_coeffs[i][~np.isnan(decoy_coeffs[i])])>0]
+    
     
     ms1_spectra = all_spectra.ms1scans
     ms2_spectra = all_spectra.ms2scans
@@ -837,6 +856,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         group_keys = [] ## collect to ensure we match them up correctly
         all_channel_scans = []
         fs = []
+        best_coeff = []
         for prec_mz,prec_seq in zip(prec_mzs,prec_seqs):
             
             ## keep decoys mathching to the correct MS1
@@ -853,7 +873,16 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             ms2_vals = {0:0}
             
             if channel_key in grouped_decoy_coeffs.groups:
-                new_data= grouped_decoy_coeffs.get_group(channel_key)   
+                new_data= grouped_decoy_coeffs.get_group(channel_key).copy()
+                
+                ### rank order the coeffs in terms of goodness of fit
+                new_data.loc[:,"rank_score"] = np.sum([np.argsort(-new_data.loc[:,i]).argsort() for i in lesser_features_present],0)               
+                new_data.loc[:,"rank_score"] += np.sum([np.argsort(new_data[i]).argsort() for i in greater_features_present],0)
+                
+                highest_ranked_spec = new_data.Ms1_spec_id.iloc[np.argmax(new_data.rank_score)]
+                # plt.scatter(new_data.spec_id,new_data.rank_score)
+                # plt.scatter(new_data.spec_id,np.log10(new_data.coeff))
+                                                
                 ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
                 prec_rt = new_data.rt.iloc[np.argmax(new_data.coeff)]
                 ms2_window_bool = np.logical_and(prec_mz+offset>bottom_of_window,prec_mz+offset<top_of_window)
@@ -875,10 +904,10 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             # else:
             #     ms2_vals = {}
                 
-            if config.args.dummy_value=="orig":
-                f = interp1d(list(ms2_vals.keys()), np.array(list(ms2_vals.values())), bounds_error=False)
-            else:
-                f = interp1d(list(ms2_vals.keys()), remove_non_consecutive(np.array(list(ms2_vals.values()))), bounds_error=False)
+            # if config.args.dummy_value=="orig":
+            f = interp1d(list(ms2_vals.keys()), np.array(list(ms2_vals.values())), bounds_error=False)
+            # else:
+            #     f = interp1d(list(ms2_vals.keys()), remove_non_consecutive(np.array(list(ms2_vals.values()))), bounds_error=False)
                 
             fs.append(f)
             
@@ -940,7 +969,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
                 else:
                     ms1_index_of_max = ms1_keys[np.argmax(mf.moving_average(f(ms1_keys),config.smoothing_window))] #gets interpolated coeff for all MS1 scans
                     
-   
+            ms1_index_of_max = highest_ranked_spec
             ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), list(all_ms1_vals.values()), ms1_index_of_max)
             
             ## redefine all_scans to keep only thoe from the above peak
@@ -1012,8 +1041,6 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         # break
         # all_pearson, ms1_traces, coeff_traces, iso_ratios
     return all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted
-
-
 
 
 
