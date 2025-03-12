@@ -107,7 +107,7 @@ min_iso_intensity = 1e-3 ## derived empirically
 num_iso_r = 2
 
 ## how many isotope traces to collect
-num_iso_ms1 = 6
+num_iso_ms1 = 4
 
 ## how much to offset the decoy prec mz
 decoy_mz_offset = 0

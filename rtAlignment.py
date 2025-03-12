@@ -838,6 +838,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     if not config.args.use_emp_rt:
         ## filter for only a single channel for each
+        print("Performing Fine Tuning")
         seq_rt = {}
         for s,rt in zip(np.array(id_keys)[cor_filter],np.array(dia_rt)[cor_filter]):
             key=librarySpectra[(s[0],float(s[1]))]["seq"]
@@ -943,6 +944,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
             # boundary = elbow_pred_x
+            print("Fine Tuned Library Chosen")
             boundary = fit_errors(all_pred_diffs,limit,percentile)
             rt_spl = pred_rt_spl
             all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
@@ -953,12 +955,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                 
         else: ### empirical are better
             # boundary = elbow_emp_x
+            print("Empirical Library Chosen")
             boundary = fit_errors(all_emp_diffs,limit,percentile)
             ## keep the library RTs and splines the same
             rt_spl = emp_rt_spl
         
     else:
 
+        print("Using Empirical w/o Fine Tuning")
         updatedLibrary = copy.deepcopy(librarySpectra)
         all_lib_keys = list(librarySpectra)
         rt_spl = emp_rt_spl
