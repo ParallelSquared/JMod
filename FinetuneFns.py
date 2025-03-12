@@ -135,6 +135,9 @@ def fine_tune_rt(grouped_df,
     elif config.tag.name=="tag6_5plex":
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
         
+    elif config.tag.name=="tag6_9plex":
+        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
+        
     elif config.tag.name=="tag6":
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
         
