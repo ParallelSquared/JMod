@@ -708,6 +708,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     all_output_df = pd.DataFrame([j for i in output for j in i],columns=names[:len(output[0][0])])
     
+    print("First 5 rows of output_df:")
+    print(output_df.head(5))
+
     frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
     frag_cosines_p = np.array([fragment_cor(output_df,i,fn="p") for i in range(len(output_df))])
     frag_multiply = frag_cosines*frag_cosines_p

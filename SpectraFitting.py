@@ -406,9 +406,13 @@ def get_features(
     
     if len(prec_frags)>0 and len(list(prec_frags)[0])==len(lib_peaks_matched[0]):
         hyperscores = [hyperscore(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
+        b_counts = [b_count(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
+        y_counts = [y_count(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
     else:
         hyperscores = np.zeros_like(num_lib_peaks_matched)
-    
+        b_counts = np.zeros_like(num_lib_peaks_matched)
+        y_counts = np.zeros_like(num_lib_peaks_matched)
+
     features = np.stack([num_lib_peaks_matched,
                           frac_lib_intensity,
                           frac_dia_intensity,
@@ -422,6 +426,8 @@ def get_features(
                           frac_unique_pred,
                           frac_dia_intensity_pred,
                           hyperscores,
+                          b_counts,
+                          y_counts,
                           scribe_scores,
                           max_unmatched_residuals,
                           max_matched_residuals,
@@ -1289,8 +1295,15 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
         subset_pred_spec = np.sum(scaled_matrix,1)
         subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
         large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
-        
+        def b_count(frag_list,matches):
+            return sum(["b" in i for i,j in zip(frag_list,matches) if j])
+            
+        def y_count(frag_list,matches):
+            return sum(["y" in i for i,j in zip(frag_list,matches) if j])
+
         hyperscores = [hyperscore(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
+        b_counts = [b_count(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
+        y_counts = [y_count(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
         
             
         scribe_scores = get_scribe(
@@ -1352,6 +1365,8 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
                             frac_unique_pred,
                             frac_dia_intensity_pred,
                             hyperscores,
+                            b_counts,
+                            y_counts,
                             scribe_scores,
                             max_unmatched_residuals,
                             max_matched_residuals,

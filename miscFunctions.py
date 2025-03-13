@@ -540,6 +540,12 @@ def hyperscore(frag_list,matches):
     dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
     return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y)))
 
+def b_count(frag_list,matches):
+    return sum(["b" in i for i,j in zip(frag_list,matches) if j])
+    
+def y_count(frag_list,matches):
+    return sum(["y" in i for i,j in zip(frag_list,matches) if j])
+
 def hyperscore2(frag_list,matches):
     num_b = sum(["b" in i for i,j in zip(frag_list,matches) if j])
     num_y = sum(["y" in i for i,j in zip(frag_list,matches) if j])

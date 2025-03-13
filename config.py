@@ -30,7 +30,7 @@ parser.add_argument('--lib_frac', default=.5, type=float)
 parser.add_argument('-z','--dummy_value', type=str)
 parser.add_argument('--plexDIA', action='store_true')
 parser.add_argument('--use_emp_rt', action='store_true')
-
+parser.add_argument('--decoy_channels', type=str, help='Comma-separated list of integers indicating decoy channels (e.g., "1,2,3")')
 
 
 args = parser.parse_args()

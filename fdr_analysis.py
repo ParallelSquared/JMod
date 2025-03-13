@@ -10,8 +10,9 @@ Created on Fri Aug 23 09:38:40 2024
 from read_output import get_large_prec
 
 from sklearn.model_selection import KFold
+from sklearn.model_selection import GroupKFold
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_curve,auc 
+from sklearn.metrics import roc_curve, auc, accuracy_score, precision_recall_curve, average_precision_score
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.neural_network import MLPClassifier
 from sklearn import preprocessing
@@ -172,8 +173,6 @@ def ms1_quant(fdc,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
 
     return fdc
 
-
-
 class model_instance():
     def __init__(self,model_type):
         self.mode_type = model_type
@@ -288,6 +287,210 @@ class score_model():
             model_idx+=1
             
         return np.concatenate(self.predictions)[rev_order]
+
+class ModelInstance:
+    def __init__(self, model_type):
+        self.model_type = model_type
+        
+    def predict(self, X):
+        pred = self.__predict_fn__(X)
+        if len(pred.shape) == 2:
+            output = pred[:, 1]
+        else:
+            output = pred
+        return output
+
+class ChannelScoreModel:
+    def __init__(self, df, model_type, target_channels, decoy_channels, features=None, n_splits=5):
+        """
+        Initialize the model for cross-validation.
+        
+        Parameters:
+        -----------
+        df : pandas.DataFrame
+            The DataFrame containing all the data
+        model_type : str
+            The type of model to use ('rf', 'xgb', or 'lda')
+        target_channels : list
+            List of target channel numbers
+        decoy_channels : list
+            List of decoy channel numbers
+        features : list, optional
+            List of feature column names to use
+        n_splits : int
+            Number of cross-validation folds
+        """
+        self.df = df  # Store the DataFrame as an instance variable
+        self.target_channels = target_channels
+        self.decoy_channels = decoy_channels
+        self.features = features
+        self.model_type = model_type
+        self.n_splits = n_splits
+        self.models = []
+        print(f"Using {model_type} model with {n_splits} cross-validation splits")
+        
+    def run_model(self):
+        """
+        Train the model using cross-validation and generate out-of-fold predictions.
+        
+        Returns:
+        --------
+        predictions : numpy.ndarray
+            Out-of-fold predictions
+        true_labels : numpy.ndarray
+            True labels corresponding to predictions
+        """
+        # Create feature matrix and target vector using the stored DataFrame
+        X = self.df[self.features]
+        y = self.df['is_decoy_channel'].astype(int)
+        
+        # Replace NaN values with 0
+        X = X.fillna(0)
+        
+        # Use protein as grouping variable for cross-validation
+        groups = self.df['protein']
+        
+        # Initialize arrays to store predictions and true values
+        n_samples = len(X)
+        self.predictions = np.zeros(n_samples)
+        self.true_labels = np.zeros(n_samples)
+        
+        # Define model fitting function based on model type
+        if self.model_type == "rf":
+            def fit_model(X, y):
+                model = RandomForestClassifier(
+                    n_estimators=100, 
+                    max_depth=10,
+                    n_jobs=-1)
+                model.fit(X, y)
+                return model
+                
+        elif self.model_type == "lda":
+            def fit_model(X, y):
+                model = LinearDiscriminantAnalysis()
+                model.fit(X, y)
+                return model
+                
+        elif self.model_type == "xgb":
+            def fit_model(X, y):
+                dtrain = xgb.DMatrix(X, y)
+                params = {
+                    'max_depth': 3, 
+                    'eta': 0.3, 
+                    'objective': 'binary:logistic',
+                    'eval_metric': 'auc',
+                    'nthread': 4
+                }
+                model = xgb.train(params, dtrain, num_boost_round=100)
+                return model
+                
+            def predict_fn(model, X_test):
+                dtest = xgb.DMatrix(X_test)
+                return model.predict(dtest)
+        else:
+            raise ValueError(f"Unsupported model type: {self.model_type}")
+            
+        # Set predict function based on model type
+        if self.model_type == "xgb":
+            self.predict_fn = predict_fn
+        else:
+            self.predict_fn = lambda model, X_test: model.predict_proba(X_test)[:, 1]
+        
+        # Setup cross-validation with GroupKFold
+        gfk = GroupKFold(n_splits=self.n_splits)
+        
+        # Check if we have enough groups
+        n_groups = len(np.unique(groups))
+        if n_groups < self.n_splits:
+            print(f"Warning: Number of unique groups ({n_groups}) is less than number of splits ({self.n_splits})")
+            self.n_splits = n_groups
+            gfk = GroupKFold(n_splits=self.n_splits)
+        
+        # Get CV splits
+        splits = list(gfk.split(X, y, groups=groups))
+        
+        # Train and predict for each fold
+        print("Training models with cross-validation...")
+        for fold_idx, (train_idx, test_idx) in enumerate(tqdm.tqdm(splits)):
+            X_train = X.iloc[train_idx]
+            X_test = X.iloc[test_idx]
+            y_train = y.iloc[train_idx]
+            
+            # Train model
+            model = fit_model(X_train, y_train)
+            self.models.append(model)
+            
+            # Generate predictions and store them directly
+            fold_preds = self.predict_fn(model, X_test)
+            self.predictions[test_idx] = fold_preds
+            self.true_labels[test_idx] = y.iloc[test_idx].values
+            
+        return self.predictions, self.true_labels
+    
+    def evaluate(self):
+        """
+        Evaluate model performance using various metrics.
+        
+        Returns:
+        --------
+        roc_auc : float
+            Area under the ROC curve
+        avg_precision : float
+            Average precision score
+        accuracy : float
+            Accuracy at optimal threshold
+        """
+        # Calculate ROC curve and AUC
+        fpr, tpr, thresholds = roc_curve(self.true_labels, self.predictions)
+        roc_auc = auc(fpr, tpr)
+        
+        # Calculate PR curve and average precision
+        precision, recall, pr_thresholds = precision_recall_curve(self.true_labels, self.predictions)
+        avg_precision = average_precision_score(self.true_labels, self.predictions)
+        
+        # Find the optimal threshold using F1 score
+        f1_scores = 2 * precision * recall / (precision + recall + 1e-10)
+        optimal_idx = np.argmax(f1_scores)
+        
+        # Handle case where optimal_idx is out of bounds
+        if optimal_idx < len(pr_thresholds):
+            optimal_threshold = pr_thresholds[optimal_idx]
+        else:
+            optimal_threshold = 0.5
+        
+        # Calculate binary predictions using the optimal threshold
+        binary_preds = (self.predictions >= optimal_threshold).astype(int)
+        accuracy = accuracy_score(self.true_labels, binary_preds)
+        
+        print("\nModel Evaluation Results:")
+        print(f"ROC AUC: {roc_auc:.4f}")
+        print(f"Average Precision: {avg_precision:.4f}")
+        print(f"Optimal Threshold: {optimal_threshold:.4f}")
+        print(f"Accuracy at Optimal Threshold: {accuracy:.4f}")
+        
+        # Get feature importance for Random Forest model
+        if self.model_type == "rf" and len(self.models) > 0 and hasattr(self, 'features'):
+            feature_names = self.features
+            
+            # Average feature importance across all folds
+            feature_importance = np.zeros(len(feature_names))
+            for model in self.models:
+                feature_importance += model.feature_importances_
+            feature_importance /= len(self.models)
+            
+            # Sort features by importance
+            indices = np.argsort(feature_importance)[::-1]
+            top_features = [(feature_names[i], feature_importance[i]) for i in indices[:10]]
+            
+            print("\nTop 10 Important Features:")
+            for i, (feature, importance) in enumerate(top_features):
+                print(f"{i+1}. {feature}: {importance:.4f}")
+                
+        # Create visualization plots
+        #self._plot_roc_curve(fpr, tpr, roc_auc)
+        #self._plot_pr_curve(precision, recall, avg_precision)
+        
+        return #roc_auc, avg_precision, accuracy
 
 
 def plex_features(fdc):
@@ -528,9 +731,185 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     
     return fdc
 
+def score_channel_decoys(df, decoy_channels=[12], n_splits=5, model_type="rf", q_value_threshold=0.01):
+    """
+    Score peptide identifications based on channel decoy approach, where one channel
+    (typically channel 12) is treated as a decoy channel.
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame containing peptide identifications with channel information
+    decoy_channels : list, default=[12]
+        List of channel numbers to be used as decoy channels
+    n_splits : int, default=5
+        Number of cross-validation folds for model training
+    model_type : str, default="rf"
+        Model type to use for classification, options: "rf", "xgb", "lda"
+    q_value_threshold : float, default=0.01
+        Q-value threshold for filtering results
+        
+    Returns
+    -------
+    pandas.DataFrame
+        The original DataFrame with additional columns:
+        - is_decoy_channel: Binary indicator for decoy channel
+        - predicted_decoy_[model_type]: Model score for being a decoy channel
+        - channel_qvalue: Calculated q-value based on decoy competition
+    """
+    # Create binary target based on channel
+    df['is_decoy_channel'] = df['channel'].isin(decoy_channels)
+    
+    # Print class distribution
+    print(f"Channel distribution:")
+    print(df['channel'].value_counts())
+    print(f"\nDecoy channel(s) {decoy_channels} samples: {df['is_decoy_channel'].sum()}")
+    print(f"Non-decoy channel samples: {(~df['is_decoy_channel']).sum()}")
+    
+    #Remove sequence decoys from channel fdr estimation
+    df = df[~df['decoy']]
+    # Define what constitutes a unique precursor
+    precursor_columns = ['untag_prec', 'z']  # May need to change in future
 
+    # Method 2: More efficient approach using transform
+    # Create a flag for each precursor group indicating if any member passes threshold
+    # May have be redundant with Jason's latest PR. 
+    df['group_passes'] = df.groupby(precursor_columns)['Qvalue'].transform(
+        lambda x: (x <= q_value_threshold).any()
+    )
 
+    # Filter to keep only rows where the group passes
+    filtered_df = df[df['group_passes']]
 
+    # Remove the temporary column if desired
+    filtered_df = filtered_df.drop(columns=['group_passes'])
+
+    # Print summary of filtering
+    print(f"Original dataset size: {len(df)} rows")
+    print(f"Filtered dataset size: {len(filtered_df)} rows")
+    print(f"Kept {len(filtered_df)/len(df)*100:.1f}% of rows")
+
+    # Count how many unique precursors were kept
+    precursors_before = df.groupby(precursor_columns).ngroups
+    precursors_after = filtered_df.groupby(precursor_columns).ngroups
+    print(f"Unique precursors before: {precursors_before}")
+    print(f"Unique precursors after: {precursors_after}")
+    print(f"Kept {precursors_after/precursors_before*100:.1f}% of unique precursors")
+
+    # Check distribution of channels in filtered dataset
+    print("\nChannel distribution in filtered dataset:")
+    print(filtered_df['channel'].value_counts())
+
+    # Verify that we have complete precursor groups
+    precursor_sizes_before = df.groupby(precursor_columns).size()
+    precursor_sizes_after = filtered_df.groupby(precursor_columns).size()
+
+    print("\nVerifying precursor group completeness:")
+    if (precursor_sizes_before.loc[precursor_sizes_after.index] == precursor_sizes_after).all():
+        print("✓ All precursor groups were kept intact")
+    else:
+        print("! Some precursor groups may be incomplete")
+
+    # Print summary of filtering
+    print(f"Original dataset size: {len(df)} rows")
+    print(f"Filtered dataset size (Qvalue <= {q_value_threshold}): {len(filtered_df)} rows")
+    print(f"Removed {len(df) - len(filtered_df)} rows ({(1 - len(filtered_df)/len(df))*100:.1f}%)")
+
+    # Continue with the filtered DataFrame for your model training
+    df = filtered_df  # Replace the original DataFrame with the filtered one
+
+    # Remove sequence and metadata columns for modeling
+    # Keep only numeric features that are useful for prediction
+    # Define features to exclude from the model
+    features = ['coeff', 'z','rt','num_lib','frac_lib_int',
+                'mz_error','rt_error','frac_int_matched','prec_r2','prec_r2_uniq',
+                'hyperscore','b_count','y_count','scribe_scores','max_unmatched_residuals','gof_stats',
+                'manhattan_distances','frac_int_matched_pred','frac_int_matched_pred_sigcoeff','cosine'
+                ,'plexfitMS1_p','plexfit_ps','ms1_cor','iso1_cor','iso2_cor',
+                'traceproduct','iso_cor','MS1_Int','seq_len'
+                ]
+    # Get numeric columns only
+    numeric_columns = df.select_dtypes(include=['number']).columns.tolist()
+
+    # Filter features to only include those that exist in the DataFrame
+    features = [col for col in features if col in numeric_columns]
+    
+    # Add boolean columns like ends_k if they exist
+    if 'ends_k' in df.columns:
+        features.append('ends_k')
+    else:
+        # Create ends_k feature if it doesn't exist
+        df['ends_k'] = df['last_aa'] == 'K'
+        features.append('ends_k')
+    
+    print(f"\nSelected {len(features)} features for model training")
+    
+    # Identify target channels (those that aren't in decoy_channels)
+    target_channels = [ch for ch in df['channel'].unique() if ch not in decoy_channels]
+    
+    # Train the model and get predictions
+    print(f"\n=== Training {model_type.upper()} model for channel decoy scoring ===")
+    model = ChannelScoreModel(
+        df=df,
+        model_type=model_type,
+        target_channels=target_channels, 
+        decoy_channels=decoy_channels,
+        features=features,
+        n_splits=n_splits
+    )
+    
+    predictions, true_labels = model.run_model()
+    model.evaluate()
+    
+    # Add predictions to the dataframe
+    df[f'predicted_decoy_{model_type}'] = predictions
+    
+    # Sort by model score (ascending for channel decoys)
+    sorted_df = df.sort_values(by=f'predicted_decoy_{model_type}', ascending=True).reset_index(drop=True)
+    
+    # Calculate competition factor based on number of target channels vs decoy channels
+    num_target_channels = len(target_channels)
+    num_decoy_channels = len(decoy_channels)
+    
+    # Calculate competition factor
+    competition_factor = num_target_channels / num_decoy_channels
+    print(f"Competition factor: {competition_factor:.2f} ({num_target_channels} target channels / {num_decoy_channels} decoy channel(s))")
+    
+    # Calculate channel-level q-value with competition adjustment
+    sorted_df['channel_qvalue'] = (sorted_df['is_decoy_channel'].cumsum() * competition_factor) / \
+                                (sorted_df['is_decoy_channel'] == False).cumsum()
+    
+    # Apply monotonicity correction to ensure q-values never decrease
+    min_q = float('inf')
+    for i in range(len(sorted_df)-1, -1, -1):
+        min_q = min(min_q, sorted_df.iloc[i]['channel_qvalue'])
+        sorted_df.iloc[i, sorted_df.columns.get_loc('channel_qvalue')] = min_q
+    
+    # Use the sorted DataFrame as our result
+    df = sorted_df
+    
+    # Print statistics about the q-values
+    print(f"\nChannel Q-value summary statistics:")
+    print(df['channel_qvalue'].describe())
+    
+    # Count identifications at different q-value thresholds
+    for threshold in [0.01, 0.05, 0.1]:
+        count = (df['channel_qvalue'] <= threshold).sum()
+        percent = count/len(df)*100
+        print(f"Identifications at q-value <= {threshold}: {count} ({percent:.1f}%)")
+    
+    # Create a filtered dataframe based on q-value threshold
+    filtered_df = df[df['channel_qvalue'] <= q_value_threshold]
+    print(f"\nAfter channel decoy filtering (q-value <= {q_value_threshold}):")
+    print(f"Retained {len(filtered_df)} / {len(df)} identifications ({len(filtered_df)/len(df)*100:.1f}%)")
+    
+    return df
+
+# Then, at the end of process_data, add:
+# fdx = score_channel_decoys(fdx)
+# fdx.to_csv(results_folder+"/all_IDs.csv", index=False)
+# fdx[np.logical_and(~fdx["decoy"], fdx["Qvalue"] < config.fdr_threshold) & 
+#     (fdx["channel_qvalue"] <= 0.01)].to_csv(results_folder+"/filtered_IDs.csv", index=False)
 def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
     results_folder = os.path.dirname(file)
@@ -584,5 +963,37 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
 
     
     ## save to results folder
-    fdx.to_csv(results_folder+"/all_IDs.csv",index=False)
-    fdx[np.logical_and(~fdx["decoy"],fdx["Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
+    fdx.to_csv(results_folder+"/all_IDs.csv", index=False)
+
+    # Check if we need to run channel decoy scoring
+    run_channel_scoring = False
+
+    if config.args.decoy_channels:
+        decoy_channels = [int(channel.strip()) for channel in config.args.decoy_channels.split(',')]
+    else:
+        decoy_channels = []  # Default to empty list if no decoy channels provided
+        
+    if len(decoy_channels)>0:
+        # Check if any rows in fdx match the decoy channels
+        channel_column = 'channel'  
+        decoy_channels_present = any(fdx[channel_column].isin(decoy_channels))
+        if decoy_channels_present:
+            run_channel_scoring = True
+        else:
+            print(f"WARNING: Decoy channels {decoy_channels} were provided but no rows with these channels were found in the data.")
+
+
+    if run_channel_scoring:
+        # Pass the decoy channels list to the scoring function
+        fdx = score_channel_decoys(fdx, decoy_channels = decoy_channels)
+        fdx.to_csv(results_folder+"/channel_IDs.csv", index=False)
+        combined_filter = np.logical_and(~fdx["decoy"], fdx["Qvalue"] < config.fdr_threshold) & (fdx["channel_qvalue"] <= 0.05)
+    else:
+        # Skip channel decoy scoring
+        fdx.to_csv(results_folder+"/channel_IDs.csv", index=False)
+        combined_filter = np.logical_and(~fdx["decoy"], fdx["Qvalue"] < config.fdr_threshold)
+
+    fdx[combined_filter].to_csv(results_folder+"/filtered_IDs.csv", index=False)
+
+
+

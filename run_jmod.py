@@ -73,6 +73,9 @@ if __name__=="__main__":
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
     results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
+    results_folder_path = "/Users/nathanwamsley/Data/Mar_2025/Kevin_DE_Tag_Pioneer/KMD_JMOD_OUT_D" #test on first two batches. 
+    results_folder_path = "/Users/nathanwamsley/Data/Mar_2025/Kevin_DE_Tag_Pioneer/KMD_JMOD_OUT_G" #test on first two batches. 
+   
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     if not os.path.exists(results_folder_path):
@@ -169,11 +172,11 @@ if __name__=="__main__":
             if key[:2] != "__" and key not in config_exclude:
                 write_file.writelines(f"{key}: {item}\n")
     
-    with open(results_folder_path+"/slib","wb") as dill_file:
-        slib = dill.dump(spectrumLibrary,dill_file)   
+    #with open(results_folder_path+"/slib","wb") as dill_file:
+    #    slib = dill.dump(spectrumLibrary,dill_file)   
       
-    with open(results_folder_path+"/dlib","wb") as dill_file:
-        dlib = dill.dump(decoy_lib,dill_file)   
+    #with open(results_folder_path+"/dlib","wb") as dill_file:
+    #    dlib = dill.dump(decoy_lib,dill_file)   
     
     ######################################################
     ### Start the search
