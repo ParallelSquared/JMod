@@ -75,6 +75,7 @@ if __name__=="__main__":
     results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
     results_folder_path = "/Users/nathanwamsley/Data/Mar_2025/Kevin_DE_Tag_Pioneer/KMD_JMOD_OUT_D" #test on first two batches. 
     results_folder_path = "/Users/nathanwamsley/Data/Mar_2025/Kevin_DE_Tag_Pioneer/KMD_JMOD_OUT_G" #test on first two batches. 
+    results_folder_path = "/Users/nathanwamsley/Data/Mar_2025/Kevin_DE_Tag_Pioneer/KMD_JMOD_OUT_H" #test on first two batches. 
    
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name

@@ -189,12 +189,12 @@ class model_instance():
         
 class score_model():
     
-    def __init__(self,model_type,n_splits=5,folder=None):
-        self.model_type=model_type
+    def __init__(self, model_type, n_splits=5, folder=None):
+        self.model_type = model_type
         self.n_splits = n_splits
         self.folder = folder
                 
-    def run_model(self,X,y):
+    def run_model(self,X,y,protein_names):
         if self.model_type=="rf":
             
             ### Random Forest
@@ -270,10 +270,17 @@ class score_model():
         else:
             raise ValueError("Unsupported model type")
             
-        kf = KFold(n_splits=self.n_splits,shuffle=True)
-        k_orders = [i for i in kf.split(X,y)]
-        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
+        gfk = GroupKFold(n_splits = self.n_splits)
+        groups = protein_names #Get the protein column
 
+        #May be an odd scenario where number of proteins is less than number of CV folds 
+        n_proteins = len(groups.unique())
+        if n_proteins < self.n_splits:
+            raise ValueError(f"Number of unique proteins ({n_proteins}) must be >= number of folds ({self.n_splits})")
+
+        #k_orders = [i for i in kf.split(X,y)] old way
+        k_orders = [i for i in gfk.split(X, y, groups=groups)]
+        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
         data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]]] for i in k_orders] # put data into folds
 
 
@@ -348,8 +355,15 @@ class ChannelScoreModel:
         X = X.fillna(0)
         
         # Use protein as grouping variable for cross-validation
-        groups = self.df['protein']
-        
+        # Check if there are more than 100 unique protein names
+        unique_proteins = self.df['protein'].nunique()
+        if unique_proteins < 100:
+            print(f"Only {unique_proteins} unique proteins found, which is less than 100. Switching to use 'untag_seq' for grouping in cross-validation.")
+            groups = self.df['untag_seq']
+        else:
+            print(f"Using {unique_proteins} unique proteins for grouping in cross-validation.")
+            groups = self.df['protein']
+
         # Initialize arrays to store predictions and true values
         n_samples = len(X)
         self.predictions = np.zeros(n_samples)
@@ -618,12 +632,21 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "unique_obs_int",
                   "file_name",
                   "protein"]
+    # Check if there are more than 100 unique protein names
+    unique_proteins = fdc['protein'].nunique()
+    if unique_proteins < 100:
+        print(f"Only {unique_proteins} unique proteins found, which is less than 100. Switching to use 'untag_seq' for grouping in cross-validation.")
+        protein_names = fdc['untag_seq']
+    else:
+        print(f"Using {unique_proteins} unique proteins for grouping in cross-validation.")
+        protein_names = fdc['protein']
+
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
     # print(X.columns)
-    X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
+    X[np.isnan(X)] = 0  # set nans to zero (mostly for r2 values)
         
-    sc_model = score_model(model_type,folder=folder)
-    pred = sc_model.run_model(X, y)
+    sc_model = score_model(model_type, folder=folder)
+    pred = sc_model.run_model(X, y, protein_names)
     
     model_name= model_type
     
