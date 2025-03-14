@@ -939,7 +939,8 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     mz_ppm = config.opt_ms1_tol
     rt_tol = config.opt_rt_tol
     
-    lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=timeplex)
+    lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=timeplex,
+    max_features=['gof_stats','max_matched_residuals','manhattan_distances','scribe_scores'])
     
     
     

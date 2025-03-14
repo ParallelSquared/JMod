@@ -81,52 +81,83 @@ dtypes  = {"coeff":np.float32,
             }
 
 
-def get_large_prec(file,
-                   condense_output=True,
-                   timeplex=False):
+def get_large_prec(file, condense_output=True, timeplex=False, max_features=None):
+    """
+    Read peptide/protein identifications from file and filter to keep only the 
+    highest coefficient for each peptide.
     
+    Parameters:
+    -----------
+    file : str
+        Path to the identification file
+    condense_output : bool
+        Whether to return condensed output
+    timeplex : bool
+        Whether data contains time channel information
+    max_features : list
+        List of column names for which to preserve maximum values
+        
+    Returns:
+    --------
+    tuple
+        Depending on condense_output, returns a tuple with:
+        - large_prec: dictionary of peptides with coefficients > 1
+        - filtered_decoy_coeffs: DataFrame with highest coefficient per peptide
+        - decoy_coeffs: complete DataFrame (if condense_output=False)
+    """
     col_names = list(names)
     if timeplex:
-        col_names.insert(5,"time_channel")
-        dtypes["time_channel"] = np.float32 ## !!! need to fix 
-    # print(col_names)
-    decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
+        col_names.insert(5, "time_channel")
+        dtypes["time_channel"] = np.float32
+        
+    # Read the data
+    decoy_coeffs = pd.read_csv(file, header=None, names=col_names, dtype=dtypes)
     
-    
-    # get dataframe
+    # Sort by coefficient to use drop_duplicates with 'last' later
     sorted_decoy_coeffs = decoy_coeffs.sort_values(by="coeff")
     
-    # create dictionay, where value is index of largest coeff for each key (seq,z)
+    # Define grouping keys
+    group_keys = ["seq", "z", "time_channel"] if timeplex else ["seq", "z"]
     
-    # create new dataframe using only these indices
+    # If specific features for max calculation are provided
+    if max_features and len(max_features) > 0:
+        # Calculate maximum values per group for requested features
+        max_values = sorted_decoy_coeffs.groupby(group_keys)[max_features].max().reset_index()
+        
+        # Rename columns to indicate they're max values
+        max_renamed = max_values.copy()
+        for feature in max_features:
+            max_renamed = max_renamed.rename(columns={feature: f"max_{feature}"})
+        
+        # Merge max values back into main DataFrame
+        sorted_decoy_coeffs = pd.merge(sorted_decoy_coeffs, max_renamed, on=group_keys, how='left')
+    
+    # Continue with existing logic
     if timeplex:
-        # names.insert(5,"time_channel")
-        # dtypes["time_channel"] = np.int32
-        lib_rt = sorted_decoy_coeffs["rt"]-sorted_decoy_coeffs["rt_error"]
+        lib_rt = sorted_decoy_coeffs["rt"] - sorted_decoy_coeffs["rt_error"]
         sorted_decoy_coeffs["lib_rt"] = lib_rt
-        filtered_decoy_coeffs = sorted_decoy_coeffs.drop_duplicates(["seq","z","time_channel"], keep='last')
+        filtered_decoy_coeffs = sorted_decoy_coeffs.drop_duplicates(group_keys, keep='last')
         filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
-        filtered_decoy_coeffs = filtered_decoy_coeffs.drop(np.where(filtered_decoy_coeffs.seq=="0")[0])
+        filtered_decoy_coeffs = filtered_decoy_coeffs.drop(np.where(filtered_decoy_coeffs.seq == "0")[0])
         filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
-        large_prec = {(i,j,l):k for i,j,k,l in zip(filtered_decoy_coeffs.seq,
-                                                   filtered_decoy_coeffs.z,
-                                                   filtered_decoy_coeffs.coeff,
-                                                   filtered_decoy_coeffs.time_channel) if k>1}
+        large_prec = {(i, j, l): k for i, j, k, l in zip(filtered_decoy_coeffs.seq,
+                                                        filtered_decoy_coeffs.z,
+                                                        filtered_decoy_coeffs.coeff,
+                                                        filtered_decoy_coeffs.time_channel) if k > 1}
     else:
-        filtered_decoy_coeffs = sorted_decoy_coeffs.drop_duplicates(["seq","z"], keep='last')
+        filtered_decoy_coeffs = sorted_decoy_coeffs.drop_duplicates(group_keys, keep='last')
         filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
-        filtered_decoy_coeffs = filtered_decoy_coeffs.drop(np.where(filtered_decoy_coeffs.seq=="0")[0])
+        filtered_decoy_coeffs = filtered_decoy_coeffs.drop(np.where(filtered_decoy_coeffs.seq == "0")[0])
         filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
-    
-        large_prec = {(i,j):k for i,j,k in zip(filtered_decoy_coeffs.seq,filtered_decoy_coeffs.z,filtered_decoy_coeffs.coeff) if k>1}
+        large_prec = {(i, j): k for i, j, k in zip(filtered_decoy_coeffs.seq, 
+                                                  filtered_decoy_coeffs.z, 
+                                                  filtered_decoy_coeffs.coeff) if k > 1}
 
     if condense_output:
-        return large_prec,filtered_decoy_coeffs
+        return large_prec, filtered_decoy_coeffs
     else:
-        return large_prec,filtered_decoy_coeffs, decoy_coeffs
-
-
-
+        return large_prec, filtered_decoy_coeffs, decoy_coeffs
+        
 def read_results(file,
                    timeplex=False):
     
