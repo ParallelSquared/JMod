@@ -10,7 +10,7 @@ import os
 import re
 from load_files import loadSpectra
 from SpecLib import loadSpecLib
-from mass_tags import tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678, diethyl_6plex
+from mass_tags import tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678, diethyl_6plex,available_tags
 import config
 import iso_functions as iso_f
 import argparse
@@ -54,18 +54,8 @@ def run():
     library = loadSpecLib(lib_file)
     
     if "TagName" in params:
-        if params["TagName"]=="mTRAQ_678":
-            mass_tag = mTRAQ_678
-            
-        elif params["TagName"]=="mTRAQ_02468":
-            mass_tag = mTRAQ_02468
-            
-        elif params["TagName"]=="mTRAQ":
-            mass_tag = mTRAQ
-        
-        elif params["TagName"]=="diethyl_6plex":
-            mass_tag = diethyl_6plex
-            
+        if  params["TagName"] in available_tags:
+            mass_tag = available_tags[params["TagName"]]
         else:
             raise ValueError("Unknown Tag")
         config.tag = mass_tag

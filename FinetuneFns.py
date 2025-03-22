@@ -119,26 +119,34 @@ def fine_tune_rt(grouped_df,
                  # model_path = '/Volumes/Lab/KMD/JD_RT_copy/CNN/iRT_updated_model', # better option #!!! Move to config?
                  # model_path = "/Volumes/Lab/KMD/JD_RT_copy/CNN/timeplex_lf/iRT_updated_model", ### trained from single LF timeplex
                  qc_plots = False,
-                 results_path=None):
-    print("Fine Tuning RTs")
+                 results_path=None,
+                 tag=None):
+    
     print(f"{len(grouped_df)} peptides considered for fine tuning")
     
-    if config.tag is None:
+    if tag is None:
+        tag=config.tag
+    
+    if tag is None:
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_LF_09182024_"
         
-    elif config.tag.name=="mTRAQ":
+    elif tag.name=="mTRAQ":
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_mTRAQ_09182024_"
         
-    elif config.tag.name=="diethyl_6plex":
+    elif tag.name=="diethyl_6plex":
+        # model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk3plex/iRT_updated_model"
+        model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk_thenFDX016/iRT_updated_model"
+        
+    elif tag.name=="diethyl_3plex":
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_DiEthyl_11052024_"
         
-    elif config.tag.name=="tag6_5plex":
+    elif tag.name=="tag6_5plex":
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
         
-    elif config.tag.name=="tag6_9plex":
+    elif tag.name=="tag6_9plex":
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
         
-    elif config.tag.name=="tag6":
+    elif tag.name=="tag6":
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
         
     else:
@@ -155,7 +163,7 @@ def fine_tune_rt(grouped_df,
     
     orig_predictions = np.mean([model.predict(np.array(X_test)) for model in models],axis=0)
     
-    loess_result = lowess(orig_predictions.flatten(), Y_test, frac=0.4)
+    loess_result = lowess(orig_predictions.flatten(), Y_test, frac=0.1)
     
     def obs_to_model(rts):
         return np.interp(rts, loess_result[:, 0], loess_result[:, 1])
@@ -165,16 +173,24 @@ def fine_tune_rt(grouped_df,
         return np.interp(rts, loess_result[order, 1], loess_result[order, 0])
 
 
-    ### Fine Tune models
-    models,history = train_models(models,[X_train,obs_to_model(Y_train)],results_folder=results_path)
-    
+    if len(grouped_df)>config.FT_minimum:
+        ### Fine Tune models
+        print("Fine Tuning RTs")
+        models,history = train_models(models,[X_train,obs_to_model(Y_train)],results_folder=results_path)
+    else:
+        print("Not enough IDs for fine tuning")
+        print("Using base model for predictions")
+        
+        ##use all data as validation as none was used for training
+        data_split = np.concatenate([X_train,X_test],0),np.concatenate([X_train,X_test],0),np.concatenate([Y_train,Y_test],0),np.concatenate([Y_train,Y_test],0)   
+        
     if qc_plots:
            
         plt.subplots()
         plt.scatter(Y_test,orig_predictions,s=1)
         # plt.scatter(Y_test,obs_to_model(Y_test),s=1)
         plt.xlabel("Observed Values")
-        plt.ylabel("Old model predictions")
+        plt.ylabel("Base model predictions")
         if results_path:
             plt.savefig(results_path+"/RT_finetune_ObsvsOld.png",dpi=600,bbox_inches="tight")
             
@@ -186,36 +202,37 @@ def fine_tune_rt(grouped_df,
         if results_path:
             plt.savefig(results_path+"/RT_finetune_ObsvsOldAlign.png",dpi=600,bbox_inches="tight")
         
+        if len(grouped_df)>config.FT_minimum:
+            # Add the smoothed values to a new column
+            plt.subplots()
+            plt.scatter(obs_to_model(Y_test),orig_predictions,s=1)
+            x_lim = plt.xlim()
+            y_lim = plt.ylim()
+            plt.plot(x_lim,x_lim)
+            plt.xlabel("Aligned observed Values")
+            plt.ylabel("Old model predictions")
+            if results_path:
+                plt.savefig(results_path+"/RT_finetune_AlignObsvsOld.png",dpi=600,bbox_inches="tight")
+            
         
-        # Add the smoothed values to a new column
-        plt.subplots()
-        plt.scatter(obs_to_model(Y_test),orig_predictions,s=1)
-        x_lim = plt.xlim()
-        y_lim = plt.ylim()
-        plt.plot(x_lim,x_lim)
-        plt.xlabel("Aligned observed Values")
-        plt.ylabel("Old model predictions")
-        if results_path:
-            plt.savefig(results_path+"/RT_finetune_AlignObsvsOld.png",dpi=600,bbox_inches="tight")
-        
-        plt.subplots()
-        for h in history:
-            plt.plot(h.history["loss"],color="tab:blue",alpha=.5)
-            plt.plot(h.history["val_loss"],color="tab:orange",alpha=.5) 
-        if results_path:
-            plt.savefig(results_path+"/RT_finetune_training.png",dpi=600,bbox_inches="tight")
-             
+            plt.subplots()
+            for h in history:
+                plt.plot(h.history["loss"],color="tab:blue",alpha=.5)
+                plt.plot(h.history["val_loss"],color="tab:orange",alpha=.5) 
+            if results_path:
+                plt.savefig(results_path+"/RT_finetune_training.png",dpi=600,bbox_inches="tight")
+                 
             
 
-        predictions = np.mean([model.predict(np.array(X_test)) for model in models],axis=0)
-        plt.subplots()
-        plt.scatter(obs_to_model(Y_test),predictions,s=1)
-        x_lim = plt.xlim()
-        y_lim = plt.ylim()
-        plt.plot(x_lim,y_lim)
-        plt.xlabel("Aligned observed Values")
-        plt.ylabel("New model predictions")
-        if results_path:
-            plt.savefig(results_path+"/RT_finetune_AlignObsvsNew.png",dpi=600,bbox_inches="tight")
+            predictions = np.mean([model.predict(np.array(X_test)) for model in models],axis=0)
+            plt.subplots()
+            plt.scatter(obs_to_model(Y_test),predictions,s=1)
+            x_lim = plt.xlim()
+            y_lim = plt.ylim()
+            plt.plot(x_lim,x_lim)
+            plt.xlabel("Aligned observed Values")
+            plt.ylabel("New model predictions")
+            if results_path:
+                plt.savefig(results_path+"/RT_finetune_AlignObsvsNew.png",dpi=600,bbox_inches="tight")
         
     return data_split, models, model_to_obs

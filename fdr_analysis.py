@@ -130,7 +130,7 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
         
         fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
         fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        fdc["plexfittrace_ps_all"] = [";".join(map(str,p)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+        fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.isnan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
         fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
 
     else:
@@ -212,14 +212,15 @@ class score_model():
         self.n_splits = n_splits
         self.folder = folder
                 
-    def run_model(self,X,y):
+    def run_model(self,X,y,sample_weight=None):
+        print("test")
         if self.model_type=="rf":
             
             ### Random Forest
-            def fit_model(X,y,idx=""):
+            def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    m.model = RandomForestClassifier(n_estimators = 100, max_depth=10,n_jobs=-1)
-                    m.model.fit(X,y)
+                    m.model = RandomForestClassifier(n_estimators = 200,n_jobs=-1)
+                    m.model.fit(X,y,sample_weight=sample_weight)
                     m.__predict_fn__ = m.model.predict_proba
 
                     if self.folder:
@@ -243,7 +244,7 @@ class score_model():
         elif self.model_type=="lda":
             
             ## Linear Disriminant Analysis
-            def fit_model(X,y,idx=""):
+            def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
                     m.model = LinearDiscriminantAnalysis()
                     m.model.fit(X,y)
@@ -256,14 +257,17 @@ class score_model():
         elif self.model_type == "xg":
             
             ## XGBoost
-            def fit_model(X,y,idx=""):
+            def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    dTrain = xgb.DMatrix(X,y)
-                    param = {'max_depth': 2, 'eta': 1, 'objective': 'binary:logistic'}
-                    param['nthread'] = 4
-                    param['eval_metric'] = 'auc'
+                    dTrain = xgb.DMatrix(X,y,weight=sample_weight)
+                    param = {
+                        'max_depth': 10, 
+                        'eta': .1, 
+                        'objective': 'binary:logistic'}
+                    # param['nthread'] = 4
+                    param['eval_metric'] = 'pre'
                     
-                    m.model = xgb.train(param, dtrain=dTrain)
+                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=50)
                     def xg_predict(X):
                         X_convert = xgb.DMatrix(X)
                         return m.model.predict(X_convert)
@@ -283,11 +287,13 @@ class score_model():
         
             
         elif self.model_type == "nn":
-            X = preprocessing.StandardScaler().fit(X).transform(X)
+            columns = X.columns
+            X = pd.DataFrame(preprocessing.StandardScaler().fit(X).transform(X),columns=columns)
             ## Neural network
-            def fit_model(X,y):
+            def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    m.model = MLPClassifier((32,16,8,4),activation="relu")
+                    # m.model = MLPClassifier((32,16,8,4),activation="relu")
+                    m.model = MLPClassifier((8,8,4),activation="relu")
                     m.model.fit(X,y)
                     m.__predict_fn__ = m.model.predict_proba
                     return m
@@ -299,14 +305,18 @@ class score_model():
         k_orders = [i for i in kf.split(X,y)]
         rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
 
-        data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]]] for i in k_orders] # put data into folds
-
+        if sample_weight is not None:
+            data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]],sample_weight[i[0]]] for i in k_orders] # put data into folds
+    
+        else:
+            data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]],None] for i in k_orders] # put data into folds
+        
 
         self.models = []
         self.predictions=[]
         model_idx=0
-        for X_train, X_test, y_train, y_test in tqdm.tqdm(data_splits):
-            m = fit_model(X_train,y_train,idx=model_idx)
+        for X_train, X_test, y_train, y_test,weights in tqdm.tqdm(data_splits):
+            m = fit_model(X_train,y_train,sample_weight=weights,idx=model_idx)
             self.models.append(m)
             self.predictions.append(m.predict(X_test))
             model_idx+=1
@@ -544,8 +554,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         plt.subplots()
         vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
         # plt.hist([],[])
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label=">Threshold")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="<Threshold")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="Low Scoring")
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.decoy]]),bins,alpha=.5,label="Decoy")
         plt.xlabel(feat)
         plt.ylabel("Frequency")
@@ -559,8 +569,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         plt.subplots()
         vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
         # plt.hist([],[])
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label=">Threshold")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="<Threshold")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="Low Scoring")
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.decoy]]),bins,alpha=.5,label="Decoy")
         plt.xlabel(feat)
         plt.ylabel("Frequency")
