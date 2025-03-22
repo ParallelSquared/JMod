@@ -346,7 +346,7 @@ def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeple
                     if not np.all(np.isfinite(ms2_values)):
                         bad_indices = np.where(~np.isfinite(ms2_values))[0]
                         bad_scans = list(all_ms2_vals.keys())[bad_indices[0]]
-                        print(f"Warning: Non-finite MS2 value detected at scan {bad_scans}")
+                        #print(f"Warning: Non-finite MS2 value detected at scan {bad_scans}")
                     
                     # Calculate correlations with validity check
                     spec_pearsons = []
@@ -724,7 +724,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
     if "abs_mz_error" not in decoy_coeffs.columns:
         decoy_coeffs["abs_mz_error"] = np.abs(decoy_coeffs.mz_error)
         
-    print(config.num_iso_ms1)
+    
     ## features where bigger is better 
     greater_features =["hyperscore","frag_cosines_p","frag_cosines_p","manhattan_distances","coeff","frac_lib_int"]
     greater_features_present = [i for i in greater_features if i in decoy_coeffs.columns and np.ptp(decoy_coeffs[i][~np.isnan(decoy_coeffs[i])])>0]
@@ -963,13 +963,14 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
                 ms1_index_of_max = top_ms1_spec_idx ## should I just use the max of MS1???? Need to look into again
             else:
                 # ms1_index_of_max = new_data.Ms1_spec_id.iloc[np.argmax(new_data.coeff)]
-                ms1_keys = list(all_ms1_vals.keys())
-                if config.args.dummy_value=="orig":
-                    ms1_index_of_max = ms1_keys[np.argmax(f(ms1_keys))]
-                else:
-                    ms1_index_of_max = ms1_keys[np.argmax(mf.moving_average(f(ms1_keys),config.smoothing_window))] #gets interpolated coeff for all MS1 scans
+                # ms1_keys = list(all_ms1_vals.keys())
+                # if config.args.dummy_value=="orig":
+                #     ms1_index_of_max = ms1_keys[np.argmax(f(ms1_keys))]
+                # else:
+                #     ms1_index_of_max = ms1_keys[np.argmax(mf.moving_average(f(ms1_keys),config.smoothing_window))] #gets interpolated coeff for all MS1 scans
                     
-            ms1_index_of_max = highest_ranked_spec
+                ms1_index_of_max = highest_ranked_spec
+                
             ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), list(all_ms1_vals.values()), ms1_index_of_max)
             
             ## redefine all_scans to keep only thoe from the above peak

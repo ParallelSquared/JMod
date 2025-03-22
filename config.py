@@ -96,6 +96,9 @@ opt_im_tol = im_tol
 protein_column = 'protein_name'
 
 
+### the minimum number of IDs necessary for fine-tuning
+FT_minimum = 1e3
+
 
 num_iso_peaks = args.num_iso
 min_iso_intensity = 1e-3 ## derived empirically

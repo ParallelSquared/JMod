@@ -146,6 +146,9 @@ if __name__=="__main__":
         # spectrumLibrary = iso_f.iso_library(spectrumLibrary)
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary)
         
+    # with open(results_folder_path+"/slib","wb") as dill_file:
+    #     slib = dill.dump(spectrumLibrary,dill_file)   
+      
     print("Creating Decoy Library")
     decoy_lib = SpecLib.create_decoy_lib(spectrumLibrary,rules="rev")
     for key in spectrumLibrary:
@@ -169,11 +172,8 @@ if __name__=="__main__":
             if key[:2] != "__" and key not in config_exclude:
                 write_file.writelines(f"{key}: {item}\n")
     
-    with open(results_folder_path+"/slib","wb") as dill_file:
-        slib = dill.dump(spectrumLibrary,dill_file)   
-      
-    with open(results_folder_path+"/dlib","wb") as dill_file:
-        dlib = dill.dump(decoy_lib,dill_file)   
+    # with open(results_folder_path+"/dlib","wb") as dill_file:
+    #     dlib = dill.dump(decoy_lib,dill_file)   
     
     ######################################################
     ### Start the search
