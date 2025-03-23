@@ -20,7 +20,7 @@ import iso_functions as iso_f
 from SpectraFitting import fit_to_lib
 from scipy.interpolate import LSQUnivariateSpline as spline
 from scipy.interpolate import UnivariateSpline, InterpolatedUnivariateSpline
-from scipy.optimize import isotonic_regression
+#from scipy.optimize import isotonic_regression
 from statistics import quantiles
 from miscFunctions import within_tol
 from scipy import signal
@@ -731,7 +731,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         cor_filter = np.logical_and(frag_multiply>cor_limit,output_hyper>hyper_cutoff)
         feature_percentile = 0
         # for feature_percentile in [50,60,70,80,90]: 
-        print("Filtering IDs from initial search")
         for feature_percentile in  range(20,80,5):
         
         ## empirically derived cutoffs
@@ -786,22 +785,22 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             
             first_rt_diffs = (f(output_rts)-output_df.rt)
             rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
-            first_rt_tolerance = 4*np.abs(rt_stddev)
+            first_rt_tolerance = 4*rt_stddev
             # rt_mean, rt_stddev = stats.norm.fit(first_rt_diffs[cor_filter])
             # vals,bins,_=plt.hist(first_rt_diffs[cor_filter],np.linspace(-10,10,100),density=True)
             # plt.title(str(feature_percentile))
-            # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),gaussian(np.linspace(-first_rt_tolerance,first_rt_tolerance,100), rt_amplitude, rt_mean, rt_stddev))
+            # # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),gaussian(np.linspace(-first_rt_tolerance,first_rt_tolerance,100), rt_amplitude, rt_mean, rt_stddev))
             # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),stats.norm.pdf(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),loc= rt_mean, scale=rt_stddev))
             
             # plt.vlines([-first_rt_tolerance,first_rt_tolerance],[0]*2,[max(vals)]*2)
             
             bad_IDs  = (np.abs(first_rt_diffs)>np.min([first_rt_tolerance,np.ptp(dia_rt)/5]))[cor_filter]
             outside_ratio = sum(bad_IDs)/len(bad_IDs)
-            print(f"Testing Percentile: {feature_percentile}, Ratio: {np.round(outside_ratio,4)}, #IDs: {sum(cor_filter)}")
-            if outside_ratio<.05 or (sum(cor_filter)-sum(bad_IDs)<800):
+            # print(feature_percentile,outside_ratio)
+            if outside_ratio<.05:
                 break
         
-        print(feature_percentile,np.round(outside_ratio,4),sum(cor_filter))
+        print(feature_percentile,outside_ratio)
                 
         
         cor_filter = np.logical_and(cor_filter,np.abs(first_rt_diffs)<first_rt_tolerance)
@@ -839,7 +838,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     if not config.args.use_emp_rt:
         ## filter for only a single channel for each
-        print("Trying RT Prediction")
         seq_rt = {}
         for s,rt in zip(np.array(id_keys)[cor_filter],np.array(dia_rt)[cor_filter]):
             key=librarySpectra[(s[0],float(s[1]))]["seq"]
@@ -945,7 +943,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
             # boundary = elbow_pred_x
-            print("Fine Tuned Library Chosen")
             boundary = fit_errors(all_pred_diffs,limit,percentile)
             rt_spl = pred_rt_spl
             all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
@@ -956,14 +953,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                 
         else: ### empirical are better
             # boundary = elbow_emp_x
-            print("Empirical Library Chosen")
             boundary = fit_errors(all_emp_diffs,limit,percentile)
             ## keep the library RTs and splines the same
             rt_spl = emp_rt_spl
         
     else:
 
-        print("Using Empirical w/o Fine Tuning")
         updatedLibrary = copy.deepcopy(librarySpectra)
         all_lib_keys = list(librarySpectra)
         rt_spl = emp_rt_spl
@@ -1070,7 +1065,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
     new_rt_tol = boundary#4*np.abs(rt_stddev) 
+    if config.args.user_rt_tol:
+        print("Using user specified RT tolerance")
+        new_rt_tol = config.args.rt_tol
     print(f"Optimsed RT tolerance: {new_rt_tol}")
+    
     config.opt_rt_tol = new_rt_tol
     
     # set optimised ms2 tol
@@ -1439,6 +1438,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     output_df["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
     
     feature_percentile = 50
+    if config.args.user_percentile:
+        print("Using user specified feature percentile for first search")
+        feature_percentile = config.args.initial_percentile
     def get_df_filter(df,p=50):
         return np.logical_and.reduce([df[feat]>np.percentile(df[feat],feature_percentile) for feat in ["hyperscore",
                                                                                                  "frag_cosines_p",
@@ -1862,6 +1864,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
     new_rt_tol =boundary# 4*np.abs(rt_stddev)
+    if config.args.user_rt_tol:
+        print("Using user specified RT tolerance")
+        new_rt_tol = config.args.rt_tol
     print(f"Optimsed RT tolerance: {new_rt_tol}")
     
     # ## ensure there is no overlap
@@ -1892,7 +1897,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         new_rt_tol = (min_prediction_diff/2)*.99 # ensure no overlap
         print(f"Reseting tolerance to {new_rt_tol}")
     
-    
+
     
     config.opt_rt_tol = new_rt_tol
     
@@ -2056,10 +2061,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         
         
-        
         ##plot mz alignment
         plt.subplots()
-        plt.scatter(rts,diffs,label="Original_MZ",s=1,alpha=5/((len(dia_rt)//1000)+1))
+        plt.scatter(rts,diffs,label="Original_MZ",s=1,alpha=min(1,5/((len(dia_rt)//1000)+1)))
         plt.scatter(rts,f_rt_mz(rts),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("Updated RT")
@@ -2069,7 +2073,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         ##plot mz alignment
         plt.subplots()
-        plt.scatter(id_mzs,diffs-f_rt_mz(rts),label="Original_MZ",s=1,alpha=5/((len(dia_rt)//1000)+1))
+        plt.scatter(id_mzs,diffs-f_rt_mz(rts),label="Original_MZ",s=1,alpha=min(1,5/((len(dia_rt)//1000)+1)))
         plt.scatter(id_mzs,mz_spl(id_mzs),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("m/z")

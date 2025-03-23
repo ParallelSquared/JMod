@@ -33,6 +33,10 @@ parser.add_argument('--use_emp_rt', action='store_true') #use original library R
 parser.add_argument('--unfiltered_quant', action='store_false') #by default it will only do MS1 quant on precursors with best channel qvalue < 0.01
 parser.add_argument('--score_lib_frac', default=.5, type=float) #minimum frac_lib_int that a precursor must have to score
 parser.add_argument('--no_transfer', action='store_true') #by default use shared channel information for precursor scoring
+parser.add_argument('--user_rt_tol', action='store_true') 
+parser.add_argument('--rt_tol', default=.5, type=float)
+parser.add_argument('--initial_percentile', default=50, type=float)
+parser.add_argument('--user_percentile', action='store_true') 
 
 
 
@@ -99,9 +103,6 @@ opt_im_tol = im_tol
 protein_column = 'protein_name'
 
 
-### the minimum number of IDs necessary for fine-tuning
-FT_minimum = 1e3
-
 
 num_iso_peaks = args.num_iso
 min_iso_intensity = 1e-3 ## derived empirically
@@ -110,7 +111,7 @@ min_iso_intensity = 1e-3 ## derived empirically
 num_iso_r = 2
 
 ## how many isotope traces to collect
-num_iso_ms1 = 4
+num_iso_ms1 = 6
 
 ## how much to offset the decoy prec mz
 decoy_mz_offset = 0
