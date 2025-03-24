@@ -219,7 +219,7 @@ class score_model():
             ### Random Forest
             def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    m.model = RandomForestClassifier(n_estimators = 200,n_jobs=-1)
+                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=-1)
                     m.model.fit(X,y,sample_weight=sample_weight)
                     m.__predict_fn__ = m.model.predict_proba
 
@@ -261,7 +261,7 @@ class score_model():
                     m = model_instance(model_type=self.model_type)
                     dTrain = xgb.DMatrix(X,y,weight=sample_weight)
                     param = {
-                        'max_depth': 10, 
+                        'max_depth': config.tree_max_depth, 
                         'eta': .1, 
                         'objective': 'binary:logistic'}
                     # param['nthread'] = 4
@@ -459,6 +459,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
                   "plexfittrace_ps_all",
                   "unique_frag_mz", "untag_prec",
+                  "channels_matched",
                   "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor","plexfitMS1","plexfitMS1_p","plex_Area", "untag_prec","channel","time_channel",
                   "unique_frag_mz",
                   "unique_obs_int",
@@ -615,6 +616,7 @@ def compute_protein_FDR(df):
         .reset_index(name="Precursor_IDs")
     )
     print("Number of precursors at 1% FDR:")
+    print("All Channels:",np.sum(df_counts_prec.Precursor_IDs))
     print(df_counts_prec.to_string(index=False))
     
 
@@ -626,6 +628,7 @@ def compute_protein_FDR(df):
         .reset_index(name="Protein_IDs")
     )
     print("\nNumber of proteins at 1% FDR:")
+    print("All Channels:",np.sum(df_counts_prots.Protein_IDs))
     print(df_counts_prots.to_string(index=False))
 
 
@@ -638,6 +641,7 @@ def compute_protein_FDR(df):
 
     if config.args.plexDIA:
         print("\nAfter plexDIA identification propagation based on best channel Q-value:")
+        
         # Compute number of precursor IDs at 1% FDR
         df_counts_prec = (
             df[(df["decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
@@ -649,6 +653,7 @@ def compute_protein_FDR(df):
         
         # Print precursor ID counts
         print("Number of precursors at 1% FDR (best channel):")
+        print("All Channels:",np.sum(df_counts_prec.Precursor_IDs))
         print(df_counts_prec.to_string(index=False))
         
         # Compute number of protein IDs at 1% FDR
@@ -662,6 +667,7 @@ def compute_protein_FDR(df):
         
         # Print protein ID counts
         print("\nNumber of proteins at 1% FDR (best channel):")
+        print("All Channels:",np.sum(df_counts_prots.Protein_IDs))
         print(df_counts_prots.to_string(index=False))
 
 
@@ -766,4 +772,4 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
     ## save to results folder
     fdx_quant.to_csv(results_folder+"/all_IDs.csv",index=False)
-    fdx_quant[np.logical_and(~fdx_quant["decoy"],fdx_quant["Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
+    fdx_quant[np.logical_and(~fdx_quant["decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)

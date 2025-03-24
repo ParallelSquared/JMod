@@ -156,6 +156,8 @@ score_model = "rf"
     xg: XgBoost
 """
 
+tree_max_depth = None
+
 fdr_threshold = 0.01
 
 
