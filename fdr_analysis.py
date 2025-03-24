@@ -323,100 +323,6 @@ class score_model():
             
         return np.concatenate(self.predictions)[rev_order]
 
-
-def plex_features(fdc):
-
-    if config.args.no_transfer:
-            return fdc
-    else: 
-        print("Using joint information across channels for precursor scoring")
-        if config.args.timeplex & config.args.plexDIA:
-            fdc["median_rt"] = fdc.groupby(["untag_prec","time_channel"])['rt'].transform("median")
-            fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
-            fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
-            fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
-    
-            fdc["median_rt_run"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
-            fdc.loc[fdc["channels_matched"] == 1, "median_rt_run"] = pd.NA
-            fdc["abs_diff_rt_from_median_run"] = np.abs(fdc['rt'] - fdc['median_rt_run'])
-            fdc["abs_diff_rt_from_median_run"].fillna(fdc["abs_diff_rt_from_median_run"].mean(), inplace=True)
-    
-        if config.args.timeplex and not config.args.plexDIA: #get difference in RTs between timeplexes
-            fdc["median_rt_run"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
-            fdc.loc[fdc["channels_matched"] == 1, "median_rt_run"] = pd.NA
-            fdc["abs_diff_rt_from_median_run"] = np.abs(fdc['rt'] - fdc['median_rt_run'])
-            fdc["abs_diff_rt_from_median_run"].fillna(fdc["abs_diff_rt_from_median_run"].mean(), inplace=True)
-    
-        if config.args.plexDIA and not config.args.timeplex: #get difference in RTs wihtin a plex
-            fdc["median_rt"] = fdc.groupby(["untag_prec"])['rt'].transform("median")
-            fdc.loc[fdc["channels_matched"] == 1, "median_rt"] = pd.NA
-            fdc["abs_diff_rt_from_median"] = np.abs(fdc['rt'] - fdc['median_rt'])
-            fdc["abs_diff_rt_from_median"].fillna(fdc["abs_diff_rt_from_median"].mean(), inplace=True)
-            
-        
-        fdc["median_abs_rt_error"] = fdc.groupby(["untag_prec"])["rt_error"].transform(lambda x: np.abs(x).median())
-    
-        fdc["median_coeff"] = fdc.groupby(["untag_prec"])['coeff'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_coeff"] = pd.NA
-        fdc["diff_coeff_from_median"] = np.log10(fdc['coeff']+1) - np.log10(fdc['median_coeff']+1)
-        fdc["diff_coeff_from_median"].fillna(fdc["diff_coeff_from_median"].mean(), inplace=True)
-        
-        
-        
-        fdc["median_frac_int_uniq_pred"] = fdc.groupby(["untag_prec"])['frac_int_uniq_pred'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq_pred"] = pd.NA
-        fdc["diff_frac_int_uniq_pred_from_median"] = fdc['frac_int_uniq_pred'] - fdc['median_frac_int_uniq_pred']
-        fdc["diff_frac_int_uniq_pred_from_median"].fillna(fdc["diff_frac_int_uniq_pred_from_median"].mean(), inplace=True)
-        
-        
-        
-        fdc["median_frac_dia_int"] = fdc.groupby(["untag_prec"])['frac_dia_int'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_frac_dia_int"] = pd.NA
-        fdc["diff_frac_dia_int_from_median"] = fdc['frac_dia_int'] - fdc['median_frac_dia_int']
-        fdc["diff_frac_dia_int_from_median"].fillna(fdc["diff_frac_dia_int_from_median"].mean(), inplace=True)
-        
-        
-        
-        fdc["median_mz_error"] = fdc.groupby(["untag_prec"])['mz_error'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_mz_error"] = pd.NA
-        fdc["abs_diff_mz_error_from_median"] = np.abs(fdc['mz_error'] - fdc['median_mz_error'])
-        fdc["abs_diff_mz_error_from_median"].fillna(fdc["abs_diff_mz_error_from_median"].mean(), inplace=True)
-        
-        
-        fdc["median_frac_int_uniq"] = fdc.groupby(["untag_prec"])['frac_int_uniq'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_frac_int_uniq"] = pd.NA
-        fdc["abs_diff_frac_int_uniq_from_median"] = fdc['frac_int_uniq'] - fdc['median_frac_int_uniq']
-        fdc["abs_diff_frac_int_uniq_from_median"].fillna(fdc["abs_diff_frac_int_uniq_from_median"].mean(), inplace=True)
-        
-        
-        fdc["median_frac_lib_int"] = fdc.groupby(["untag_prec"])['frac_lib_int'].transform("median")
-        fdc.loc[fdc["channels_matched"] == 1, "median_frac_lib_int"] = pd.NA
-        fdc["diff_frac_lib_int_from_median"] = fdc['frac_lib_int'] - fdc['median_frac_lib_int']
-        fdc["diff_frac_lib_int_from_median"].fillna(fdc["diff_frac_lib_int_from_median"].mean(), inplace=True)
-        
-        
-        
-        # Count number of entries with 'frac_int_uniq_pred' > 0
-        fdc['num_channels_greater0_coeff'] = fdc.groupby("untag_prec")['coeff'].transform(lambda x: (x > 0).sum())
-        fdc['num_channels_greater0_frac_int_uniq_pred'] = fdc.groupby("untag_prec")['frac_int_uniq_pred'].transform(lambda x: (x > 0).sum())
-        fdc['num_channels_greater0_frac_dia_int'] = fdc.groupby("untag_prec")['frac_dia_int'].transform(lambda x: (x > 0).sum())
-        fdc['num_channels_greater0_frac_int_uniq'] = fdc.groupby("untag_prec")['frac_int_uniq'].transform(lambda x: (x > 0).sum())
-        fdc['num_channels_greater0_frac_lib_int'] = fdc.groupby("untag_prec")['frac_lib_int'].transform(lambda x: (x > 0).sum())
-        
-        #fdc["channels_matched_seq"] = fdc.groupby("untag_seq")["untag_seq"].transform("count")
-        # fdc["summed_coeff"] = fdc.groupby("untag_prec")['coeff'].transform("sum")
-        # fdc["summed_frac_int_uniq_pred"] = fdc.groupby("untag_prec")['coeff'].transform("sum")
-        # fdc["summed_frac_dia_int"] = fdc.groupby("untag_prec")['frac_dia_int'].transform("sum")
-        # fdc["summed_mz_error"] = fdc.groupby("untag_prec")['frac_dia_int'].transform("sum")
-        # fdc["summed_frac_int_uniq"] = fdc.groupby("untag_prec")['frac_int_uniq'].transform("sum")
-        # fdc["summed_frac_lib_int"] = fdc.groupby("untag_prec")['frac_lib_int'].transform("sum")
-
-        # fdc["summed_manhattan_distances"] = fdc.groupby("untag_prec")['manhattan_distances'].transform("sum")
-        # fdc["summed_gof_stats"] = fdc.groupby("untag_prec")['gof_stats'].transform("sum")
-        # fdc["summed_max_matched_residuals"] = fdc.groupby("untag_prec")['max_matched_residuals'].transform("sum")
-        # fdc["summed_scribe_scores"] = fdc.groupby("untag_prec")['scribe_scores'].transform("sum")
-
-        return fdc
     
     
 def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
@@ -443,9 +349,6 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     
     print("Scoring IDs")
     
-
-    if config.args.timeplex or config.args.plexDIA:
-        fdc = plex_features(fdc)
     
     ## We consider decoys and targets with v small coeffs to be from the null distributiom
     _bool = np.logical_and(~fdc["decoy"],fdc.coeff>1)
