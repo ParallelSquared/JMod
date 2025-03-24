@@ -20,7 +20,7 @@ import iso_functions as iso_f
 from SpectraFitting import fit_to_lib
 from scipy.interpolate import LSQUnivariateSpline as spline
 from scipy.interpolate import UnivariateSpline, InterpolatedUnivariateSpline
-from scipy.optimize import isotonic_regression
+#from scipy.optimize import isotonic_regression
 from statistics import quantiles
 from miscFunctions import within_tol
 from scipy import signal
@@ -1439,6 +1439,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     output_df["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
     
     feature_percentile = 50
+    if config.args.user_percentile:
+        print("Using user specified feature percentile for first search")
+        feature_percentile = config.args.initial_percentile
     def get_df_filter(df,p=50):
         return np.logical_and.reduce([df[feat]>np.percentile(df[feat],feature_percentile) for feat in ["hyperscore",
                                                                                                  "frag_cosines_p",
@@ -1862,6 +1865,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
     new_rt_tol =boundary# 4*np.abs(rt_stddev)
+    if config.args.user_rt_tol:
+        print("Using user specified RT tolerance")
+        new_rt_tol = config.args.rt_tol
     print(f"Optimsed RT tolerance: {new_rt_tol}")
     
     # ## ensure there is no overlap
@@ -1892,7 +1898,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         new_rt_tol = (min_prediction_diff/2)*.99 # ensure no overlap
         print(f"Reseting tolerance to {new_rt_tol}")
     
-    
+
     
     config.opt_rt_tol = new_rt_tol
     
@@ -2056,10 +2062,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         
         
-        
         ##plot mz alignment
         plt.subplots()
-        plt.scatter(rts,diffs,label="Original_MZ",s=1,alpha=5/((len(dia_rt)//1000)+1))
+        plt.scatter(rts,diffs,label="Original_MZ",s=1,alpha=min(1,5/((len(dia_rt)//1000)+1)))
         plt.scatter(rts,f_rt_mz(rts),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("Updated RT")
@@ -2069,7 +2074,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         ##plot mz alignment
         plt.subplots()
-        plt.scatter(id_mzs,diffs-f_rt_mz(rts),label="Original_MZ",s=1,alpha=5/((len(dia_rt)//1000)+1))
+        plt.scatter(id_mzs,diffs-f_rt_mz(rts),label="Original_MZ",s=1,alpha=min(1,5/((len(dia_rt)//1000)+1)))
         plt.scatter(id_mzs,mz_spl(id_mzs),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("m/z")
