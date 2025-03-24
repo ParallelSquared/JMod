@@ -1070,6 +1070,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
     new_rt_tol = boundary#4*np.abs(rt_stddev) 
+    if config.args.user_rt_tol:
+        print("Using user specified RT tolerance")
+        new_rt_tol = config.args.rt_tol
     print(f"Optimsed RT tolerance: {new_rt_tol}")
     config.opt_rt_tol = new_rt_tol
     
