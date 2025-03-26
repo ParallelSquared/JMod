@@ -178,7 +178,7 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
         "plexfittrace_spec_all", "plexfittrace_all", "plexfittrace_ps_all",
         "plex_Area", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
         "all_ms1_specs", "MS1_Area"
-    ]
+    ] + [f"all_ms1_iso{i}vals" for i in range(config.num_iso_ms1)]
     
     # Ensure we only select columns that actually exist in fdc
     existing_cols = [col for col in selected_cols if col in fdc.columns]
