@@ -72,6 +72,7 @@ if __name__=="__main__":
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
+
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
         
