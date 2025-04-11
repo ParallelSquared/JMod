@@ -170,7 +170,8 @@ def gof_stat(
     val_split,
     residuals,
     val_obs,
-    coeffs
+    coeffs,
+    offset
 ):
 
     """
@@ -211,7 +212,7 @@ def gof_stat(
             for (row_idx, col_idx, val) in zip(row_idx_split[j], col_idx_split[j], val_split[j]):
                 r = abs(residuals[row_idx])
                 sum_of_residuals[j] += r
-                sum_of_fitted_peaks[j] += abs(coeffs[col_idx]*val)
+                sum_of_fitted_peaks[j] += abs(coeffs[col_idx+offset]*val)
                 if (val_obs[row_idx] > 1e-6):
                     if r > max_matched_residual:
                         max_matched_residual = r
@@ -349,7 +350,8 @@ def get_features(
         ref_spec_values_split,
         residuals,
         dia_spectrum[:,1],
-        lib_coefficients
+        lib_coefficients,
+        ref_spec_offset
     )
     # Add our new function call
     manhattan_distances = get_manhattan_distance(
@@ -363,7 +365,7 @@ def get_features(
     num_lib_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched])
     frac_lib_intensity = [np.sum(i) for i in ref_spec_values_split] # all ints sum to 1 so these give frac
     tic = np.sum(dia_spectrum[:,1])
-    frac_dia_intensity = [np.sum(dia_spectrum[i+ref_spec_offset,1])/tic for i in ref_spec_row_indices_split]
+    frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in ref_spec_row_indices_split]
     # mz tol
     rel_error = ms1_error#np.zeros(len(ref_peaks_in_dia))
     rt_error = prec_rt-rt_mz[:,0]
@@ -385,7 +387,7 @@ def get_features(
         
     frac_unique_pred = [np.divide(*np.sum(i,axis=0)[::-1])*c if i.shape[0]>0 else 0 for i,c in zip(peaks_not_shared,lib_coefficients)] #frac of int matched by unique peaks pred by unique peaks
     
-    frac_dia_intensity_pred = [(i*c)/j for i,j,c in zip(frac_lib_intensity,frac_dia_intensity,lib_coefficients)]
+    frac_dia_intensity_pred = [(i*c)/j for i,j,c in zip(frac_lib_intensity,frac_dia_intensity,lib_coefficients[offset:-1])]
     
     #### stack spectrum features
     # r2all = np.ones_like(num_lib_peaks_matched)*r2all
@@ -1340,7 +1342,8 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
             ref_spec_values_split,
             residuals,
             dia_spectrum[:,1],
-            lib_coefficients
+            lib_coefficients,
+            0
         )
         # Add our new function call
         manhattan_distances = get_manhattan_distance(
