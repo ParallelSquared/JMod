@@ -140,10 +140,11 @@ def load_tsv_speclib(spec_lib_file):
                 python_lib[unique_id]["seq"] = row["PeptideSequence"]
             python_lib[unique_id]["prec_mz"] = float(row["PrecursorMz"])
             python_lib[unique_id]["prec_z"] = float(row["PrecursorCharge"]) 
-            if "RT" in row:
-                rt = row["RT"]
-            elif "Tr_recalibrated" in row:
+            
+            if "Tr_recalibrated" in row:
                 rt = row["Tr_recalibrated"]
+            elif "RT" in row:
+                rt = row["RT"]
             elif "iRT" in row:
                 rt = row["iRT"]
             else:
@@ -153,7 +154,7 @@ def load_tsv_speclib(spec_lib_file):
             loss=""
             if "FragmentLossType" in row:
                 loss = str(row["FragmentLossType"])
-                if loss in ["unknown","noloss"]:
+                if loss in ["unknown","noloss",""]:
                     loss=""
                 else:
                     loss = "-"+loss
@@ -177,8 +178,12 @@ def load_tsv_speclib(spec_lib_file):
                 python_lib[unique_id]["protein_name"] = row["ProteinName"]
             elif "ProteinID" in row:
                 python_lib[unique_id]["protein_name"] = row["ProteinID"]
+            elif "ProteinId" in row:
+                python_lib[unique_id]["protein_name"] = row["ProteinId"]
             if "Genes" in row:
                 python_lib[unique_id]["genes"] = row["Genes"]
+            if "GeneName" in row:
+                python_lib[unique_id]["genes"] = row["GeneName"]
             if "UniprotID" in row:
                 python_lib[unique_id]["UniprotID"] = row["UniprotID"]
             
@@ -271,7 +276,7 @@ def loadSpecLib(lib_file):
         with open(python_lib_file,"rb") as read_file:
             spec_lib = pickle.load(read_file)
     
-    print(f"Loaded {len(spec_lib)} library spectra")
+    print(f"Loaded {len(spec_lib)} library precursors")
     print("finished")
     return spec_lib
     

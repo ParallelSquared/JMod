@@ -66,15 +66,15 @@ if __name__=="__main__":
                                     f"libfrac{config.args.lib_frac}",
                                     *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,plexDIA,is_timeplex,dummy_val]))])
     
-    results_folder_path = "/Users/kevinmcdonnell/Programming/Python/Jmod/Results/"+results_folder_name
+    
     print(results_folder_name)
     # print(config.args.tag)
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
-    # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
-    # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
+    if config.args.output_folder is not None:
+        results_folder_path = config.args.output_folder +"/" +results_folder_name
+        
     if not os.path.exists(results_folder_path):
         os.mkdir(results_folder_path)
     

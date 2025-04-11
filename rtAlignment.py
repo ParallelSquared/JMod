@@ -359,6 +359,17 @@ def closest_spec(dia_rt_mzwin,mz,rt):
     #     print(mz,rt)
     #     return 0
     
+def closest_spec(dia_rt_mzwin, mz, rt):
+    contender_idxs = np.where((dia_rt_mzwin[:,1] < mz) & (mz < dia_rt_mzwin[:,2]))[0]
+    
+    if contender_idxs.size == 0:  # More efficient size check
+        return 0
+    
+    contenders = dia_rt_mzwin[contender_idxs, 0]  # Extract only necessary column
+    closest_idx = contender_idxs[np.argmin(np.abs(contenders - rt))]
+    
+    return closest_idx
+    
 def gaussian(x, amplitude, mean, stddev):
     return (amplitude/ (np.abs(stddev) * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mean) / stddev) ** 2)
 
@@ -719,6 +730,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     median  = np.median(np.concatenate([i for i in frag_errors]))
     output_df["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
     
+    output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in output_df["seq"]])
+    output_df["last_aa"]=[i[-1] for i in output_df.stripped_seq]
+    
     if results_folder is not None:
         output_df.to_csv(results_folder+"/firstSearch.csv", index=False)
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
@@ -777,10 +791,36 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             # print(sum(cor_filter))
             
             f = lowess_fit(output_rts[cor_filter],output_df.rt[cor_filter],.1)
+            plt.subplots()
+            plt.scatter(output_rts[cor_filter],output_df.rt[cor_filter],s=1)
+            plt.scatter(output_rts[cor_filter],f(output_rts[cor_filter]),s=1)
+            plt.title(str(feature_percentile))
+            plt.savefig(results_folder+f"/Percentile_{str(feature_percentile)}.png",dpi=600,bbox_inches="tight")
+            
             # plt.subplots()
-            # plt.scatter(output_rts[cor_filter],output_df.rt[cor_filter],s=1)
-            # plt.scatter(output_rts[cor_filter],f(output_rts[cor_filter]),s=1)
+            # f = lowess_fit(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],.1)
+            # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],s=1)
+            # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],
+            #             f(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter]),s=1)
             # plt.title(str(feature_percentile))
+            
+            # r_filter =np.logical_and(output_df.last_aa=="R",cor_filter)
+            # fr = lowess_fit(output_rts[r_filter], output_df.rt[r_filter],.1)
+            # plt.subplots()
+            # plt.scatter(output_rts[r_filter],output_df.rt[r_filter],s=1)
+            # x = np.linspace(min(output_rts[r_filter]),max(output_rts[r_filter]),100)
+            # plt.scatter(x,fr(x),s=1)
+            # plt.title(str(feature_percentile))
+            
+            
+            # k_filter =np.logical_and(output_df.last_aa=="K",cor_filter)
+            # fk = lowess_fit(output_rts[k_filter], output_df.rt[k_filter],.1)
+            # # plt.subplots()
+            # plt.scatter(output_rts[k_filter],output_df.rt[k_filter],s=1)
+            # x = np.linspace(min(output_rts[k_filter]),max(output_rts[k_filter]),100)
+            # plt.scatter(x,fk(x),s=1)
+            # plt.title(str(feature_percentile))
+            
          
            
             
@@ -1074,7 +1114,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         print("Using user specified RT tolerance")
         new_rt_tol = config.args.rt_tol
     print(f"Optimsed RT tolerance: {new_rt_tol}")
-    config.opt_rt_tol = new_rt_tol
+    config.opt_rt_tol = np.abs(new_rt_tol)
     
     # set optimised ms2 tol
     # is_real = ~np.isnan(diffs)
@@ -1086,9 +1126,18 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
     # new_ms1_tol = get_tol(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs)
     # new_ms1_tol = get_tol(diffs-mz_spl(id_mzs))
-    new_ms1_tol = 4*mz_stddev
+    new_ms1_tol = np.abs(4*mz_stddev)
     print(f"Optimsed ms1 tolerance: {new_ms1_tol}")
     
+    
+    if config.args.ms1_ppm!=0:
+        print(f"Using MS1 Tolerance provided: {config.args.ms1_ppm}ppm")
+        new_ms1_tol=np.abs(config.args.ms1_ppm*1e-6)
+    elif config.min_ms1_tol!=0 and config.min_ms1_tol>new_ms1_tol:
+        print(f"Exceeded minimum MS1 tolerance: {np.abs(config.min_ms1_tol)}")
+        print(f"Setting new MS1 tolerance: {np.abs(config.min_ms1_tol)}")
+        new_ms1_tol=np.abs(config.min_ms1_tol)
+        
     config.opt_ms1_tol  = new_ms1_tol
     
     if ms2:
@@ -1161,21 +1210,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         plt.savefig(results_folder+"/RTdiff.png",dpi=600,bbox_inches="tight")
         
         
-        ##plot mz alignment
-        plt.subplots()
-        plt.scatter(converted_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(dia_rt)[cor_filter])//1000)+1)))
-        plt.scatter(converted_rt,f_rt_mz(converted_rt),label="Predicted_MZ",s=1)
-        # plt.legend()
-        plt.xlabel("Updated RT")
-        plt.ylabel("m/z difference (relative)")
-        # plt.show()
-        plt.savefig(results_folder+"/MZrtfit.png",dpi=600,bbox_inches="tight")
-        
-        
         
 
-        # stop
-        # Plot the CDFs with elbow points
+        
+        ### Plot the CDFs with elbow points
         
         plt.subplots()
         plt.figure(figsize=(8, 5))
@@ -1213,6 +1251,17 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         plt.savefig(results_folder+"/RTelbows.png",dpi=600,bbox_inches="tight")
         
         
+        ##plot mz rt alignment
+        plt.subplots()
+        plt.scatter(converted_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(dia_rt)[cor_filter])//1000)+1)))
+        plt.scatter(converted_rt,f_rt_mz(converted_rt),label="Predicted_MZ",s=1)
+        # plt.legend()
+        plt.xlabel("Updated RT")
+        plt.ylabel("m/z difference (relative)")
+        # plt.show()
+        plt.savefig(results_folder+"/MZrtfit.png",dpi=600,bbox_inches="tight")
+        
+        
 
         ##plot mz alignment
         plt.subplots()
@@ -1226,7 +1275,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         
         
-        ## plot mz alignment
+        ## plot mz diff
         plt.subplots()
         plt.hist(np.array(diffs)[cor_filter],100)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs,100,alpha=.5)
@@ -1268,6 +1317,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             plt.savefig(results_folder+"/MS2diff.png",dpi=600,bbox_inches="tight")
     # plt.scatter(id_mzs,diffs)
     # plt.scatter(output_rts,diffs)
+    plt.close("all")
     
     if ms2:
         return (rt_spl, mz_func, ms2_func), updatedLibrary
@@ -1867,10 +1917,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
    
     
     # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
-    new_rt_tol =boundary# 4*np.abs(rt_stddev)
+    new_rt_tol =np.abs(boundary)# 4*np.abs(rt_stddev)
     if config.args.user_rt_tol:
         print("Using user specified RT tolerance")
-        new_rt_tol = config.args.rt_tol
+        new_rt_tol = np.abs(config.args.rt_tol)
     print(f"Optimsed RT tolerance: {new_rt_tol}")
     
     # ## ensure there is no overlap
@@ -1896,9 +1946,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     min_prediction_diff = np.min(prediction_diffs)
     min_prediction_diff = np.min([np.min(i) for i in prediction_diffs])
     
-    if new_rt_tol>min_prediction_diff/2:
+    if new_rt_tol>np.abs(min_prediction_diff/2):
         print("Warning; Library RTs overlapping")
-        new_rt_tol = (min_prediction_diff/2)*.99 # ensure no overlap
+        new_rt_tol = np.abs(min_prediction_diff/2)*.99 # ensure no overlap
         print(f"Reseting tolerance to {new_rt_tol}")
     
 
@@ -1917,7 +1967,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
 
     # new_ms1_tol = get_tol(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs)
     # new_ms1_tol = get_tol(diffs-mz_spl(id_mzs))
-    new_ms1_tol = 4*mz_stddev
+    new_ms1_tol = np.abs(4*mz_stddev)
     print(f"Optimsed ms1 tolerance: {new_ms1_tol}")
     
     config.opt_ms1_tol  = new_ms1_tol

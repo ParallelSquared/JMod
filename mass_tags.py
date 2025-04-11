@@ -152,7 +152,33 @@ tag6_9plex = massTag(rules = "nK",
                      12.0339381092,14.0406477848,16.03857422084],
             channel_names = ["0","2","4","6","8","10","12","14","16"],
             name = "tag6_9plex") 
+
+tag6_d0d2 = massTag(rules = "nK",
+            base_mass=308.1160923903,
+            # delta = 4.0070994,
+            # delta = [4.0070994],
+            delta = [0.0, 2.0067096756],
+            channel_names = ["0","2"],
+            name = "tag6_d0d2") 
+
+tag6_d0d4 = massTag(rules = "nK",
+            base_mass=308.1160923903,
+            # delta = 4.0070994,
+            # delta = [4.0070994],
+            delta = [0.0, 4.01095605604],
+            channel_names = ["0","4"],
+            name = "tag6_d0d4") 
      
+
+tag6_d0d2d4 = massTag(rules = "nK",
+                    base_mass=308.1160923903,
+                    # delta = 4.0070994,
+                    # delta = [4.0070994],
+                    delta = [0.0, 2.0067096756, 4.01095605604],
+                    channel_names = ["0","2","4"],
+                    name = "tag6_d0d2d4") 
+     
+
 tag6lys = massTag(rules = "nK",
             base_mass=464.24235,
             # delta = 4.0070994,
@@ -339,6 +365,9 @@ available_tags = {"mTRAQ":mTRAQ,
                   "tag6":tag6,
                   "tag6_5plex":tag6_5plex,
                   "tag6_9plex":tag6_9plex,
+                  "tag6_d0d2":tag6_d0d2,
+                  "tag6_d0d4":tag6_d0d4,
+                  "tag6_d0d2d4":tag6_d0d2d4,
                   "tag6pip":tag6pip,
                   "tag6lys":tag6lys,
                   "tag6arg":tag6arg}
