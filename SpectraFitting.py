@@ -83,6 +83,8 @@ def get_residuals(
     decoy_sparse_col,  # sparse cols for decoy data
     val_obs,  # observed values. the 'b' in Ax = b
     coeffs,  # coefficients. the 'x' in Ax = b
+    ref_spec_offset,
+    decoy_spec_offset,
 ):
     """
     Calculate residuals (Ax - b) and prediction values for both reference and decoy data.
@@ -107,11 +109,11 @@ def get_residuals(
             - y_pred (numpy.ndarray): Predicted values calculated as A*x.
     """
     
-    def _compute_prediction(sparse_val, sparse_row, sparse_col, coeff_array, y_pred):
+    def _compute_prediction(sparse_val, sparse_row, sparse_col, coeff_array, y_pred, offset):
         """Helper function to compute predictions for a set of sparse data"""
         for j in range(len(sparse_row)):
             for row, col, val in zip(sparse_row[j], sparse_col[j], sparse_val[j]):
-                y_pred[row] += val * coeff_array[col]
+                y_pred[row] += val * coeff_array[col+offset]
         return y_pred
     
     coeffs = np.asarray(coeffs).ravel()
@@ -121,10 +123,10 @@ def get_residuals(
     y_pred = np.zeros(N)
     
     # Compute predictions for reference data
-    y_pred = _compute_prediction(ref_sparse_val, ref_sparse_row, ref_sparse_col, coeffs, y_pred)
+    y_pred = _compute_prediction(ref_sparse_val, ref_sparse_row, ref_sparse_col, coeffs, y_pred, ref_spec_offset)
     
     # Add predictions for decoy data
-    y_pred = _compute_prediction(decoy_sparse_val, decoy_sparse_row, decoy_sparse_col, coeffs, y_pred)
+    y_pred = _compute_prediction(decoy_sparse_val, decoy_sparse_row, decoy_sparse_col, coeffs, y_pred, decoy_spec_offset)
     
     # Compute residuals
     #r = np.zeros_like(y_pred)
@@ -306,7 +308,9 @@ def get_features(
     all_row_indices,
     all_values,
     prec_frags,
-    ms1_error):
+    ms1_error,
+    ref_spec_offset,
+    decoy_spec_offset):
     
     scribe_scores = get_scribe(
         ref_spec_row_indices_split,
@@ -323,7 +327,9 @@ def get_features(
         decoy_spec_row_indices_split,
         decoy_spec_col_indices_split,
         dia_spectrum[:,1],
-        lib_coefficients
+        lib_coefficients,
+        ref_spec_offset,
+        decoy_spec_offset
     )
     # Then use y_pred for the manhattan distance
     manhattan_distances = get_manhattan_distance(
@@ -357,7 +363,7 @@ def get_features(
     num_lib_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched])
     frac_lib_intensity = [np.sum(i) for i in ref_spec_values_split] # all ints sum to 1 so these give frac
     tic = np.sum(dia_spectrum[:,1])
-    frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in ref_spec_row_indices_split]
+    frac_dia_intensity = [np.sum(dia_spectrum[i+ref_spec_offset,1])/tic for i in ref_spec_row_indices_split]
     # mz tol
     rel_error = ms1_error#np.zeros(len(ref_peaks_in_dia))
     rt_error = prec_rt-rt_mz[:,0]
@@ -406,9 +412,13 @@ def get_features(
     
     if len(prec_frags)>0 and len(list(prec_frags)[0])==len(lib_peaks_matched[0]):
         hyperscores = [hyperscore(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
+        b_counts = [b_count(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
+        y_counts = [y_count(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
     else:
         hyperscores = np.zeros_like(num_lib_peaks_matched)
-    
+        b_counts = np.zeros_like(num_lib_peaks_matched)
+        y_counts = np.zeros_like(num_lib_peaks_matched)
+
     features = np.stack([num_lib_peaks_matched,
                           frac_lib_intensity,
                           frac_dia_intensity,
@@ -422,6 +432,8 @@ def get_features(
                           frac_unique_pred,
                           frac_dia_intensity_pred,
                           hyperscores,
+                          b_counts,
+                          y_counts,
                           scribe_scores,
                           max_unmatched_residuals,
                           max_matched_residuals,
@@ -907,7 +919,9 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
                                 (ref_spec_row_indices_split+decoy_spec_row_indices_split),
                                 (ref_spec_values_split+decoy_spec_values_split),
                                 [library[i]["frags"] for i in ref_pep_cand],
-                                ref_ms1_error)
+                                ref_ms1_error,
+                                0,
+                                decoy_col_offset)
         
         single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
         
@@ -939,7 +953,9 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
                                             (ref_spec_row_indices_split+decoy_spec_row_indices_split),
                                             (ref_spec_values_split+decoy_spec_values_split),
                                             [converted_frags[i] for i in decoy_peaks_in_dia],
-                                            decoy_ms1_error)
+                                            decoy_ms1_error,
+                                            decoy_col_offset,
+                                            0)
         
             # new_row_indices_split = [[peak_idx_convertor[j] for j in i] for i in decoy_spec_row_indices_split]
             unique_row_indices_split_decoy = [[peak_idx_convertor[j] in single_matched_rows for j in i] for i in decoy_spec_row_indices_split]
@@ -1259,7 +1275,8 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
         r2_lib_spec = [np_pearson_cor(i,dia_spectrum[j,1]).statistic for i,j in zip(ref_spec_values_split,ref_spec_row_indices_split)]
         
         single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
-        peaks_not_shared = [np.array([[dia_spectrum[i,1],j] for i,j in zip(dia,lib) if i in single_matched_rows]) for dia,lib in zip(ref_spec_row_indices_split,ref_spec_values_split)]
+        peaks_not_shared = [
+            np.array([[dia_spectrum[i,1],j] for i,j in zip(dia,lib) if i in single_matched_rows]) for dia,lib in zip(ref_spec_row_indices_split,ref_spec_values_split)]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             r2_unique = [np_pearson_cor(*i.T).statistic if i.shape[0]>1 else 0 for i in peaks_not_shared ]
@@ -1289,8 +1306,15 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
         subset_pred_spec = np.sum(scaled_matrix,1)
         subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
         large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
-        
+        def b_count(frag_list,matches):
+            return sum(["b" in i for i,j in zip(frag_list,matches) if j])
+            
+        def y_count(frag_list,matches):
+            return sum(["y" in i for i,j in zip(frag_list,matches) if j])
+
         hyperscores = [hyperscore(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
+        b_counts = [b_count(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
+        y_counts = [y_count(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
         
             
         scribe_scores = get_scribe(
@@ -1352,6 +1376,8 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
                             frac_unique_pred,
                             frac_dia_intensity_pred,
                             hyperscores,
+                            b_counts,
+                            y_counts,
                             scribe_scores,
                             max_unmatched_residuals,
                             max_matched_residuals,
