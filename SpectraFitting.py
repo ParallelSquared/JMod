@@ -387,7 +387,7 @@ def get_features(
         
     frac_unique_pred = [np.divide(*np.sum(i,axis=0)[::-1])*c if i.shape[0]>0 else 0 for i,c in zip(peaks_not_shared,lib_coefficients)] #frac of int matched by unique peaks pred by unique peaks
     
-    frac_dia_intensity_pred = [(i*c)/j for i,j,c in zip(frac_lib_intensity,frac_dia_intensity,lib_coefficients[offset:-1])]
+    frac_dia_intensity_pred = [(i*c)/j for i,j,c in zip(frac_lib_intensity,frac_dia_intensity,lib_coefficients[ref_spec_offset:])]
     
     #### stack spectrum features
     # r2all = np.ones_like(num_lib_peaks_matched)*r2all
