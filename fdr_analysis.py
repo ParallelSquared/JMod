@@ -213,7 +213,7 @@ class score_model():
         self.folder = folder
                 
     def run_model(self,X,y,sample_weight=None):
-        print("test")
+        # print(f"{config.tree_max_depth}")
         if self.model_type=="rf":
             
             ### Random Forest

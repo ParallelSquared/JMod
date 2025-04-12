@@ -14,7 +14,7 @@ parser.add_argument('-r', '--use_rt', action='store_true')
 parser.add_argument('-f', '--use_features', action='store_false')
 parser.add_argument('-m', '--atleast_m', default=3, type=int)
 parser.add_argument('-t', '--threads', default=10, type=int)
-parser.add_argument('-p', '--ppm', default=20, type=float)
+parser.add_argument('-p', '--ppm', default=10, type=float)
 parser.add_argument('-o','--output_folder', default=None)   
 parser.add_argument('--ms2_align', action='store_true')
 parser.add_argument('--timeplex', action='store_true')
@@ -164,7 +164,7 @@ score_model = "rf"
     xg: XgBoost
 """
 
-tree_max_depth = None
+tree_max_depth = 20
 
 fdr_threshold = 0.01
 
