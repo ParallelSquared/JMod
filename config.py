@@ -102,7 +102,8 @@ opt_im_tol = im_tol
 
 
 
-protein_column = 'protein_name'
+# protein_column = 'protein_name'
+protein_column = 'protein_group'
 
 
 ### the minimum number of IDs necessary for fine-tuning
