@@ -133,21 +133,13 @@ def fine_tune_rt(grouped_df,
     elif tag.name=="mTRAQ":
         model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_mTRAQ_09182024_"
         
-    elif tag.name=="diethyl_6plex":
+    elif "diethyl" in tag.name:
         # model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk3plex/iRT_updated_model"
         model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk_thenFDX016/iRT_updated_model"
         
-    elif tag.name=="diethyl_3plex":
-        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_DiEthyl_11052024_"
-        
-    elif tag.name=="tag6_5plex":
-        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
-        
-    elif tag.name=="tag6_9plex":
-        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
-        
-    elif tag.name=="tag6":
-        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
+    elif "tag6" in tag.name:
+        # model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
+        model_path = "/Volumes/Lab/KMD/FineTuning/tag6/iRT_CNN_model_tag6_05052025_"
         
     else:
         raise ValueError("Unknown label")
@@ -172,6 +164,9 @@ def fine_tune_rt(grouped_df,
         order = np.argsort(loess_result[:, 1])
         return np.interp(rts, loess_result[order, 1], loess_result[order, 0])
 
+    # def obs_to_model(rts):
+    #     return (rts-rts.min())/(rts.max()-rts.min())
+    
 
     if len(grouped_df)>config.FT_minimum:
         ### Fine Tune models

@@ -14,7 +14,8 @@ parser.add_argument('-r', '--use_rt', action='store_true')
 parser.add_argument('-f', '--use_features', action='store_false')
 parser.add_argument('-m', '--atleast_m', default=3, type=int)
 parser.add_argument('-t', '--threads', default=10, type=int)
-parser.add_argument('-p', '--ppm', default=20, type=float)
+parser.add_argument('-p', '--ppm', default=10, type=float)
+parser.add_argument('-o','--output_folder', default=None)   
 parser.add_argument('--ms2_align', action='store_true')
 parser.add_argument('--timeplex', action='store_true')
 parser.add_argument('--num_timeplex', default=0, type=int)
@@ -36,6 +37,8 @@ parser.add_argument('--user_rt_tol', action='store_true')
 parser.add_argument('--rt_tol', default=.5, type=float)
 parser.add_argument('--initial_percentile', default=50, type=float)
 parser.add_argument('--user_percentile', action='store_true') 
+parser.add_argument('--no_ms1_req', action='store_false') 
+parser.add_argument("--ms1_ppm",default=0, type=float)
 
 
 
@@ -99,9 +102,15 @@ opt_im_tol = im_tol
 
 
 
-protein_column = 'protein_name'
+# protein_column = 'protein_name'
+protein_column = 'protein_group'
 
 
+### the minimum number of IDs necessary for fine-tuning
+FT_minimum = 1e3
+
+### minimum ms1 tolerance; set to 0 to ignore
+min_ms1_tol = 3e-6
 
 num_iso_peaks = args.num_iso
 min_iso_intensity = 1e-3 ## derived empirically
@@ -130,7 +139,7 @@ test_var = "test_1"
 
 ### filters for picking spectra to fit
 frac_lib_matched = args.lib_frac
-match_ms1 = True
+match_ms1 = args.no_ms1_req
 top_n = 10
 atleast_m = args.atleast_m
 
@@ -156,7 +165,7 @@ score_model = "rf"
     xg: XgBoost
 """
 
-tree_max_depth = None
+tree_max_depth = 20
 
 fdr_threshold = 0.01
 

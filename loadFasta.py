@@ -19,25 +19,33 @@ fasta_files = [
     "/Users/kevinmcdonnell/Programming/Data/FASTA/uniprot-proteome_UP000000625.fasta", ## ecoli
     "/Users/kevinmcdonnell/Programming/Data/FASTA/uniprot-proteome_UP000002311+reviewed_yes.fasta" ## yeast
     ]
+
+fasta_files = [
+        '/Volumes/Lab/CharlesRiver/Tag6/March 2025 Collision energy 30%/fasta/human_canonical_2025_03_25.fasta',
+        '/Volumes/Lab/CharlesRiver/Tag6/March 2025 Collision energy 30%/fasta/ecoli_2025_03_25.fasta',
+        '/Volumes/Lab/CharlesRiver/Tag6/March 2025 Collision energy 30%/fasta/s_cerevisiae_2025_03_25.fasta'
+    ]
 rule = 'Trypsin'
 max_num_missed_cleavage = 2
 
 all_fasta_seqs = []
 all_protein_names=[]
 for fasta_file in fasta_files:
+    # break
     fasta_seqs = set()
     proteins =set()
     pep_to_prot = {}
     prot_num=0
     with fasta.read(fasta_file) as db:
          for entry in db:
-            # break
+            # if entry.description=="sp|Q9UHJ6|SHPK_HUMAN Sedoheptulokinase OS=Homo sapiens OX=9606 GN=SHPK PE=1 SV=4":
+            #     break
             prot_num+=1
             proteins.update([re.search("[a-z]{2}\|(.*)?\|",entry.description)[1]])
             peps = parser.cleave(entry.sequence,rule=rule,
                                  missed_cleavages=max_num_missed_cleavage,
-                                 min_length=7,
-                                 max_length=45)
+                                 min_length=5,
+                                 max_length=50)
             # peps = {re.sub("I","L",i) for i in peps}
             fasta_seqs.update(peps)
             

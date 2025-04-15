@@ -130,7 +130,7 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
         
         fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
         fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.isnan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+        fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
         fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
 
     else:
@@ -213,7 +213,7 @@ class score_model():
         self.folder = folder
                 
     def run_model(self,X,y,sample_weight=None):
-        print("test")
+        # print(f"{config.tree_max_depth}")
         if self.model_type=="rf":
             
             ### Random Forest
@@ -517,6 +517,7 @@ def compute_protein_FDR(df):
         .groupby(["file_name", "channel"])
         .size()
         .reset_index(name="Precursor_IDs")
+        .sort_values("channel")
     )
     print("Number of precursors at 1% FDR:")
     print("All Channels:",np.sum(df_counts_prec.Precursor_IDs))
@@ -529,7 +530,8 @@ def compute_protein_FDR(df):
         .groupby(["run_chan","channel"])
         .size()
         .reset_index(name="Protein_IDs")
-    )
+        .sort_values("channel")
+        )
     print("\nNumber of proteins at 1% FDR:")
     print("All Channels:",np.sum(df_counts_prots.Protein_IDs))
     print(df_counts_prots.to_string(index=False))
@@ -552,6 +554,7 @@ def compute_protein_FDR(df):
             .groupby(["file_name", "channel"])
             .size()
             .reset_index(name="Precursor_IDs")
+            .sort_values("channel")
         )
         
         # Print precursor ID counts
@@ -566,6 +569,7 @@ def compute_protein_FDR(df):
             .groupby(["run_chan", "channel"])
             .size()
             .reset_index(name="Protein_IDs")
+            .sort_values("channel")
         )
         
         # Print protein ID counts
