@@ -164,8 +164,10 @@ def compute_new_quant(group,scan_width=3,use="max"):
     return group.plexfittrace_all.transform(lambda x: np.sum(list(map(float,x.split(";")[max(0,largest_stat_idx-scan_width):min(len(pearson_stats),largest_stat_idx+scan_width)]))))
     
 def add_new_quant(fdx1):
-    new_quant_column = fdx1.groupby(["file_idx","untag_prec"],as_index=False).apply(lambda x: compute_new_quant(x))
+    new_quant_column = fdx1.groupby(["file_idx","untag_prec"],as_index=False).apply(lambda x: compute_new_quant(x,use="max"))
     fdx1["new_plexfitMS1"] = new_quant_column.reset_index(level=0, drop=True)
+    new_quant_column2 = fdx1.groupby(["file_idx","untag_prec"],as_index=False).apply(lambda x: compute_new_quant(x,use="pearson"))
+    fdx1["new_plexfitMS1_p"] = new_quant_column2.reset_index(level=0, drop=True)
     return fdx1
 
 
@@ -1327,7 +1329,7 @@ def compute_all_comparisons(fdx,
         # plt.hlines(np.unique(all_ratios),0,len(all_ratios))
     
     else:
-        counter_size = 0.9
+        counter_size = 1.1#0.9
         only_A = False
         y_lim = 4
         tick_offset = .1
@@ -1345,10 +1347,10 @@ def compute_all_comparisons(fdx,
             kde=gaussian_kde(mix_values[comb])
             bins = np.linspace(-y_lim,y_lim,60)
             # ax_hist.plot(kde(bins),bins,color=org_colors[o_i])
-            plt.fill_betweenx(bins,count,count+ kde(bins),alpha=.5,color=org_colors[o_i],label=orgs[o_i]+" ratio" if count==0 else "")
+            plt.fill_betweenx(bins,count,count+ (kde(bins)/max(kde(bins))),alpha=.5,color=org_colors[o_i],label=orgs[o_i]+" ratio" if count==0 else "")
             t_ratio = np.log2(theoretical_yeast_amounts[comb[0]]/theoretical_yeast_amounts[comb[1]])
-            end_of_line = min(counter_size*.95,(max(kde(bins)))*1.2)
-            # end_of_line = .9#
+            # end_of_line = min(counter_size*.95,(max(kde(bins)))*1.2)
+            end_of_line = counter_size*.9#
             plt.hlines(t_ratio,count,count+ end_of_line,label="Theoretical Ratio" if count==0 else "")
             hist_labels.append(comb[0]+"/"+comb[1])
             counts.append(count)
@@ -1356,7 +1358,7 @@ def compute_all_comparisons(fdx,
             # count+=end_of_line*1.1
         # plt.xticks(range(len(hist_labels)),hist_labels)
         plt.xticks(np.array(counts)+tick_offset,hist_labels)
-        plt.legend(bbox_to_anchor=(1.2, 1.2))
+        plt.legend(bbox_to_anchor=(1.1, 1.1))
         plt.ylabel("Log$_2$ Ratios")
         ax.spines[['right', 'top']].set_visible(False)
 

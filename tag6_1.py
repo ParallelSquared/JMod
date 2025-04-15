@@ -70,13 +70,35 @@ fdx_files_5p = ["/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_5plex_20win-DIA
                 # "/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_5plex_20win-DIA_2_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate220325_20ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_9plex_plexDIA/filtered_IDs.csv",
                 "/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_5plex_20win-DIA_3_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate220325_20ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_9plex_plexDIA/filtered_IDs.csv"]
 
-fdx_files_9p=["/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_9plex_20win-DIA_1_hs_tag6_shortpep_JDRT_480_1000_100k_jmodUpdate220325_20ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_9plex_plexDIA_noprotein/filtered_IDs.csv"]
+
+
+fdx_files_lf = ["/Volumes/Lab/KMD/Results/2025-03-20_HY_LF-200pg_20win-DIA_3_LF_HY_libUpdate220325_20ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0/filtered_IDs.csv"]
+
+fdx_files_d0 =["/Volumes/Lab/KMD/Results/2025-03-20_HY_T6d0-200pg_20win-DIA_1_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate120525_10.0ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_new_iso_prec/filtered_IDs.csv",
+               "/Volumes/Lab/KMD/Results/2025-03-20_HY_T6d0-200pg_20win-DIA_2_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate120525_10.0ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_new_iso_prec/filtered_IDs.csv",
+               "/Volumes/Lab/KMD/Results/2025-03-20_HY_T6d0-200pg_20win-DIA_3_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate120525_10.0ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_new_iso_prec/filtered_IDs.csv"
+               ]
+
+fdx_files_5p = ["/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_5plex_20win-DIA_1_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate120525_10ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_5plex_plexDIA/filtered_IDs.csv",
+                "/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_5plex_20win-DIA_2_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate120525_10ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_5plex_plexDIA/filtered_IDs.csv",
+                "/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_5plex_20win-DIA_3_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate120525_10ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_5plex_plexDIA/filtered_IDs.csv"
+                ]
+
+
+fdx_files_9p=["/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_9plex_20win-DIA_1_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate120525_10ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_9plex_plexDIA/filtered_IDs.csv",
+              "/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_9plex_20win-DIA_2_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate120525_10ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_9plex_plexDIA/filtered_IDs.csv",
+              "/Volumes/Lab/KMD/Results/2025-03-20_HY_T6-200pg_9plex_20win-DIA_3_hs_tag6_shortpep_JDRT_480_1000_250k_jmodUpdate120525_10ppm_3m_unmatchc_DECOYrev_libfrac0.5_RT_Dino_iso3.0_tag6_9plex_plexDIA/filtered_IDs.csv"]
+
+
+
+
 
 
 title1 = "3-plex"
 # title1 = "4 Da"
 # fdx1, dc1 = load_files(fdx_files1)
-fdxs = [load_files(fdx_files,channels,channel_mix)[0] for fdx_files in [fdx_files_d0,
+fdxs = [load_files(fdx_files,channels,channel_mix)[0] for fdx_files in [fdx_files_lf,
+                                                                        fdx_files_d0,
                                                                      fdx_files_5p,
                                                                      fdx_files_9p]]
 fdxs_orig = fdxs
@@ -97,7 +119,7 @@ groups = [[i for i in list(np.unique(fdx.Run))] for fdx in fdxs]
 plot_channel_numbers2(fdxs,
                       titles = group_keys,
                       channels=channels,
-                      summary_type="protei",
+                      summary_type="protein",
                       width = .2,
                       offset_size=.22,
                       fig_size=(10,5))
@@ -137,6 +159,19 @@ fdxs_merged = [merge_and_norm(["plex_Area","new_plexfitMS1"], fdx,file_names, [f
 
 compute_all_comparisons(fdxs_merged[2][fdxs_merged[2].pep_len>10],
                            quant_name="merged_new_plexfitMS1",
+                           channels=channels,
+                           channel_mix=channel_mix,
+                           theoretical_yeast_amounts=theoretical_yeast_amounts,
+                           plot_type = "allm",
+                           Q_value_limit=.01,
+                           # BestChannel_Qvalue_limit=0.005,
+                           at_least_b=0
+                           )
+
+fdx_m = merge_and_norm(["plex_Area","new_plexfitMS1"],fdx4,"9plex",[list(np.unique(fdx4.Run))])
+compute_all_comparisons(fdx_m[fdx_m.Qvalue<.01],
+                           # quant_name="merged_new_plexfitMS1",
+                           quant_name="merged_plex_Area",
                            channels=channels,
                            channel_mix=channel_mix,
                            theoretical_yeast_amounts=theoretical_yeast_amounts,
