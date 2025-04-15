@@ -15,7 +15,7 @@ from read_output import names
 import config
 
 from miscFunctions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
-    ms1_error, change_seq, convert_frags, hyperscore, closest_ms1spec, closest_peak_diff, cosim, convert_prec_mz,np_pearson_cor
+    ms1_error, change_seq, convert_frags, hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim, convert_prec_mz,np_pearson_cor
 from SpecLib import frag_to_peak, specific_frags
 from iso_functions import gen_isotopes
 
@@ -243,48 +243,77 @@ def get_manhattan_distance(
     y_pred  # Changed from coeffs to y_pred
 ):
     """
-    Calculate the fitted Manhattan distance between predicted and observed values for each precursor.
+    Calculate fit metrics between predicted and observed fragment intensity values.
     
-    Manhattan distance is the sum of absolute differences between predicted and observed values,
-    normalized by the sum of observed values and log-transformed. Better fits have higher (less negative) values.
+    This function computes two metrics for each precursor:
+    1. Modified Manhattan distance: Sum of absolute differences between predicted and observed 
+       values, normalized by sum of observed values and log-transformed. Higher (less negative) 
+       values indicate better fits.
+    2. Spectral contrast angle: Spectral contrast between model (Ax) and observed (b) internsities for 
+    the fragments matching each respective precursor
     
-    Args:
-        row_idx_split (list): List of arrays containing row indices for each precursor's fragments.
-        col_idx_split (list): List of arrays containing column indices for each precursor.
-        prec_val_split (list): List of arrays containing predicted intensity values for each precursor's fragments.
-        val_obs (numpy.ndarray): Array of observed intensity values.
-        y_pred (numpy.ndarray): Array of predicted values after applying coefficients.
-        
-    Returns:
-        numpy.ndarray: Array of fitted Manhattan distances for each precursor, log-transformed and negated
-                      so that higher values indicate better fits.
+    Parameters
+    ----------
+    row_idx_split : list of numpy.ndarray
+        List of arrays containing row indices for each precursor's fragments.
+    col_idx_split : list of numpy.ndarray
+        List of arrays containing column indices for each precursor.
+    prec_val_split : list of numpy.ndarray
+        List of arrays containing predicted intensity values for each precursor's fragments.
+    val_obs : numpy.ndarray
+        Array of observed intensity values.
+    y_pred : numpy.ndarray
+        Array of predicted intensity values after applying model coefficients.
+    
+    Returns
+    -------
+    manhattan_distances : numpy.ndarray
+        Array of modified Manhattan distances for each precursor, with higher values 
+        indicating better fits.
+    fitted_spectral_contrast : numpy.ndarray
+        Array of spectral contrast angles for each precursor
+    
+    Notes
+    -----
+    - Edge cases are handled: when sum of observed values is zero (bad fit) or 
+      Manhattan distance is zero (perfect fit).
+    - The col_idx_split parameter is not used in the current implementation.
     """
     n = len(row_idx_split)
     N = len(val_obs)
     if (n > 0) & (N > 0):
         manhattan_distances = np.zeros(n)
+        fitted_spectral_contrast = np.zeros(n)
+
         x_sums = np.zeros(n)
         
         for j in range(n):
+            u2_sum, v2_sum, uv_sum = 0.0, 0.0, 0.0
             for i, row in enumerate(row_idx_split[j]):
                 # Sum observed intensities for normalization
                 x_sums[j] += val_obs[row]
                 # Calculate Manhattan distance using predicted values
                 manhattan_distances[j] += abs(y_pred[row] - val_obs[row])
-            
+                u2_sum += y_pred[row]**2 
+                v2_sum += val_obs[row]**2
+                uv_sum += y_pred[row] * val_obs[row]
             # Normalize and transform
+
             if x_sums[j] > 0 and manhattan_distances[j] > 0:
                 manhattan_distances[j] = -np.log2(manhattan_distances[j] / x_sums[j])
+                fitted_spectral_contrast[j] = np.sqrt(uv_sum)/(np.sqrt(u2_sum) * np.sqrt(v2_sum))
             else:
                 # Handle edge cases
                 if x_sums[j] == 0:
                     manhattan_distances[j] = np.finfo(np.float32).max  # Bad fit
+                    fitted_spectral_contrast[j] = 0.0
                 else:  # manhattan_distances[j] == 0
                     manhattan_distances[j] = np.finfo(np.float32).min  # Perfect fit
+                    fitted_spectral_contrast[j] = np.sqrt(uv_sum)/(np.sqrt(u2_sum) * np.sqrt(v2_sum))
                 
-        return manhattan_distances
+        return manhattan_distances, fitted_spectral_contrast
     else:
-        return np.zeros(0)
+        return np.zeros(0), np.zeros(0)
 
 #@profile
 def get_features(
@@ -332,18 +361,6 @@ def get_features(
         ref_spec_offset,
         decoy_spec_offset
     )
-    # Then use y_pred for the manhattan distance
-    manhattan_distances = get_manhattan_distance(
-        ref_spec_row_indices_split,
-        ref_spec_col_indices_split,
-        ref_spec_values_split,
-        dia_spectrum[:,1],
-        y_pred  # Pass y_pred instead of lib_coefficients
-    )
-    #max_matched_residuals = max_matched_residual(
-    #    ref_spec_row_indices_split,
-    #    residuals 
-    #)
     gof_stats, max_unmatched_residuals, max_matched_residuals = gof_stat(
         ref_spec_row_indices_split,
         ref_spec_col_indices_split,
@@ -354,7 +371,7 @@ def get_features(
         ref_spec_offset
     )
     # Add our new function call
-    manhattan_distances = get_manhattan_distance(
+    manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance(
         ref_spec_row_indices_split,
         ref_spec_col_indices_split,
         ref_spec_values_split,
@@ -413,10 +430,11 @@ def get_features(
     large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
     
     if len(prec_frags)>0 and len(list(prec_frags)[0])==len(lib_peaks_matched[0]):
-        hyperscores = [hyperscore(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
+        hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]))
+        longest_y_ions = [longest_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
     else:
-        hyperscores = np.zeros_like(num_lib_peaks_matched)
-
+        hyperscores, b_counts, y_counts = np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched)
+        longest_y_ions = np.zeros_like(num_lib_peaks_matched)
     features = np.stack([num_lib_peaks_matched,
                           frac_lib_intensity,
                           frac_dia_intensity,
@@ -430,11 +448,15 @@ def get_features(
                           frac_unique_pred,
                           frac_dia_intensity_pred,
                           hyperscores,
+                          b_counts, 
+                          y_counts,
+                          longest_y_ions,
                           scribe_scores,
                           max_unmatched_residuals,
                           max_matched_residuals,
                           gof_stats,
                           manhattan_distances,
+                          fitted_spectral_contrasts,
                           frac_int_matched_pred,
                           frac_int_matched_pred_sigcoeff,
                           large_coeff_cosine,
@@ -1302,9 +1324,9 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
         subset_pred_spec = np.sum(scaled_matrix,1)
         subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
         large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
-        hyperscores = [hyperscore(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
+        hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]))
+        longest_y_ions = [longest_y(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
 
-            
         scribe_scores = get_scribe(
             ref_spec_row_indices_split,
             ref_spec_col_indices_split,
@@ -1325,17 +1347,14 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
             0
         )
         # Then use y_pred for the manhattan distance
-        manhattan_distances = get_manhattan_distance(
+        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance(
             ref_spec_row_indices_split,
             ref_spec_col_indices_split,
             ref_spec_values_split,
             dia_spectrum[:,1],
-            y_pred  # Pass y_pred instead of lib_coefficients
+            y_pred
         )
-        #max_matched_residuals = max_matched_residual(
-        #    ref_spec_row_indices_split,
-        #    residuals 
-        #)
+
         gof_stats, max_unmatched_residuals, max_matched_residuals = gof_stat(
             ref_spec_row_indices_split,
             ref_spec_col_indices_split,
@@ -1345,15 +1364,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
             lib_coefficients,
             0
         )
-        # Add our new function call
-        manhattan_distances = get_manhattan_distance(
-            ref_spec_row_indices_split,
-            ref_spec_col_indices_split,
-            ref_spec_values_split,
-            dia_spectrum[:,1],
-            y_pred
-        )
-        
+
         features = np.stack([num_lib_peaks_matched,
                             frac_lib_intensity,
                             frac_dia_intensity,
@@ -1367,11 +1378,15 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
                             frac_unique_pred,
                             frac_dia_intensity_pred,
                             hyperscores,
+                            b_counts, 
+                            y_counts,
+                            longest_y_ions,
                             scribe_scores,
                             max_unmatched_residuals,
                             max_matched_residuals,
                             gof_stats,
                             manhattan_distances,
+                            fitted_spectral_contrasts,
                             frac_int_matched_pred,
                             frac_int_matched_pred_sigcoeff,
                             large_coeff_cosine,
@@ -1718,8 +1733,8 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
         subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
         large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
         
-        hyperscores = [hyperscore(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
-        
+        hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]))
+        longest_y_ions = [longest_y(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
         features = np.stack([num_lib_peaks_matched,
                               frac_lib_intensity,
                               frac_dia_intensity,
@@ -1733,6 +1748,9 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
                               frac_unique_pred,
                               frac_dia_intensity_pred,
                               hyperscores,
+                              b_counts,
+                              y_counts,
+                              longest_y_ions,
                               frac_int_matched_pred,
                               frac_int_matched_pred_sigcoeff,
                               large_coeff_cosine
@@ -1787,8 +1805,9 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
         
         large_coeff_cosine = np.ones_like(num_decoy_peaks_matched)*subset_cosine
                               
-        hyperscores = [hyperscore(i,j) for i,j in zip([converted_frags[k] for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]
-        
+        hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(i,j) for i,j in zip([converted_frags[k] for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]))
+        longest_y_ions = [longest_y(i,j) for i,j in zip([longest_y(converted_frags[k]) for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]
+        print("TEST")
         decoy_features = np.stack([num_decoy_peaks_matched,
                               frac_lib_intensity,
                               frac_dia_intensity,
@@ -1802,6 +1821,9 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
                               frac_unique_pred,
                               frac_dia_intensity_pred,
                               hyperscores,
+                              b_counts,
+                              y_counts,
+                              longest_y_ions,
                               frac_int_matched_pred,
                               frac_int_matched_pred_sigcoeff,
                               large_coeff_cosine
