@@ -531,7 +531,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # mz_tol,ms1,results_folder,ms2 = (config.ms1_tol,False,None,False) 
     # here spectra are both ms1 and ms2 
     
-    config.n_most_intense_features = int(1e8) # larger than possible, essentually all
+    config.n_most_intense_features = int(1e5) # larger than possible, essentually all
     
     scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
     print("Intitial search")
@@ -789,6 +789,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             #                                                                                                     )
             # plt.scatter(output_rts[cor_filter],output_df.rt[cor_filter],s=.01)
             # print(sum(cor_filter))
+            # plt.subplots()
+            # plt.scatter(np.array(diffs)[cor_filter],output_df.rt[cor_filter],s=1)
+            # plt.title(str(feature_percentile))
+            
+            # plt.subplots()
+            # plt.scatter(np.array([(i-mz)/mz for i,mz in zip(feature_mzs,id_mzs)])[cor_filter],output_df.rt[cor_filter],s=1)
+            # plt.title(str(feature_percentile))
+            
             
             f = lowess_fit(output_rts[cor_filter],output_df.rt[cor_filter],.1)
             plt.subplots()
@@ -1016,6 +1024,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         emp_cdf_auc = auc(emp_data,emp_p)
         boundary = fit_errors(all_emp_diffs,limit,percentile)
     
+    new_lib_rt = np.array([updatedLibrary[k]["iRT"] for k in id_keys])
     converted_rt = rt_spl([updatedLibrary[k]["iRT"] for k in id_keys])
     
     rt_amplitude, rt_mean, rt_stddev = fit_gaussian((dia_rt-converted_rt)[cor_filter])
@@ -1033,8 +1042,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     
     resp_ms1scans = [closest_ms1spec(dia_rt[i], ms1_rt) for i in range(len(dia_rt))]
-    diffs = [closest_peak_diff(mz, ms1spectra[i].mz) for i,mz in zip(resp_ms1scans,id_mzs)]
-    
+    # diffs = [closest_peak_diff(mz, ms1spectra[i].mz) for i,mz in zip(resp_ms1scans,id_mzs)]
+    diffs = np.array([(i-mz)/mz for i,mz in zip(feature_mzs,id_mzs)])
     # # diffs = [closest_feature(id_mzs[i],dia_rt[i],dino_features,0,10*1e-6) for i in range(len(id_mzs))]
     
     # # feature_mz = [closest_feature2(id_mzs[i],converted_rt[i],dino_features,1,30*1e-6) for i in range(len(id_mzs))]
@@ -1055,16 +1064,18 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     ################################################
     
     
-    f_rt_mz = lowess_fit(converted_rt[cor_filter],np.array(diffs)[cor_filter],.2)
-    # plt.scatter(converted_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=.1,alpha=.5)
-    # plt.scatter(converted_rt[cor_filter],f_rt_mz(dia_rt),s=1,alpha=.2)
-    
+    f_rt_mz = lowess_fit(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],.02)
+    # plt.subplots()
+    # plt.scatter(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=.1,alpha=1)
+    # plt.scatter(new_lib_rt[cor_filter],f_rt_mz(new_lib_rt)[cor_filter],s=1,alpha=.2)
+    # plt.xlim(10,42);plt.ylim(-1.5e-5,1.5e-5)
     # plt.scatter(id_mzs,diffs,label="Original_MZ",s=1,alpha=.1)
     # plt.scatter(id_mzs,diffs-f_rt_mz(dia_rt),label="Original_MZ",s=1,alpha=.1)
     
     # mz_spl = twostepfit(np.array(id_mzs)[rt_filter_bool],(diffs-f_rt_mz(dia_rt))[r t_filter_bool],1)
-    mz_spl = lowess_fit(np.array(id_mzs)[cor_filter],(diffs-f_rt_mz(dia_rt))[cor_filter])
-    # plt.scatter(id_mzs,diffs-f_rt_mz(dia_rt),label="Original_MZ",s=1,alpha=.1)
+    mz_spl = lowess_fit(np.array(id_mzs)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter])
+    # plt.subplots()
+    # plt.scatter(np.array(id_mzs)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter],label="Original_MZ",s=1,alpha=1)
     # plt.scatter(id_mzs,mz_spl(id_mzs),label="Original_MZ",s=1,alpha=.1)
     # plt.hlines(0,400,900)
 
@@ -1074,7 +1085,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # orig_mzs = id_mzs+(diffs*np.array(id_mzs))
     # plt.hist(((mz_func(id_mzs,rts)-orig_mzs)/id_mzs)[rt_filter_bool],100)
     
-    corrected_mz_diffs = (diffs-(f_rt_mz(converted_rt)+mz_spl(id_mzs)))[cor_filter]
+    corrected_mz_diffs = (diffs-(f_rt_mz(new_lib_rt)+mz_spl(id_mzs)))[cor_filter]
     mz_amplitude, mz_mean, mz_stddev = fit_gaussian(corrected_mz_diffs)
     
     ### MS2 alignment
@@ -1253,8 +1264,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         ##plot mz rt alignment
         plt.subplots()
-        plt.scatter(converted_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(dia_rt)[cor_filter])//1000)+1)))
-        plt.scatter(converted_rt,f_rt_mz(converted_rt),label="Predicted_MZ",s=1)
+        plt.scatter(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(dia_rt)[cor_filter])//1000)+1)))
+        plt.scatter(new_lib_rt,f_rt_mz(new_lib_rt),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("Updated RT")
         plt.ylabel("m/z difference (relative)")
@@ -1265,7 +1276,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
         ##plot mz alignment
         plt.subplots()
-        plt.scatter(np.array(id_mzs)[cor_filter],(diffs-f_rt_mz(converted_rt))[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(dia_rt)[cor_filter])//1000)+1)))
+        plt.scatter(np.array(id_mzs)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(new_lib_rt)[cor_filter])//1000)+1)))
         plt.scatter(id_mzs,mz_spl(id_mzs),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("m/z")
@@ -1280,7 +1291,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         plt.hist(np.array(diffs)[cor_filter],100)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs,100,alpha=.5)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_spl(id_mzs))/id_mzs,100,alpha=.5)
-        vals,bins,_ = plt.hist((diffs-mz_spl(id_mzs)-f_rt_mz(converted_rt))[cor_filter],100,alpha=.5)
+        vals,bins,_ = plt.hist((diffs-mz_spl(id_mzs)-f_rt_mz(new_lib_rt))[cor_filter],100,alpha=.5)
         plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,max(vals)*.8,color="r")
         # plt.vlines([-4*mz_stddev,4*mz_stddev],0,50,color="g")
         plt.text(config.opt_ms1_tol,max(vals)*.8,f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
