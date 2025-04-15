@@ -286,6 +286,13 @@ def get_manhattan_distance(
     else:
         return np.zeros(0)
 
+def hyperscore2(frags,frag_names_matched):
+    
+    num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
+    num_y = sum(["y" in i for i in frag_names_matched if "iso" not in i])
+    dp = np.sum([frags[i] for i in frag_names_matched if "iso" not in i])
+    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y)))
+    
 #@profile
 def get_features(
     rt_mz,
@@ -311,7 +318,8 @@ def get_features(
     prec_frags,
     ms1_error,
     ref_spec_offset,
-    decoy_spec_offset):
+    decoy_spec_offset,
+    ordered_frags=None):
     
     scribe_scores = get_scribe(
         ref_spec_row_indices_split,
@@ -414,6 +422,8 @@ def get_features(
     
     if len(prec_frags)>0 and len(list(prec_frags)[0])==len(lib_peaks_matched[0]):
         hyperscores = [hyperscore(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
+    elif ordered_frags is not None:
+        hyperscores = [hyperscore2(frags,frag_names) for frags,frag_names in zip(prec_frags,ordered_frags)]
     else:
         hyperscores = np.zeros_like(num_lib_peaks_matched)
 
@@ -917,7 +927,8 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
                                 [library[i]["frags"] for i in ref_pep_cand],
                                 ref_ms1_error,
                                 0,
-                                decoy_col_offset)
+                                decoy_col_offset,
+                                frag_names)
         
         single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
         
@@ -951,7 +962,8 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
                                             [converted_frags[i] for i in decoy_peaks_in_dia],
                                             decoy_ms1_error,
                                             decoy_col_offset,
-                                            0)
+                                            0,
+                                            decoy_frag_names)
         
             # new_row_indices_split = [[peak_idx_convertor[j] for j in i] for i in decoy_spec_row_indices_split]
             unique_row_indices_split_decoy = [[peak_idx_convertor[j] in single_matched_rows for j in i] for i in decoy_spec_row_indices_split]
