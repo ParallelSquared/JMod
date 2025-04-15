@@ -41,8 +41,8 @@ from functools import partial
 
 import line_profiler
 
-def moving_average(x, w):
-    return np.convolve(x, np.ones(w), 'same') / w
+# def moving_average(x, w):
+#     return np.convolve(x, np.ones(w), 'same') / w
 
 
 colours = ["tab:blue","tab:orange","tab:green","tab:red",
@@ -59,7 +59,7 @@ linestyles = ["solid", "dotted", "dashed", "dashdot"]
 min_int = 1e-3
 
 
-def moving_average(x, w):
+def moving_average(x, w=4):
     return np.convolve(x, np.ones(w), 'same') / w
 
 def most_dense_idx(x):
@@ -186,8 +186,9 @@ def get_trace_int(spec,mz,atol=0,rtol=0,base=min_int):
 def get_ms1_peak(x,y,idx):
     x = np.array(x)
     y = np.array(y)
-    
-    peaks,peak_attr= find_peaks(y,width=(None,None))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        peaks,peak_attr= find_peaks(y,width=(None,None))
     
     ## if no peak, return the index of the max
     if len(peaks)==0:
@@ -971,7 +972,7 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
                     
                 ms1_index_of_max = highest_ranked_spec
                 
-            ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), list(all_ms1_vals.values()), ms1_index_of_max)
+            ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), moving_average(list(all_ms1_vals.values())), ms1_index_of_max)
             
             ## redefine all_scans to keep only thoe from the above peak
             channel_scans = all_scans[all_scans.index(ms1_peak_edge_idxs[0]):all_scans.index(ms1_peak_edge_idxs[1])+1]
