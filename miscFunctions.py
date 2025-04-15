@@ -550,7 +550,7 @@ def hyperscore2(frag_list,matches):
     num_b = sum(["b" in i for i,j in zip(frag_list,matches) if j])
     num_y = sum(["y" in i for i,j in zip(frag_list,matches) if j])
     dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
-    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y)))
+    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
 
 def longest_y(frag_list, matches):
     def extract_fragment_number(fragment_name):
