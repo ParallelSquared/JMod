@@ -44,7 +44,7 @@ library[all_keys[4]]
 
 class massTag():
     
-    def __init__(self,rules,base_mass,delta,channel_names, name):
+    def __init__(self,rules,base_mass,delta,channel_names, name, compositions=None):
         
         self.rules = rules
         
@@ -65,6 +65,12 @@ class massTag():
         
         self.mass_dict = {self.name+"-"+str(i):j for i,j in zip(self.channel_names,self.channel_masses)}
     
+    
+        if compositions is not None:
+            self.channel_comp = {i:compositions[i] for i in self.channel_names}
+        else: 
+            self.channel_comp=None
+            
     def __repr__(self):
         return("\n".join([
                            "Mass Tag",
@@ -86,12 +92,8 @@ mTRAQ = massTag(rules = "nK",
             channel_names = ["0","4","8"],
             name = "mTRAQ")
 
-# mTRAQ
-# print(mTRAQ)
 
-### path to diann searches: /Volumes/Lab/MY/2024-03-25_Sciex_9-plex_combinations/
 ### 
-# 140.0949630177, nK  --channels mTRAQ,6,nK,6.0074891:6.0074891;mTRAQ,7,nK,7.0108440:7.0108440;mTRAQ,8,nK,8.0141988132:8.0141988132 
 mTRAQ_678 = massTag(rules = "nK",
                     base_mass=140.0949630177,
                     # delta = 4.0070994,
@@ -100,9 +102,6 @@ mTRAQ_678 = massTag(rules = "nK",
                     channel_names = ["6","7","8"],
                     name = "mTRAQ_678")
 
-# print(mTRAQ)
- 
-### mTRAQ, 140.0949630177, nK  --channels mTRAQ,0,nK,0:0;mTRAQ,2,nK,2.0003897:2.0003897;mTRAQ,4,nK,4.0070994:4.0070994;mTRAQ,6,nK,6.0074891:6.0074891;mTRAQ,8,nK,8.0141988132:8.0141988132   
  
 mTRAQ_02468 =   massTag(rules = "nK",
                         base_mass=140.0949630177,
@@ -125,7 +124,19 @@ diethyl_3plex =       massTag(rules = "nK",
                         delta = [0.0,4.013419349,8.05021396],#,12.06363332,14.07618681],
                         channel_names = ["0","4","8"],#,"12","14"],
                         name = "diethyl_3plex")
- 
+
+tag6_compositions = {"0":mass.Composition({"C":18,"H":16,"N":2,"O":3}),
+                    "2":mass.Composition({"C":16,"H":16,"N":2,"O":3,"C[13]":2,"O[18]":0}),
+                    "4":mass.Composition({"C":16,"H":16,"N":2,"O":2,"C[13]":2,"O[18]":1}),
+                    "6":mass.Composition({"C":12,"H":16,"N":2,"O":3,"C[13]":6,"O[18]":0}),
+                    "8":mass.Composition({"C":10,"H":16,"N":2,"O":3,"C[13]":8,"O[18]":0}),
+                    "10":mass.Composition({"C":10,"H":16,"N":2,"O":3,"C[13]":8,"O[18]":1}),
+                    "12":mass.Composition({"C":7,"H":16,"N":1,"O":3,"C[13]":11,"O[18]":0,"N[15]":1}),
+                    "14":mass.Composition({"C":5,"H":16,"N":1,"O":3,"C[13]":13,"O[18]":0,"N[15]":1}),
+                    "16":mass.Composition({"C":6,"H":16,"N":0,"O":3,"C[13]":13,"O[18]":0,"N[15]":2}),
+                                         }
+    
+    
      
 tag6 = massTag(rules = "nK",
             base_mass=308.1160923903,
@@ -133,7 +144,8 @@ tag6 = massTag(rules = "nK",
             # delta = [4.0070994],
             delta = [0.0],#,4.01095605604],#,8.02683870239997],
             channel_names = ["0"],#["0","4"],#,"8"],
-            name = "tag6")
+            name = "tag6",
+            compositions=tag6_compositions)
 
 tag6_5plex = massTag(rules = "nK",
             base_mass=308.1160923903,
@@ -142,7 +154,8 @@ tag6_5plex = massTag(rules = "nK",
             delta = [0.0, 4.01095605604,8.0268387024,
                      12.0339381092,16.03857422084],
             channel_names = ["0","4","8","12","16"],
-            name = "tag6_5plex")
+            name = "tag6_5plex",
+            compositions=tag6_compositions)
 
 tag6_9plex = massTag(rules = "nK",
             base_mass=308.1160923903,
@@ -151,8 +164,38 @@ tag6_9plex = massTag(rules = "nK",
             delta = [0.0, 2.0067096756, 4.01095605604, 6.0201290268,8.0268387024,10.03108508284,
                      12.0339381092,14.0406477848,16.03857422084],
             channel_names = ["0","2","4","6","8","10","12","14","16"],
-            name = "tag6_9plex") 
+            name = "tag6_9plex",
+            compositions=tag6_compositions) 
+
+tag6_d0d2 = massTag(rules = "nK",
+            base_mass=308.1160923903,
+            # delta = 4.0070994,
+            # delta = [4.0070994],
+            delta = [0.0, 2.0067096756],
+            channel_names = ["0","2"],
+            name = "tag6_d0d2",
+            compositions=tag6_compositions) 
+
+tag6_d0d4 = massTag(rules = "nK",
+            base_mass=308.1160923903,
+            # delta = 4.0070994,
+            # delta = [4.0070994],
+            delta = [0.0, 4.01095605604],
+            channel_names = ["0","4"],
+            name = "tag6_d0d4",
+            compositions=tag6_compositions) 
      
+
+tag6_d0d2d4 = massTag(rules = "nK",
+                    base_mass=308.1160923903,
+                    # delta = 4.0070994,
+                    # delta = [4.0070994],
+                    delta = [0.0, 2.0067096756, 4.01095605604],
+                    channel_names = ["0","2","4"],
+                    name = "tag6_d0d2d4",
+                    compositions=tag6_compositions) 
+     
+
 tag6lys = massTag(rules = "nK",
             base_mass=464.24235,
             # delta = 4.0070994,
@@ -339,6 +382,9 @@ available_tags = {"mTRAQ":mTRAQ,
                   "tag6":tag6,
                   "tag6_5plex":tag6_5plex,
                   "tag6_9plex":tag6_9plex,
+                  "tag6_d0d2":tag6_d0d2,
+                  "tag6_d0d4":tag6_d0d4,
+                  "tag6_d0d2d4":tag6_d0d2d4,
                   "tag6pip":tag6pip,
                   "tag6lys":tag6lys,
                   "tag6arg":tag6arg}
