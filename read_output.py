@@ -41,7 +41,8 @@ names = ["coeff","spec_id","Ms1_spec_id",
          "file_name",
          "protein",
          "manhattan_distances_nearby_max",
-         "max_matched_residuals_nearby_min"
+         "max_matched_residuals_nearby_min",
+         "gof_stats_nearby_min"
          ]
 
 dtypes  = {"coeff":np.float32,
@@ -85,7 +86,8 @@ dtypes  = {"coeff":np.float32,
             "file_name":str,
             "protein":str,
             "manhattan_distances_nearby_max":np.float32,
-            "max_matched_residuals_nearby_min":np.float32
+            "max_matched_residuals_nearby_min":np.float32,
+            "gof_stats_nearby_min":np.float32
             }
 
 def find_extreme_in_nearby_scans(df, column_name, n_scans=3, find_max=True):
@@ -119,7 +121,7 @@ def find_extreme_in_nearby_scans(df, column_name, n_scans=3, find_max=True):
     # Create a new column for the nearby extreme values
     operation_type = "max" if find_max else "min"
     nearby_col = f"{column_name}_nearby_{operation_type}"
-    result_df[nearby_col] = None
+    result_df[nearby_col] = np.zeros_like(result_df[column_name])
 
     # Define grouping columns based on whether time_channel is present
     group_cols = ['seq', 'z', 'time_channel'] if 'time_channel' in df.columns else ['seq', 'z']
@@ -147,15 +149,18 @@ def find_extreme_in_nearby_scans(df, column_name, n_scans=3, find_max=True):
         start_pos = max(0, pos_in_sorted - n_scans)
         end_pos = min(len(sorted_group) - 1, pos_in_sorted + n_scans)
         nearby_indices = sorted_group.index[start_pos:end_pos+1]
-        
+        #print("nearby_indices ", nearby_indices ", \n")
         # Find the extreme value of the specified column in the nearby scans
         extreme_val = (
             group.loc[nearby_indices, column_name].max() if find_max else 
             group.loc[nearby_indices, column_name].min()
         )
-        
+        # Update all rows in the original dataframe for this group
+        group_indices = group.index
+        result_df.loc[group_indices, nearby_col] = extreme_val
+
         # Assign this extreme value to the row with the highest coefficient
-        result_df.loc[max_coeff_idx, nearby_col] = extreme_val
+        #result_df.loc[max_coeff_idx, nearby_col] = extreme_val Can I get rid of this line now?
 
     return result_df
     
@@ -206,9 +211,9 @@ def get_large_prec(file,
     # print(col_names)
     decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
     
-    find_extreme_in_nearby_scans(decoy_coeffs, "manhattan_distances", n_scans=3, find_max=True)
-    find_extreme_in_nearby_scans(decoy_coeffs, "max_matched_residuals", n_scans=3, find_max=False)
-    [print(col) for col in decoy_coeffs.columns]
+    decoy_coeffs = find_extreme_in_nearby_scans(decoy_coeffs, "manhattan_distances", n_scans=2, find_max=True)
+    decoy_coeffs = find_extreme_in_nearby_scans(decoy_coeffs, "max_matched_residuals", n_scans=2, find_max=False)
+    decoy_coeffs = find_extreme_in_nearby_scans(decoy_coeffs, "gof_stats", n_scans=2, find_max=False)
     # get dataframe
     sorted_decoy_coeffs = decoy_coeffs.sort_values(by="coeff")
     

@@ -301,7 +301,7 @@ def get_manhattan_distance(
 
             if x_sums[j] > 0 and manhattan_distances[j] > 0:
                 manhattan_distances[j] = -np.log2(manhattan_distances[j] / x_sums[j])
-                fitted_spectral_contrast[j] = np.sqrt(uv_sum)/(np.sqrt(u2_sum) * np.sqrt(v2_sum))
+                fitted_spectral_contrast[j] = np.sqrt(uv_sum)/(np.sqrt(u2_sum) * np.sqrt(v2_sum) + 1e-10)
             else:
                 # Handle edge cases
                 if x_sums[j] == 0:
@@ -309,7 +309,7 @@ def get_manhattan_distance(
                     fitted_spectral_contrast[j] = 0.0
                 else:  # manhattan_distances[j] == 0
                     manhattan_distances[j] = np.finfo(np.float32).min  # Perfect fit
-                    fitted_spectral_contrast[j] = np.sqrt(uv_sum)/(np.sqrt(u2_sum) * np.sqrt(v2_sum))
+                    fitted_spectral_contrast[j] = np.sqrt(uv_sum)/(np.sqrt(u2_sum) * np.sqrt(v2_sum) + 1e-10)
                 
         return manhattan_distances, fitted_spectral_contrast
     else:
