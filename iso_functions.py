@@ -311,7 +311,7 @@ def calculate_mz(sequence,charge):
     return mass.calculate_mass(seq_comp,charge=charge)
 
 def precursor_isotopes(sequence,charge,n_isotopes=2):
-    
+    sequence = re.sub("Decoy_","",sequence)
     #split_seq = split_peptide(sequence)
     split_seq = parse_peptide(sequence)
     
