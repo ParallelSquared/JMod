@@ -80,11 +80,11 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
    
     print("Performing MS1 Quantitation") 
     
-    fdc = dat[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
+    fdc = dat#[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
     
     #only quantify confident precs
-    if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
-        fdc = fdc[fdc["BestChannel_Qvalue"] < 0.01].reset_index(drop=True)
+    # if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
+    #     fdc = fdc[fdc["BestChannel_Qvalue"] < 0.01].reset_index(drop=True)
 
     if timeplex:
         all_keys = [(i,j,k) for i,j,k in zip(fdc.seq,fdc.z,fdc.time_channel)]
@@ -293,7 +293,7 @@ class score_model():
             def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
                     # m.model = MLPClassifier((32,16,8,4),activation="relu")
-                    m.model = MLPClassifier((8,8,4),activation="relu")
+                    m.model = MLPClassifier((20,20,4),activation="relu")
                     m.model.fit(X,y)
                     m.__predict_fn__ = m.model.predict_proba
                     return m
