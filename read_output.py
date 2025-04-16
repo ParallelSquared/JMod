@@ -43,6 +43,7 @@ names = ["coeff","spec_id","Ms1_spec_id",
          "manhattan_distances_nearby_max",
          "max_matched_residuals_nearby_min",
          "gof_stats_nearby_min",
+         "scribe_scores_nearby_min",
          "n_scans",
          "smoothness"
          ]
@@ -90,6 +91,7 @@ dtypes  = {"coeff":np.float32,
             "manhattan_distances_nearby_max":np.float32,
             "max_matched_residuals_nearby_min":np.float32,
             "gof_stats_nearby_min":np.float32,
+            "scribe_scores_nearby_min":np.float32,
             "n_scans":np.float32,
             "smoothness":np.float32
             }
