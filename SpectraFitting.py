@@ -320,7 +320,7 @@ def hyperscore2(frags,frag_names_matched):
     num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
     num_y = sum(["y" in i for i in frag_names_matched if "iso" not in i])
     dp = np.sum([frags[i] for i in frag_names_matched if "iso" not in i])
-    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y)))
+    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
     
 #@profile
 def get_features(
@@ -440,8 +440,8 @@ def get_features(
     if len(prec_frags)>0 and len(list(prec_frags)[0])==len(lib_peaks_matched[0]):
         hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]))
         longest_y_ions = [longest_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
-    elif ordered_frags is not None:
-        hyperscores, b_counts, y_counts  = [hyperscore2(frags,frag_names) for frags,frag_names in zip(prec_frags,ordered_frags)]
+    elif len(prec_frags)>0 and ordered_frags is not None:
+        hyperscores, b_counts, y_counts  = map(list, zip(*[hyperscore2(frags,frag_names) for frags,frag_names in zip(prec_frags,ordered_frags)]))
         longest_y_ions = [max([int(re.match("[by](\d+)",i)[1]) for i in frag_names])  for frag_names in ordered_frags]
     else:
         hyperscores, b_counts, y_counts = np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched)
