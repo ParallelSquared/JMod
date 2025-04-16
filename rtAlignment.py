@@ -1040,10 +1040,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # all_diffs = [closest_feature(all_id_mzs[i],all_id_rt[i][1],dino_features,1,20*1e-6) for i in range(len(all_id_mzs))]
     # all_coeffs = [closest_feature(all_id_mzs[i],all_id_rt[i][1],dino_features,1,10*1e-6) for i in range(len(all_id_mzs))]
     
-    
-    resp_ms1scans = [closest_ms1spec(dia_rt[i], ms1_rt) for i in range(len(dia_rt))]
-    # diffs = [closest_peak_diff(mz, ms1spectra[i].mz) for i,mz in zip(resp_ms1scans,id_mzs)]
-    diffs = np.array([(i-mz)/mz for i,mz in zip(feature_mzs,id_mzs)])
+    if dino_features is None:
+        resp_ms1scans = [closest_ms1spec(dia_rt[i], ms1_rt) for i in range(len(dia_rt))]
+        diffs = [closest_peak_diff(mz, ms1spectra[i].mz) for i,mz in zip(resp_ms1scans,id_mzs)]
+    else:
+        diffs = np.array([(i-mz)/mz for i,mz in zip(feature_mzs,id_mzs)])
     # # diffs = [closest_feature(id_mzs[i],dia_rt[i],dino_features,0,10*1e-6) for i in range(len(id_mzs))]
     
     # # feature_mz = [closest_feature2(id_mzs[i],converted_rt[i],dino_features,1,30*1e-6) for i in range(len(id_mzs))]
