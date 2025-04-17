@@ -299,26 +299,15 @@ def get_large_prec(file,
     represent peptide identifications with high confidence scores.
     """
     col_names = list(names)
-    print("col_names ", col_names)
     if timeplex:
         col_names.insert(5,"time_channel")
         dtypes["time_channel"] = np.float32 ## !!! need to fix 
     # print(col_names)
     decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
     
-    decoy_coeffs = find_extreme_in_nearby_scans(
-        decoy_coeffs, 
-        ["manhattan_distances","max_matched_residuals","gof_stats", "scribe_scores"], 
-        [True, False, False, False], 
-        n_scans=2)
-
-    decoy_coeffs = calculate_peak_smoothness(
-                        df=decoy_coeffs,
-                        value_column='coeff',  # Column containing intensity values
-                        rt_column='rt',        # Column containing retention times
-                        group_columns=None     # Default grouping by ['seq', 'z'] or ['seq', 'z', 'time_channel']
-                    )
-
+    decoy_coeffs = find_extreme_in_nearby_scans(decoy_coeffs, "manhattan_distances", n_scans=2, find_max=True)
+    decoy_coeffs = find_extreme_in_nearby_scans(decoy_coeffs, "max_matched_residuals", n_scans=2, find_max=False)
+    decoy_coeffs = find_extreme_in_nearby_scans(decoy_coeffs, "gof_stats", n_scans=2, find_max=False)
     # get dataframe
     sorted_decoy_coeffs = decoy_coeffs.sort_values(by="coeff")
     
@@ -350,6 +339,7 @@ def get_large_prec(file,
         return large_prec,filtered_decoy_coeffs
     else:
         return large_prec,filtered_decoy_coeffs, decoy_coeffs
+
 
 
 def read_results(file,

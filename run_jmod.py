@@ -73,7 +73,7 @@ if __name__=="__main__":
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
     results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
-    results_folder_path = "/Users/nathanwamsley/Data/Apr_2025/troubleshoot_jmod_041125/test_out_10"
+    results_folder_path = "/Users/nathanwamsley/Data/Apr_2025/tag6_test/9plex"
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     #python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
