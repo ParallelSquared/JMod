@@ -430,8 +430,8 @@ def get_features(
     large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
     
     if len(prec_frags)>0 and len(list(prec_frags)[0])==len(lib_peaks_matched[0]):
-        hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]))
-        longest_y_ions = [longest_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
+        hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y2(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]))
+        longest_y_ions = [longest_y2(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
     else:
         hyperscores, b_counts, y_counts = np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched)
         longest_y_ions = np.zeros_like(num_lib_peaks_matched)
@@ -1808,7 +1808,6 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
                               
         hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(i,j) for i,j in zip([converted_frags[k] for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]))
         longest_y_ions = [longest_y(i,j) for i,j in zip([longest_y(converted_frags[k]) for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]
-        print("TEST")
         decoy_features = np.stack([num_decoy_peaks_matched,
                               frac_lib_intensity,
                               frac_dia_intensity,

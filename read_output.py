@@ -42,7 +42,10 @@ names = ["coeff","spec_id","Ms1_spec_id",
          "protein",
          "manhattan_distances_nearby_max",
          "max_matched_residuals_nearby_min",
-         "gof_stats_nearby_min"
+         "gof_stats_nearby_min",
+         "scribe_scores_nearby_min",
+         "n_scans",
+         "smoothness"
          ]
 
 dtypes  = {"coeff":np.float32,
@@ -87,10 +90,13 @@ dtypes  = {"coeff":np.float32,
             "protein":str,
             "manhattan_distances_nearby_max":np.float32,
             "max_matched_residuals_nearby_min":np.float32,
-            "gof_stats_nearby_min":np.float32
+            "gof_stats_nearby_min":np.float32,
+            "scribe_scores_nearby_min":np.float32,
+            "n_scans":np.float32,
+            "smoothness":np.float32
             }
 
-def find_extreme_in_nearby_scans(df, column_name, n_scans=3, find_max=True):
+def find_extreme_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
     """
     For each precursor, finds the minimum or maximum value of a specified column from
     nearby scans (N scans before and N scans after by retention time) for
@@ -118,50 +124,138 @@ def find_extreme_in_nearby_scans(df, column_name, n_scans=3, find_max=True):
     # Create a copy of the dataframe
     result_df = df.copy()
 
-    # Create a new column for the nearby extreme values
-    operation_type = "max" if find_max else "min"
-    nearby_col = f"{column_name}_nearby_{operation_type}"
-    result_df[nearby_col] = np.zeros_like(result_df[column_name])
-
     # Define grouping columns based on whether time_channel is present
     group_cols = ['seq', 'z', 'time_channel'] if 'time_channel' in df.columns else ['seq', 'z']
-
+    gdf = df.groupby(group_cols)
     # For each unique precursor
-    for _, group in df.groupby(group_cols):
+    for column_name, find_max in zip(column_names, find_max_list): 
+        # Create a new column for the nearby extreme values
+        operation_type = "max" if find_max else "min"
+        nearby_col = f"{column_name}_nearby_{operation_type}"
+        result_df[nearby_col] = np.zeros_like(result_df[column_name])
+
         # Check if the column exists in the dataframe
-        if column_name not in group.columns:
+        for _, group in gdf:
+
+            # Find the index of the row with the highest coefficient
+            max_coeff_idx = group['coeff'].idxmax()
+            
+            # Sort the group by retention time
+            sorted_group = group.sort_values('rt')
+            
+            # Find the position of the max coefficient scan in the sorted list
+            try:
+                pos_in_sorted = sorted_group.index.get_loc(max_coeff_idx)
+            except KeyError:
+                # If the index is not found (should not happen), skip this group
+                continue
+            
+            # Get indices of scans before and after the max coefficient scan
+            start_pos = max(0, pos_in_sorted - n_scans)
+            end_pos = min(len(sorted_group) - 1, pos_in_sorted + n_scans)
+            nearby_indices = sorted_group.index[start_pos:end_pos+1]
+            #print("nearby_indices ", nearby_indices ", \n")
+            # Find the extreme value of the specified column in the nearby scans
+            extreme_val = (
+                group.loc[nearby_indices, column_name].max() if find_max else 
+                group.loc[nearby_indices, column_name].min()
+            )
+            # Update all rows in the original dataframe for this group
+            group_indices = group.index
+            result_df.loc[group_indices, nearby_col] = extreme_val
+
+            # Assign this extreme value to the row with the highest coefficient
+            #result_df.loc[max_coeff_idx, nearby_col] = extreme_val Can I get rid of this line now?
+    
+    result_df["n_scans"] = np.zeros_like(result_df["coeff"])
+    for _, group in gdf:
+        result_df.loc[group.index, "n_scans"] = len(group)
+
+    return result_df
+
+def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_columns=None):
+    """
+    Calculates the smoothness (integrated squared second derivative) of chromatographic 
+    peaks for each group in the dataframe.
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Dataframe containing chromatographic peak data
+    value_column : str, default='coeff'
+        The column containing intensity values to measure smoothness
+    rt_column : str, default='rt'
+        The column containing retention time values
+    group_columns : list of str, default=None
+        The columns to group by. If None, uses ['seq', 'z', 'time_channel'] 
+        if 'time_channel' exists, otherwise ['seq', 'z']
+        
+    Returns
+    -------
+    pandas.DataFrame
+        The original dataframe with an added 'smoothness' column containing 
+        the calculated smoothness value for each group
+    """
+    # Create a copy of the dataframe
+    result_df = df.copy()
+    
+    # Add smoothness column
+    result_df['smoothness'] = np.zeros_like(result_df[value_column], dtype=float)
+    
+    # Determine grouping columns if not provided
+    if group_columns is None:
+        group_columns = ['seq', 'z', 'time_channel'] if 'time_channel' in df.columns else ['seq', 'z']
+    
+    # Process each group
+    for group_key, group in df.groupby(group_columns):
+        # Sort by retention time
+        sorted_group = group.sort_values(rt_column)
+        
+        if len(sorted_group) <= 1:
+            # Can't calculate smoothness with just one point
+            result_df.loc[sorted_group.index, 'smoothness'] = 0.0
             continue
             
-        # Find the index of the row with the highest coefficient
-        max_coeff_idx = group['coeff'].idxmax()
+        # Get the weights (intensity values) and retention times
+        weights = sorted_group[value_column].values
+        rts = sorted_group[rt_column].values
         
-        # Sort the group by retention time
-        sorted_group = group.sort_values('rt')
+        # Find the apex (maximum intensity)
+        apex_idx = np.argmax(weights)
+        apex_weight = weights[apex_idx]
         
-        # Find the position of the max coefficient scan in the sorted list
-        try:
-            pos_in_sorted = sorted_group.index.get_loc(max_coeff_idx)
-        except KeyError:
-            # If the index is not found (should not happen), skip this group
+        if apex_weight == 0:
+            # Avoid division by zero
+            result_df.loc[sorted_group.index, 'smoothness'] = 0.0
             continue
+            
+        # Calculate smoothness
+        smoothness = 0.0
         
-        # Get indices of scans before and after the max coefficient scan
-        start_pos = max(0, pos_in_sorted - n_scans)
-        end_pos = min(len(sorted_group) - 1, pos_in_sorted + n_scans)
-        nearby_indices = sorted_group.index[start_pos:end_pos+1]
-        #print("nearby_indices ", nearby_indices ", \n")
-        # Find the extreme value of the specified column in the nearby scans
-        extreme_val = (
-            group.loc[nearby_indices, column_name].max() if find_max else 
-            group.loc[nearby_indices, column_name].min()
-        )
-        # Update all rows in the original dataframe for this group
-        group_indices = group.index
-        result_df.loc[group_indices, nearby_col] = extreme_val
-
-        # Assign this extreme value to the row with the highest coefficient
-        #result_df.loc[max_coeff_idx, nearby_col] = extreme_val Can I get rid of this line now?
-
+        if len(weights) == 1:
+            # Special case for single point
+            smoothness = (-2 * weights[0] / apex_weight) ** 2
+        else:
+            for i in range(len(weights)):
+                if i == 0:
+                    # First point
+                    deriv = ((weights[i+1] - weights[i]) / (rts[i+1] - rts[i]) + 
+                             (-weights[i]) / (rts[i+1] - rts[i])) / apex_weight
+                    smoothness += deriv ** 2
+                elif i > 0 and i < len(weights) - 1:
+                    # Interior points
+                    deriv = ((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]) + 
+                             (weights[i+1] - weights[i]) / (rts[i+1] - rts[i])) / apex_weight
+                    smoothness += deriv ** 2
+                elif i == len(weights) - 1:
+                    # Last point
+                    deriv = ((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]) + 
+                             (-weights[i]) / (rts[i] - rts[i-1])) / apex_weight
+                    smoothness += deriv ** 2
+        
+        # Assign the calculated smoothness to all rows in this group
+        result_df.loc[sorted_group.index, 'smoothness'] = smoothness
+    
     return result_df
     
 def get_large_prec(file,
@@ -205,15 +299,26 @@ def get_large_prec(file,
     represent peptide identifications with high confidence scores.
     """
     col_names = list(names)
+    print("col_names ", col_names)
     if timeplex:
         col_names.insert(5,"time_channel")
         dtypes["time_channel"] = np.float32 ## !!! need to fix 
     # print(col_names)
     decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
     
-    decoy_coeffs = find_extreme_in_nearby_scans(decoy_coeffs, "manhattan_distances", n_scans=2, find_max=True)
-    decoy_coeffs = find_extreme_in_nearby_scans(decoy_coeffs, "max_matched_residuals", n_scans=2, find_max=False)
-    decoy_coeffs = find_extreme_in_nearby_scans(decoy_coeffs, "gof_stats", n_scans=2, find_max=False)
+    decoy_coeffs = find_extreme_in_nearby_scans(
+        decoy_coeffs, 
+        ["manhattan_distances","max_matched_residuals","gof_stats", "scribe_scores"], 
+        [True, False, False, False], 
+        n_scans=2)
+
+    decoy_coeffs = calculate_peak_smoothness(
+                        df=decoy_coeffs,
+                        value_column='coeff',  # Column containing intensity values
+                        rt_column='rt',        # Column containing retention times
+                        group_columns=None     # Default grouping by ['seq', 'z'] or ['seq', 'z', 'time_channel']
+                    )
+
     # get dataframe
     sorted_decoy_coeffs = decoy_coeffs.sort_values(by="coeff")
     
@@ -245,7 +350,6 @@ def get_large_prec(file,
         return large_prec,filtered_decoy_coeffs
     else:
         return large_prec,filtered_decoy_coeffs, decoy_coeffs
-
 
 
 def read_results(file,

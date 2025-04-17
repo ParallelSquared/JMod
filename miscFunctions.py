@@ -546,6 +546,12 @@ def hyperscore_b_y(frag_list,matches):
     dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
     return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
 
+def hyperscore_b_y2(frags,frag_names_matched):
+    num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
+    num_y = sum(["y" in i for i in frag_names_matched if "iso" not in i])
+    dp = np.sum([frags[i] for i in frag_names_matched if "iso" not in i])
+    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
+    
 def hyperscore2(frag_list,matches):
     num_b = sum(["b" in i for i,j in zip(frag_list,matches) if j])
     num_y = sum(["y" in i for i,j in zip(frag_list,matches) if j])
@@ -568,6 +574,29 @@ def longest_y(frag_list, matches):
     
     # Extract fragment numbers from matching fragments
     fragment_numbers = [extract_fragment_number(frag_name) for frag_name, match_value in zip(frag_list, matches) if match_value]
+    
+    # Handle the case where there are no matches
+    if not fragment_numbers:
+        return 0
+        
+    return np.max(fragment_numbers)
+
+def longest_y2(frag_list, matches):
+    def extract_fragment_number(fragment_name):
+        # Check if fragment_name is a string
+        if not isinstance(fragment_name, str):
+            return 0  # Return 0 for non-string inputs
+            
+        # Pattern matches 'b' or 'y' followed by digits, optionally followed by underscore and more characters
+        pattern = r"^[by](\d+)(?:[_-].*)?$"
+        match = re.match(pattern, fragment_name)
+        if match:
+            # Convert the captured digits to an integer
+            return int(match.group(1))
+        return 0
+    
+    # Extract fragment numbers from matching fragments
+    fragment_numbers = [extract_fragment_number(frag_name) for frag_name, match_value in zip(frag_list, matches) if "iso" not in match_value]
     
     # Handle the case where there are no matches
     if not fragment_numbers:
