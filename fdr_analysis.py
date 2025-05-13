@@ -9,7 +9,7 @@ Created on Fri Aug 23 09:38:40 2024
 
 from read_output import get_large_prec
 
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold,GroupKFold
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_curve,auc 
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -80,11 +80,11 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
    
     print("Performing MS1 Quantitation") 
     
-    fdc = dat#[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
+    fdc = dat[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
     
     #only quantify confident precs
-    # if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
-    #     fdc = fdc[fdc["BestChannel_Qvalue"] < 0.01].reset_index(drop=True)
+    if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
+        fdc = fdc[fdc["BestChannel_Qvalue"] < 0.01].reset_index(drop=True)
 
     if timeplex:
         all_keys = [(i,j,k) for i,j,k in zip(fdc.seq,fdc.z,fdc.time_channel)]
@@ -212,7 +212,7 @@ class score_model():
         self.n_splits = n_splits
         self.folder = folder
                 
-    def run_model(self,X,y,sample_weight=None):
+    def run_model(self,X,y,sample_weight=None,groups=None):
         # print(f"{config.tree_max_depth}")
         if self.model_type=="rf":
             
@@ -260,14 +260,31 @@ class score_model():
             def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
                     dTrain = xgb.DMatrix(X,y,weight=sample_weight)
+                    # param = {
+                    #     'max_depth': config.tree_max_depth, 
+                    #     'eta': .1, 
+                    #     'objective': 'binary:logistic',}
                     param = {
-                        'max_depth': config.tree_max_depth, 
-                        'eta': .1, 
-                        'objective': 'binary:logistic'}
+                        # 'max_depth': config.tree_max_depth, 
+                        # 'eta': .1, 
+                        # 'objective': 'binary:logistic',
+                        
+                        'objective': 'binary:logistic',  
+                         'eval_metric': 'aucpr',    
+                         'eta': 0.1,
+                         'max_depth': 10,          
+                         'subsample': 0.8,
+                         'colsample_bytree': 0.8,   
+                         'tree_method': 'hist',         
+                         'nthread': -1,                   
+                         'seed': 42  ,
+                         'min_child_weight': .5
+                        }
+
                     # param['nthread'] = 4
-                    param['eval_metric'] = 'pre'
+                    # param['eval_metric'] = 'pre'
                     
-                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=50)
+                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=500)
                     def xg_predict(X):
                         X_convert = xgb.DMatrix(X)
                         return m.model.predict(X_convert)
@@ -304,6 +321,20 @@ class score_model():
         kf = KFold(n_splits=self.n_splits,shuffle=True)
         k_orders = [i for i in kf.split(X,y)]
         rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
+
+        if groups is not None:
+            gfk = GroupKFold(n_splits = 5)
+        
+            #k_orders = [i for i in kf.split(X,y)] old way
+            k_orders = [i for i in gfk.split(X, y, groups=groups)]
+            rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
+            
+            # permutation = np.random.permutation(len(X))
+            # X_shuffled = X.iloc[permutation]
+            # y_shuffled = y[permutation]
+            # groups_shuffled = np.array(self.groups)[permutation]
+            # k_orders = [i for i in gfk.split(X_shuffled,y_shuffled,groups=groups_shuffled)]
+            # rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
 
         if sample_weight is not None:
             data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]],sample_weight[i[0]]] for i in k_orders] # put data into folds
@@ -373,7 +404,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
         
     sc_model = score_model(model_type,folder=folder)
-    pred = sc_model.run_model(X, y)
+    pred = sc_model.run_model(X, y, groups=fdc.stripped_seq)
     
     model_name= model_type
 
@@ -486,7 +517,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
 
 
-def compute_protein_FDR(df):
+def compute_protein_FDR(df,results_folder=None):
     print("Computing Protein FDR")
 
   
@@ -536,7 +567,15 @@ def compute_protein_FDR(df):
     print("All Channels:",np.sum(df_counts_prots.Protein_IDs))
     print(df_counts_prots.to_string(index=False))
 
-
+    if results_folder is not None:
+        with open(results_folder+'/Summary.txt', 'a') as f:
+            print("Number of precursors at 1% FDR:", file=f)
+            print("All Channels:",np.sum(df_counts_prec.Precursor_IDs), file=f)
+            print(df_counts_prec.to_string(index=False), file=f)
+            
+            print("\nNumber of proteins at 1% FDR:", file=f)
+            print("All Channels:",np.sum(df_counts_prots.Protein_IDs), file=f)
+            print(df_counts_prots.to_string(index=False), file=f)
     
     # if config.args.plexDIA:
     #     if config.args.timeplex:
@@ -576,6 +615,16 @@ def compute_protein_FDR(df):
         print("\nNumber of proteins at 1% FDR (best channel):")
         print("All Channels:",np.sum(df_counts_prots.Protein_IDs))
         print(df_counts_prots.to_string(index=False))
+        
+        if results_folder is not None:
+            with open(results_folder+'/Summary.txt', 'a') as f:
+                print("Number of precursors at 1% FDR (best channel):", file=f)
+                print("All Channels:",np.sum(df_counts_prec.Precursor_IDs), file=f)
+                print(df_counts_prec.to_string(index=False), file=f)
+                
+                print("\nNumber of proteins at 1% FDR (best channel):", file=f)
+                print("All Channels:",np.sum(df_counts_prots.Protein_IDs), file=f)
+                print(df_counts_prots.to_string(index=False), file=f)
 
 
     return df
@@ -674,7 +723,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
     # have possible reannotate woth fasta here
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
-    fdx_quant = compute_protein_FDR(fdx_quant)
+    fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder)
 
     
     ## save to results folder

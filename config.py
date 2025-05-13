@@ -110,7 +110,7 @@ protein_column = 'protein_group'
 FT_minimum = 1e3
 
 ### minimum ms1 tolerance; set to 0 to ignore
-min_ms1_tol = 3e-6
+min_ms1_tol = 0#3e-6
 
 num_iso_peaks = args.num_iso
 min_iso_intensity = 1e-3 ## derived empirically

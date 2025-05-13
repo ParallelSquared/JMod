@@ -130,7 +130,10 @@ def load_tsv_speclib(spec_lib_file):
         python_lib = {}
         idx = 0
         for row in csv_reader:
-            row["ModifiedPeptide"] = row["ModifiedPeptide"].strip("_")
+            if "ModifiedPeptide" in row:
+                row["ModifiedPeptide"] = row["ModifiedPeptide"].strip("_")
+            elif "ModifiedSequence" in row:
+                row["ModifiedPeptide"] = row["ModifiedSequence"].strip("_")
             unique_id = (row["ModifiedPeptide"],float(row["PrecursorCharge"]))
             python_lib.setdefault(unique_id,{})
             python_lib[unique_id]["mod_seq"] = row["ModifiedPeptide"]

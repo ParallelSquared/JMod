@@ -68,7 +68,7 @@ org_colors = ["tab:blue","tab:orange","tab:green"]
 org_colors = ["tab:blue","tab:orange","tab:red"]
 
 
-def load_files(fdx_files1,channels,channel_mix,get_dcs=False):
+def load_jmod_files(fdx_files1,channels,channel_mix,get_dcs=False):
     
     fdxs = []
     dcs = []

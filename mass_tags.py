@@ -222,6 +222,19 @@ tag6pip = massTag(rules = "nK",
             channel_names = ["0"],#["0","4"],#,"8"],
             name = "tag6pip")
 
+ProtSci_light_plex = massTag(rules = "nK",
+            base_mass=0.0,
+            delta = [328.231941371, 332.232721371, 336.246141371, 340.246860336,344.260280336],
+            channel_names = ["4","8","12","16", "20"],
+            name = "ProtSci_light_plex") 
+
+ProtSci_heavy_plex = massTag(rules = "nK",
+            base_mass=0.0,
+            delta = [328.231941371, 332.232721371, 336.246141371, 340.246860336,344.260280336],
+            channel_names = ["4","8","12","16", "20"],
+            name = "ProtSci_light_plex") 
+
+
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
 def split_frag_name(ion_type):
@@ -387,7 +400,8 @@ available_tags = {"mTRAQ":mTRAQ,
                   "tag6_d0d2d4":tag6_d0d2d4,
                   "tag6pip":tag6pip,
                   "tag6lys":tag6lys,
-                  "tag6arg":tag6arg}
+                  "tag6arg":tag6arg,
+                  "ProtSci_light_plex":ProtSci_light_plex}
 
 # if config.args.mTRAQ:
 #     config.tag = mTRAQ

@@ -23,7 +23,8 @@ fasta_files = [
 fasta_files = [
         '/Volumes/Lab/CharlesRiver/Tag6/March 2025 Collision energy 30%/fasta/human_canonical_2025_03_25.fasta',
         '/Volumes/Lab/CharlesRiver/Tag6/March 2025 Collision energy 30%/fasta/ecoli_2025_03_25.fasta',
-        '/Volumes/Lab/CharlesRiver/Tag6/March 2025 Collision energy 30%/fasta/s_cerevisiae_2025_03_25.fasta'
+        '/Volumes/Lab/CharlesRiver/Tag6/March 2025 Collision energy 30%/fasta/s_cerevisiae_2025_03_25.fasta',
+        "/Users/kevinmcdonnell/Programming/Data/FASTA/uniprotkb_proteome_UP000006548_AND_revi_2025_04_25.fasta"
     ]
 rule = 'Trypsin'
 max_num_missed_cleavage = 2
