@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Created on Mon Aug 26 08:34:24 2024
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
 
-@author: kevinmcdonnell
-"""
 from fdr_analysis import process_data
 import os
 import re

@@ -1,3 +1,8 @@
+"""
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
 
 
 from brainpy import isotopic_variants
