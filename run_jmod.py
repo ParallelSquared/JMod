@@ -18,6 +18,8 @@ import tqdm
 import csv
 from functools import partial
 import pandas as pd
+import sys
+import json
 
 import load_files 
 import SpecLib
@@ -32,8 +34,22 @@ from fdr_analysis import process_data
 
 
 if __name__=="__main__":
-            
+        
 
+    # Check if a single argument is provided and it's a JSON file
+    if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
+        # Treat this as the config_json argument
+        config.args.config_json = sys.argv[1]
+        print(f"Using configuration file: {config.args.config_json}")
+
+    # Load JSON configuration if specified
+    if config.args.config_json:
+        print(f"Loading configuration from {config.args.config_json}")
+        if not config.load_config_from_json(config.args.config_json):
+            print("Failed to load JSON configuration. Using command-line arguments.")
+
+    # Print the configuration that will be used
+    print("Using configuration:")
     print(config.args)
     
     ####  Load Libraries   ######################
@@ -78,7 +94,7 @@ if __name__=="__main__":
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-
+    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_051425"
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
         
@@ -87,15 +103,45 @@ if __name__=="__main__":
     
     
     overall_start_time = time.time()
-    
+    #python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
+
     
     ######################################################
     #### Load the data
     spectrumLibrary = SpecLib.loadSpecLib(lib_file)
-    
     DIAspectra=load_files.loadSpectra(mzml_file)
-    spectra_to_fit = DIAspectra.ms2scans
-    
+
+    if config.args.test_mode:
+        print(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
+        
+        # Filter MS2 scans based on retention time and precursor m/z
+        filtered_ms2_scans = []
+        for scan in DIAspectra.ms2scans:
+            if (config.args.test_rt_min <= scan.RT <= config.args.test_rt_max and 
+                config.args.test_mz_min <= scan.prec_mz <= config.args.test_mz_max):
+                filtered_ms2_scans.append(scan)
+        
+        print(f"Selected {len(filtered_ms2_scans)} out of {len(DIAspectra.ms2scans)} MS2 scans for test mode")
+        DIAspectra.ms2scans = filtered_ms2_scans
+        spectra_to_fit = DIAspectra.ms2scans
+        
+        # Pre-filter the library to speed up processing
+        # Note: This is a rough filter that will be refined after RT alignment
+        filtered_library = {}
+        rt_tolerance = config.rt_tol * 2  # Use a wider tolerance initially
+        mz_tolerance = config.mz_tol * 2
+        
+        for key, entry in spectrumLibrary.items():
+            #if (config.args.test_rt_min - rt_tolerance <= entry["iRT"] <= config.args.test_rt_max + rt_tolerance and
+            #    config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
+            if (config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
+                filtered_library[key] = entry
+        
+        print(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
+        spectrumLibrary = filtered_library
+    else:
+        print("yo mama")
+        spectra_to_fit = DIAspectra.ms2scans
     ######################################################
     #### RT/MZ Alignment #####
     

@@ -539,7 +539,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     config.n_most_intense_features = int(1e5) # larger than possible, essentually all
     
-    scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
+    # Calculate scans_per_cycle safely
+    if len(dia_spectra.ms1scans) > 0:
+        scans_per_cycle = max(1, round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans)))
+    else:
+        scans_per_cycle = 1
+
     print("Intitial search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
@@ -548,14 +553,49 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     ms1_rt = np.array([i.RT for i in ms1spectra])
     
+    # Adjust partitioning based on available data
     totalIC = np.array([np.sum(i.intens) for i in ms2spectra])
+    total_scans = len(totalIC)
     
-    num_partition = 10
-    split_size = int(np.ceil(len(totalIC)/num_partition))
-    split_tic = [totalIC[i*split_size:(i+1)*split_size] for i in range(num_partition)]
-    split_top_n = [(np.argsort(-tics)+(idx*split_size))[:(config.n_most_intense//num_partition)] for idx,tics in enumerate(split_tic)]
-    top_n = np.concatenate(split_top_n)
+    # Dynamically adjust number of partitions based on data size
+    num_partition = min(10, max(1, total_scans // 10))  # At least 1 partition, at most 10
     
+    if num_partition > 0 and total_scans > 0:
+        # Calculate desired scans per partition
+        desired_per_partition = min(total_scans // num_partition, 
+                                   config.n_most_intense // num_partition)
+        
+        split_size = max(1, int(np.ceil(total_scans/num_partition)))
+        split_tic = [totalIC[i*split_size:min(total_scans, (i+1)*split_size)] for i in range(num_partition)]
+        
+        # Only take as many as available in each partition
+        split_top_n = []
+        for idx, tics in enumerate(split_tic):
+            if len(tics) > 0:  # Only process non-empty partitions
+                # Take min of desired or available
+                n_to_take = min(len(tics), desired_per_partition)
+                if n_to_take > 0:
+                    split_top_n.append((np.argsort(-tics)+(idx*split_size))[:n_to_take])
+        
+        if split_top_n:  # If we have any results
+            top_n = np.concatenate(split_top_n)
+        else:
+            # Fallback if partitioning fails
+            top_n = np.random.choice(np.arange(total_scans), 
+                                    min(total_scans, config.n_most_intense), 
+                                    replace=False)
+    else:
+        # Fallback for very small datasets
+        top_n = np.random.choice(np.arange(total_scans), 
+                                min(total_scans, config.n_most_intense), 
+                                replace=False)
+    
+    # Safely calculate top_n_ms1
+    if scans_per_cycle > 0:
+        top_n_ms1 = top_n // scans_per_cycle
+    else:
+        top_n_ms1 = top_n
+
     # top_n = np.argsort(-totalIC)[:config.n_most_intense]
     top_n_ms1 = top_n//scans_per_cycle
     all_keys = list(librarySpectra)
@@ -568,7 +608,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
         ### redefine "top_n_spectra" to evenly span Rt and m/z
         np.random.seed(0)
-        top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
+        #top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
         
         
         fit_outputs=[]

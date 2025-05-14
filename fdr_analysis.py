@@ -90,8 +90,6 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     else:
         all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
 
-
-        
     if mass_tag:
         #fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
         group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels(DIAspectra, 
@@ -196,9 +194,14 @@ class model_instance():
         
     def predict(self,X):
         pred = self.__predict_fn__(X)
-            
+        #First column of pred is target probabilities and second column is decoys
+        #If for some reason there were no decoys in one of the training folds
+        #only a single column is returned. Handle this case...
         if len(pred.shape)==2:
-            output = pred[:,1]
+            if pred.shape[1]==2:
+                output = pred[:,1]
+            else:
+                output = pred[:,0]
         else:
             output = pred
         return output
@@ -234,7 +237,7 @@ class score_model():
                     
                         # Save plot
                         plt.savefig(self.folder + f"/RF{idx}_feature_importance.png", dpi=600, bbox_inches="tight")
-                    
+                        # For RF models, print feature importance
                     return m
                 
             # self.model = fit_model(X,y)
@@ -316,7 +319,9 @@ class score_model():
                 
         else:
             raise ValueError("Unsupported model type")
-            
+        
+        print(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
+        
         kf = KFold(n_splits=self.n_splits,shuffle=True)
         k_orders = [i for i in kf.split(X,y)]
         rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
@@ -400,6 +405,10 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "protein"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
     # print(X.columns)
+    print(f"Using {len(X.columns)} features for scoring:")
+    for idx, feature in enumerate(X.columns):
+        print(f"{idx+1}. {feature}")
+    
     X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
         
     sc_model = score_model(model_type,folder=folder)
@@ -461,10 +470,6 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
     # plt.plot(frac_decoy)
     T = output[score_order[np.searchsorted(frac_decoy,0.01)]]
-
-    print()
-    print("#IDs at 1% FDR:", np.sum(output>T))
-    
     above_t = output>T
     fdc["PredVal"] = output
     fdc["Qvalue"] = frac_decoy[orig_order]
@@ -636,36 +641,48 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     mz_ppm = config.opt_ms1_tol
     rt_tol = config.opt_rt_tol
     
+    # After loading data and adding basic features
     lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=timeplex)
     
-    # if "seq" not in fdc.columns:
-    #     raise KeyError("Column 'seq' is missing in fdc. Check data loading step.")
-
-    
-    ## Add additional features
-    # X["prec_z"] = fdc["z"]
-   # print(fdc.columns)  # Ensure 'seq' is in fdc
-
+    # Add standard features
     fdc["stripped_seq"] = np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in fdc["seq"]])
     fdc["pep_len"] = [len(re.findall("([A-Z](?:\(.*?\))?)",re.sub("Decoy","",i))) for i in fdc["stripped_seq"]]
-    # X["rt"] = fdc["rt"]
-    # X["coeff"] = fdc["coeff"]
     fdc["sq_rt_error"] = np.power(fdc["rt_error"],2)
     fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
 
+    # Handle untag_seq
     if mass_tag:
         fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
     else:
         fdc["untag_seq"] = fdc["seq"]
     #print(fdc.columns)  # Ensure 'seq' is in fdc
 
-       
+    # Add untag_prec and channels_matched
     fdc["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdc["untag_seq"],fdc["z"])]
     channel_matches_counts = fdc["untag_prec"].value_counts()
     channel_matches_counts_dict = {i:j for i,j in zip(channel_matches_counts.index,channel_matches_counts)}
     fdc["channels_matched"] = [channel_matches_counts_dict[i] for i in fdc["untag_prec"]]
 
+    print("Adding median-based features...")
+    # Calculate median of various metrics by untag_prec group
+    for metric_col in ["gof_stats", "scribe_scores", "max_matched_residuals", "manhattan_distances"]:
+        col_name = f"median_{metric_col}"
+        fdc[col_name] = fdc.groupby("untag_prec")[metric_col].transform("median")
+        # Set to NA for single-channel entries
+        fdc.loc[fdc["channels_matched"] == 1, col_name] = pd.NA
+        
+        # Calculate difference from median
+        diff_col = f"diff_{metric_col}_from_median"
+        fdc[diff_col] = fdc[metric_col] - fdc[col_name]
+        
+        # Fill NA with mean of non-NA values
+        mean_val = fdc[diff_col].mean()
+        fdc[diff_col] = fdc[diff_col].fillna(mean_val)
+        
+        print(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
+        print(f"  Summary stats: min={fdc[diff_col].min():.5f}, max={fdc[diff_col].max():.5f}, mean={fdc[diff_col].mean():.5f}")
     
+
     if timeplex:
         if mass_tag:
             tag_name = mass_tag.name

@@ -3,11 +3,8 @@ This Source Code Form is subject to the terms of the Oxford Nanopore
 Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
-
-
 import argparse
-
-
+import json
 
 parser = argparse.ArgumentParser(
                     prog='Jmod',
@@ -47,6 +44,13 @@ parser.add_argument('--user_percentile', action='store_true')
 parser.add_argument('--no_ms1_req', action='store_false') 
 parser.add_argument("--ms1_ppm",default=0, type=float)
 
+#These options are for test mode. Limit spectra to process for speed
+parser.add_argument('--config_json', type=str, help='Path to JSON configuration file')
+parser.add_argument('--test_mode', action='store_true', help='Run in test mode with limited data')
+parser.add_argument('--test_rt_min', type=float, default=0, help='Minimum retention time for test mode')
+parser.add_argument('--test_rt_max', type=float, default=10, help='Maximum retention time for test mode')
+parser.add_argument('--test_mz_min', type=float, default=400, help='Minimum m/z for test mode')
+parser.add_argument('--test_mz_max', type=float, default=800, help='Maximum m/z for test mode')
 
 
 args = parser.parse_args()
@@ -258,3 +262,28 @@ diann_mods = {
 "UniMod:268" : 6.013809, 
 "UniMod:269" : 10.027228
 };
+
+
+# Function to load configuration from JSON
+def load_config_from_json(json_path):
+    """Load configuration parameters from a JSON file."""
+    try:
+        with open(json_path, 'r') as f:
+            config_data = json.load(f)
+        
+        # Update args with values from JSON
+        for key, value in config_data.items():
+            if hasattr(args, key):
+                setattr(args, key, value)
+        
+        # Set additional config variables if present
+        if 'additional_config' in config_data:
+            for key, value in config_data['additional_config'].items():
+                if key in globals() and not key.startswith('__'):
+                    globals()[key] = value
+                
+        return True
+    except Exception as e:
+        print(f"Error loading JSON configuration: {e}")
+        return False
+        
