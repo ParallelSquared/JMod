@@ -31,11 +31,10 @@ from miscFunctions import write_to_csv
 import iso_functions as iso_f
 from mass_tags import tag_library
 from fdr_analysis import process_data
-
+from mass_tags import available_tags
 
 if __name__=="__main__":
         
-
     # Check if a single argument is provided and it's a JSON file
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
         # Treat this as the config_json argument
@@ -51,7 +50,7 @@ if __name__=="__main__":
     # Print the configuration that will be used
     print("Using configuration:")
     print(config.args)
-    
+
     ####  Load Libraries   ######################
     mzml_file = config.args.mzml.replace("\\","/")
     lib_file = config.args.speclib.replace("\\","/")
@@ -94,7 +93,7 @@ if __name__=="__main__":
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_051425_c"
+    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_timeplex_051425_01"
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
         
@@ -148,18 +147,45 @@ if __name__=="__main__":
     # rt_mz = np.array([[rtSpl(i["iRT"]), i["prec_mz"]] for i in spectrumLibrary.values()])
     # rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in spectrumLibrary.values()])
     
+    #if config.args.tag:
+    #    print("HEY!!!")
+    #    spectrumLibrary = tag_library(spectrumLibrary,config.tag)
+    #    mass_tag = config.tag  
+    #    print("mass_tag ", mass_tag)  
+    #else:
+    #    print("NOOO!!!")
+    #    mass_tag = None
+        
     if config.args.tag:
-        spectrumLibrary = tag_library(spectrumLibrary,config.tag)
-        mass_tag = config.tag    
+        # Find the tag object based on the tag name
+        if config.args.tag in available_tags:
+            config.tag = available_tags[config.args.tag]
+            print(f"Using tag: {config.tag.name}")
+            spectrumLibrary = tag_library(spectrumLibrary, config.tag)
+            mass_tag = config.tag
+        else:
+            print(f"Error: Tag '{config.args.tag}' not found in available_tags.")
+            print(f"Available tags: {list(available_tags.keys())}")
+            # Either exit or continue without tagging
+            mass_tag = None
+            config.tag = None
     else:
         mass_tag = None
-        
-        
+        config.tag = None        
         
     if config.args.timeplex:
         ## now ooutputs library as we finetune RT
-        funcs,spectrumLibrary = MZRTfit_timeplex(DIAspectra, spectrumLibrary, pd.read_csv(feature_path,sep="\t"), config.mz_tol,results_folder=results_folder_path,
-                                 ms2=config.args.ms2_align)
+        # With this:
+        if config.args.use_features and os.path.exists(feature_path):
+            print("Loading Dinosaur features")
+            dino_features = pd.read_csv(feature_path, delimiter="\t")
+            funcs, spectrumLibrary = MZRTfit_timeplex(DIAspectra, spectrumLibrary, dino_features, config.mz_tol, results_folder=results_folder_path,
+                                            ms2=config.args.ms2_align)
+        else:
+            print("Not using features")
+            funcs, spectrumLibrary = MZRTfit_timeplex(DIAspectra, spectrumLibrary, None, config.mz_tol, results_folder=results_folder_path,
+                                            ms2=config.args.ms2_align)
+
         rt_spls,mz_func = funcs[:2]
         
         plex_lib = {}
@@ -170,9 +196,6 @@ if __name__=="__main__":
             rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.concatenate(rt_mz)
         spectrumLibrary = plex_lib
-        
-
-        
     else:    
         funcs,spectrumLibrary = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
                                         ms2=config.args.ms2_align)

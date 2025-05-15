@@ -1,6 +1,6 @@
 {
     "mzml": "/Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML",
-    "speclib": "/Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv",
+    "speclib": "/Users/nathanwamsley/Data/JMOD_TESTS/Jmod/Lib_PSMTag_JD_05112025_jmod_works.tsv",
     "use_emp_rt": true,
     "use_features": true,
     "atleast_m": 3,

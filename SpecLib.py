@@ -299,12 +299,13 @@ from iso_functions import gen_isotopes_dict
 
 def create_decoy_lib(library,rules):
     ## keep keys the same but change seq, mz and frags
-    
+    for key in library:
+        library[key]["parent_key"] = key
+
     decoy_lib =copy.deepcopy(library) # create copy so we do not change the original
     
     for key in tqdm.tqdm(decoy_lib):
         entry = decoy_lib[key]
-        
         entry["seq"] = change_seq(key[0],rules)
         #!!! To change;
         # if config.args.decoy=="rev": ## this will have the same mz as many correct matches and therefore a really good ms1 isotope corr
