@@ -322,12 +322,17 @@ class score_model():
         
         print(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
         
-        kf = KFold(n_splits=self.n_splits,shuffle=True)
+        kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = 42)
         k_orders = [i for i in kf.split(X,y)]
         rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
 
         if groups is not None:
-            gfk = GroupKFold(n_splits = 5)
+            unique_groups = np.unique(groups)
+            if len(unique_groups) < 5:
+                print(f"Warning: Only {len(unique_groups)} unique groups for 5-fold CV. Using KFold instead.")
+                gfk = KFold(n_splits=5, shuffle=True, random_state=42)
+            else:
+                gfk = GroupKFold(n_splits=5)
         
             #k_orders = [i for i in kf.split(X,y)] old way
             k_orders = [i for i in gfk.split(X, y, groups=groups)]
@@ -405,49 +410,49 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "protein"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
 
-        # DEBUG: Check each column for infinity or very large values
-    problem_columns = []
-    for col in X.columns:
-        try:
-            # Check for infinity
-            if np.isinf(X[col]).any():
-                problem_columns.append(f"{col}: has infinity")
-                
-            # Check for very large values
-            max_val = X[col].max()
-            min_val = X[col].min()
-            if abs(max_val) > 1e30 or abs(min_val) > 1e30:
-                problem_columns.append(f"{col}: has extreme value (min={min_val}, max={max_val})")
-                
-            # Check for NaN
-            if np.isnan(X[col]).any():
-                problem_columns.append(f"{col}: has NaN")
-                
-        except Exception as e:
-            problem_columns.append(f"{col}: error checking - {str(e)}")
+    # DEBUG: Check each column for infinity or very large values
+    #problem_columns = []
+    #for col in X.columns:
+    #    try:
+    #        # Check for infinity
+    #        if np.isinf(X[col]).any():
+    #            problem_columns.append(f"{col}: has infinity")
+    #            
+    #        # Check for very large values
+    #        max_val = X[col].max()
+    #        min_val = X[col].min()
+    #        if abs(max_val) > 1e30 or abs(min_val) > 1e30:
+    #            problem_columns.append(f"{col}: has extreme value (min={min_val}, max={max_val})")
+    #            
+    #        # Check for NaN
+    #        if np.isnan(X[col]).any():
+    #            problem_columns.append(f"{col}: has NaN")
+    #            
+    #    except Exception as e:
+    #        problem_columns.append(f"{col}: error checking - {str(e)}")
     
-    if problem_columns:
-        print("Problem columns detected:")
-        for prob in problem_columns:
-            print(f"  - {prob}")
-            
-        # Additional info about columns with infinity
-        for col in X.columns:
-            if np.isinf(X[col]).any():
-                inf_indices = np.where(np.isinf(X[col]))[0]
-                print(f"\nInfinity values in column '{col}' at indices: {inf_indices[:5]}...")
-                print(f"Example row with infinity in '{col}':")
-                print(X.iloc[inf_indices[0]].to_string())
-                
-                # Try to find the cause
-                if col in ['rt_error', 'sq_rt_error', 'mz_error', 'sq_mz_error']:
-                    print(f"Original values for '{col.replace('sq_', '')}':")
-                    if 'sq_rt_error' in col:
-                        print(fdc.loc[inf_indices[0], 'rt_error'])
-                    elif 'sq_mz_error' in col:
-                        print(fdc.loc[inf_indices[0], 'mz_error'])
-                
-                break  # Just show one example to avoid overwhelming output
+    #if problem_columns:
+    #    print("Problem columns detected:")
+    #    for prob in problem_columns:
+    #        print(f"  - {prob}")
+    #        
+    #    # Additional info about columns with infinity
+    #    for col in X.columns:
+    #        if np.isinf(X[col]).any():
+    #            inf_indices = np.where(np.isinf(X[col]))[0]
+    #            print(f"\nInfinity values in column '{col}' at indices: {inf_indices[:5]}...")
+    #            print(f"Example row with infinity in '{col}':")
+    #            print(X.iloc[inf_indices[0]].to_string())
+    #            
+    #            # Try to find the cause
+    #            if col in ['rt_error', 'sq_rt_error', 'mz_error', 'sq_mz_error']:
+    #                print(f"Original values for '{col.replace('sq_', '')}':")
+    #                if 'sq_rt_error' in col:
+    #                    print(fdc.loc[inf_indices[0], 'rt_error'])
+    #                elif 'sq_mz_error' in col:
+    #                    print(fdc.loc[inf_indices[0], 'mz_error'])
+    #            
+    #            break  # Just show one example to avoid overwhelming output
     
     # print(X.columns)
     print(f"Using {len(X.columns)} features for scoring:")

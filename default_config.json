@@ -16,7 +16,7 @@
     "tag": "",
     "num_iso": 5,
     "lib_frac": 0.5,
-    "test_mode": false,
+    "test_mode": true,
     "test_rt_min": 20,
     "test_rt_max": 30,
     "test_mz_min": 500,
