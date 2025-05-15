@@ -48,8 +48,7 @@ names = ["coeff","spec_id","Ms1_spec_id",
          "protein",
          "manhattan_distances_nearby_max",
          "max_matched_residuals_nearby_min",
-         "gof_stats_nearby_min",
-         "median_gof_stats"
+         "gof_stats_nearby_min"
          ]
 
 dtypes  = {"coeff":np.float32,
@@ -94,8 +93,7 @@ dtypes  = {"coeff":np.float32,
             "protein":str,
             "manhattan_distances_nearby_max":np.float32,
             "max_matched_residuals_nearby_min":np.float32,
-            "gof_stats_nearby_min":np.float32,
-            "median_gof_stats":np.float32
+            "gof_stats_nearby_min":np.float32
             }
 
 def find_extreme_in_nearby_scans(df, column_name, n_scans=3, find_max=True):

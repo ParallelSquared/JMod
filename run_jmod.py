@@ -94,7 +94,7 @@ if __name__=="__main__":
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_051425"
+    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_051425_c"
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
         
@@ -140,7 +140,6 @@ if __name__=="__main__":
         print(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
         spectrumLibrary = filtered_library
     else:
-        print("yo mama")
         spectra_to_fit = DIAspectra.ms2scans
     ######################################################
     #### RT/MZ Alignment #####

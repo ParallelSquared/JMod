@@ -633,7 +633,55 @@ def compute_protein_FDR(df,results_folder=None):
 
     return df
 
-
+def add_median_based_features(df, metric_columns, group_col="untag_prec", count_col="channels_matched", verbose=True):
+    """
+    Calculate median-based features for specified metrics across groups.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        Input dataframe containing the metric columns
+    metric_columns : list
+        List of column names to calculate medians and differences for
+    group_col : str, default="untag_prec"
+        Column to group by for median calculations
+    count_col : str, default="channels_matched"
+        Column indicating how many channels each group has
+    verbose : bool, default=True
+        Whether to print summary statistics
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        DataFrame with added median and difference columns
+    """
+    # Make a copy to avoid modifying the original
+    result_df = df.copy()
+    
+    if verbose:
+        print(f"Adding median-based features for {len(metric_columns)} metrics...")
+    
+    for metric_col in metric_columns:
+        # Calculate median for each group
+        col_name = f"median_{metric_col}"
+        result_df[col_name] = result_df.groupby(group_col)[metric_col].transform("median")
+        
+        # Set to NA for single-channel entries
+        result_df.loc[result_df[count_col] == 1, col_name] = pd.NA
+        
+        # Calculate difference from median
+        diff_col = f"diff_{metric_col}_from_median"
+        result_df[diff_col] = result_df[metric_col] - result_df[col_name]
+        
+        # Fill NA with mean of non-NA values
+        mean_val = result_df[diff_col].mean()
+        result_df[diff_col] = result_df[diff_col].fillna(mean_val)
+        
+        if verbose:
+            print(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
+            print(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
+    
+    return result_df
 
 def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
@@ -663,25 +711,9 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     channel_matches_counts_dict = {i:j for i,j in zip(channel_matches_counts.index,channel_matches_counts)}
     fdc["channels_matched"] = [channel_matches_counts_dict[i] for i in fdc["untag_prec"]]
 
-    print("Adding median-based features...")
-    # Calculate median of various metrics by untag_prec group
-    for metric_col in ["gof_stats", "scribe_scores", "max_matched_residuals", "manhattan_distances"]:
-        col_name = f"median_{metric_col}"
-        fdc[col_name] = fdc.groupby("untag_prec")[metric_col].transform("median")
-        # Set to NA for single-channel entries
-        fdc.loc[fdc["channels_matched"] == 1, col_name] = pd.NA
-        
-        # Calculate difference from median
-        diff_col = f"diff_{metric_col}_from_median"
-        fdc[diff_col] = fdc[metric_col] - fdc[col_name]
-        
-        # Fill NA with mean of non-NA values
-        mean_val = fdc[diff_col].mean()
-        fdc[diff_col] = fdc[diff_col].fillna(mean_val)
-        
-        print(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
-        print(f"  Summary stats: min={fdc[diff_col].min():.5f}, max={fdc[diff_col].max():.5f}, mean={fdc[diff_col].mean():.5f}")
-    
+    # Use the helper function to add median-based features
+    #metrics_to_process = ["gof_stats", "scribe_scores", "max_matched_residuals", "manhattan_distances"]
+    #fdc = add_median_based_features(fdc, metrics_to_process)
 
     if timeplex:
         if mass_tag:
