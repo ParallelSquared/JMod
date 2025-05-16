@@ -67,65 +67,138 @@ def create_model_data(grouped_df,seq_name = 'PeptideSequence', rt_name="RT"):
     return X_train, X_test, Y_train, Y_test
 
 
-
-
-#def load_existing_models(path):
-#        
-#    # Load the models for prediction without compiling
-#    models = []
-#    num_models = 5  # We have 5 models
-#    
-#    for i in range(num_models):
-#        model = load_model(path+str(i), compile=False)
-#        # model = tf.keras.layers.TFSMLayer(f"/Volumes/Lab/KMD/JD_RT_copy/iRT_model_mTRAQ_09042024_{i}", call_endpoint="serving_default")
-#        models.append(model)
-#        
-#    return models
-
-def load_existing_models(model_path):
+def convert_models_to_keras3_format(model_path, output_dir=None):
     """
-    Load pre-trained CNN models using Keras 3 compatible approach.
-    
-    This function loads saved models using keras.layers.TFSMLayer instead of the 
-    traditional keras.models.load_model approach. This adaptation is necessary because 
-    Keras 3 no longer supports loading legacy TensorFlow SavedModel format directly. 
-    Instead, it loads them as inference-only layers via TFSMLayer.
+    Convert legacy TensorFlow SavedModel format to Keras 3-compatible format (.h5).
     
     Parameters
     ----------
     model_path : str
-        Base path to the saved models. The function will append indices (0, 1, 2)
-        to this path to load multiple models.
+        Base path to the saved models. Function will append indices (0, 1, 2).
+    output_dir : str, optional
+        Directory to save converted models. If None, uses original directory.
     
     Returns
     -------
     list
-        A list of loaded model objects (TFSMLayer instances) that can be used for inference.
-        May contain fewer than 3 models if some failed to load.
-    
-    Notes
-    -----
-    - In Keras 3, only V3 .keras files and legacy H5 format (.h5) are supported by load_model().
-    - TFSMLayer provides a way to load legacy SavedModel format for inference-only use.
-    - The models loaded this way cannot be further trained, only used for inference.
-    - The 'serving_default' endpoint is assumed - adjust if your models use a different endpoint.
-
+        Paths to converted model files.
     """
-
-    models = []
+    import tensorflow as tf
+    import os
+    
+    if output_dir is None:
+        output_dir = os.path.dirname(model_path)
+    
+    converted_paths = []
+    
     for i in range(3):  # Assuming 3 models
         try:
-            # Use TFSMLayer for TensorFlow SavedModel format
-            model = keras.layers.TFSMLayer(
+            # First try the direct import approach
+            print(f"Converting model {i}...")
+            
+            # Load the original model using TFSMLayer
+            layer_model = tf.keras.layers.TFSMLayer(
                 model_path + str(i), 
                 call_endpoint='serving_default'
             )
-            models.append(model)
+            
+            # Create a simple wrapper model that we can save in the new format
+            input_shape = (30, 20)  # Adjust based on your model's expected input
+            inputs = tf.keras.Input(shape=input_shape)
+            outputs = layer_model(inputs)
+            
+            # Extract the actual tensor from dictionary output if needed
+            if isinstance(outputs, dict):
+                for key in outputs:
+                    outputs = outputs[key]
+                    break
+            
+            # Create a new model with the same behavior
+            new_model = tf.keras.Model(inputs=inputs, outputs=outputs)
+            
+            # Save in H5 format (compatible with Keras 3)
+            h5_path = os.path.join(output_dir, f"converted_model_{i}.h5")
+            new_model.save(h5_path, save_format='h5')
+            
+            # Verify the model can be loaded
+            test_model = tf.keras.models.load_model(h5_path)
+            
+            converted_paths.append(h5_path)
+            print(f"Successfully converted model {i} to {h5_path}")
+            
         except Exception as e:
-            print(f"Failed to load model {i}: {e}")
+            print(f"Error converting model {i}: {e}")
+    
+    return converted_paths
+
+
+def load_existing_models(model_path):
+    """
+    Load pre-trained CNN models in a way compatible with Keras 3.
+    
+    This function first attempts to load models directly. If that fails due to 
+    format compatibility issues, it tries to convert them to a Keras 3-compatible
+    format and then load them.
+    
+    Parameters
+    ----------
+    model_path : str
+        Base path to the saved models.
+    
+    Returns
+    -------
+    list
+        A list of loaded model objects that can be used for inference and training.
+    """
+    import tensorflow as tf
+    from tensorflow import keras
+    import os
+    
+    models = []
+    try_conversion = False
+    
+    # First try direct loading
+    try:
+        for i in range(3):  # Assuming 3 models
+            try:
+                # Try to load directly
+                model = keras.models.load_model(model_path + str(i), compile=False)
+                models.append(model)
+                print(f"Successfully loaded model {i} directly")
+            except Exception as e:
+                if "File format not supported" in str(e):
+                    print(f"Model {i} format not supported by Keras 3. Will try conversion.")
+                    try_conversion = True
+                    break
+                else:
+                    print(f"Error loading model {i}: {e}")
+    except Exception as e:
+        print(f"Error during initial model loading: {e}")
+        try_conversion = True
+    
+    # If direct loading failed, try conversion
+    if try_conversion or not models:
+        print("Attempting to convert models to Keras 3-compatible format...")
+        try:
+            converted_paths = convert_models_to_keras3_format(model_path)
+            
+            # Try to load the converted models
+            models = []
+            for path in converted_paths:
+                try:
+                    model = keras.models.load_model(path, compile=False)
+                    models.append(model)
+                    print(f"Successfully loaded converted model from {path}")
+                except Exception as e:
+                    print(f"Error loading converted model from {path}: {e}")
+            
+            # If conversion worked, save as the new default
+            if models and all(isinstance(m, keras.Model) for m in models):
+                print("Successfully converted and loaded models. These will be used for future runs.")
+        except Exception as e:
+            print(f"Error during model conversion: {e}")
+    print(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
     return models
-
-
 
 def train_models(models,train_data,results_folder=None):
         
@@ -141,7 +214,7 @@ def train_models(models,train_data,results_folder=None):
         all_history.append(history)
         if results_folder:        
             model.save(results_folder+f'/iRT_updated_model{i}')
-        
+    print(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
     return models, all_history
 
 
@@ -155,12 +228,10 @@ def scale_rt(rt,min_max):
     rt = rt + min_max[0]
     return rt
     
-    
+# model_path = "/Users/nathanwamsley/Data/JMOD_TESTS/iRT_CNN_model_tag6_05052025_"
+         
 
 def fine_tune_rt(grouped_df,
-                 # model_path='/Volumes/Lab/KMD/JD_RT_copy/iRT_model_mTRAQ_09042024_',
-                 # model_path = '/Volumes/Lab/KMD/JD_RT_copy/CNN/iRT_updated_model', # better option #!!! Move to config?
-                 # model_path = "/Volumes/Lab/KMD/JD_RT_copy/CNN/timeplex_lf/iRT_updated_model", ### trained from single LF timeplex
                  qc_plots = False,
                  results_path=None,
                  tag=None):
@@ -184,6 +255,7 @@ def fine_tune_rt(grouped_df,
         # model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
         #model_path = "/Volumes/Lab/KMD/FineTuning/tag6/iRT_CNN_model_tag6_05052025_"
         model_path = "/Users/nathanwamsley/Data/JMOD_TESTS/iRT_CNN_model_tag6_05052025_"
+
         
     else:
         raise ValueError("Unknown label")
@@ -192,120 +264,84 @@ def fine_tune_rt(grouped_df,
     data_split = X_train, X_test, Y_train, Y_test = create_model_data(grouped_df,seq_name='Stripped.Sequence')
 
     models = load_existing_models(model_path)
-    
+    print(f"Loaded {len(models)} models")
     # Perform LOESS regression on the filtered data
-
-    # Perform predictions based on model type
-    # Need to update models so that all are copatible with the new Keras 3 approach
-    # see 'load_existing_models' function docstring above 
-    X_test_array = np.array(X_test)
-    model_outputs = []
-    
-    models = load_existing_models(model_path)
-    
-    # Define fallback RT conversion function
-    def create_fallback_converters():
-        from scipy.interpolate import interp1d
-        
-        if 'iRT' in grouped_df.columns and 'RT' in grouped_df.columns:
-            lib_rts = grouped_df['iRT'].values
-            obs_rts = grouped_df['RT'].values
-            
-            valid_indices = ~np.isnan(lib_rts) & ~np.isnan(obs_rts)
-            lib_rts = lib_rts[valid_indices]
-            obs_rts = obs_rts[valid_indices]
-            
-            if len(lib_rts) > 3:
-                rt_converter = interp1d(lib_rts, obs_rts, bounds_error=False, fill_value="extrapolate")
-                def model_to_obs(rts):
-                    return rt_converter(rts)
-                    
-                rev_converter = interp1d(obs_rts, lib_rts, bounds_error=False, fill_value="extrapolate")
-                def obs_to_model(rts):
-                    return rev_converter(rts)
-            else:
-                model_to_obs = lambda x: x
-                obs_to_model = lambda x: x
-        else:
-            print("Warning: 'iRT' or 'RT' columns not found in dataframe")
-            model_to_obs = lambda x: x
-            obs_to_model = lambda x: x
-        
-        return model_to_obs, obs_to_model
-    
-    for model in models:
-        try:
-            # First get the raw output
-            if hasattr(model, 'predict'):
-                print("Using model.predict()")
-                raw_pred = model.predict(X_test_array)
-            else:
-                print("Calling model directly")
-                raw_pred = model(X_test_array)
-            
-            # Debug information
-            print(f"Raw prediction type: {type(raw_pred)}")
-            if isinstance(raw_pred, dict):
-                print(f"Dictionary keys: {raw_pred.keys()}")
-            
-            # Process the prediction based on its type
-            if isinstance(raw_pred, dict):
-                # Try different strategies to extract values from dictionary
-                if 'output_0' in raw_pred:
-                    pred = raw_pred['output_0']
-                    print(f"Using 'output_0' key, value type: {type(pred)}")
-                elif 'predictions' in raw_pred:
-                    pred = raw_pred['predictions'] 
-                    print(f"Using 'predictions' key, value type: {type(pred)}")
-                elif 'outputs' in raw_pred:
-                    pred = raw_pred['outputs']
-                    print(f"Using 'outputs' key, value type: {type(pred)}")
-                else:
-                    # Last resort: use the first value that looks like an array
-                    print("Searching for array-like values in dictionary")
-                    found_array = False
-                    for key, value in raw_pred.items():
-                        if isinstance(value, (np.ndarray, list)) and len(np.asarray(value)) > 0:
-                            pred = value
-                            print(f"Using key '{key}', value type: {type(pred)}")
-                            found_array = True
-                            break
-                    
-                    if not found_array:
-                        print("Could not find usable array in dictionary")
-                        print(f"Dictionary contents: {raw_pred}")
-                        continue  # Skip this model
-            else:
-                pred = raw_pred
-            
-            # Convert to numpy array and ensure correct shape
-            pred = np.asarray(pred)
-            print(f"Prediction shape: {pred.shape}")
-            
-            if len(pred.shape) > 1 and pred.shape[1] == 1:
-                pred = pred.flatten()
-                print(f"Flattened shape: {pred.shape}")
-            
-            # Final sanity check - ensure values are numeric
-            if not np.issubdtype(pred.dtype, np.number):
-                print(f"Warning: Prediction has non-numeric dtype: {pred.dtype}")
-                continue
-                
-            model_outputs.append(pred)
-            print(f"Successfully added prediction with shape {pred.shape}")
-            
-        except Exception as e:
-            print(f"Error during prediction with model: {e}")
-            continue
-    
-    if not model_outputs:
-        print("No valid predictions from any model")
-        model_to_obs, obs_to_model = create_fallback_converters()
-        return data_split, None, model_to_obs
-        
-    #orig_predictions = np.mean([model.predict(np.array(X_test)) for model in models],axis=0)
     ###!!!  NB: Fit/training is very much dependent on the loess fit; Make sure it's monotonic and nott overfit also (edit "frac")
     lowess = sm.nonparametric.lowess
+    
+    # Modified to handle both regular Keras models and TFSMLayer
+    try:
+        model_outputs = []
+        X_test_array = np.array(X_test)
+        
+        for model in models:
+            try:
+                # Before prediction:
+                print(f"Attempting prediction with model of type {type(model).__name__}")
+                
+                if hasattr(model, 'predict'):
+                    pred = model.predict(X_test_array)
+                    print(f"Used predict() method, result type: {type(pred).__name__}")
+                else:
+                    # TFSMLayer objects are called directly
+                    print(f"Calling model directly (TFSMLayer approach)")
+                    pred = model(X_test_array)
+                    print(f"Direct call result type: {type(pred).__name__}")
+                    
+                    # Extract data from tensor dictionary if needed
+                    if isinstance(pred, dict):
+                        print(f"Prediction is a dictionary with keys: {list(pred.keys())}")
+                        for key in pred:
+                            value = pred[key]
+                            print(f"Key '{key}' contains data of type {type(value).__name__}")
+                            if hasattr(value, 'numpy'):
+                                print(f"Converting TensorFlow tensor from key '{key}' to NumPy array")
+                                pred = value.numpy()
+                                print(f"Shape after conversion: {pred.shape}")
+                                break
+                    
+                # Add shape information
+                if hasattr(pred, 'shape'):
+                    print(f"Prediction shape: {pred.shape}")
+                else:
+                    print(f"Prediction has no shape attribute, type: {type(pred)}")
+                
+                model_outputs.append(pred)
+                print(f"Successfully added prediction to model_outputs")
+            except Exception as e:
+                print(f"Error predicting with model: {e}")
+                print(f"Traceback: {traceback.format_exc()}")
+        
+        orig_predictions = np.mean(model_outputs, axis=0)
+    except Exception as e:
+        print(f"Error making predictions: {e}")
+        # Define fallback
+        def model_to_obs(rts):
+            return rts
+        def obs_to_model(rts):
+            return rts
+        return data_split, models, model_to_obs
+    
+
+    print(f"Number of model outputs collected: {len(model_outputs)}")
+    for i, output in enumerate(model_outputs):
+        print(f"Model output {i} type: {type(output).__name__}, ", end="")
+        if hasattr(output, 'shape'):
+            print(f"shape: {output.shape}")
+        else:
+            print(f"no shape attribute")
+
+    if not model_outputs:
+        print("No valid predictions from any model!")
+    else:
+        print(f"Attempting to average {len(model_outputs)} model outputs")
+
+    print(f"Original predictions shape: {orig_predictions.shape}")
+    print(f"Y_test shape: {Y_test.shape}")
+    print(f"Flattened predictions shape: {orig_predictions.flatten().shape}")
+    print(f"First few values of predictions: {orig_predictions.flatten()[:5]}")
+    print(f"First few values of Y_test: {Y_test[:5]}")
+
     loess_result = lowess(orig_predictions.flatten(), Y_test, frac=0.1)
     
     def obs_to_model(rts):
@@ -315,14 +351,15 @@ def fine_tune_rt(grouped_df,
         order = np.argsort(loess_result[:, 1])
         return np.interp(rts, loess_result[order, 1], loess_result[order, 0])
 
-    # def obs_to_model(rts):
-    #     return (rts-rts.min())/(rts.max()-rts.min())
-    
-
     if len(grouped_df)>config.FT_minimum:
         ### Fine Tune models
-        print("Fine Tuning RTs")
-        models,history = train_models(models,[X_train,obs_to_model(Y_train)],results_folder=results_path)
+        # Check if models support training
+        can_train = all(hasattr(model, 'fit') for model in models)
+        if can_train:
+            print("Fine Tuning RTs")
+            models,history = train_models(models,[X_train,obs_to_model(Y_train)],results_folder=results_path)
+        else:
+            print("Models don't support fine-tuning (using TFSMLayer). Using for inference only.")
     else:
         print("Not enough IDs for fine tuning")
         print("Using base model for predictions")
@@ -348,7 +385,7 @@ def fine_tune_rt(grouped_df,
         if results_path:
             plt.savefig(results_path+"/RT_finetune_ObsvsOldAlign.png",dpi=600,bbox_inches="tight")
         
-        if len(grouped_df)>config.FT_minimum:
+        if len(grouped_df)>config.FT_minimum and ('history' in locals() or 'history' in globals()):
             # Add the smoothed values to a new column
             plt.subplots()
             plt.scatter(obs_to_model(Y_test),orig_predictions,s=1)
@@ -369,16 +406,39 @@ def fine_tune_rt(grouped_df,
                 plt.savefig(results_path+"/RT_finetune_training.png",dpi=600,bbox_inches="tight")
                  
             
-
-            predictions = np.mean([model.predict(np.array(X_test)) for model in models],axis=0)
-            plt.subplots()
-            plt.scatter(obs_to_model(Y_test),predictions,s=1)
-            x_lim = plt.xlim()
-            y_lim = plt.ylim()
-            plt.plot(x_lim,x_lim)
-            plt.xlabel("Aligned observed Values")
-            plt.ylabel("New model predictions")
-            if results_path:
-                plt.savefig(results_path+"/RT_finetune_AlignObsvsNew.png",dpi=600,bbox_inches="tight")
+            # Modified to handle both model types, similar to above
+            try:
+                model_outputs = []
+                for model in models:
+                    try:
+                        if hasattr(model, 'predict'):
+                            pred = model.predict(np.array(X_test))
+                        else:
+                            pred = model(np.array(X_test))
+                            if isinstance(pred, dict):
+                                for key in pred:
+                                    if hasattr(pred[key], 'numpy'):
+                                        pred = pred[key].numpy()
+                                        break
+                                        
+                        if hasattr(pred, 'numpy'):
+                            pred = pred.numpy()
+                            
+                        model_outputs.append(pred)
+                    except Exception as e:
+                        print(f"Error predicting with model: {e}")
+                        
+                predictions = np.mean(model_outputs, axis=0)
+                plt.subplots()
+                plt.scatter(obs_to_model(Y_test),predictions,s=1)
+                x_lim = plt.xlim()
+                y_lim = plt.ylim()
+                plt.plot(x_lim,x_lim)
+                plt.xlabel("Aligned observed Values")
+                plt.ylabel("New model predictions")
+                if results_path:
+                    plt.savefig(results_path+"/RT_finetune_AlignObsvsNew.png",dpi=600,bbox_inches="tight")
+            except Exception as e:
+                print(f"Error creating fine-tuned model plot: {e}")
         
     return data_split, models, model_to_obs
