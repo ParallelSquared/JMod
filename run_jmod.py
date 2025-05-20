@@ -1,9 +1,3 @@
-"""
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
-
 
 import config
 
@@ -64,7 +58,7 @@ if __name__=="__main__":
     
     ms2_align = "MS2align" if config.args.ms2_align else ""
     results_folder_name = "_".join([spec_file_name,
-                                    lib_file_name+"Update130525",
+                                    lib_file_name+"Update240325",
                                     f"{config.mz_ppm}ppm",
                                     f"{config.atleast_m}m",
                                     f"unmatch{config.unmatched_fit_type}",
@@ -72,16 +66,15 @@ if __name__=="__main__":
                                     f"libfrac{config.args.lib_frac}",
                                     *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,plexDIA,is_timeplex,dummy_val]))])
     
-    
+    #results_folder_path = "/Users/kevinmcdonnell/Programming/Python/Jmod/Results/"+results_folder_name
     print(results_folder_name)
     # print(config.args.tag)
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-
-    if config.args.output_folder is not None:
-        results_folder_path = config.args.output_folder +"/" +results_folder_name
-        
+    #results_folder_path = "/Volumes/Lab/KMD/Results/"+results_folder_name
+    # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
+    # results_folder_path = "/Users/kevinmcdonnell/Programming/Data/Results/"+results_folder_name
     if not os.path.exists(results_folder_path):
         os.mkdir(results_folder_path)
     

@@ -1,10 +1,3 @@
-"""
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
-
-
 import subprocess
 import numpy as np
 from pyteomics import mzml, auxiliary
@@ -137,10 +130,7 @@ def load_tsv_speclib(spec_lib_file):
         python_lib = {}
         idx = 0
         for row in csv_reader:
-            if "ModifiedPeptide" in row:
-                row["ModifiedPeptide"] = row["ModifiedPeptide"].strip("_")
-            elif "ModifiedSequence" in row:
-                row["ModifiedPeptide"] = row["ModifiedSequence"].strip("_")
+            row["ModifiedPeptide"] = row["ModifiedPeptide"].strip("_")
             unique_id = (row["ModifiedPeptide"],float(row["PrecursorCharge"]))
             python_lib.setdefault(unique_id,{})
             python_lib[unique_id]["mod_seq"] = row["ModifiedPeptide"]
@@ -150,11 +140,10 @@ def load_tsv_speclib(spec_lib_file):
                 python_lib[unique_id]["seq"] = row["PeptideSequence"]
             python_lib[unique_id]["prec_mz"] = float(row["PrecursorMz"])
             python_lib[unique_id]["prec_z"] = float(row["PrecursorCharge"]) 
-            
-            if "Tr_recalibrated" in row:
-                rt = row["Tr_recalibrated"]
-            elif "RT" in row:
+            if "RT" in row:
                 rt = row["RT"]
+            elif "Tr_recalibrated" in row:
+                rt = row["Tr_recalibrated"]
             elif "iRT" in row:
                 rt = row["iRT"]
             else:
@@ -164,7 +153,7 @@ def load_tsv_speclib(spec_lib_file):
             loss=""
             if "FragmentLossType" in row:
                 loss = str(row["FragmentLossType"])
-                if loss in ["unknown","noloss",""]:
+                if loss in ["unknown","noloss"]:
                     loss=""
                 else:
                     loss = "-"+loss
@@ -188,12 +177,8 @@ def load_tsv_speclib(spec_lib_file):
                 python_lib[unique_id]["protein_name"] = row["ProteinName"]
             elif "ProteinID" in row:
                 python_lib[unique_id]["protein_name"] = row["ProteinID"]
-            elif "ProteinId" in row:
-                python_lib[unique_id]["protein_name"] = row["ProteinId"]
             if "Genes" in row:
                 python_lib[unique_id]["genes"] = row["Genes"]
-            if "GeneName" in row:
-                python_lib[unique_id]["genes"] = row["GeneName"]
             if "UniprotID" in row:
                 python_lib[unique_id]["UniprotID"] = row["UniprotID"]
             
@@ -286,7 +271,7 @@ def loadSpecLib(lib_file):
         with open(python_lib_file,"rb") as read_file:
             spec_lib = pickle.load(read_file)
     
-    print(f"Loaded {len(spec_lib)} library precursors")
+    print(f"Loaded {len(spec_lib)} library spectra")
     print("finished")
     return spec_lib
     

@@ -1,9 +1,10 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
+Created on Thu Sep 12 14:24:09 2024
 
+@author: kevinmcdonnell
+"""
 
 
 import tensorflow as tf
@@ -114,31 +115,36 @@ def scale_rt(rt,min_max):
     
 
 def fine_tune_rt(grouped_df,
-                 # model_path='/Volumes/Lab/KMD/JD_RT_copy/iRT_model_mTRAQ_09042024_',
-                 # model_path = '/Volumes/Lab/KMD/JD_RT_copy/CNN/iRT_updated_model', # better option #!!! Move to config?
-                 # model_path = "/Volumes/Lab/KMD/JD_RT_copy/CNN/timeplex_lf/iRT_updated_model", ### trained from single LF timeplex
                  qc_plots = False,
                  results_path=None,
                  tag=None):
     
     print(f"{len(grouped_df)} peptides considered for fine tuning")
-    
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+        
     if tag is None:
         tag=config.tag
     
     if tag is None:
-        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_LF_09182024_"
+        model_path = os.path.join(script_dir, 'iRT_CNN_model_LF_09182024_')
         
     elif tag.name=="mTRAQ":
-        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_mTRAQ_09182024_"
+        model_path = os.path.join(script_dir, 'iRT_CNN_model_mTRAQ_09182024_')
         
-    elif "diethyl" in tag.name:
-        # model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk3plex/iRT_updated_model"
-        model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk_thenFDX016/iRT_updated_model"
+    elif tag.name=="diethyl_6plex":
+        model_path = os.path.join(script_dir, 'iRT_updated_model')
         
-    elif "tag6" in tag.name:
-        # model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
-        model_path = "/Volumes/Lab/KMD/FineTuning/tag6/iRT_CNN_model_tag6_05052025_"
+    elif tag.name=="diethyl_3plex":
+        model_path = os.path.join(script_dir, 'iRT_CNN_model_DiEthyl_11052024_')
+        
+    elif tag.name=="tag6_5plex":
+        model_path = os.path.join(script_dir, 'iRT_TransferLearning_Tag6_updated_04072025_')
+        
+    elif tag.name=="tag6_9plex":
+        model_path = os.path.join(script_dir, 'iRT_TransferLearning_Tag6_updated_04072025_')
+        
+    elif tag.name=="tag6":
+        model_path = os.path.join(script_dir, 'iRT_TransferLearning_Tag6_updated_04072025_')
         
     else:
         raise ValueError("Unknown label")
@@ -163,9 +169,6 @@ def fine_tune_rt(grouped_df,
         order = np.argsort(loess_result[:, 1])
         return np.interp(rts, loess_result[order, 1], loess_result[order, 0])
 
-    # def obs_to_model(rts):
-    #     return (rts-rts.min())/(rts.max()-rts.min())
-    
 
     if len(grouped_df)>config.FT_minimum:
         ### Fine Tune models

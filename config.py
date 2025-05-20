@@ -1,10 +1,3 @@
-"""
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
-
-
 import argparse
 
 
@@ -21,8 +14,7 @@ parser.add_argument('-r', '--use_rt', action='store_true')
 parser.add_argument('-f', '--use_features', action='store_false')
 parser.add_argument('-m', '--atleast_m', default=3, type=int)
 parser.add_argument('-t', '--threads', default=10, type=int)
-parser.add_argument('-p', '--ppm', default=10, type=float)
-parser.add_argument('-o','--output_folder', default=None)   
+parser.add_argument('-p', '--ppm', default=20, type=float)
 parser.add_argument('--ms2_align', action='store_true')
 parser.add_argument('--timeplex', action='store_true')
 parser.add_argument('--num_timeplex', default=0, type=int)
@@ -44,30 +36,12 @@ parser.add_argument('--user_rt_tol', action='store_true')
 parser.add_argument('--rt_tol', default=.5, type=float)
 parser.add_argument('--initial_percentile', default=50, type=float)
 parser.add_argument('--user_percentile', action='store_true') 
-parser.add_argument('--no_ms1_req', action='store_false') 
-parser.add_argument("--ms1_ppm",default=0, type=float)
+parser.add_argument('--tree_max_depth', default=10, type=float)
+
 
 
 
 args = parser.parse_args()
-
-# args.mzml = "/Volumes/Lab/Quant/CC20170118_SAM_Specter_Ecolidigest_DIA_01.mzML"
-# args.speclib = "/Volumes/Lab/Quant/SpecLibs/EcoliSpPrositLib.msp.tsv"
-# args.mzml = "/Users/kevinmcdonnell/Programming/Data/2023_10_05_lf-dia_375pg_ce24.mzml"
-# args.use_rt=True
-# args.use_features=True
-# args.mzml = "/Users/kevinmcdonnell/Programming/Data/2023_08_28_LF-DIA_E480.mzML"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/BrukerHumanPrositLib.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/s6Thermo_prosit.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositFrags.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/Human_Bruker_Library_PrositFrags.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/ecoli_hb_thermo_prosit.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE27.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE39.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE45.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE51.msp.tsv"
-# print(args)
-
 
 mz_ppm = args.ppm
 mz_tol = mz_ppm*10**(-6)
@@ -109,16 +83,10 @@ opt_im_tol = im_tol
 
 
 
-# protein_column = 'protein_name'
-protein_column = 'protein_group'
+protein_column = 'protein_name'
 
 
-### the minimum number of IDs necessary for fine-tuning
 FT_minimum = 1e3
-
-### minimum ms1 tolerance; set to 0 to ignore
-min_ms1_tol = 0#3e-6
-
 num_iso_peaks = args.num_iso
 min_iso_intensity = 1e-3 ## derived empirically
 
@@ -146,7 +114,7 @@ test_var = "test_1"
 
 ### filters for picking spectra to fit
 frac_lib_matched = args.lib_frac
-match_ms1 = args.no_ms1_req
+match_ms1 = True
 top_n = 10
 atleast_m = args.atleast_m
 
@@ -172,7 +140,7 @@ score_model = "rf"
     xg: XgBoost
 """
 
-tree_max_depth = 20
+tree_max_depth = args.tree_max_depth
 
 fdr_threshold = 0.01
 
