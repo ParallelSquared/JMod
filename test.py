@@ -78,7 +78,7 @@ if __name__=="__main__":
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/JD/test_init_05192_02"
+
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
         
@@ -193,9 +193,7 @@ if __name__=="__main__":
     ## process in batches
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
-    # Initialize an empty list to accumulate all coefficient data
-    all_coeff_data = []
-    # Initialize an empty list to accumulate all outputs
+    # start_time = time.time()
     for batch_idx in range(num_batches):
         start_time = time.time()
         batch_spectra = spectra_to_fit[batch_idx*num_per_batch:(batch_idx+1)*num_per_batch]
@@ -217,41 +215,15 @@ if __name__=="__main__":
                             return_frags=False,
                             decoy=True,
                             decoy_library=decoy_lib))
-        # Save detailed coefficient values from this batch
-        batch_coeff_data = []
-        for scan_results, scan_spec in zip(outputs, batch_spectra):
-            for result in scan_results:
-                # Only save entries with non-zero coefficients to save space
-                if result[0] > 0:
-                    # Extract key information for coefficient analysis
-                    batch_coeff_data.append({
-                        'coeff': result[0],
-                        'scan_id': result[1],
-                        'ms1_scan_id': result[2],
-                        'seq': result[3],
-                        'z': result[4],
-                        'time_channel': result[5] if config.args.timeplex else 0,
-                        'prec_mz': result[6],
-                        'rt': result[7],
-                        'decoy': 'Decoy' in str(result[3])
-                    })
-        
-        # Add this batch's coefficients to the accumulated data
-        all_coeff_data.extend(batch_coeff_data)    
-
+            
         long_outputs = [j for i in outputs for j in i]
         print(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
-        print(f"Found {len(batch_coeff_data)} non-zero coefficients in this batch")
-    
+        
         decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
-        write_to_csv(long_outputs, decoylib_search_path)
+        write_to_csv(long_outputs,decoylib_search_path)
+        
     
-
-    # After all batches are processed, save the complete coefficient data
-    coeff_df = pd.DataFrame(all_coeff_data)
-    print(f"Saving {len(all_coeff_data)} total coefficients to detailed_coefficients.csv")
-    coeff_df.to_csv(results_folder_path+"/detailed_coefficients.csv", index=False)
-
+    
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
                  library=spectrumLibrary,
