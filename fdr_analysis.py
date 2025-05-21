@@ -728,3 +728,4 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     ## save to results folder
     fdx_quant.to_csv(results_folder+"/all_IDs.csv",index=False)
     fdx_quant[np.logical_and(~fdx_quant["decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
+    fdx_quant[["stripped_seq","z","untag_prec","file_name","channel","decoy","Qvalue", "Protein_Qvalue","PredVal","protein"]].to_parquet(results_folder+"/all_IDs_filtered.parquet")

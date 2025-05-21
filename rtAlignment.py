@@ -14,7 +14,7 @@ import multiprocessing
 import tqdm
 from functools import partial
 from pyteomics import mass 
-from kneed import KneeLocator
+# from kneed import KneeLocator
 
 from SpecLib import load_tsv_speclib,load_tsv_lib, loadSpecLib
 import load_files 
@@ -872,7 +872,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         # print(str(feature_percentile),min(density))
         
         
-        emp_rt_spl = lowess_fit(np.array(output_rts)[cor_filter],np.array(dia_rt)[cor_filter],.1)
+        emp_rt_spl = lowess_fit(np.array(output_rts)[cor_filter],np.array(dia_rt)[cor_filter],.02)
     else:
         hyper_cutoff = np.percentile(all_hyper,80)
         all_cor_filter = all_hyper>hyper_cutoff

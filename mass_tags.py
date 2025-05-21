@@ -239,7 +239,11 @@ ProtSci_heavy_plex = massTag(rules = "nK",
             channel_names = ["4","8","12","16", "20"],
             name = "ProtSci_light_plex") 
 
-
+SILAC = massTag(rules="R", 
+                base_mass=0, 
+                delta=[10.008269], 
+                channel_names=[10], 
+                name="SILAC")
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
 def split_frag_name(ion_type):
@@ -406,7 +410,8 @@ available_tags = {"mTRAQ":mTRAQ,
                   "tag6pip":tag6pip,
                   "tag6lys":tag6lys,
                   "tag6arg":tag6arg,
-                  "ProtSci_light_plex":ProtSci_light_plex}
+                  "ProtSci_light_plex":ProtSci_light_plex,
+                  "SILAC":SILAC}
 
 # if config.args.mTRAQ:
 #     config.tag = mTRAQ
