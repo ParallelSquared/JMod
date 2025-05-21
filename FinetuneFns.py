@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 load_model = tf.keras.models.load_model
 import statsmodels.api as sm
 import config
+import os
 
 pd.options.display.max_columns = 1000
 
@@ -24,8 +25,6 @@ pd.options.display.max_columns = 1000
 plt.rcParams['figure.dpi'] = 500
 plt.rcParams['axes.labelsize'] = 12
 plt.rcParams['axes.titlesize'] = 12
-
-
 
 
 
@@ -123,22 +122,23 @@ def fine_tune_rt(grouped_df,
     
     print(f"{len(grouped_df)} peptides considered for fine tuning")
     
+    current_dir = os.path.dirname(__file__)
+    
     if tag is None:
         tag=config.tag
     
     if tag is None:
-        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_LF_09182024_"
+        model_path = os.path.join(current_dir,"rt_models","iRT_CNN_model_LF_09182024_")
         
     elif tag.name=="mTRAQ":
-        model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_mTRAQ_09182024_"
+        model_path = os.path.join(current_dir,"rt_models","iRT_CNN_model_mTRAQ_09182024_")
         
     elif "diethyl" in tag.name:
-        # model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk3plex/iRT_updated_model"
-        model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk_thenFDX016/iRT_updated_model"
+       model_path = os.path.join(current_dir,"rt_models","iRT_CNN_model_DiEthyl_11052024_")
         
     elif "tag6" in tag.name:
         # model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
-        model_path = "/Volumes/Lab/KMD/FineTuning/tag6/iRT_CNN_model_tag6_05052025_"
+        model_path = os.path.join(current_dir,"rt_models","iRT_TransferLearning_Tag6_updated_05072025_")
         
     else:
         raise ValueError("Unknown label")
