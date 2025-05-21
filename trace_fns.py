@@ -35,7 +35,7 @@ import warnings
 from scipy.interpolate import interp1d
 from scipy import sparse, optimize
 from scipy.signal import find_peaks
-import sparse_nnls
+# import sparse_nnls
 import Jplot as jp
 
 import multiprocessing
