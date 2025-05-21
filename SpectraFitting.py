@@ -13,9 +13,9 @@ import warnings
 from scipy import stats
 from scipy import sparse
 from pyteomics import mass
+import ptinnls
 import re
 
-import sparse_nnls
 from read_output import names
 import config
 
@@ -886,7 +886,7 @@ def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fal
         dia_spec_int = np.append(dia_spec_int,[0]*(sparse_lib_matrix.shape[0]-dia_spec_int.shape[0])) 
         
         # Fit lib spectra to observed spectra
-        fit_results = sparse_nnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
+        fit_results = ptinnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
         lib_coefficients = fit_results['x']
         
         
@@ -1240,7 +1240,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
         sparse_lib_matrix = sparse.coo_matrix((sparse_values,(sparse_row_indices,sparse_col_indices)))
         # print("Starting Fit")
         # Fit lib spectra to observed spectra
-        fit_results = sparse_nnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
+        fit_results = ptinnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
         lib_coefficients = fit_results['x']
         
         
@@ -1649,7 +1649,7 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
         sparse_lib_matrix = sparse.coo_matrix((sparse_values,(sparse_row_indices,sparse_col_indices)))
 
         # Fit lib spectra to observed spectra
-        fit_results = sparse_nnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
+        fit_results = ptinnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
         lib_coefficients = fit_results['x']
         
         

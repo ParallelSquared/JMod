@@ -22,7 +22,7 @@ import SpecLib
 import Jplot as jp
 import config
 import iso_functions as iso_f
-
+import ptinnls
 from SpectraFitting import fit_to_lib
 from scipy.interpolate import LSQUnivariateSpline as spline
 from scipy.interpolate import UnivariateSpline, InterpolatedUnivariateSpline
