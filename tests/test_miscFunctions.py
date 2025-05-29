@@ -7,7 +7,7 @@ import numpy as np
 
 # Import the functions we want to test
 from miscFunctions import (
-    change_seq, parse_peptide, extract_mod, split_frag_name,
+    change_seq, convert_prec_mz, convert_frags, parse_peptide, extract_mod, split_frag_name,
     closest_peak_diff, frag_to_peak, within_tol
 )
 
@@ -104,6 +104,50 @@ class TestChangeSeq:
         result = change_seq(sequence, rules)
         assert result == expected
 
+class TestPrecMz:
+    """Test cases for calculating precursor m/z ratios function"""
+    def test_convert_prec_mz(self):
+        """Test converting precursor m/z ratios"""
+        # Test with a simple m/z value
+        #Get precursor m/zs from Skyline for testing purposes 
+        result = convert_prec_mz("PEPTIDE", 2)
+        assert abs(result - 400.68725848012497) < 1e-6
+
+        #Since no mods dict is specified the mod is ignored 
+        result = convert_prec_mz("PEPTIDE(mTRAQ-0)", 2)
+        assert abs(result - 400.68725848012497) < 1e-6
+
+        #Now includes the mod mass 
+        result = convert_prec_mz("PEPTIDE(mTRAQ-0)", 2, {"mTRAQ-0": 144.102063})
+        assert abs(result - 400.68725848012497 - 144.102063/2) < 1e-6
+        seq = 'AAAEQAISVR'
+        frags = {
+                        'b3_1': [214.1186178209, 0.48869178],
+                        'b4_1': [343.16121090887, 0.29596102],
+                        'b5_1': [471.21978841415, 0.13230422],
+                        'b6_1': [542.25690219886, 0.1957216],
+                        'y3_1': [361.21939449133, 0.51684165],
+                        'y4_1': [474.30345846846, 0.22480424],
+                        'y5_1': [545.34057225317, 0.35331511],
+                        'y6_1': [673.39914975845, 0.5639957],
+                        'y7_1': [802.44174284642, 1.0],
+                        'y8_1': [873.47885663113, 0.8503218],
+                        'y9_1': [944.51597041584, 0.49269193]
+                    }
+        expected_new_frags = {
+            'b3_1': [300.19178276116, 0.48869178],
+            'b4_1': [371.22889654587004, 0.29596102],
+            'b5_1': [499.28747405115, 0.13230422],
+            'b6_1': [628.3300671391199, 0.1957216],
+            'y3_1': [317.19317974349, 0.51684165],
+            'y4_1': [388.2302935282, 0.22480424],
+            'y5_1': [517.2728866161699, 0.35331511],
+            'y6_1': [645.3314641214499, 0.5639957],
+            'y7_1': [716.3685779061599, 1.0],
+            'y8_1': [829.4526418832899, 0.8503218],
+            'y9_1': [916.4846702875599, 0.49269193]
+        }
+        assert convert_frags(seq, frags, "rev") == expected_new_frags
 
 class TestParsePeptide:
     """Test cases for the parse_peptide function"""

@@ -379,7 +379,7 @@ diann_rules = {
 #     #     new_seq = "".join(seq)
 #     return new_seq
 
-def change_seq(seq: str, rules: str):
+def change_seq(seq: str, rules: str) -> str:
     """Modifies a peptide sequence to create a complementary decoy sequence.
     Uses either the sequence reversal method or the DIA-NN rules for sequence
     'mutation' 
@@ -393,7 +393,7 @@ def change_seq(seq: str, rules: str):
 
     Returns
     -------
-    string
+    str
         The modified sequence 
     
     Example
@@ -435,83 +435,112 @@ def change_seq(seq: str, rules: str):
     return new_seq
 
 
-def convert_prec_mz(seq,z):
+def convert_prec_mz(seq: str, z: int = 1, mass_dict: dict[str, float] = {}) -> float:
+    """Gets the precursors m/z for a peptide sequence given the
+    amino acid sequence and the charge state. Accepts sequences with modifications
+    in '(' brackets  
+
+    Parameters
+    ----------
+    seq : str
+        The original peptide sequence 
+    z : int
+        The charge state of the peptide (default is 1)
+    mass_dict : dict[str, float], optional
+        A dictionary mapping modification tags (e.g., 'Phospho', 'mTRAQ-0') to their mass shifts.
+        Defaults to empty dict.
+
+    Returns
+    -------
+    float
+        The unmodified m/z ratio of the peptide 
     
+    Example
+    -------
+    >>> change_seq("PEPTIDE", 2)
+    "LDLSVED"
+    >>> change_seq("PEPTIDE", 3)
+    "LDLSVED"
+    """
+        
+    #Identifies modifications within the sequence 
     split_seq = re.findall("([A-Z](?:\(.*?\))?)",seq)
-    
     mods = [re.findall("\((.*?)\)",i) for i in split_seq]
     
-    ## assume AA is the first 
+    ## assume AA is the first. P(+79.97) or K(mTRAQ-0) for example 
     unmod_seq = [i[0] for i in split_seq]
     
     unmod_mass = mass.fast_mass(unmod_seq,charge=z)
     
-    if config.tag:
-    	tag_masses = sum([config.tag.mass_dict[j] for i in mods for j in i if j in config.tag.mass_dict])
-    else: 
-    	tag_masses = 0
-        
+    # if config.tag:
+    #	tag_masses = sum([config.tag.mass_dict[j] for i in mods for j in i if j in config.tag.mass_dict])
+    #else: 
+    # 	tag_masses = 0
+    
+    # Compute total mass of the modifications in the provided mass_dict
+    tag_masses = sum(
+        mass_dict.get(j, 0.0) for sublist in mods for j in sublist
+    )
+
     return unmod_mass+(tag_masses)/z
-    
-
-def convert_frags_orig(seq,frags,rules):
-    
-    new_seq = change_seq(seq=seq,rules=rules)
-    
-    new_frags = {}
-    
-    for frag in frags:
-        ion,charge = frag.split("_")
-        ion_type = ion[0]
-        ion_nmr = int(ion[1:])
-        
-        if ion_type=="b":
-            mz = mass.fast_mass(new_seq[:ion_nmr],ion_type,int(charge))
-        
-        if ion_type=="y":
-            mz = mass.fast_mass(new_seq[ion_nmr:],ion_type,int(charge))
-
-        new_frags[frag] = [mz, frags[frag][1]]
-
-    return new_frags
-
-
-# def convert_frags(seq,frags,rules=diann_rules):
-    
-#     new_seq = change_seq(seq=seq,rules=rules)
-    
-#     new_frags = {}
-    
-#     for frag in frags:
-#         ion,charge = frag.split("_")
-#         ion_type = ion[0]
-#         ion_nmr_loss = ion[1:]
-#         ion_nmr_loss_split = ion_nmr_loss.split("-")
-#         ion_nmr = int(ion_nmr_loss_split[0])
-#         loss = 0
-#         if len(ion_nmr_loss_split)>1:
-#             ion_loss = ion_nmr_loss[1]
-#             loss = mass.calculate_mass(ion_loss)
-#         if ion_type=="b":
-#             mz = mass.fast_mass(new_seq[:ion_nmr],ion_type,int(charge)) - loss
-        
-#         if ion_type=="y":
-#             mz = mass.fast_mass(new_seq[-ion_nmr:],ion_type,int(charge)) - loss
-
-#         new_frags[frag] = [mz, frags[frag][1]]
-
-#     return new_frags
-
-
-
-
 
 ## update to work for mTRAQ
 ## Note: unsure if this works for modifications
 ####  TO DO:   Need to add tag masses to larger dict with modifications included 
 #@profile
-def convert_frags(seq,frags,rules=diann_rules):
+def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rules) -> dict[str, list[float]]:
+    """Gets the precursors m/z for a peptide sequence given the
+    amino acid sequence and the charge state. Accepts sequences with modifications
+    in '(' brackets  
+
+    Parameters
+    ----------
+    seq : str
+        The original peptide sequence 
+    frags : dict[str, list[float]]
+        Maps the fragment names (e.g., 'b3_2') to a list containing the m/z ratio and intensity.
+        Fragment names have format (b/y)(frag index)_charge, e.g., 'b3_2' for b ion 3 with charge 2.
+    rules : str
+        Method to modify string (must either be 'rev' or 'diann')
+
+
+    Returns
+    -------
+    float
+        The unmodified m/z ratio of the peptide 
     
+    Example
+    -------
+    >>> seq = 'AAAEQAISVR'
+    >>> frags = {
+                    'b3_1': [214.1186178209, 0.48869178],
+                    'b4_1': [343.16121090887, 0.29596102],
+                    'b5_1': [471.21978841415, 0.13230422],
+                    'b6_1': [542.25690219886, 0.1957216],
+                    'y3_1': [361.21939449133, 0.51684165],
+                    'y4_1': [474.30345846846, 0.22480424],
+                    'y5_1': [545.34057225317, 0.35331511],
+                    'y6_1': [673.39914975845, 0.5639957],
+                    'y7_1': [802.44174284642, 1.0],
+                    'y8_1': [873.47885663113, 0.8503218],
+                    'y9_1': [944.51597041584, 0.49269193]
+                }
+    >>> convert_frags(seq, frags, "rev")
+    {
+    'b3_1': [300.19178276116, 0.48869178],
+    'b4_1': [371.22889654587004, 0.29596102],
+    'b5_1': [499.28747405115, 0.13230422],
+    'b6_1': [628.3300671391199, 0.1957216],
+    'y3_1': [317.19317974349, 0.51684165],
+    'y4_1': [388.2302935282, 0.22480424],
+    'y5_1': [517.2728866161699, 0.35331511],
+    'y6_1': [645.3314641214499, 0.5639957],
+    'y7_1': [716.3685779061599, 1.0],
+    'y8_1': [829.4526418832899, 0.8503218],
+    'y9_1': [916.4846702875599, 0.49269193]
+    }
+    """
+
     new_seq = change_seq(seq=seq,rules=rules)    
     
     split_seq = parse_peptide(new_seq)
@@ -559,6 +588,15 @@ def convert_frags(seq,frags,rules=diann_rules):
             mz = mass.fast_mass(unmod_seq[-ion_nmr:],ion_type,int(charge)) - (loss/float(charge)) + ((sum(tag_masses[-ion_nmr:]) +sum(mod_masses[-ion_nmr:]))/float(charge))  
 
         new_frags[frag] = [mz, frags[frag][1]]
+
+    #import pprint
+    #print("new_frags:")
+    #pprint.pprint(new_frags)
+    #print("Type:", type(new_frags))
+    #print("Structure Example:", list(new_frags.items())[:1])  # show one entry if possible
+    #print()
+    # Force error after debugging output
+    #raise RuntimeError("Intentional debug stop after printing input information.")
 
     return new_frags
 
