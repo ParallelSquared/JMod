@@ -1,10 +1,16 @@
 # jmod
 Spectrum-centric search engine
 
-Running a search:
+## Running a search:
+#### With command line args
 ```
-python run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzml
+python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzml
 ```
+#### With json configuration file 
+```
+python path/to/run_jmod.py --config_json path/to/config.json
+```
+
 
 Parameters:
 ```

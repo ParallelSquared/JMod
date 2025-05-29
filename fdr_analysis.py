@@ -455,9 +455,9 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     #            break  # Just show one example to avoid overwhelming output
     
     # print(X.columns)
-    print(f"Using {len(X.columns)} features for scoring:")
-    for idx, feature in enumerate(X.columns):
-        print(f"{idx+1}. {feature}")
+    #print(f"Using {len(X.columns)} features for scoring:")
+    #for idx, feature in enumerate(X.columns):
+    #    print(f"{idx+1}. {feature}")
     
     X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
         
