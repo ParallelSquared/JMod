@@ -33,6 +33,7 @@ from mass_tags import tag_library
 from fdr_analysis import process_data
 from mass_tags import available_tags
 
+
 if __name__=="__main__":
         
     # Check if a single argument is provided and it's a JSON file
@@ -46,7 +47,7 @@ if __name__=="__main__":
         print(f"Loading configuration from {config.args.config_json}")
         if not config.load_config_from_json(config.args.config_json):
             print("Failed to load JSON configuration. Using command-line arguments.")
-            
+
     # Check if running in test mode
     if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
         # Run tests instead of normal operation

@@ -245,18 +245,18 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
             for i in range(len(weights)):
                 if i == 0:
                     # First point
-                    deriv = ((weights[i+1] - weights[i]) / (rts[i+1] - rts[i]) + 
-                             (-weights[i]) / (rts[i+1] - rts[i])) / apex_weight
+                    deriv = ((weights[i+1] - weights[i]) / (rts[i+1] - rts[i] + 1e-6) + 
+                             (-weights[i]) / (rts[i+1] - rts[i]  + 1e-6)) / apex_weight
                     smoothness += deriv ** 2
                 elif i > 0 and i < len(weights) - 1:
                     # Interior points
-                    deriv = ((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]) + 
-                             (weights[i+1] - weights[i]) / (rts[i+1] - rts[i])) / apex_weight
+                    deriv = ((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]  + 1e-6) + 
+                             (weights[i+1] - weights[i]) / (rts[i+1] - rts[i] + 1e-6)) / apex_weight
                     smoothness += deriv ** 2
                 elif i == len(weights) - 1:
                     # Last point
-                    deriv = ((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]) + 
-                             (-weights[i]) / (rts[i] - rts[i-1])) / apex_weight
+                    deriv = ((weights[i-1] - weights[i]) / (rts[i] - rts[i-1] + 1e-6) + 
+                             (-weights[i]) / (rts[i] - rts[i-1] + 1e-6)) / apex_weight
                     smoothness += deriv ** 2
         
         # Assign the calculated smoothness to all rows in this group

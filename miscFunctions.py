@@ -5,6 +5,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
 import numpy as np
+import numpy.typing as npt
 import csv
 import re
 from pyteomics import mass
@@ -14,33 +15,137 @@ import config
 import line_profiler
 
 def feature_list_rt(DinoDF,rt,rt_tol): 
+    """
+    Description:
+
+    Parameters:
+    ----------
+    DinoDF : type?
+        description...
+    rt : type?
+        description...
+    rt_tol : type?
+        description...
+
+    Returns:
+    -------
+    description...
+    
+    Notes:
+    ------
+    __make_docstring__
+
+    import pprint
+    print("DinoDF:")
+    pprint.pprint(DinoDF)
+    print("Type:", type(DinoDF))
+    print("Structure Example:", list(DinoDF.items())[:1])  # show one entry if possible
+    print()
+    Force error after debugging output
+    raise RuntimeError("Intentional debug stop after printing input information.")
+    """
+
     # _bool=np.logical_and(DinoDF["rtStart"]-rt_tol<rt,DinoDF["rtEnd"]+rt_tol>rt)
     _bool=np.abs(DinoDF["rtApex"]-rt)<rt_tol
+
     return(DinoDF[_bool])
     
 # def feature_list_mz(DinoDF,window): 
 #     _bool=np.logical_and(DinoDF["mz"]>window[0],DinoDF["mz"]<window[1])
 def feature_list_mz(DinoDF,window_mz,window_width): 
+    """
+    Description:
+
+    Parameters:
+    ----------
+    DinoDF : type?
+        description...
+    window_mz : type?
+        description...
+    window_width : type?
+        description...
+
+    Returns:
+    -------
+    description...
+    
+    Notes:
+    ------
+    __make_docstring__
+
+    import pprint
+    
+    print("var_name:")
+    pprint.pprint(var_name)
+    print("Type:", type(var_name))
+    print("Structure Example:", list(var_name.items())[:1])  # show one entry if possible
+    print()
+    Force error after debugging output
+    raise RuntimeError("Intentional debug stop after printing input information.")
+    """
     _bool=np.abs(DinoDF["mz"]-window_mz)<(window_width/2)
     return(DinoDF[_bool])
     
-    
-
-def filter_lib(dia_spectrum,library,rt_tol=.5):
-    
-    rt = dia_spectrum.RT
-    mz_window = dia_spectrum.ms1window
-    # get rt and prec mz vector
-    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in library])
-    
-    _bool = np.logical_and(rt_mz[:,0]>rt-rt_tol,rt_mz[:,0]<rt+rt_tol)
-    
 def window_width(spec):
+    """
+    Description:
+
+    Parameters:
+    ----------
+    spec : type?
+        description...
+
+    Returns:
+    -------
+    description...
+    
+    Notes:
+    ------
+    __make_docstring__
+
+    import pprint
+    
+    print("var_name:")
+    pprint.pprint(var_name)
+    print("Type:", type(var_name))
+    print("Structure Example:", list(var_name.items())[:1])  # show one entry if possible
+    print()
+    Force error after debugging output
+    raise RuntimeError("Intentional debug stop after printing input information.")
+    """
     w1,w2 = spec.ms1window
     return w2-w1
     
 
 def createTolWindows(positions,tolerance):
+    """
+    Description:
+
+    Parameters:
+    ----------
+    positions : type?
+        description...
+    tolerance : type?
+        description...
+
+    Returns:
+    -------
+    description...
+    
+    Notes:
+    ------
+    __make_docstring__
+
+    import pprint
+    
+    print("var_name:")
+    pprint.pprint(var_name)
+    print("Type:", type(var_name))
+    print("Structure Example:", list(var_name.items())[:1])  # show one entry if possible
+    print()
+    Force error after debugging output
+    raise RuntimeError("Intentional debug stop after printing input information.")
+    """ 
     sorted_positions = np.sort(positions)
     abs_tols=tolerance*sorted_positions
     l_bound = sorted_positions-abs_tols
@@ -56,29 +161,104 @@ def createTolWindows(positions,tolerance):
     
 
 
-def write_to_csv(data,filepath,colnames=None):
-    
+def write_to_csv(data: list[list],filepath: str,colnames: list[str] = None):
+    """
+    Description:
+
+    Parameters:
+    ----------
+    data : list[list[float/int/complex]]
+        Row major matrix of numbers as list  
+    filepath : string
+        Where to write the csv file?
+    colnames : list[str]
+        List of column names. Must correspond to the number of columns in 'data'
+
+    Returns:
+    -------
+    None. Writes the data to a CSV at filepath with 'colnames' as the header if not None
+
+    """
     with open(filepath,"a", newline='') as write_file:
         writer = csv.writer(write_file)
         if colnames is not None:
-            writer.writerow(colnames)
+            if len(colnames)==len(data[0]):
+                writer.writerow(colnames)
+            else:
+                println("WARNING: Column names do not match data columns. Skipping header row.")
         writer.writerows(data)
         
         
         
-def within_tol(x, y, atol, rtol):
+def within_tol(x: list[float], y: list[float], atol: float, rtol: float) -> npt.NDArray[np.float64]:
+    """
+    Compare two lists of floats element-wise to determine if each pair of values 
+    is within a specified absolute and relative tolerance.
+
+    Parameters:
+    ----------
+    x : list[float]
+        First list of float values.
+    y : list[float]
+        Second list of float values to compare against.
+    atol : float
+        Absolute tolerance.
+    rtol : float
+        Relative tolerance.
+
+    Returns:
+    -------
+    np.ndarray
+        A NumPy array of shape (n, 2) where:
+        - Column 0 contains boolean values indicating whether the corresponding
+          elements in x and y are within the specified tolerance.
+        - Column 1 contains the raw differences (x - y) for each pair.
+    
+    Notes:
+    ------
+    Potentially performance issues 
+    """
     x = np.asanyarray(x)
     y = np.asanyarray(y)
-    diff = x-y
+    diff = x - y
     logic = np.less_equal(abs(diff), atol + rtol * np.abs(y))
-    log_dif = np.zeros((*logic.shape,2))
-    log_dif[...,0] = logic
-    log_dif[...,1] = diff
-    return log_dif 
+    log_dif = np.zeros((*logic.shape, 2))
+    log_dif[..., 0] = logic
+    log_dif[..., 1] = diff
+    return log_dif
     
 
 def get_diff(mz,peaks,tol):
+    """
+    Description:
+
+    Parameters:
+    ----------
+    mz : type?
+        description...
+    peaks : type?
+        description...
+    tol : type?
+        description...
+
+    Returns:
+    -------
+    description...
     
+    Notes:
+    ------
+    __make_docstring__
+
+    import pprint
+    
+    print("var_name:")
+    pprint.pprint(var_name)
+    print("Type:", type(var_name))
+    print("Structure Example:", list(var_name.items())[:1])  # show one entry if possible
+    print()
+    Force error after debugging output
+    raise RuntimeError("Intentional debug stop after printing input information.")
+    """
     log_diff = within_tol(mz, peaks, atol=0, rtol=tol) 
     idxs = np.where(log_diff[...,0])[0]
     
@@ -172,7 +352,26 @@ def closest_ms1spec(ms2rt,ms1rt):
 #     else: 
 #         return np.nan
 # #@profile   
-def closest_peak_diff(mz,spec_mz_list,max_diff=2e-5):
+def closest_peak_diff(mz: np.float64,spec_mz_list: npt.NDArray[np.float64],max_diff: float=2e-5):
+    """
+    Description:
+
+    Parameters:
+    ----------
+    mz : np.float64
+        m/z of the query peak 
+    peaks : npt.NDArray[np.float64]
+        sorted list of m/z values from the spectrum (ascending)
+    max_diff : the mass tolerance for the peak search
+        the mass tolerance for the peak search
+
+    Returns:
+    -------
+    np.float64
+        Smallest relative difference between the query m/z and the nearest peak in the spectrum `peaks`. 
+        Returns np.nan if no match within the max_diff tolerance 
+    """
+
     # all_diffs = spec_mz_list-mz
     # smallest_diff = all_diffs[np.argmin(np.abs(all_diffs))]/mz # rel diff
     order_idx = np.searchsorted(spec_mz_list, mz)
@@ -194,49 +393,56 @@ def closest_peak_diff(mz,spec_mz_list,max_diff=2e-5):
             mz_diff = left_diff/mz
         else:
             mz_diff = right_diff/mz
-    # print(mz_diff)
-    if (-max_diff)<mz_diff<max_diff:
+    if (-max_diff)<=mz_diff<=max_diff:
         return mz_diff
     else: 
         return np.nan
     
+def parse_peptide(seq: str) -> list[str]:
+    """Parse a peptide sequence into individual amino acids with their modifications.
     
-
-# def parse_peptide(seq):
-#     ### extract all [] or () from seq with preceding AA
-#     close_d = {"[":"]","(":")"}
-#     new_seq = []
-#     s_idx=0
-#     current= ""
-#     b_count = 0
-#     while s_idx<len(seq):
-#         s= seq[s_idx]
-#         if s_idx==0 and s not in "[(":
-#             current=s
-#         elif s_idx!=0 and s not in "[(":
-#             new_seq.append(current)
-#             current= s
+    This function takes a peptide sequence string that may contain modifications
+    in brackets (parentheses or square brackets) and splits it into a list where
+    each element is an amino acid, potentially with its associated modifications.
+    Modifications are kept attached to their preceding amino acid.
+    
+    Parameters
+    ----------
+    seq : str
+        A peptide sequence string, potentially containing modifications in 
+        parentheses () or square brackets []. 
+        Examples: "PEPTIDE", "PEP(+79.97)TIDE", "K[+42]PEPTIDE"
+    
+    Returns
+    -------
+    list[str]
+        A list where each element is a single amino acid (single letter code)
+        potentially followed by its modification(s) in brackets.
         
-#         elif s in "[(":
-#             b_count +=1
-#             opener = s
-#             current+=s
-#             while s!=close_d[opener] and b_count!=0:
-#                 if s==close_d[opener]:
-#                     b_count-=1
-#                 elif s in "[(":
-#                     b_count+=1
-#                 s_idx+=1
-#                 s= seq[s_idx]
-#                 current+=s
-#         s_idx+=1
-
-#     if current!=new_seq[-1]:
-#         new_seq.append(current)
+    Examples
+    --------
+    >>> parse_peptide("PEPTIDE")
+    ['P', 'E', 'P', 'T', 'I', 'D', 'E']
     
-#     return new_seq
-
-def parse_peptide(seq):
+    >>> parse_peptide("PEP(+79.97)TIDE")
+    ['P', 'E', 'P(+79.97)', 'T', 'I', 'D', 'E']
+    
+    >>> parse_peptide("K(mTRAQ)PEPTIDE(+15.99)R")
+    ['K(mTRAQ)', 'P', 'E', 'P', 'T', 'I', 'D', 'E(+15.99)', 'R']
+    
+    >>> parse_peptide("C[+57.02]PEPTIDE")
+    ['C[+57.02]', 'P', 'E', 'P', 'T', 'I', 'D', 'E']
+    
+    >>> parse_peptide("")
+    []
+    
+    Notes
+    -----
+    - Modifications must be properly closed with matching brackets
+    - Nested brackets are handled correctly
+    - If a sequence starts with a modification (edge case), it's added as a standalone element
+    - Both parentheses () and square brackets [] are supported for modifications
+    """
     ### extract all [] or () from seq with preceding AA
     close_d = {"[": "]", "(": ")"}
     new_seq = []
@@ -274,8 +480,60 @@ def parse_peptide(seq):
     return new_seq
     
 
-def extract_mod(AA):
-    ### extract all [] or () from AA
+def extract_mod(AA: str) -> list[str]:
+    """Extract all modifications from an amino acid string.
+    
+    This function takes a string representing an amino acid with potential
+    modifications in brackets (parentheses or square brackets) and returns
+    a list of all modifications found, including their enclosing brackets.
+    
+    Parameters
+    ----------
+    AA : str
+        A string representing an amino acid with potential modifications.
+        Can be just an amino acid letter (e.g., "K") or an amino acid
+        with modifications in parentheses or square brackets.
+        Examples: "K", "K(mTRAQ)", "C[+57.02]", "K(mTRAQ)(+42)"
+    
+    Returns
+    -------
+    list[str]
+        A list of all modifications found in the input string, where each
+        modification includes its enclosing brackets. Returns an empty list
+        if no modifications are found.
+        
+    Examples
+    --------
+    >>> extract_mod("K")
+    []
+    
+    >>> extract_mod("K(mTRAQ)")
+    ['(mTRAQ)']
+    
+    >>> extract_mod("E(+15.99)")
+    ['(+15.99)']
+    
+    >>> extract_mod("C[+57.02]")
+    ['[+57.02]']
+    
+    >>> extract_mod("K(mTRAQ)(+42)")
+    ['(mTRAQ)', '(+42)']
+    
+    >>> extract_mod("S(Phospho)[+80]")
+    ['(Phospho)', '[+80]']
+    
+    Notes
+    -----
+    - The function preserves the bracket type (parentheses or square brackets)
+    - Multiple modifications on the same amino acid are returned as separate elements
+    - The function handles nested brackets correctly using a bracket counter
+    - Modifications are returned in the order they appear in the input
+    - The amino acid letter itself is not included in the output
+    
+    See Also
+    --------
+    parse_peptide : Parse entire peptide sequences with modifications
+    """
     close_d = {"[":"]","(":")"}
     mods = []
     s_idx=0
@@ -307,7 +565,65 @@ def extract_mod(AA):
     return mods
         
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
-def split_frag_name(ion_type):
+def split_frag_name(ion_type: str) -> tuple[str, int, str, str]:
+    """Split a fragment ion name into its component parts.
+    
+    This function parses mass spectrometry fragment ion notation and extracts
+    the ion type, fragment index, optional neutral loss, and charge state.
+    Fragment names follow the format: (ion_type)(index)(-loss)_(charge)
+    where the loss component is optional.
+    
+    Parameters
+    ----------
+    ion_type : str
+        A fragment ion name in standard mass spectrometry notation.
+        Format: (b/y/a/c/x/z)(index)(-loss)_(charge)
+        Examples: "b5_2", "y10-H2O_1", "b3-NH3_2", "y7_1"
+    
+    Returns
+    -------
+    tuple[str, int, str, str]
+        A tuple containing four elements:
+        - frag_type (str): The ion series type (e.g., 'b', 'y', 'a', 'c', 'x', 'z')
+        - frag_idx (int): The fragment index number
+        - loss (str): The neutral loss notation (e.g., 'H2O', 'NH3'), empty string if no loss
+        - frag_z (str): The charge state as a string (e.g., '1', '2', '3')
+    
+    Examples
+    --------
+    >>> split_frag_name("b5_2")
+    ('b', 5, '', '2')
+    
+    >>> split_frag_name("y10-H2O_1")
+    ('y', 10, 'H2O', '1')
+    
+    >>> split_frag_name("b3-NH3_2")
+    ('b', 3, 'NH3', '2')
+    
+    >>> split_frag_name("a12_3")
+    ('a', 12, '', '3')
+    
+    >>> split_frag_name("y7-H3PO4_1")
+    ('y', 7, 'H3PO4', '1')
+    
+    Notes
+    -----
+    - The function expects the charge to be separated by an underscore '_'
+    - Neutral losses are indicated by a hyphen '-' after the fragment index
+    - Common neutral losses include H2O (water), NH3 (ammonia), H3PO4 (phosphoric acid)
+    - The function supports standard ion series: a, b, c (N-terminal) and x, y, z (C-terminal)
+    - The charge state is returned as a string, not an integer
+    
+    Raises
+    ------
+    ValueError
+        If the input string doesn't contain an underscore to separate charge state
+    
+    See Also
+    --------
+    fragment_seq : Uses split_frag_name to determine fragment sequences
+    convert_frags : Processes fragment information for decoy generation
+    """
     frag_name,frag_z = ion_type.split("_")
     loss_check = frag_name.split("-")
     loss = ""
@@ -319,7 +635,7 @@ def split_frag_name(ion_type):
     return frag_type,frag_idx,loss,frag_z
     
 ########### Decoy functions
-
+#Store somewhere easier to find. 
 diann_rules = {
                 'G':'L',
                  'A':'L',
@@ -342,42 +658,6 @@ diann_rules = {
                  'N':'Q',
                  'D':'E'
                  }
-
-# def change_seq(seq,rules):
-#     # seq: list of AAs
-#     # frags: dictionary of frags
-    
-#     if type(seq)==str:
-#         seq = re.findall("[A-Z](?<!\([A-Z])",seq)
-#     else:
-#         seq = [re.sub("\(.*\)","",aa) for aa in seq]
-        
-#     if rules=="diann":
-#         new_seq = "".join([diann_rules[aa] for aa in seq])
-#     elif rules=="rev":
-#         new_seq = "".join(seq[:-1][::-1]+seq[-1:])
-    
-#     return new_seq
-
-
-# def change_seq(seq,rules):
-#     # seq: list of AAs
-#     # frags: dictionary of frags
-#     # re.findall("([A-Z](?:\(.*?\))?)",peptide)
-#     if type(seq)==str:
-#         seq = re.findall("([A-Z](?:\(.*?\))?)",seq)
-#     else:
-#         seq = [re.sub("\(.*\)","",aa) for aa in seq]
-        
-#     if rules=="diann":
-#         new_seq = "".join([diann_rules[aa] for aa in seq])
-#     elif rules=="rev":
-#         new_seq = "".join(seq[:-1][::-1]+seq[-1:])
-#     else:
-#         raise ValueError("Unavailable rules selected")
-#     # elif rules==None:
-#     #     new_seq = "".join(seq)
-#     return new_seq
 
 def change_seq(seq: str, rules: str) -> str:
     """Modifies a peptide sequence to create a complementary decoy sequence.
@@ -417,9 +697,9 @@ def change_seq(seq: str, rules: str) -> str:
     else:
         tags = [[] for i in seq]
         
-    mods = [extract_mod(i) for i in seq]
+    #mods = [extract_mod(i) for i in seq]
     ## assume AA is the first 
-    untag_seq = [i[0] for i in seq]
+    #untag_seq = [i[0] for i in seq]
     
     if rules=="diann":
         new_split_seq = [diann_rules[aa] for aa in seq]
@@ -600,24 +880,57 @@ def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rule
 
     return new_frags
 
+def hyperscore_b_y(frag_list: dict[str, list[float]],matches: npt.NDArray[np.bool_]) -> tuple[float, int, int]:
+    """
+    Description:
 
-def hyperscore(frag_list,matches):
-    num_b = sum(["b" in i for i,j in zip(frag_list,matches) if j])
-    num_y = sum(["y" in i for i,j in zip(frag_list,matches) if j])
-    dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
-    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y)))
+    Parameters:
+    ----------
+    frag_list : dict[str, list[float]]
+        Dictionary mapping fragment names for a precursor to a list pair containng the m/z ratio and relative intensity.
+    matches : npt.NDArray[np.bool_]
+        Same length as the keys in the dictionary. In order of smallest to largest fragment by m/z. Indicates which of the fragments in the frag_list matched peaks
+        in the spectrum. 
 
-def hyperscore_b_y(frag_list,matches):
-    num_b = sum(["b" in i for i,j in zip(frag_list,matches) if j])
-    num_y = sum(["y" in i for i,j in zip(frag_list,matches) if j])
+    Returns:
+    -------
+    hyperscore, matched b-ions, matched y-ions, tuple[float, int, int]
+    
+    Example:
+    --------
+    >>> frag_list= {
+        'b3_1': [244.09279699588, 0.25249937],
+        'b4_1': [372.15137450116, 0.45614848],
+        'b5_1': [485.23543847829, 0.27464142],
+        'b6_1': [542.25690219886, 0.07701804],
+        'y4_1': [472.2514228956, 0.31066182],
+        'y5_1': [529.27288661617, 1.0],
+        'y6_1': [642.3569505933, 0.50503737],
+        'y7_1': [770.41552809858, 0.14570464],
+        'y8_1': [827.43699181915, 0.3309042],
+        'y9_1': [956.47958490712, 0.054985035]
+        }
+    >>> matches = array([ True,  True,  True,  True,  True, False,  True,  True,  True,
+       False])
+    Notes:
+    ------
+    """
+    #num_b = sum(["b" in i for i,j in zip(frag_list,matches) if j])
+    #num_y = sum(["y" in i for i,j in zip(frag_list,matches) if j])
+    #dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
+    #return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
+    num_b, num_y = 0, 0
+    for (i, j) in zip(frag_list, matches):
+        if j:
+            if "b" in i:
+                num_b += 1
+            elif "y" in i:
+                num_y += 1
+
+    #Not efficient to have to allocate and sort every time. 
     dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
     return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
 
-def hyperscore2(frag_list,matches):
-    num_b = sum(["b" in i for i,j in zip(frag_list,matches) if j])
-    num_y = sum(["y" in i for i,j in zip(frag_list,matches) if j])
-    dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
-    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
 
 def longest_y(frag_list, matches):
     def extract_fragment_number(fragment_name):
