@@ -379,7 +379,30 @@ diann_rules = {
 #     #     new_seq = "".join(seq)
 #     return new_seq
 
-def change_seq(seq,rules):
+def change_seq(seq: str, rules: str):
+    """Modifies a peptide sequence to create a complementary decoy sequence.
+    Uses either the sequence reversal method or the DIA-NN rules for sequence
+    'mutation' 
+
+    Parameters
+    ----------
+    seq : str
+        The original peptide sequence 
+    rules : str
+        Method to modify string (must either be 'rev' or 'diann')
+
+    Returns
+    -------
+    string
+        The modified sequence 
+    
+    Example
+    -------
+    >>> change_seq("PEPTIDE", "diann")
+    "LDLSVED"
+    >>> change_seq("PEPTIDE", "rev")
+    "LDLSVED"
+    """
     # seq: list of AAs
     # frags: dictionary of frags
     # re.findall("([A-Z](?:\(.*?\))?)",peptide)
