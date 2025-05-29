@@ -46,6 +46,19 @@ if __name__=="__main__":
         print(f"Loading configuration from {config.args.config_json}")
         if not config.load_config_from_json(config.args.config_json):
             print("Failed to load JSON configuration. Using command-line arguments.")
+            
+    # Check if running in test mode
+    if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
+        # Run tests instead of normal operation
+        print("Running JMod in test mode...")
+        import subprocess
+        
+        # Remove the test argument and pass remaining args to test runner
+        test_args = sys.argv[2:] if len(sys.argv) > 2 else []
+        cmd = [sys.executable, "run_tests.py"] + test_args
+        
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
 
     # Print the configuration that will be used
     print("Using configuration:")

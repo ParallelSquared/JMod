@@ -54,6 +54,12 @@ parser.add_argument('--test_mz_max', type=float, default=800, help='Maximum m/z 
 
 
 args = parser.parse_args()
+#if __name__ == "__main__":
+#    args = parser.parse_args()
+#else:
+#    # When imported, create args with defaults
+#    args = argparse.Namespace()
+#    # Set all the default values here
 
 # args.mzml = "/Volumes/Lab/Quant/CC20170118_SAM_Specter_Ecolidigest_DIA_01.mzML"
 # args.speclib = "/Volumes/Lab/Quant/SpecLibs/EcoliSpPrositLib.msp.tsv"
