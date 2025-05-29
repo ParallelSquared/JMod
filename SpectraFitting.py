@@ -16,7 +16,7 @@ from scipy import sparse
 from pyteomics import mass
 import re
 
-import sparse_nnls
+import ptinnls as sparse_nnls
 from read_output import names
 import config
 
