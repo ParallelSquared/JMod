@@ -883,7 +883,9 @@ def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rule
 def hyperscore_b_y(frag_list: dict[str, list[float]],matches: npt.NDArray[np.bool_]) -> tuple[float, int, int]:
     """
     Description:
-
+        Given a list of fragments, their theoretical m/z, theoretical intensities, and a list indicating
+        which fragments matched peaks in the spectrum, calcualte the number of matched b and y ions as
+        well as the hyperscore. 
     Parameters:
     ----------
     frag_list : dict[str, list[float]]
@@ -914,6 +916,10 @@ def hyperscore_b_y(frag_list: dict[str, list[float]],matches: npt.NDArray[np.boo
        False])
     Notes:
     ------
+    Not an efficient implementation. 'frag_to_peak' allocates an array to get the sorted indices of the 
+    fragments by their m/z so that they correspond to matches. 
+    Potential fix: each frag list could have three elements, the last is the 'match' indicator. Should also be 
+    a dict of tuples and not lists. 
     """
     #num_b = sum(["b" in i for i,j in zip(frag_list,matches) if j])
     #num_y = sum(["y" in i for i,j in zip(frag_list,matches) if j])
@@ -1049,16 +1055,63 @@ def fit_gaussian(data,init_std=None):
     
     return fit_params#, background
 
+def frag_to_peak(frag_dict: dict[str, list[float]],return_frags: bool=False): #->npt.NDArray[np.float64]
+    """
+    Description:
+        Sorts the values (m/z and intensities) rows of the frag_dict by their m/z and returns
+        a matrix with a row for each fragment and columns for the m/z and intensity.
+    Parameters:
+    ----------
+    frag_list : dict[str, list[float]]
+        Dictionary mapping fragment names for a precursor to a list pair containng the m/z ratio and relative intensity.
+    return_frags : bool
+        Wheather to also return the dictionary keys sortedy by their values (m/z)
 
-
-
-
-# def frag_to_peak(frag_dict):
-#     peaks = np.array(list(frag_dict.values()))
-#     order = np.argsort(peaks[:,0])
-#     return peaks[order]
-
-def frag_to_peak(frag_dict,return_frags=False):
+    Returns:
+    -------
+    peaks : np.ndarray
+        A 2D numpy array with the first column as m/z values and the second column as intensities, sorted by m/z.
+    
+    Example:
+    --------
+    >>> {
+        'b3_1': [329.16081698605, 0.25633228],
+        'b3_1_iso1': [330.1637526155811, 0.05175954048391056],
+        'b4_1': [458.20341007402, 0.12788501],
+        'b4_1_iso1': [459.20636583855736, 0.033455156427240874],
+        'y3_1': [401.28708012833, 0.13112698],
+        'y3_1_iso1': [402.2898720399767, 0.029145210435823944],
+        'y4_1': [564.35040866088, 0.40015215],
+        'y4_1_iso1': [565.3533188802813, 0.13007301732202506],
+        'y5_1': [693.39300174885, 0.723387],
+        'y5_1_iso1': [694.395929600629, 0.278314979784522],
+        'y6_1': [764.43011553356, 1.0],
+        'y6_1_iso1': [765.4330309212257, 0.4217951826932419],
+        'y7_1': [835.46722931827, 0.840592],
+        'y7_1_iso1': [836.4701342550052, 0.38570703236196757]
+    }
+    >>> frag_to_peak(frag_list)
+    array([[3.29160817e+02, 2.56332280e-01],
+       [3.30163753e+02, 5.17595405e-02],
+       [4.01287080e+02, 1.31126980e-01],
+       [4.02289872e+02, 2.91452104e-02],
+       [4.58203410e+02, 1.27885010e-01],
+       [4.59206366e+02, 3.34551564e-02],
+       [5.64350409e+02, 4.00152150e-01],
+       [5.65353319e+02, 1.30073017e-01],
+       [6.93393002e+02, 7.23387000e-01],
+       [6.94395930e+02, 2.78314980e-01],
+       [7.64430116e+02, 1.00000000e+00],
+       [7.65433031e+02, 4.21795183e-01],
+       [8.35467229e+02, 8.40592000e-01],
+       [8.36470134e+02, 3.85707032e-01]])
+    Notes:
+    ------
+    Not an efficient implementation. 'frag_to_peak' allocates an array to get the sorted indices of the 
+    fragments by their m/z so that they correspond to matches. 
+    Potential fix: each frag list could have three elements, the last is the 'match' indicator. Should also be 
+    a dict of tuples and not lists. 
+    """
     peaks = np.array(list(frag_dict.values()))
     order = np.argsort(peaks[:,0])
     if return_frags:
@@ -1067,9 +1120,7 @@ def frag_to_peak(frag_dict,return_frags=False):
     else:
         return peaks[order]
 
-
-non_specific_frags = ["b1","b2","y1","y2","y3"]
-def specific_frags(frag_dict,non_spec =non_specific_frags):
+def specific_frags(frag_dict: dict[str, list[float]],non_spec: list[str] =["b1","b2","y1","y2","y3"]):
     peaks = []
     for frag in frag_dict:
         frag_type,frag_idx,loss,frag_z = split_frag_name(frag)
