@@ -1,4 +1,10 @@
 """
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
+
+"""
 Alternative conftest.py that avoids the config import issue
 This approach modifies sys.argv before any imports
 """
@@ -18,7 +24,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 # Now we can safely import config without argparse errors
 try:
-    import config
+    import src.config as config
     # Override any problematic attributes
     config.tag = None
     if not hasattr(config, 'diann_mods'):

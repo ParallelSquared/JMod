@@ -1,0 +1,832 @@
+"""
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
+
+
+
+from .read_output import get_large_prec
+
+from sklearn.model_selection import KFold,GroupKFold
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import roc_curve,auc 
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.neural_network import MLPClassifier
+from sklearn import preprocessing
+from scipy import stats
+import xgboost as xgb
+
+import numpy as np
+import matplotlib.pyplot as plt
+import tqdm
+import re
+import os
+import pandas as pd
+
+from .trace_fns import ms1_cor, ms1_cor_channels
+from .utils.load_files import loadSpectra
+from .models.spec_lib.spec_lib import loadSpecLib
+
+from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
+from .utils.misc_functions import unstring_floats
+
+from . import config 
+
+
+def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
+
+
+# lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=bool(params["timeplex"]))
+
+# all_lp.append(lp)
+# all_prec_labels.append(lp)
+                       
+       
+
+### check if this processing was already done
+### If so load it
+### if not create it
+
+# ID_attributes_file  = "precursor_attributes.csv"
+# ID_attributes_path = results_folder+"/"+ID_attributes_file 
+# if os.path.exists(ID_attributes_path):
+#     fdc = pd.read_csv(ID_attributes_path)
+# else:
+
+    
+# def add_attributes(fdc):
+     
+#     ## Add additional features
+#     # X["prec_z"] = fdc["z"]
+#     fdc["pep_len"] = [len(re.findall("([A-Z](?:\(.*?\))?)",i.split("_")[-1])) for i in fdc["seq"]]
+#     fdc["stripped_seq"] = np.array([re.sub("\(.*?\)","",i) for i in fdc["seq"]])
+#     # X["rt"] = fdc["rt"]
+#     # X["coeff"] = fdc["coeff"]
+#     fdc["sq_rt_error"] = np.power(fdc["rt_error"],2)
+#     fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
+    
+    
+#     return fdc
+
+
+def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
+    # X = fdc.iloc[:,6:-5]
+   
+    print("Performing MS1 Quantitation") 
+    
+    fdc = dat[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
+    
+    #only quantify confident precs
+    if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
+        fdc = fdc[fdc["BestChannel_Qvalue"] < 0.01].reset_index(drop=True)
+
+    if timeplex:
+        all_keys = [(i,j,k) for i,j,k in zip(fdc.seq,fdc.z,fdc.time_channel)]
+    else:
+        all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
+
+    if mass_tag:
+        #fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
+        group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels(DIAspectra, 
+                                                                                                                        fdc, 
+                                                                                                                        dc, 
+                                                                                                                        mz_ppm=mz_ppm, 
+                                                                                                                        rt_tol = rt_tol,
+                                                                                                                        tag=mass_tag,
+                                                                                                                        timeplex=timeplex
+                                                                                                                        )
+        
+        ## create dictionary  that links keys to data so we can match the order of "fdc"
+        
+        linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}
+        
+        p_corrs = [group_p_corrs[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+        ms1_traces = [group_ms1_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+        ms2_traces = [group_ms2_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+        iso_ratios = [group_iso_ratios[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+        extracted_keys = [group_keys[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+        extracted_fitted = [group_fitted[linker_dict[key][0]][0][:,linker_dict[key][1]] for key in all_keys]
+        extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in all_keys]
+        extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in all_keys]
+        
+        
+        fdc["plexfitMS1"] = [np.max(i) for i in extracted_fitted]
+        fdc["plexfitMS1_p"] = [j[np.argmax(i)].statistic  if type(j[np.argmax(i)])!=float else 0 for i,j in zip(extracted_fitted,extracted_fitted_p)]
+    
+        plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+        plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
+        plexfit_ps = [[i[k].statistic if type(i[k])!=float else 0 for k in j] for i,j in zip(extracted_fitted_p,plexfittrace_idxs)]
+        # fdc["plexfitMS1_new"] = [np.max(i) for i in plexfittrace]
+        fdc["plexfittrace"] = [";".join(map(str,i)) for i in plexfittrace] ###spec ids come from ms2_traces
+        fdc["plexfit_ps"] = [";".join(map(str,i)) for i in plexfit_ps]
+        
+        fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+        fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+        fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+        fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
+
+    else:
+        #fdc["untag_seq"] = fdc["seq"]
+        p_corrs, ms1_traces, ms2_traces, iso_ratios = ms1_cor(DIAspectra, 
+                                                                fdc, 
+                                                                dc, 
+                                                                mz_ppm=mz_ppm, 
+                                                                rt_tol = rt_tol,
+                                                                timeplex=timeplex)
+
+
+    
+    
+    fdc["ms1_cor"] = [i[0] for i in p_corrs]
+    
+    for idx in range(config.num_iso_r):
+        iso_num = idx+1
+        fdc[f"iso{iso_num}_cor"] = [i[iso_num] for i in p_corrs]
+    # fdc["iso1_cor"] = [i[1] for i in p_corrs]
+    # fdc["iso2_cor"] = [i[2] for i in p_corrs]
+    
+    fdc["traceproduct"] = np.log10(fdc["ms1_cor"]*fdc["iso1_cor"]*fdc["iso2_cor"]+1e-6)
+    
+    # fdc["MS1_is1cor"] = [stats.pearsonr(list(i[0].values())[:10], list(i[1].values())[:10]).statistic for i in ms1_traces]
+    
+    
+    fdc["iso_cor"] = [i[0].statistic for i in iso_ratios]
+    
+    fdc["MS1_Int"] = [i[2][0] for i in iso_ratios]
+    fdc["MS1_Int"] = [np.linalg.lstsq(np.array(i[1])[:,np.newaxis], i[2])[0][0] for i in iso_ratios]
+    
+    # X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
+    fdc["all_ms1_specs"] = [";".join(map(str,trace[0].keys())) for trace in ms1_traces]
+    for i in range(config.num_iso_ms1):
+        fdc[f"all_ms1_iso{i}vals"] = [";".join(map(str,trace[i].values())) for trace in ms1_traces]
+    # fdc["ms2_trace"] = [";".join(map(str,trace.values())) for trace in ms2_traces]
+    
+    fdc["MS1_Area"]=[auc(list(map(float,fdc.all_ms1_specs.iloc[idx].split(";"))),list(map(float,fdc.all_ms1_iso0vals.iloc[idx].split(";")))) for idx in range(len(fdc))]
+
+
+        # Define selected columns that we want to merge
+    selected_cols = [
+        "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps",
+        "plexfittrace_spec_all", "plexfittrace_all", "plexfittrace_ps_all",
+        "plex_Area", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
+        "all_ms1_specs", "MS1_Area"
+    ] + [f"all_ms1_iso{i}vals" for i in range(config.num_iso_ms1)]
+    
+    # Ensure we only select columns that actually exist in fdc
+    existing_cols = [col for col in selected_cols if col in fdc.columns]
+    
+    # Perform the merge safely
+    dat = dat.merge(fdc[["untag_prec", "channel"] + existing_cols], how="left", on=["untag_prec", "channel"]).fillna(0)
+
+
+    return dat
+
+
+
+class model_instance():
+    def __init__(self,model_type):
+        self.mode_type = model_type
+        
+    def predict(self,X):
+        pred = self.__predict_fn__(X)
+        #First column of pred is target probabilities and second column is decoys
+        #If for some reason there were no decoys in one of the training folds
+        #only a single column is returned. Handle this case...
+        if len(pred.shape)==2:
+            if pred.shape[1]==2:
+                output = pred[:,1]
+            else:
+                output = pred[:,0]
+        else:
+            output = pred
+        return output
+        
+        
+class score_model():
+    
+    def __init__(self,model_type,n_splits=5,folder=None):
+        self.model_type=model_type
+        self.n_splits = n_splits
+        self.folder = folder
+                
+    def run_model(self,X,y,sample_weight=None,groups=None):
+        # print(f"{config.tree_max_depth}")
+        if self.model_type=="rf":
+            
+            ### Random Forest
+            def fit_model(X,y,sample_weight,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=-1)
+                    m.model.fit(X,y,sample_weight=sample_weight)
+                    m.__predict_fn__ = m.model.predict_proba
+
+                    if self.folder:
+                        feature_importance = m.model.feature_importances_
+                        sorted_indices = np.argsort(feature_importance)  
+                        sorted_features = np.array(X.columns)[sorted_indices]  
+                        sorted_importance = feature_importance[sorted_indices]  
+                    
+                        fig, ax = plt.subplots(figsize=(8, len(X.columns)*0.3))                    
+                        ax.barh(sorted_features, sorted_importance)
+                        ax.set_title("Feature Importance")
+                    
+                        # Save plot
+                        plt.savefig(self.folder + f"/RF{idx}_feature_importance.png", dpi=600, bbox_inches="tight")
+                        # For RF models, print feature importance
+                    return m
+                
+            # self.model = fit_model(X,y)
+            
+        
+        elif self.model_type=="lda":
+            
+            ## Linear Disriminant Analysis
+            def fit_model(X,y,sample_weight,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    m.model = LinearDiscriminantAnalysis()
+                    m.model.fit(X,y)
+                    m.__predict_fn__ = m.model.predict_proba
+                    return m
+                
+            # self.model = fit_model(X,y)
+            
+            
+        elif self.model_type == "xg":
+            
+            ## XGBoost
+            def fit_model(X,y,sample_weight,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    dTrain = xgb.DMatrix(X,y,weight=sample_weight)
+                    # param = {
+                    #     'max_depth': config.tree_max_depth, 
+                    #     'eta': .1, 
+                    #     'objective': 'binary:logistic',}
+                    param = {
+                        # 'max_depth': config.tree_max_depth, 
+                        # 'eta': .1, 
+                        # 'objective': 'binary:logistic',
+                        
+                        'objective': 'binary:logistic',  
+                         'eval_metric': 'aucpr',    
+                         'eta': 0.1,
+                         'max_depth': 10,          
+                         'subsample': 0.8,
+                         'colsample_bytree': 0.8,   
+                         'tree_method': 'hist',         
+                         'nthread': -1,                   
+                         'seed': 42  ,
+                         'min_child_weight': .5
+                        }
+
+                    # param['nthread'] = 4
+                    # param['eval_metric'] = 'pre'
+                    
+                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=500)
+                    def xg_predict(X):
+                        X_convert = xgb.DMatrix(X)
+                        return m.model.predict(X_convert)
+                    m.__predict_fn__ = xg_predict
+                    
+                    if self.folder:
+                        plt.subplots()
+                        fi = m.model.get_score(importance_type="gain")
+                        plt.barh(X.columns,[fi[i] if i in fi else 0 for i in X.columns])
+                        plt.title("Feature Importance")
+                        plt.savefig(self.folder+f"/XGBoost{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
+                    
+                    
+                    return m
+                
+            # self.model = fit_model(X,y)
+        
+            
+        elif self.model_type == "nn":
+            columns = X.columns
+            X = pd.DataFrame(preprocessing.StandardScaler().fit(X).transform(X),columns=columns)
+            ## Neural network
+            def fit_model(X,y,sample_weight,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    # m.model = MLPClassifier((32,16,8,4),activation="relu")
+                    m.model = MLPClassifier((20,20,4),activation="relu")
+                    m.model.fit(X,y)
+                    m.__predict_fn__ = m.model.predict_proba
+                    return m
+                
+        else:
+            raise ValueError("Unsupported model type")
+        
+        print(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
+        
+        kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = 42)
+        k_orders = [i for i in kf.split(X,y)]
+        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
+
+        if groups is not None:
+            unique_groups = np.unique(groups)
+            if len(unique_groups) < 5:
+                print(f"Warning: Only {len(unique_groups)} unique groups for 5-fold CV. Using KFold instead.")
+                gfk = KFold(n_splits=5, shuffle=True, random_state=42)
+            else:
+                gfk = GroupKFold(n_splits=5)
+        
+            #k_orders = [i for i in kf.split(X,y)] old way
+            k_orders = [i for i in gfk.split(X, y, groups=groups)]
+            rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
+            
+            # permutation = np.random.permutation(len(X))
+            # X_shuffled = X.iloc[permutation]
+            # y_shuffled = y[permutation]
+            # groups_shuffled = np.array(self.groups)[permutation]
+            # k_orders = [i for i in gfk.split(X_shuffled,y_shuffled,groups=groups_shuffled)]
+            # rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
+
+        if sample_weight is not None:
+            data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]],sample_weight[i[0]]] for i in k_orders] # put data into folds
+    
+        else:
+            data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]],None] for i in k_orders] # put data into folds
+        
+
+        self.models = []
+        self.predictions=[]
+        model_idx=0
+        for X_train, X_test, y_train, y_test,weights in tqdm.tqdm(data_splits):
+            m = fit_model(X_train,y_train,sample_weight=weights,idx=model_idx)
+            self.models.append(m)
+            self.predictions.append(m.predict(X_test))
+            model_idx+=1
+            
+        return np.concatenate(self.predictions)[rev_order]
+
+    
+    
+def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
+    """
+    Parameters
+    ----------
+    fdc : pandas.DataFrame
+        All PSMs identified.
+    model_type : string [autogluon]
+                 Type of ML model used to discriminate targets and decoys.
+                 Only 'autogluon' is supported in this implementation.
+    fdr_t : float
+        False discovery rate threshold.
+    folder : str, optional
+        Folder path for saving plots.
+
+    Returns
+    -------
+    fdc : pandas.DataFrame
+        Updated dataframe with prediction values and Q-values.
+    """
+
+    assert model_type in ["lda", "rf", "xg"], 'model_type must be one of ["lda", "rf", "xg"]'
+    
+    print("Scoring IDs")
+    
+    
+    ## We consider decoys and targets with v small coeffs to be from the null distributiom
+    _bool = np.logical_and(~fdc["decoy"],fdc.coeff>1)
+    
+    ## define our features and labels for the model
+    y = np.array(_bool,dtype=int)
+    
+    # exclude necessary columns
+    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
+                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
+                  'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
+                  "plexfittrace_ps_all",
+                  "unique_frag_mz", "untag_prec",
+                  "channels_matched",
+                  "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor","plexfitMS1","plexfitMS1_p","plex_Area", "untag_prec","channel","time_channel",
+                  "unique_frag_mz",
+                  "unique_obs_int",
+                  "file_name",
+                  "protein"]
+    X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
+
+    # DEBUG: Check each column for infinity or very large values
+    #problem_columns = []
+    #for col in X.columns:
+    #    try:
+    #        # Check for infinity
+    #        if np.isinf(X[col]).any():
+    #            problem_columns.append(f"{col}: has infinity")
+    #            
+    #        # Check for very large values
+    #        max_val = X[col].max()
+    #        min_val = X[col].min()
+    #        if abs(max_val) > 1e30 or abs(min_val) > 1e30:
+    #            problem_columns.append(f"{col}: has extreme value (min={min_val}, max={max_val})")
+    #            
+    #        # Check for NaN
+    #        if np.isnan(X[col]).any():
+    #            problem_columns.append(f"{col}: has NaN")
+    #            
+    #    except Exception as e:
+    #        problem_columns.append(f"{col}: error checking - {str(e)}")
+    
+    #if problem_columns:
+    #    print("Problem columns detected:")
+    #    for prob in problem_columns:
+    #        print(f"  - {prob}")
+    #        
+    #    # Additional info about columns with infinity
+    #    for col in X.columns:
+    #        if np.isinf(X[col]).any():
+    #            inf_indices = np.where(np.isinf(X[col]))[0]
+    #            print(f"\nInfinity values in column '{col}' at indices: {inf_indices[:5]}...")
+    #            print(f"Example row with infinity in '{col}':")
+    #            print(X.iloc[inf_indices[0]].to_string())
+    #            
+    #            # Try to find the cause
+    #            if col in ['rt_error', 'sq_rt_error', 'mz_error', 'sq_mz_error']:
+    #                print(f"Original values for '{col.replace('sq_', '')}':")
+    #                if 'sq_rt_error' in col:
+    #                    print(fdc.loc[inf_indices[0], 'rt_error'])
+    #                elif 'sq_mz_error' in col:
+    #                    print(fdc.loc[inf_indices[0], 'mz_error'])
+    #            
+    #            break  # Just show one example to avoid overwhelming output
+    
+    # print(X.columns)
+    #print(f"Using {len(X.columns)} features for scoring:")
+    #for idx, feature in enumerate(X.columns):
+    #    print(f"{idx+1}. {feature}")
+    
+    X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
+        
+    sc_model = score_model(model_type,folder=folder)
+    pred = sc_model.run_model(X, y, groups=fdc.stripped_seq)
+    
+    model_name= model_type
+
+    ####### make sure to not have these in the model (bc they are left out in decoys) #######
+       # "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps","plexfittrace_spec_all","plexfittrace_all","plexfittrace_ps_all","plex_Area","ms1_cor","traceproduct","iso_cor","MS1_Int","all_ms1_specs","MS1_Area"
+        
+    ###############################################################################################
+    ########################  Analysis the predictions    ######################################
+    
+    
+    
+    
+    if len(pred.shape)==2:
+        output = pred[:,1]
+    else:
+        output = pred
+        
+        
+        
+    ## Use the scores to estimate the #IDs as 1% FDR
+    
+    fpr, tpr, _ = roc_curve(y, output)
+    # plt.subplots()
+    # plt.plot(fpr,tpr)
+    # print("AUC: ",np.round(auc(fpr,tpr),3))
+    
+    
+    
+    # ordered_scores = sorted(output)[::-1]
+    
+    ## note this is slow
+    ## count down to find optimal FDR but then just use every Nth score to get a nice plot
+    # fdr = []
+    # threshold = []
+    # interval = 1
+    # for idx,s in enumerate(tqdm.tqdm(ordered_scores)):
+    #     if idx%interval==0:
+    #         ## SCORES IN INCREASING ORDER
+    #         # fdr.append(np.sum(np.greater_equal(pred[~y.astype(bool),1],s))/np.sum(np.greater_equal(pred[:,1],s)))
+            
+    #         # Scores decreasing
+    #         val = np.sum(np.greater_equal(output[~y.astype(bool)],s))/np.sum(np.greater_equal(output,s))
+    #         fdr.append(val)
+    #         if val<.01:
+    #             # if threshold==[]:
+    #             threshold = [ordered_scores[idx-1],s]
+    #         else:
+    #             interval=10
+    
+    
+    ## FASTER VERSION OF ABOVE
+    score_order = np.argsort(-output)
+    orig_order = np.argsort(score_order)
+    decoy_order = fdc["decoy"][score_order]
+    frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
+    # plt.plot(frac_decoy)
+    T = output[score_order[np.searchsorted(frac_decoy,0.01)]]
+    above_t = output>T
+    fdc["PredVal"] = output
+    fdc["Qvalue"] = frac_decoy[orig_order]
+    
+    if folder:
+        
+        plt.subplots()
+        y_log=False
+        vals,bins,_ = plt.hist(output,50,log=y_log,label="All")
+        plt.hist(output[y.astype(bool)],bins,alpha=.5,log=y_log,label="Targets")
+        plt.hist(output[~y.astype(bool)],bins,alpha=.5,log=y_log,label="Decoys")
+        plt.legend()
+        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        plt.vlines(T,0,max(vals))
+        plt.savefig(folder+"/ModelScore.png",dpi=600,bbox_inches="tight")
+        
+        
+        
+        feat = 'rt_error'
+        func = np.array#np.log10#
+        plt.subplots()
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
+        # plt.hist([],[])
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="Low Scoring")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.decoy]]),bins,alpha=.5,label="Decoy")
+        plt.xlabel(feat)
+        plt.ylabel("Frequency")
+        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        plt.legend()
+        plt.savefig(folder+"/RT_error.png",dpi=600,bbox_inches="tight")
+        
+                
+        feat = 'mz_error'
+        func = np.array#np.log10#
+        plt.subplots()
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
+        # plt.hist([],[])
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="Low Scoring")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.decoy]]),bins,alpha=.5,label="Decoy")
+        plt.xlabel(feat)
+        plt.ylabel("Frequency")
+        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        plt.legend()
+        plt.savefig(folder+"/mz_error.png",dpi=600,bbox_inches="tight")
+    
+    return fdc
+
+
+
+def compute_protein_FDR(df,results_folder=None):
+    print("Computing Protein FDR")
+
+  
+    df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)
+    df_seqchargeqvals = df[df["Qvalue"] < 0.01].copy().reset_index(drop=True) #filter
+    df_seqchargeqvals["maxPredval"] = df_seqchargeqvals.groupby(["protein", "decoy"])["PredVal"].transform("max")
+    df_seqchargeqvals = df_seqchargeqvals.drop_duplicates(subset=["protein", "decoy"]).reset_index(drop=True)
+    
+    # Rank by descending maxPredval and compute accum_decoys & Protein_Qvalue
+    df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False).reset_index(drop=True)
+    df_seqchargeqvals["prot_rank"] = df_seqchargeqvals.index + 1  # Equivalent to row_number()
+    df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["decoy"].cumsum()
+    df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["accum_decoys"] / df_seqchargeqvals["prot_rank"]
+    
+    # Filter for non-decoy proteins and select distinct protein values
+    df_seqchargeqvals_distinct = (
+        df_seqchargeqvals[df_seqchargeqvals["decoy"] == False]
+        .drop_duplicates(subset=["protein"])
+        [["protein", "Protein_Qvalue"]]
+    )
+    
+    df = df.drop(columns=["Protein_Qvalue"], errors="ignore")
+    df = df.merge(df_seqchargeqvals_distinct, on="protein", how="left")
+        
+    df_counts_prec = (
+        df[(df["decoy"] == False) & (df["Qvalue"] < 0.01)]
+        .drop_duplicates(subset=["run_chan", "untag_prec"])
+        .groupby(["file_name", "channel"])
+        .size()
+        .reset_index(name="Precursor_IDs")
+        .sort_values("channel")
+    )
+    print("Number of precursors at 1% FDR:")
+    print("All Channels:",np.sum(df_counts_prec.Precursor_IDs))
+    print(df_counts_prec.to_string(index=False))
+    
+
+    df_counts_prots = (
+        df[(df["Protein_Qvalue"] < 0.01) & (df["decoy"] == False) & (df["Qvalue"] < 0.01)]
+        .drop_duplicates(subset=["run_chan", "protein"])
+        .groupby(["run_chan","channel"])
+        .size()
+        .reset_index(name="Protein_IDs")
+        .sort_values("channel")
+        )
+    print("\nNumber of proteins at 1% FDR:")
+    print("All Channels:",np.sum(df_counts_prots.Protein_IDs))
+    print(df_counts_prots.to_string(index=False))
+
+    if results_folder is not None:
+        with open(results_folder+'/Summary.txt', 'a') as f:
+            print("Number of precursors at 1% FDR:", file=f)
+            print("All Channels:",np.sum(df_counts_prec.Precursor_IDs), file=f)
+            print(df_counts_prec.to_string(index=False), file=f)
+            
+            print("\nNumber of proteins at 1% FDR:", file=f)
+            print("All Channels:",np.sum(df_counts_prots.Protein_IDs), file=f)
+            print(df_counts_prots.to_string(index=False), file=f)
+    
+    # if config.args.plexDIA:
+    #     if config.args.timeplex:
+    #         df["BestChannel_Protein_Qvalue"] = df.groupby(["time_channel", "protein", "decoy"])["Protein_Qvalue"].transform("min")
+    #     else:
+    #         df["BestChannel_Protein_Qvalue"] = df.groupby(["file_name", "protein", "decoy"])["Protein_Qvalue"].transform("min")
+
+    if config.args.plexDIA:
+        print("\nAfter plexDIA identification propagation based on best channel Q-value:")
+        
+        # Compute number of precursor IDs at 1% FDR
+        df_counts_prec = (
+            df[(df["decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
+            .drop_duplicates(subset=["run_chan", "untag_prec"])
+            .groupby(["file_name", "channel"])
+            .size()
+            .reset_index(name="Precursor_IDs")
+            .sort_values("channel")
+        )
+        
+        # Print precursor ID counts
+        print("Number of precursors at 1% FDR (best channel):")
+        print("All Channels:",np.sum(df_counts_prec.Precursor_IDs))
+        print(df_counts_prec.to_string(index=False))
+        
+        # Compute number of protein IDs at 1% FDR
+        df_counts_prots = (
+            df[(df["Protein_Qvalue"] < 0.01) & (df["decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
+            .drop_duplicates(subset=["run_chan", "protein"])
+            .groupby(["run_chan", "channel"])
+            .size()
+            .reset_index(name="Protein_IDs")
+            .sort_values("channel")
+        )
+        
+        # Print protein ID counts
+        print("\nNumber of proteins at 1% FDR (best channel):")
+        print("All Channels:",np.sum(df_counts_prots.Protein_IDs))
+        print(df_counts_prots.to_string(index=False))
+        
+        if results_folder is not None:
+            with open(results_folder+'/Summary.txt', 'a') as f:
+                print("Number of precursors at 1% FDR (best channel):", file=f)
+                print("All Channels:",np.sum(df_counts_prec.Precursor_IDs), file=f)
+                print(df_counts_prec.to_string(index=False), file=f)
+                
+                print("\nNumber of proteins at 1% FDR (best channel):", file=f)
+                print("All Channels:",np.sum(df_counts_prots.Protein_IDs), file=f)
+                print(df_counts_prots.to_string(index=False), file=f)
+
+
+    return df
+
+def add_median_based_features(df, metric_columns, group_col="untag_prec", count_col="channels_matched", verbose=True):
+    """
+    Calculate median-based features for specified metrics across groups.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        Input dataframe containing the metric columns
+    metric_columns : list
+        List of column names to calculate medians and differences for
+    group_col : str, default="untag_prec"
+        Column to group by for median calculations
+    count_col : str, default="channels_matched"
+        Column indicating how many channels each group has
+    verbose : bool, default=True
+        Whether to print summary statistics
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        DataFrame with added median and difference columns
+    """
+    # Make a copy to avoid modifying the original
+    result_df = df.copy()
+    
+    if verbose:
+        print(f"Adding median-based features for {len(metric_columns)} metrics...")
+    
+    for metric_col in metric_columns:
+        # Calculate median for each group
+        col_name = f"median_{metric_col}"
+        result_df[col_name] = result_df.groupby(group_col)[metric_col].transform("median")
+        
+        # Set to NA for single-channel entries
+        result_df.loc[result_df[count_col] == 1, col_name] = pd.NA
+        
+        # Calculate difference from median
+        diff_col = f"diff_{metric_col}_from_median"
+        result_df[diff_col] = result_df[metric_col] - result_df[col_name]
+        
+        # Fill NA with mean of non-NA values
+        mean_val = result_df[diff_col].mean()
+        result_df[diff_col] = result_df[diff_col].fillna(mean_val)
+        
+        if verbose:
+            print(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
+            print(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
+    
+    return result_df
+
+def process_data(file,spectra,library,mass_tag=None,timeplex=False):
+    
+    results_folder = os.path.dirname(file)
+    mz_ppm = config.opt_ms1_tol
+    rt_tol = config.opt_rt_tol
+    
+    # After loading data and adding basic features
+    lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=timeplex)
+    
+    # Add standard features
+    fdc["stripped_seq"] = np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in fdc["seq"]])
+    fdc["pep_len"] = [len(re.findall("([A-Z](?:\(.*?\))?)",re.sub("Decoy","",i))) for i in fdc["stripped_seq"]]
+    fdc["sq_rt_error"] = np.power(fdc["rt_error"],2)
+    fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
+
+    # Handle untag_seq
+    if mass_tag:
+        fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
+    else:
+        fdc["untag_seq"] = fdc["seq"]
+    #print(fdc.columns)  # Ensure 'seq' is in fdc
+
+    # Add untag_prec and channels_matched
+    fdc["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdc["untag_seq"],fdc["z"])]
+    
+    
+    
+    
+    
+    
+    
+    channel_matches_counts = fdc["untag_prec"].value_counts()
+    channel_matches_counts_dict = {i:j for i,j in zip(channel_matches_counts.index,channel_matches_counts)}
+    fdc["channels_matched"] = [channel_matches_counts_dict[i] for i in fdc["untag_prec"]]
+
+    # Use the helper function to add median-based features
+    metrics_to_process = ["gof_stats", "scribe_scores", "max_matched_residuals", "manhattan_distances"]
+    fdc = add_median_based_features(fdc, metrics_to_process)
+
+    if timeplex:
+        if mass_tag:
+            tag_name = mass_tag.name
+            fdc["channel"] = [str(int(t))+"_"+re.findall(f"{tag_name}-(\d+)",i)[0] for i,t in zip(fdc.seq,fdc.time_channel)]
+        else:
+            fdc["channel"] = fdc["time_channel"]
+            
+    elif mass_tag:
+        tag_name = mass_tag.name
+        ## mTRAQ label
+        fdc["channel"] = [int(re.findall(f"{tag_name}-(\d+)",i)[0]) for i in fdc.seq]
+
+    else: 
+        fdc["channel"] = 0 #if LF
+
+    #this was previously in ms1_quant function.. we need it for the target/decoy classification
+    frag_errors = [unstring_floats(mz) for mz in fdc.frag_errors]
+    median  = np.median(np.concatenate([i for i in frag_errors]))
+    fdc["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
+
+    ## What precursors are labeled as decoys
+    fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])
+
+    
+    minfraclib_toscore = getattr(config.args, "score_lib_frac", 0) 
+    fdx_toscore = fdc[fdc['frac_lib_int'].fillna(0) >= minfraclib_toscore].reset_index(drop=True)
+    
+    fin = score_precursors(fdx_toscore,config.score_model,config.fdr_threshold,folder=results_folder)
+    new_columns = [col for col in fin.columns if col not in fdc.columns and col not in ["untag_prec", "channel"]]
+    fdx = fdc.merge(fin[["untag_prec", "channel"] + new_columns], how="left", on=["untag_prec", "channel"])
+
+    ##fill NA's appropriately
+    fdx['PredVal'] = fdx['PredVal'].fillna(0)  
+    fdx['Qvalue'] = fdx['Qvalue'].fillna(1)     
+
+
+    # if config.args.plexDIA:
+    #     if config.args.timeplex:
+    #         fdx["BestChannel_Qvalue"] = fdx.groupby(["time_channel", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a plexDIA set for each timechannel
+    #     else:
+    #         fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a plexDIA set
+    
+    if config.args.plexDIA or config.args.timeplex:
+        fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a run
+    else:
+        fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
+
+    
+    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, spectra, mz_ppm, rt_tol, timeplex)
+
+
+    fdx_quant["last_aa"] = [i[-1] for i in fdx_quant["stripped_seq"]]
+    fdx_quant["seq_len"] = [len(i) for i in fdx_quant["stripped_seq"]]
+    
+    # have possible reannotate woth fasta here
+    # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
+    fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder)
+
+    
+    ## save to results folder
+    fdx_quant.to_csv(results_folder+"/all_IDs.csv",index=False)
+    fdx_quant[np.logical_and(~fdx_quant["decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)

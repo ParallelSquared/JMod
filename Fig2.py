@@ -14,9 +14,9 @@ import os
 import re
 
 from read_output import names, dtypes
-import miscFunctions as mf
+import misc_functions as mf
 from mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library, diethyl_6plex
-import config
+import src.config as config
 
 from FigureFunctions import load_files, plot_channel_numbers, merge_and_norm,compare_channels,plot_jaccard_matrix,get_abs_ratio_errors
 

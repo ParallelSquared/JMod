@@ -29,14 +29,14 @@ python run_tests.py -c
 # Run only dummy tests
 python run_tests.py --dummy
 
-# Run only miscFunctions tests
+# Run only misc_functions tests
 python run_tests.py --misc
 
 # Run a specific test file
 python run_tests.py tests/test_dummy.py
 
 # Run a specific test
-python run_tests.py tests/test_miscFunctions.py::TestChangeSeq::test_change_seq_diann_simple
+python run_tests.py tests/test_misc_functions.py::TestChangeSeq::test_change_seq_diann_simple
 ```
 
 ### 2. Using JMod in test mode
@@ -63,7 +63,7 @@ pytest -v tests/
 pytest --cov=. --cov-report=html tests/
 
 # Run a specific test class
-pytest tests/test_miscFunctions.py::TestChangeSeq
+pytest tests/test_misc_functions.py::TestChangeSeq
 
 # Run tests matching a pattern
 pytest -k "change_seq" tests/
@@ -76,7 +76,7 @@ tests/
 ├── __init__.py              # Makes tests a Python package
 ├── conftest.py              # Pytest configuration and shared fixtures
 ├── test_dummy.py            # Simple tests to verify setup
-├── test_miscFunctions.py   # Tests for miscFunctions module
+├── test_misc_functions.py   # Tests for misc_functions module
 ├── requirements.txt         # Test dependencies
 └── README.md               # This file
 ```

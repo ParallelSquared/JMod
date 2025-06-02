@@ -1,5 +1,11 @@
 #!/usr/bin/env python
 """
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
+
+"""
 Test runner for JMod
 Run this script to execute all tests in the test suite
 """
@@ -77,7 +83,7 @@ def main():
     parser.add_argument(
         "--misc",
         action="store_true",
-        help="Run only miscFunctions tests"
+        help="Run only misc_functions tests"
     )
     
     args = parser.parse_args()
@@ -87,7 +93,7 @@ def main():
     if args.dummy:
         test_path = "tests/test_dummy.py"
     elif args.misc:
-        test_path = "tests/test_miscFunctions.py"
+        test_path = "tests/test_misc_functions.py"
     
     # Check if pytest is installed
     try:
