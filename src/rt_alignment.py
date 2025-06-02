@@ -7,51 +7,35 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import numpy as np
 import pandas as pd
 import re
-import time
-import pickle
 import matplotlib.pyplot as plt
-import multiprocessing
 import tqdm
-from functools import partial
-from pyteomics import mass 
-# from kneed import KneeLocator
+import src.config as config
+from .spectral_fitting import fit_to_lib
 
-from SpecLib import load_tsv_speclib,load_tsv_lib, loadSpecLib
-import load_files 
-import SpecLib
-import Jplot as jp
-import config
-import iso_functions as iso_f
-
-from SpectraFitting import fit_to_lib
 from scipy.interpolate import LSQUnivariateSpline as spline
-from scipy.interpolate import UnivariateSpline, InterpolatedUnivariateSpline
 #from scipy.optimize import isotonic_regression
 from statistics import quantiles
-from miscFunctions import within_tol
+from .utils.misc_functions import within_tol
 from scipy import signal
 from scipy.optimize import curve_fit
 from scipy import stats
 from sklearn.metrics import auc
-import warnings
 import dill
 dill.settings['recurse'] = True
-import itertools 
-import h5py
 import copy
 
 from scipy.interpolate import interp1d
 import statsmodels.api as sm
 
 
-from mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
+from .mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
 
-from miscFunctions import feature_list_mz, feature_list_rt, createTolWindows, within_tol,moving_average, \
-    closest_ms1spec, closest_peak_diff,split_frag_name, unstring_floats, fragment_cor, np_pearson_cor
+from .utils.misc_functions import within_tol,moving_average, \
+    closest_ms1spec, closest_peak_diff, unstring_floats, fragment_cor
 
 
-from FinetuneFns import fine_tune_rt, one_hot_encode_sequence
-from read_output import names, dtypes
+from .finetune_funs import fine_tune_rt, one_hot_encode_sequence
+from .utils.io.read_output import names, dtypes
 
 colours = ["tab:blue","tab:orange","tab:green","tab:red",
 'tab:purple',
@@ -539,7 +523,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     config.n_most_intense_features = int(1e5) # larger than possible, essentually all
     
-    scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
+    # Calculate scans_per_cycle safely
+    if len(dia_spectra.ms1scans) > 0:
+        scans_per_cycle = max(1, round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans)))
+    else:
+        scans_per_cycle = 1
+
     print("Intitial search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
@@ -548,14 +537,49 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     ms1_rt = np.array([i.RT for i in ms1spectra])
     
+    # Adjust partitioning based on available data
     totalIC = np.array([np.sum(i.intens) for i in ms2spectra])
+    total_scans = len(totalIC)
     
-    num_partition = 10
-    split_size = int(np.ceil(len(totalIC)/num_partition))
-    split_tic = [totalIC[i*split_size:(i+1)*split_size] for i in range(num_partition)]
-    split_top_n = [(np.argsort(-tics)+(idx*split_size))[:(config.n_most_intense//num_partition)] for idx,tics in enumerate(split_tic)]
-    top_n = np.concatenate(split_top_n)
+    # Dynamically adjust number of partitions based on data size
+    num_partition = min(10, max(1, total_scans // 10))  # At least 1 partition, at most 10
     
+    if num_partition > 0 and total_scans > 0:
+        # Calculate desired scans per partition
+        desired_per_partition = min(total_scans // num_partition, 
+                                   config.n_most_intense // num_partition)
+        
+        split_size = max(1, int(np.ceil(total_scans/num_partition)))
+        split_tic = [totalIC[i*split_size:min(total_scans, (i+1)*split_size)] for i in range(num_partition)]
+        
+        # Only take as many as available in each partition
+        split_top_n = []
+        for idx, tics in enumerate(split_tic):
+            if len(tics) > 0:  # Only process non-empty partitions
+                # Take min of desired or available
+                n_to_take = min(len(tics), desired_per_partition)
+                if n_to_take > 0:
+                    split_top_n.append((np.argsort(-tics)+(idx*split_size))[:n_to_take])
+        
+        if split_top_n:  # If we have any results
+            top_n = np.concatenate(split_top_n)
+        else:
+            # Fallback if partitioning fails
+            top_n = np.random.choice(np.arange(total_scans), 
+                                    min(total_scans, config.n_most_intense), 
+                                    replace=False)
+    else:
+        # Fallback for very small datasets
+        top_n = np.random.choice(np.arange(total_scans), 
+                                min(total_scans, config.n_most_intense), 
+                                replace=False)
+    
+    # Safely calculate top_n_ms1
+    if scans_per_cycle > 0:
+        top_n_ms1 = top_n // scans_per_cycle
+    else:
+        top_n_ms1 = top_n
+
     # top_n = np.argsort(-totalIC)[:config.n_most_intense]
     top_n_ms1 = top_n//scans_per_cycle
     all_keys = list(librarySpectra)
@@ -568,7 +592,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
         ### redefine "top_n_spectra" to evenly span Rt and m/z
         np.random.seed(0)
-        top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
+        #top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
         
         
         fit_outputs=[]

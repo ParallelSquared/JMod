@@ -8,14 +8,14 @@ import re
 from pyteomics import mass
 import tqdm
 import os
-import config
+import src.config as config
 import numpy as np
 import copy
 
-from iso_functions import split_frag_name, fragment_seq
+from .iso_functions import split_frag_name, fragment_seq
 
-from miscFunctions import frag_to_peak, specific_frags,parse_peptide
-
+from .utils.misc_functions import frag_to_peak, specific_frags
+from .utils.parse_peptides import parse_peptide
 """
 ## Load in the library
 from SpecLib import loadSpecLib, write_speclib_tsv
@@ -239,11 +239,7 @@ ProtSci_heavy_plex = massTag(rules = "nK",
             channel_names = ["4","8","12","16", "20"],
             name = "ProtSci_light_plex") 
 
-SILAC = massTag(rules="R", 
-                base_mass=0, 
-                delta=[10.008269], 
-                channel_names=[10], 
-                name="SILAC")
+
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
 def split_frag_name(ion_type):
@@ -410,8 +406,7 @@ available_tags = {"mTRAQ":mTRAQ,
                   "tag6pip":tag6pip,
                   "tag6lys":tag6lys,
                   "tag6arg":tag6arg,
-                  "ProtSci_light_plex":ProtSci_light_plex,
-                  "SILAC":SILAC}
+                  "ProtSci_light_plex":ProtSci_light_plex}
 
 # if config.args.mTRAQ:
 #     config.tag = mTRAQ

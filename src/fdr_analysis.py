@@ -6,7 +6,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 
 
 
-from read_output import get_large_prec
+from .utils.io.read_output import get_large_prec
 
 from sklearn.model_selection import KFold,GroupKFold
 from sklearn.ensemble import RandomForestClassifier
@@ -20,22 +20,18 @@ import xgboost as xgb
 import numpy as np
 import matplotlib.pyplot as plt
 import tqdm
-import Jplot as jp
 import re
 import os
 import pandas as pd
-import seaborn as sns
-import pickle
 
-from trace_fns import ms1_cor, ms1_cor_channels
-from load_files import loadSpectra
-from SpecLib import loadSpecLib
+from .trace_fns import ms1_cor, ms1_cor_channels
+from .utils.io.load_files import loadSpectra
+from .models.spec_lib.spec_lib import loadSpecLib
 
-from mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
-import iso_functions as iso_f
-from miscFunctions import fragment_cor,unstring_floats
+from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
+from .utils.misc_functions import unstring_floats
 
-import config
+from . import config 
 
 
 def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
@@ -90,8 +86,6 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     else:
         all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
 
-
-        
     if mass_tag:
         #fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
         group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels(DIAspectra, 
@@ -196,9 +190,14 @@ class model_instance():
         
     def predict(self,X):
         pred = self.__predict_fn__(X)
-            
+        #First column of pred is target probabilities and second column is decoys
+        #If for some reason there were no decoys in one of the training folds
+        #only a single column is returned. Handle this case...
         if len(pred.shape)==2:
-            output = pred[:,1]
+            if pred.shape[1]==2:
+                output = pred[:,1]
+            else:
+                output = pred[:,0]
         else:
             output = pred
         return output
@@ -234,7 +233,7 @@ class score_model():
                     
                         # Save plot
                         plt.savefig(self.folder + f"/RF{idx}_feature_importance.png", dpi=600, bbox_inches="tight")
-                    
+                        # For RF models, print feature importance
                     return m
                 
             # self.model = fit_model(X,y)
@@ -316,13 +315,20 @@ class score_model():
                 
         else:
             raise ValueError("Unsupported model type")
-            
-        kf = KFold(n_splits=self.n_splits,shuffle=True)
+        
+        print(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
+        
+        kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = 42)
         k_orders = [i for i in kf.split(X,y)]
         rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
 
         if groups is not None:
-            gfk = GroupKFold(n_splits = 5)
+            unique_groups = np.unique(groups)
+            if len(unique_groups) < 5:
+                print(f"Warning: Only {len(unique_groups)} unique groups for 5-fold CV. Using KFold instead.")
+                gfk = KFold(n_splits=5, shuffle=True, random_state=42)
+            else:
+                gfk = GroupKFold(n_splits=5)
         
             #k_orders = [i for i in kf.split(X,y)] old way
             k_orders = [i for i in gfk.split(X, y, groups=groups)]
@@ -399,7 +405,56 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "file_name",
                   "protein"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
+
+    # DEBUG: Check each column for infinity or very large values
+    #problem_columns = []
+    #for col in X.columns:
+    #    try:
+    #        # Check for infinity
+    #        if np.isinf(X[col]).any():
+    #            problem_columns.append(f"{col}: has infinity")
+    #            
+    #        # Check for very large values
+    #        max_val = X[col].max()
+    #        min_val = X[col].min()
+    #        if abs(max_val) > 1e30 or abs(min_val) > 1e30:
+    #            problem_columns.append(f"{col}: has extreme value (min={min_val}, max={max_val})")
+    #            
+    #        # Check for NaN
+    #        if np.isnan(X[col]).any():
+    #            problem_columns.append(f"{col}: has NaN")
+    #            
+    #    except Exception as e:
+    #        problem_columns.append(f"{col}: error checking - {str(e)}")
+    
+    #if problem_columns:
+    #    print("Problem columns detected:")
+    #    for prob in problem_columns:
+    #        print(f"  - {prob}")
+    #        
+    #    # Additional info about columns with infinity
+    #    for col in X.columns:
+    #        if np.isinf(X[col]).any():
+    #            inf_indices = np.where(np.isinf(X[col]))[0]
+    #            print(f"\nInfinity values in column '{col}' at indices: {inf_indices[:5]}...")
+    #            print(f"Example row with infinity in '{col}':")
+    #            print(X.iloc[inf_indices[0]].to_string())
+    #            
+    #            # Try to find the cause
+    #            if col in ['rt_error', 'sq_rt_error', 'mz_error', 'sq_mz_error']:
+    #                print(f"Original values for '{col.replace('sq_', '')}':")
+    #                if 'sq_rt_error' in col:
+    #                    print(fdc.loc[inf_indices[0], 'rt_error'])
+    #                elif 'sq_mz_error' in col:
+    #                    print(fdc.loc[inf_indices[0], 'mz_error'])
+    #            
+    #            break  # Just show one example to avoid overwhelming output
+    
     # print(X.columns)
+    #print(f"Using {len(X.columns)} features for scoring:")
+    #for idx, feature in enumerate(X.columns):
+    #    print(f"{idx+1}. {feature}")
+    
     X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
         
     sc_model = score_model(model_type,folder=folder)
@@ -461,10 +516,6 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
     # plt.plot(frac_decoy)
     T = output[score_order[np.searchsorted(frac_decoy,0.01)]]
-
-    print()
-    print("#IDs at 1% FDR:", np.sum(output>T))
-    
     above_t = output>T
     fdc["PredVal"] = output
     fdc["Qvalue"] = frac_decoy[orig_order]
@@ -628,7 +679,55 @@ def compute_protein_FDR(df,results_folder=None):
 
     return df
 
-
+def add_median_based_features(df, metric_columns, group_col="untag_prec", count_col="channels_matched", verbose=True):
+    """
+    Calculate median-based features for specified metrics across groups.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        Input dataframe containing the metric columns
+    metric_columns : list
+        List of column names to calculate medians and differences for
+    group_col : str, default="untag_prec"
+        Column to group by for median calculations
+    count_col : str, default="channels_matched"
+        Column indicating how many channels each group has
+    verbose : bool, default=True
+        Whether to print summary statistics
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        DataFrame with added median and difference columns
+    """
+    # Make a copy to avoid modifying the original
+    result_df = df.copy()
+    
+    if verbose:
+        print(f"Adding median-based features for {len(metric_columns)} metrics...")
+    
+    for metric_col in metric_columns:
+        # Calculate median for each group
+        col_name = f"median_{metric_col}"
+        result_df[col_name] = result_df.groupby(group_col)[metric_col].transform("median")
+        
+        # Set to NA for single-channel entries
+        result_df.loc[result_df[count_col] == 1, col_name] = pd.NA
+        
+        # Calculate difference from median
+        diff_col = f"diff_{metric_col}_from_median"
+        result_df[diff_col] = result_df[metric_col] - result_df[col_name]
+        
+        # Fill NA with mean of non-NA values
+        mean_val = result_df[diff_col].mean()
+        result_df[diff_col] = result_df[diff_col].fillna(mean_val)
+        
+        if verbose:
+            print(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
+            print(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
+    
+    return result_df
 
 def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     
@@ -636,36 +735,39 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     mz_ppm = config.opt_ms1_tol
     rt_tol = config.opt_rt_tol
     
+    # After loading data and adding basic features
     lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=timeplex)
     
-    # if "seq" not in fdc.columns:
-    #     raise KeyError("Column 'seq' is missing in fdc. Check data loading step.")
-
-    
-    ## Add additional features
-    # X["prec_z"] = fdc["z"]
-   # print(fdc.columns)  # Ensure 'seq' is in fdc
-
+    # Add standard features
     fdc["stripped_seq"] = np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in fdc["seq"]])
     fdc["pep_len"] = [len(re.findall("([A-Z](?:\(.*?\))?)",re.sub("Decoy","",i))) for i in fdc["stripped_seq"]]
-    # X["rt"] = fdc["rt"]
-    # X["coeff"] = fdc["coeff"]
     fdc["sq_rt_error"] = np.power(fdc["rt_error"],2)
     fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
 
+    # Handle untag_seq
     if mass_tag:
         fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
     else:
         fdc["untag_seq"] = fdc["seq"]
     #print(fdc.columns)  # Ensure 'seq' is in fdc
 
-       
+    # Add untag_prec and channels_matched
     fdc["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdc["untag_seq"],fdc["z"])]
+    
+    
+    
+    
+    
+    
+    
     channel_matches_counts = fdc["untag_prec"].value_counts()
     channel_matches_counts_dict = {i:j for i,j in zip(channel_matches_counts.index,channel_matches_counts)}
     fdc["channels_matched"] = [channel_matches_counts_dict[i] for i in fdc["untag_prec"]]
 
-    
+    # Use the helper function to add median-based features
+    metrics_to_process = ["gof_stats", "scribe_scores", "max_matched_residuals", "manhattan_distances"]
+    fdc = add_median_based_features(fdc, metrics_to_process)
+
     if timeplex:
         if mass_tag:
             tag_name = mass_tag.name

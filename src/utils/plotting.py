@@ -16,17 +16,6 @@ plt.rcParams['figure.dpi'] = 500
 plt.rcParams['axes.labelsize'] = 12
 plt.rcParams['axes.titlesize'] = 12
 
-
-def within_tol(x, y, atol, rtol):
-    x = np.asanyarray(x)
-    y = np.asanyarray(y)
-    diff = x-y
-    logic = np.less_equal(abs(diff), atol + rtol * np.abs(y))
-    log_dif = np.zeros((*logic.shape,2))
-    log_dif[...,0] = logic
-    log_dif[...,1] = diff
-    return log_dif 
-
 # def plot_mz(mz=None,intensity=None,peak_list=None,show=False,col=None,alpha=None):
 #     if mz is None and peak_list is None:
 #         print("enter valid peaks")

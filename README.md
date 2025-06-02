@@ -20,9 +20,19 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 
 ## Deployment  
 
-Running a search:
+## Running a search:
+#### With command line args
 ```
-python run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzml
+python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzml
+```
+#### With json configuration file 
+Example `config.json` in ./data/default_config.json
+```
+python path/to/run_jmod.py --config_json path/to/config.json
+```
+### Run Tests
+```
+python run_tests.py -c 
 ```
 
 Parameters:

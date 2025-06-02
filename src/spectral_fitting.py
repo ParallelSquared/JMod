@@ -9,31 +9,25 @@ import numpy as np
 
 
 import warnings
-
+import ptinnls as sparse_nnls
 
 from scipy import stats
 from scipy import sparse
 from pyteomics import mass
 import re
+from .utils.io.read_output import names
+import src.config as config
 
-import ptinnls as sparse_nnls
-from read_output import names
-import config
-
-from miscFunctions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
-    ms1_error, change_seq, convert_frags, hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim, convert_prec_mz,np_pearson_cor
-from SpecLib import frag_to_peak, specific_frags
-from iso_functions import gen_isotopes
+from .utils.misc_functions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
+hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim,np_pearson_cor
+from .utils.parse_peptides import change_seq, convert_frags
+from .models.spec_lib.spec_lib import frag_to_peak
 
 def get_closest_ms1(prec_rt,ms1_spectra):
     ms1_rt = np.array([i.RT for i in ms1_spectra])
     closest_ms1_scan_idx = closest_ms1spec(prec_rt, ms1_rt)
     ms1_spec = ms1_spectra[closest_ms1_scan_idx]
     return ms1_spec
-
-# def create
-
-import line_profiler
 
 def get_scribe(
     row_idx_split,
@@ -598,7 +592,11 @@ def create_entries(centroid_breaks,
 
 
 #@profile
-def fit_to_lib2(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=False,ms1_mz=None,
+def fit_to_lib2(dia_spec,
+                library,
+                rt_mz,
+                all_keys,
+                dino_features=None,rt_filter=False,ms1_mz=None,
                ms1_spectra = None,
                rt_tol = config.rt_tol,
                ms1_tol = config.ms1_tol,

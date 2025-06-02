@@ -4,13 +4,13 @@ Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
-from fdr_analysis import process_data
+from src.fdr_analysis import process_data
 import os
 import re
-from load_files import loadSpectra
-from SpecLib import loadSpecLib
+from src.utils.io.load_files import loadSpectra
+from src.models.spec_lib.spec_lib import loadSpecLib
 from mass_tags import tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678, diethyl_6plex,available_tags
-import config
+import src.config as config
 import iso_functions as iso_f
 import argparse
 
