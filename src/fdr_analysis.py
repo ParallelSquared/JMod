@@ -6,7 +6,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 
 
 
-from .read_output import get_large_prec
+from .utils.io.read_output import get_large_prec
 
 from sklearn.model_selection import KFold,GroupKFold
 from sklearn.ensemble import RandomForestClassifier
@@ -25,7 +25,7 @@ import os
 import pandas as pd
 
 from .trace_fns import ms1_cor, ms1_cor_channels
-from .utils.load_files import loadSpectra
+from .utils.io.load_files import loadSpectra
 from .models.spec_lib.spec_lib import loadSpecLib
 
 from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library

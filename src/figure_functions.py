@@ -15,7 +15,7 @@ from matplotlib import gridspec
 import os
 import re
 from itertools import combinations,combinations_with_replacement, product
-from read_output import names, dtypes
+from src.utils.io.read_output import names, dtypes
 import misc_functions as mf
 from mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library, diethyl_6plex
 import src.config as config
@@ -54,7 +54,7 @@ plt.rcParams['axes.labelsize'] = 15
 plt.rcParams['axes.titlesize'] = 15
 
 
-from src.load_fasta import all_fasta_seqs, all_protein_names
+from src.utils.io.load_fasta import all_fasta_seqs, all_protein_names
 # all_fasta_seqs = all_fasta_seqs
 
 labels = ["Human",

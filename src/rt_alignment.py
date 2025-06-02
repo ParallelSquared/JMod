@@ -34,7 +34,7 @@ from .utils.misc_functions import within_tol,moving_average, \
 
 
 from .finetune_funs import fine_tune_rt, one_hot_encode_sequence
-from .read_output import names, dtypes
+from .utils.io.read_output import names, dtypes
 
 colours = ["tab:blue","tab:orange","tab:green","tab:red",
 'tab:purple',

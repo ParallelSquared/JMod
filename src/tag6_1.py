@@ -13,7 +13,7 @@ from pathlib import Path
 import os
 import re
 
-from read_output import names, dtypes
+from src.utils.io.read_output import names, dtypes
 import misc_functions as mf
 from mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library, diethyl_6plex
 import src.config as config

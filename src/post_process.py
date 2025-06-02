@@ -7,7 +7,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 from src.fdr_analysis import process_data
 import os
 import re
-from src.utils.load_files import loadSpectra
+from src.utils.io.load_files import loadSpectra
 from src.models.spec_lib.spec_lib import loadSpecLib
 from mass_tags import tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678, diethyl_6plex,available_tags
 import src.config as config

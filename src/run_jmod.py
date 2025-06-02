@@ -14,7 +14,7 @@ import tqdm
 import pandas as pd
 import sys 
 
-from .utils import load_files 
+from .utils.io import load_files 
 from .models.spec_lib import spec_lib
 from .spectral_fitting import fit_to_lib2
 from .rt_alignment import MZRTfit, MZRTfit_timeplex

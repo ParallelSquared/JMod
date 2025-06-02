@@ -15,7 +15,7 @@ from scipy import stats
 from scipy import sparse
 from pyteomics import mass
 import re
-from .read_output import names
+from .utils.io.read_output import names
 import src.config as config
 
 from .utils.misc_functions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
