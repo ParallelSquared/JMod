@@ -161,15 +161,7 @@ if __name__=="__main__":
     # rt_mz = np.array([[rtSpl(i["iRT"]), i["prec_mz"]] for i in spectrumLibrary.values()])
     # rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in spectrumLibrary.values()])
     
-    #if config.args.tag:
-    #    print("HEY!!!")
-    #    spectrumLibrary = tag_library(spectrumLibrary,config.tag)
-    #    mass_tag = config.tag  
-    #    print("mass_tag ", mass_tag)  
-    #else:
-    #    print("NOOO!!!")
-    #    mass_tag = None
-        
+    
     if config.args.tag:
         # Find the tag object based on the tag name
         if config.args.tag in available_tags:

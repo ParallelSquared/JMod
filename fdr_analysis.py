@@ -33,7 +33,7 @@ from SpecLib import loadSpecLib
 
 from mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 import iso_functions as iso_f
-from miscFunctions import fragment_cor,unstring_floats
+from miscFunctions import unstring_floats
 
 import config
 

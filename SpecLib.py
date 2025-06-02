@@ -3,23 +3,22 @@ This Source Code Form is subject to the terms of the Oxford Nanopore
 Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
-
-
-import subprocess
 import numpy as np
-from pyteomics import mzml, auxiliary
 import os
-import matplotlib.pyplot as plt
 import csv
 import pandas as pd
 import sqlite3
-import time
-import cProfile
 import struct
 import zlib
 import pickle
-from miscFunctions import split_frag_name, frag_to_peak, specific_frags
+from miscFunctions import  frag_to_peak
+from parsePeptides import change_seq, convert_frags
 import tqdm
+import copy
+import config
+from iso_functions import gen_isotopes_dict
+
+
 # load in spec library (tsv)
 # file = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HeLa+K562-1prcGlobProt-5prcLocPep-PeakViewConverted.txt"
 # spec_lib = pd.read_csv(file,delimiter="\t")
@@ -289,12 +288,6 @@ def loadSpecLib(lib_file):
     print(f"Loaded {len(spec_lib)} library precursors")
     print("finished")
     return spec_lib
-    
-
-import copy
-import config
-from miscFunctions import change_seq, convert_frags, frag_to_peak
-from iso_functions import gen_isotopes_dict
 
 
 def create_decoy_lib(library,rules):

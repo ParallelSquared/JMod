@@ -7,25 +7,11 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import numpy as np
 import pandas as pd
 import re
-import time
-import pickle
 import matplotlib.pyplot as plt
-import multiprocessing
 import tqdm
-from functools import partial
-from pyteomics import mass 
-from kneed import KneeLocator
-
-from SpecLib import load_tsv_speclib,load_tsv_lib, loadSpecLib
-import load_files 
-import SpecLib
-import Jplot as jp
 import config
-import iso_functions as iso_f
-
 from SpectraFitting import fit_to_lib
 from scipy.interpolate import LSQUnivariateSpline as spline
-from scipy.interpolate import UnivariateSpline, InterpolatedUnivariateSpline
 #from scipy.optimize import isotonic_regression
 from statistics import quantiles
 from miscFunctions import within_tol
@@ -33,11 +19,8 @@ from scipy import signal
 from scipy.optimize import curve_fit
 from scipy import stats
 from sklearn.metrics import auc
-import warnings
 import dill
 dill.settings['recurse'] = True
-import itertools 
-import h5py
 import copy
 
 from scipy.interpolate import interp1d
@@ -46,8 +29,8 @@ import statsmodels.api as sm
 
 from mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
 
-from miscFunctions import feature_list_mz, feature_list_rt, createTolWindows, within_tol,moving_average, \
-    closest_ms1spec, closest_peak_diff,split_frag_name, unstring_floats, fragment_cor, np_pearson_cor
+from miscFunctions import within_tol,moving_average, \
+    closest_ms1spec, closest_peak_diff, unstring_floats, fragment_cor
 
 
 from FinetuneFns import fine_tune_rt, one_hot_encode_sequence

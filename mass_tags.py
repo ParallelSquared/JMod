@@ -14,8 +14,8 @@ import copy
 
 from iso_functions import split_frag_name, fragment_seq
 
-from miscFunctions import frag_to_peak, specific_frags,parse_peptide
-
+from miscFunctions import frag_to_peak, specific_frags
+from parsePeptides import parse_peptide
 """
 ## Load in the library
 from SpecLib import loadSpecLib, write_speclib_tsv

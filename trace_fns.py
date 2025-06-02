@@ -7,42 +7,19 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 
 
 import numpy as np
-import pandas as pd
-
-import matplotlib.pyplot as plt
-import time
 import re
-from matplotlib_venn import venn2, venn3
-import os
 from scipy import stats
-
-from miscFunctions import  closest_ms1spec, curve_fit, gaussian, createTolWindows,np_pearson_cor
+from miscFunctions import  closest_ms1spec,np_pearson_cor
 import miscFunctions as mf
-from pyteomics import mass
-from read_output import get_large_prec
-
-from load_files import Spectrum, SpectrumFile
-    
 import config 
-
-import dill
-import load_files
 import tqdm
-
 import iso_functions as iso
 import warnings
-
 from scipy.interpolate import interp1d
-from scipy import sparse, optimize
+from scipy import optimize
 from scipy.signal import find_peaks
-import sparse_nnls
-import Jplot as jp
-
 import multiprocessing
-
 from functools import partial
-
-import line_profiler
 
 # def moving_average(x, w):
 #     return np.convolve(x, np.ones(w), 'same') / w
