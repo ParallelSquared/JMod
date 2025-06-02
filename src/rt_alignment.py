@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import tqdm
 import src.config as config
 from .spectral_fitting import fit_to_lib
+
 from scipy.interpolate import LSQUnivariateSpline as spline
 #from scipy.optimize import isotonic_regression
 from statistics import quantiles
@@ -895,7 +896,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         # print(str(feature_percentile),min(density))
         
         
-        emp_rt_spl = lowess_fit(np.array(output_rts)[cor_filter],np.array(dia_rt)[cor_filter],.1)
+        emp_rt_spl = lowess_fit(np.array(output_rts)[cor_filter],np.array(dia_rt)[cor_filter],.02)
     else:
         hyper_cutoff = np.percentile(all_hyper,80)
         all_cor_filter = all_hyper>hyper_cutoff
