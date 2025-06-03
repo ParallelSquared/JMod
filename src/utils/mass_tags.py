@@ -241,8 +241,8 @@ ProtSci_heavy_plex = massTag(rules = "nK",
 
 SILAC = massTag(rules="R", 
                 base_mass=0, 
-                delta=[10.008269], 
-                channel_names=[10], 
+                delta=[3.98814], 
+                channel_names=[4], 
                 name="SILAC")
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
