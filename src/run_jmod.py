@@ -20,7 +20,7 @@ from .spectral_fitting import fit_to_lib2
 from .rt_alignment import MZRTfit, MZRTfit_timeplex
 from .utils.misc_functions import write_to_csv
 from . import iso_functions as iso_f
-from .mass_tags import tag_library
+from .mass_tags import tag_library, available_tags
 from .fdr_analysis import process_data
 
 def main():
