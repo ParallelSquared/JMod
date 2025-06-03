@@ -16,7 +16,7 @@ from ...utils.parse_peptides import change_seq, convert_frags
 import tqdm
 import copy
 import src.config as config
-from ...iso_functions import gen_isotopes_dict
+from ...utils.iso_functions import gen_isotopes_dict
 
 
 # load in spec library (tsv)

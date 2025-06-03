@@ -607,6 +607,8 @@ def frag_to_peak(frag_dict: dict[str, list[float]],return_frags: bool=False): #-
     a dict of tuples and not lists. 
     """
     peaks = np.array(list(frag_dict.values()))
+    if len(peaks) == 0:
+        return np.empty((0, 2)) if not return_frags else (np.empty((0, 2)), np.array([]))
     order = np.argsort(peaks[:,0])
     if return_frags:
         ordered_frags = np.array(list(frag_dict.keys()))[order]

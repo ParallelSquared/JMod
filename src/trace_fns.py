@@ -13,7 +13,7 @@ from .utils.misc_functions import  closest_ms1spec,np_pearson_cor
 from .utils import misc_functions as mf
 import src.config as config 
 import tqdm
-from . import iso_functions as iso
+from .utils import iso_functions as iso
 import warnings
 from scipy.interpolate import interp1d
 from scipy import optimize

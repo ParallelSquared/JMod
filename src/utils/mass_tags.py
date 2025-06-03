@@ -12,7 +12,7 @@ import src.config as config
 import numpy as np
 import copy
 
-from .iso_functions import split_frag_name, fragment_seq
+from .utils.iso_functions import split_frag_name, fragment_seq
 
 from .utils.misc_functions import frag_to_peak, specific_frags
 from .utils import parse_peptide

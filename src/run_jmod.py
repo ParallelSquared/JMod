@@ -19,7 +19,7 @@ from .models.spec_lib import spec_lib
 from .spectral_fitting import fit_to_lib2
 from .rt_alignment import MZRTfit, MZRTfit_timeplex
 from .utils.misc_functions import write_to_csv
-from . import iso_functions as iso_f
+from .utils import iso_functions as iso_f
 from .mass_tags import tag_library
 from .fdr_analysis import process_data
 
