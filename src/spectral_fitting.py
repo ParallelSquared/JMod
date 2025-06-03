@@ -33,8 +33,7 @@ def get_scribe(
     row_idx_split,
     col_idx_split,
     prec_val_split,
-    val_obs
-):
+    val_obs):
     """
     Calculate Scribe scores for each precursor (Searle, Shannon, Wilburn, 2023, PMID: 36695531)
     
