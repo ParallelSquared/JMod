@@ -148,14 +148,6 @@ class MzMLSpectrumFile(BaseSpectrumFile):
         except Exception as e:
             raise ValueError(f"Failed to load mzML file: {e}")
 
-# Legacy classes for backwards compatibility (deprecated)
-class Spectrum(MzMLSpectrum):
-    """Deprecated: Use MzMLSpectrum instead"""
-    pass
-
-class SpectrumFile(MzMLSpectrumFile):
-    """Deprecated: Use MzMLSpectrumFile instead"""
-    pass
             
 def loadSpectra(mzml_file):
     """Load spectra using the new MzMLSpectrumFile class"""
@@ -167,9 +159,20 @@ def loadSpectra(mzml_file):
         with open(python_spec_file,"wb") as write_file:
             pickle.dump(spectra, write_file)
     else:
-        with open(python_spec_file,"rb") as read_file:
-            print("... from pickle")
-            spectra = pickle.load(read_file)
+        try:
+            with open(python_spec_file,"rb") as read_file:
+                print("... from pickle")
+                spectra = pickle.load(read_file)
+        except (AttributeError, ModuleNotFoundError, pickle.UnpicklingError) as e:
+            # Handle legacy pickle files that reference old class names or are corrupted
+            if any(name in str(e) for name in ["SpectrumFile", "Spectrum", "load_files"]) or "UnpicklingError" in str(type(e)):
+                print("... pickle file from older version, recreating from source")
+                os.remove(python_spec_file)
+                spectra = MzMLSpectrumFile(mzml_file)
+                with open(python_spec_file,"wb") as write_file:
+                    pickle.dump(spectra, write_file)
+            else:
+                raise e
             
     print(f"Loaded {len(spectra.ms1scans)} MS1 spectra")
     print(f"Loaded {len(spectra.ms2scans)} MS2 spectra")
