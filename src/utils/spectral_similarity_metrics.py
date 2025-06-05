@@ -227,10 +227,6 @@ def max_matched_residual(
     This function finds the largest residual value among the matched peaks
     for each precursor, which can indicate the worst-fit fragment.
     
-    NOTE: This function has a bug - it zips row indices with the full residuals array
-    instead of using indices to access specific residuals. This results in only
-    checking the first N residuals where N is the length of each precursor's indices.
-    
     Parameters
     ----------
     row_idx_split : List[np.ndarray]
@@ -251,18 +247,19 @@ def max_matched_residual(
     >>> max_residuals = max_matched_residual(row_idx_split, residuals)
     >>> max_residuals.shape
     (2,)
-    >>> # Due to the bug, it checks first 3 residuals for precursor 1
-    >>> # and first 2 residuals for precursor 2
-    >>> max_residuals[0]  # max of residuals[0:3] = max([0.1, 0.3, 0.2])
+    >>> # Precursor 1 uses indices [0, 1, 2] -> residuals [0.1, 0.3, 0.2]
+    >>> max_residuals[0]  # max([0.1, 0.3, 0.2])
     0.3
-    >>> max_residuals[1]  # max of residuals[0:2] = max([0.1, 0.3])  
-    0.3
+    >>> # Precursor 2 uses indices [3, 4] -> residuals [0.5, 0.4]
+    >>> max_residuals[1]  # max([0.5, 0.4])
+    0.5
     """
     n = len(row_idx_split)
     if n > 0:
-        max_matched_residuals = np.zeros(n)
+        max_matched_residuals = np.full(n, -np.inf)
         for j in range(n):
-            for (i, val) in zip(row_idx_split[j], residuals):
+            for i in row_idx_split[j]:
+                val = residuals[i]
                 if val > max_matched_residuals[j]:
                     max_matched_residuals[j] = val
         return max_matched_residuals
@@ -456,7 +453,7 @@ def get_manhattan_distance(
 
             if x_sums[j] > 0 and manhattan_distances[j] > 0:
                 manhattan_distances[j] = -np.log2(manhattan_distances[j] / x_sums[j])
-                fitted_spectral_contrast[j] = np.sqrt(uv_sum)/(np.sqrt(u2_sum) * np.sqrt(v2_sum) + 1e-10)
+                fitted_spectral_contrast[j] = uv_sum/(np.sqrt(u2_sum) * np.sqrt(v2_sum) + 1e-10)
             else:
                 # Handle edge cases
                 if x_sums[j] == 0:
@@ -464,7 +461,7 @@ def get_manhattan_distance(
                     fitted_spectral_contrast[j] = 0.0
                 else:  # manhattan_distances[j] == 0
                     manhattan_distances[j] = np.finfo(np.float32).min  # Perfect fit
-                    fitted_spectral_contrast[j] = np.sqrt(uv_sum)/(np.sqrt(u2_sum) * np.sqrt(v2_sum) + 1e-10)
+                    fitted_spectral_contrast[j] = uv_sum/(np.sqrt(u2_sum) * np.sqrt(v2_sum) + 1e-10)
                 
         return manhattan_distances, fitted_spectral_contrast
     else:

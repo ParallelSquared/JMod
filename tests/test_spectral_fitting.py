@@ -38,12 +38,26 @@ class TestGetScribe:
         prec_val_split = [np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0])]
         val_obs = np.array([1.5, 2.5, 3.5, 4.5, 5.5])
         
+        #Precursor 1 
+        #(1.0, 2.0, 3.0) -> sqrt(1.0), sqrt(2.0), sqrt(3.0)
+        #(1.5, 2.5, 3.5) -> sqrt(1.5), sqrt(2.5), sqrt(3.5)
+        #Precursor 2
+        #(4.0, 5.0) -> sqrt(4.0), sqrt(5.0)
+        #(4.5, 5.5) -> sqrt(4.5), sqrt(5.5)
+        # Calculate SCRIBE scores
+        # Should return array with 2 scores (one per precursor)
+        
         result = get_scribe(row_idx_split, col_idx_split, prec_val_split, val_obs)
         
         # Should return array with 2 scores (one per precursor)
         assert len(result) == 2
         assert isinstance(result, np.ndarray)
         assert np.all(result >= 0)  # SCRIBE scores should be non-negative
+
+        a_norm = np.sqrt(1.0) + np.sqrt(2.0) + np.sqrt(3.0)
+        i_norm = np.sqrt(1.5) + np.sqrt(2.5) + np.sqrt(3.5)
+        expected_val = ((np.sqrt(1.0)/a_norm) - (np.sqrt(1.5)/i_norm))**2 + ((np.sqrt(2.0)/a_norm) - (np.sqrt(2.5)/i_norm))**2 + ((np.sqrt(3.0)/a_norm) - (np.sqrt(3.5)/i_norm))**2 
+        assert np.abs(result[0] - expected_val) < 1e-10
     
     def test_get_scribe_empty_input(self):
         """Test SCRIBE calculation with empty input"""
@@ -97,7 +111,7 @@ class TestGetResiduals:
         decoy_sparse_row = [np.array([2])]
         decoy_sparse_col = [np.array([0])]
         val_obs = np.array([2.0, 4.0, 6.0])
-        coeffs = np.array([2.0])
+        coeffs = np.array([2.0, 1.0])
         ref_spec_offset = 0
         decoy_spec_offset = 1
         
@@ -106,11 +120,14 @@ class TestGetResiduals:
             decoy_sparse_val, decoy_sparse_row, decoy_sparse_col,
             val_obs, coeffs, ref_spec_offset, decoy_spec_offset
         )
-        
+        test_residuals = val_obs - np.array([2.0*1.0, 2.0*2.0, 1.0*3.0])
+        expected_y_pred = np.array([2.0*1.0, 2.0*2.0, 1.0*3.0])  # coeffs * values
         assert len(residuals) == len(val_obs)
         assert len(y_pred) == len(val_obs)
         assert isinstance(residuals, np.ndarray)
         assert isinstance(y_pred, np.ndarray)
+        assert np.allclose(expected_y_pred - y_pred, 0.0, atol=1e-10)
+        assert np.allclose(test_residuals - residuals, 0.0, atol=1e-10)
     
     def test_get_residuals_empty_decoy(self):
         """Test residual calculation with no decoy data"""
@@ -296,7 +313,7 @@ class TestGetManhattanDistance:
         # Perfect match should give very high Manhattan distance (low log value becomes high)
         assert len(manhattan_distances) == 1
         assert manhattan_distances[0] == np.finfo(np.float32).min  # Perfect fit case
-        assert spectral_contrasts[0] == 1.0  # Perfect correlation
+        assert np.isclose(spectral_contrasts[0], 1.0)  # Perfect correlation
     
     def test_get_manhattan_distance_zero_observed(self):
         """Test Manhattan distance calculation when observed values are zero"""
@@ -397,21 +414,18 @@ class TestMaxMatchedResidual:
     
     def test_max_matched_residual_basic(self):
         """Test finding maximum residual for each precursor"""
-        # Note: The function has a bug - it zips indices with the full residuals array
-        # instead of using indices to access specific residuals
-        row_idx_split = [np.array([0, 1, 2]), np.array([1, 2])]
+        row_idx_split = [np.array([0, 1, 2]), np.array([3, 4])]
         residuals = np.array([0.1, 0.3, 0.2, 0.5, 0.4])
         
         result = max_matched_residual(row_idx_split, residuals)
         
         assert len(result) == 2
-        # Due to the bug, it takes first len(row_idx_split[j]) elements from residuals
-        # For first precursor: zip([0,1,2], [0.1,0.3,0.2,0.5,0.4]) -> pairs (0,0.1), (1,0.3), (2,0.2)
+        # First precursor uses indices [0, 1, 2] -> residuals [0.1, 0.3, 0.2]
         # Max of values: 0.3
         assert result[0] == 0.3
-        # For second precursor: zip([1,2], [0.1,0.3,0.2,0.5,0.4]) -> pairs (1,0.1), (2,0.3)
-        # Max of values: 0.3
-        assert result[1] == 0.3
+        # Second precursor uses indices [3, 4] -> residuals [0.5, 0.4]
+        # Max of values: 0.5
+        assert result[1] == 0.5
     
     def test_max_matched_residual_empty_input(self):
         """Test with empty input"""
@@ -425,18 +439,18 @@ class TestMaxMatchedResidual:
     
     def test_max_matched_residual_negative_values(self):
         """Test with negative residual values"""
-        row_idx_split = [np.array([0, 1]), np.array([0, 1])]
+        row_idx_split = [np.array([0, 1]), np.array([2, 3])]
         residuals = np.array([-0.5, -0.1, -0.3, -0.2])
         
         result = max_matched_residual(row_idx_split, residuals)
         
         assert len(result) == 2
-        # Due to the bug in the function:
-        # First precursor: zip([0,1], [-0.5,-0.1,-0.3,-0.2]) -> pairs (0,-0.5), (1,-0.1)
+        # First precursor uses indices [0, 1] -> residuals [-0.5, -0.1]
         # Max of values: -0.1
         assert result[0] == -0.1
-        # Second precursor: same pairs, same max
-        assert result[1] == -0.1
+        # Second precursor uses indices [2, 3] -> residuals [-0.3, -0.2]
+        # Max of values: -0.2
+        assert result[1] == -0.2
     
     def test_max_matched_residual_single_precursor(self):
         """Test with single precursor"""
@@ -446,7 +460,7 @@ class TestMaxMatchedResidual:
         result = max_matched_residual(row_idx_split, residuals)
         
         assert len(result) == 1
-        # Due to the bug: zip([0,1,2], [0.2,0.1,0.3]) -> pairs (0,0.2), (1,0.1), (2,0.3)
+        # Single precursor uses indices [0, 1, 2] -> residuals [0.2, 0.1, 0.3]
         # Max of values: 0.3
         assert result[0] == 0.3
 
@@ -518,11 +532,11 @@ class TestAccuracy:
         
         np.testing.assert_allclose(manhattan_distances[0], expected_manhattan, rtol=1e-6)
         
-        # Check spectral contrast calculation
+        # Check spectral contrast calculation (cosine similarity)
         u2_sum = np.sum(y_pred[[0,1,2]]**2)
         v2_sum = np.sum(val_obs[[0,1,2]]**2)
         uv_sum = np.sum(y_pred[[0,1,2]] * val_obs[[0,1,2]])
-        expected_contrast = np.sqrt(uv_sum) / (np.sqrt(u2_sum) * np.sqrt(v2_sum))
+        expected_contrast = uv_sum / (np.sqrt(u2_sum) * np.sqrt(v2_sum))
         
         np.testing.assert_allclose(spectral_contrasts[0], expected_contrast, rtol=1e-6)
     
