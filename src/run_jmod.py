@@ -20,7 +20,7 @@ from .spectral_fitting import fit_to_lib2
 from .rt_alignment import MZRTfit, MZRTfit_timeplex
 from .utils.misc_functions import write_to_csv
 from .utils import iso_functions as iso_f
-from .mass_tags import tag_library
+from .mass_tags import tag_library, available_tags
 from .fdr_analysis import process_data
 
 def main():
@@ -98,7 +98,6 @@ def main():
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_timeplex_051425_01"
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
         
