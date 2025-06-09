@@ -23,7 +23,9 @@ from ..utils.misc_functions import (
     createTolWindows, window_width, feature_list_mz, 
     feature_list_rt, closest_ms1spec, closest_peak_diff
 )
+from ..utils.spectral_similarity_metrics import get_closest_ms1
 from ..utils.io.read_output import names
+from ..spectral_fitting_legacy import create_entries
 import src.config as config
 import ptinnls as sparse_nnls
 
@@ -274,9 +276,7 @@ def fit_spectrum_to_library(
     # Get MS1 spectrum if available
     ms1_spec = None
     if ms1_spectra is not None:
-        ms1_rt = np.array([i.RT for i in ms1_spectra])
-        closest_ms1_scan_idx = closest_ms1spec(prec_info.rt, ms1_rt)
-        ms1_spec = ms1_spectra[closest_ms1_scan_idx]
+        ms1_spec = get_closest_ms1(prec_info.rt, ms1_spectra)
     
     # Filter candidates by window
     window_idxs = filter_candidates_by_window(

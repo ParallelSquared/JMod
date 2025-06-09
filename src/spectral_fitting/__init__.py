@@ -25,7 +25,16 @@ from .types import (
     SpectralFitResult
 )
 
+from .fitting_core import fit_spectrum_to_library
+
+from .adapter import (
+    fit_to_lib,
+    fit_to_lib_decoy,
+    fit_to_lib2
+)
+
 __all__ = [
+    # Types
     'PrecursorInfo',
     'FittingParameters', 
     'PeptideSpectralData',
@@ -35,5 +44,11 @@ __all__ = [
     'StatisticalFeatures',
     'FragmentInfo',
     'SpectralFeatures',
-    'SpectralFitResult'
+    'SpectralFitResult',
+    # Core function
+    'fit_spectrum_to_library',
+    # Legacy compatibility
+    'fit_to_lib',
+    'fit_to_lib_decoy',
+    'fit_to_lib2'
 ]
