@@ -438,9 +438,11 @@ def fit_spectrum_to_library(
             matched_peak_indices=unique_row_idxs
         )
     
+    # Pass the original spectrum_matrix (with original indices) and the full processed_spectrum 
+    # to feature calculations, not the ranked/filtered versions
     features = calculate_all_features(
-        spectrum_matrix,
-        processed_spectrum,
+        spectrum_matrix,  # This has the original row indices
+        processed_spectrum,  # This is the full spectrum
         lib_coefficients,
         sparse_matrix,
         rt_mz,

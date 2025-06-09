@@ -295,7 +295,12 @@ def create_entries(centroid_breaks,
     norm_intensities = [M[:,1]/sum(M[:,1]) for M in pep_cand_list]
     lib_peaks_matched = [j%2==1 for j in pep_cand_loc]
     
-    row_indices_split = [np.int32(((i[j]+1)/2)-1) for i,j in zip(pep_cand_loc,lib_peaks_matched)] # NB these are floats
+    # Calculate row indices with bounds checking
+    max_peak_idx = len(centroid_breaks) // 2 - 1  # Maximum valid peak index
+    row_indices_split = [
+        np.int32(np.minimum(((i[j]+1)/2)-1, max_peak_idx)) 
+        for i,j in zip(pep_cand_loc,lib_peaks_matched)
+    ]
     num_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched]) #f1
     col_indices_split = [np.array([idx]*i,dtype=int) for idx,i in zip(range(len(pep_cand)),num_peaks_matched)] 
     values_split = [ints[i] for ints,i in zip(norm_intensities,lib_peaks_matched)]
