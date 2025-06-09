@@ -55,15 +55,20 @@ def calculate_basic_features(
     
     # Fraction of DIA intensity matched by each peptide
     frac_dia_intensity = np.array([
-        np.sum(dia_spectrum[data[0], 1]) / tic if len(data[0]) > 0 else 0
+        np.sum(dia_spectrum[data[0][data[0] < len(dia_spectrum)], 1]) / tic if len(data[0]) > 0 and tic > 0 else 0
         for data in peptide_data_split
     ])
     
     # Get unique matched peaks
     unique_row_idxs = np.unique(spectrum_matrix.row_indices)
     if len(unique_row_idxs) > 0:
-        dia_spec_int = dia_spectrum[unique_row_idxs, 1]
-        frac_int_matched_scalar = np.sum(dia_spec_int) / np.sum(dia_spectrum[:, 1])
+        # Filter indices to be within bounds
+        valid_idxs = unique_row_idxs[unique_row_idxs < len(dia_spectrum)]
+        if len(valid_idxs) > 0:
+            dia_spec_int = dia_spectrum[valid_idxs, 1]
+            frac_int_matched_scalar = np.sum(dia_spec_int) / np.sum(dia_spectrum[:, 1])
+        else:
+            frac_int_matched_scalar = 0
     else:
         frac_int_matched_scalar = 0
     
@@ -114,9 +119,11 @@ def calculate_similarity_metrics(
     
     for idx in range(len(spectrum_matrix.peptide_candidates)):
         row_idx, col_idx, values = spectrum_matrix.get_peptide_indices(idx)
-        row_indices_split.append(row_idx)
-        col_indices_split.append(col_idx)
-        values_split.append(values)
+        # Filter row indices to be within bounds of dia_spectrum
+        valid_mask = row_idx < len(dia_spectrum)
+        row_indices_split.append(row_idx[valid_mask])
+        col_indices_split.append(col_idx[valid_mask])
+        values_split.append(values[valid_mask])
     
     # SCRIBE scores
     scribe_scores = get_scribe(
@@ -240,9 +247,11 @@ def calculate_statistical_features(
     
     for idx in range(len(spectrum_matrix.peptide_candidates)):
         row_idx, col_idx, values = spectrum_matrix.get_peptide_indices(idx)
-        row_indices_split.append(row_idx)
-        col_indices_split.append(col_idx) 
-        values_split.append(values)
+        # Filter row indices to be within bounds
+        valid_mask = row_idx < len(dia_spectrum)
+        row_indices_split.append(row_idx[valid_mask])
+        col_indices_split.append(col_idx[valid_mask]) 
+        values_split.append(values[valid_mask])
     
     # Goodness of fit statistics
     gof_stats, max_unmatched_residuals, max_matched_residuals = gof_stat(

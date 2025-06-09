@@ -60,6 +60,9 @@ def create_spectrum_matrix(
     num_targets = len(target_peptide_candidates)
     is_decoy = np.zeros(num_targets, dtype=bool)
     
+    # Store original indices before any modifications
+    original_row_indices = all_row_indices.copy()
+    
     # Process decoy data if provided
     if (decoy_row_indices_split is not None and 
         decoy_col_indices_split is not None and 

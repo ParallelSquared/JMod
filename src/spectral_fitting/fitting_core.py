@@ -378,6 +378,8 @@ def fit_spectrum_to_library(
     
     # Get unique matched peak indices
     unique_row_idxs = np.unique(spectrum_matrix.row_indices)
+    # Filter to valid indices
+    unique_row_idxs = unique_row_idxs[unique_row_idxs < len(processed_spectrum)]
     dia_spec_int = processed_spectrum[unique_row_idxs, 1]
     
     # Add unmatched peaks
@@ -397,15 +399,44 @@ def fit_spectrum_to_library(
     elif sparse_matrix.shape[0] < len(dia_spec_int):
         dia_spec_int = dia_spec_int[:sparse_matrix.shape[0]]
     
+    # Convert to dense array if needed for ptinnls
+    if hasattr(sparse_matrix, 'toarray'):
+        sparse_matrix_dense = sparse_matrix.toarray()
+    else:
+        sparse_matrix_dense = sparse_matrix
+    
+    # Ensure dia_spec_int is a column vector
+    dia_spec_int = dia_spec_int.reshape(-1)
+    
     # Perform sparse NNLS fitting
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        fit_results = sparse_nnls.lsqnonneg(sparse_matrix, dia_spec_int, {"show_progress": False})
-        lib_coefficients = fit_results['x']
+        # Check if we have a valid matrix
+        if sparse_matrix_dense.shape[0] == 0 or sparse_matrix_dense.shape[1] == 0:
+            lib_coefficients = np.array([])
+        else:
+            fit_results = sparse_nnls.lsqnonneg(sparse_matrix_dense, dia_spec_int, {"show_progress": False})
+            lib_coefficients = fit_results['x']
+            # Convert to numpy array if it's a cvxopt matrix
+            if hasattr(lib_coefficients, '__array__'):
+                lib_coefficients = np.array(lib_coefficients).flatten()
+            else:
+                lib_coefficients = np.asarray(lib_coefficients).flatten()
     
     # Calculate all features
     ref_spec_offset = 0
     decoy_spec_offset = np.sum(~spectrum_matrix.is_decoy)
+    
+    # If no coefficients, return empty result
+    if len(lib_coefficients) == 0:
+        return SpectralFitResult(
+            features=[],
+            coefficients=lib_coefficients,
+            peptide_ids=spectrum_matrix.peptide_candidates,
+            is_decoy=spectrum_matrix.is_decoy,
+            sparse_matrix=sparse_matrix,
+            matched_peak_indices=unique_row_idxs
+        )
     
     features = calculate_all_features(
         spectrum_matrix,
@@ -415,7 +446,7 @@ def fit_spectrum_to_library(
         rt_mz,
         window_idxs,
         prec_info.rt,
-        np.concatenate([ref_ms1_error, decoy_ms1_error]) if decoy_pep_cand else ref_ms1_error,
+        np.concatenate([ref_ms1_error, decoy_ms1_error]) if len(decoy_pep_cand) > 0 else ref_ms1_error,
         ref_spec_offset,
         decoy_spec_offset,
         lib_peaks_matched,
