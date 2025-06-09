@@ -325,6 +325,7 @@ def fit_spectrum_to_library(
     decoy_spec_col_indices_split = []
     decoy_spec_values_split = []
     decoy_pep_cand = []
+    decoy_pep_cand_list = []
     decoy_ms1_error = np.array([])
     decoy_lib_peaks_matched = []
     
@@ -459,8 +460,11 @@ def fit_spectrum_to_library(
     
     # Combine with decoy fragments if present
     all_lib_peaks_matched = lib_peaks_matched.copy()
+    all_pep_cand_list = ref_pep_cand_list.copy()
     if include_decoys and len(decoy_pep_cand) > 0:
         all_lib_peaks_matched.extend(decoy_lib_peaks_matched)
+        if 'decoy_pep_cand_list' in locals():
+            all_pep_cand_list.extend(decoy_pep_cand_list)
         # For decoys, we need to get fragment info from the original (non-decoy) peptides
         for pep_id in decoy_pep_cand:
             # Remove "Decoy_" prefix to get original peptide ID
@@ -500,7 +504,8 @@ def fit_spectrum_to_library(
         decoy_spec_offset,
         all_lib_peaks_matched,
         prec_frags,
-        ordered_frags
+        ordered_frags,
+        all_pep_cand_list
     )
     
     return SpectralFitResult(

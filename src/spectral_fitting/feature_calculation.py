@@ -312,7 +312,8 @@ def calculate_fragment_features(
     dia_spectrum: np.ndarray,
     lib_peaks_matched: List[np.ndarray],
     prec_frags: Optional[List[Dict[str, Any]]] = None,
-    ordered_frags: Optional[List[List[str]]] = None
+    ordered_frags: Optional[List[List[str]]] = None,
+    pep_cand_list: Optional[List[np.ndarray]] = None
 ) -> FragmentInfo:
     """
     Calculate fragment-level features.
@@ -323,6 +324,7 @@ def calculate_fragment_features(
         lib_peaks_matched: Boolean arrays of matched library peaks
         prec_frags: Fragment information dictionaries
         ordered_frags: Ordered fragment names
+        pep_cand_list: Original peptide candidate spectra (optional)
         
     Returns:
         FragmentInfo containing hyperscores, b/y counts, etc.
@@ -390,7 +392,25 @@ def calculate_fragment_features(
                 # For now, append empty lists
                 frag_errors.append([])
                 frag_mz.append([])
-                frag_int.append(values[matched] if hasattr(matched, '__len__') else [])
+                
+                # Get fragment intensities from original peptide candidate list if available
+                if pep_cand_list and idx < len(pep_cand_list) and hasattr(matched, '__len__'):
+                    # Use original peptide spectrum intensities
+                    pep_spectrum = pep_cand_list[idx]
+                    if len(pep_spectrum) > 0 and pep_spectrum.shape[1] >= 2:
+                        # Extract intensities for matched peaks
+                        if len(matched) <= pep_spectrum.shape[0]:
+                            frag_int.append(pep_spectrum[:len(matched), 1][matched])
+                        else:
+                            frag_int.append([])
+                    else:
+                        frag_int.append([])
+                else:
+                    # Fallback to using values from spectrum matrix
+                    if hasattr(matched, '__len__') and len(matched) <= len(values):
+                        frag_int.append(values[:len(matched)][matched])
+                    else:
+                        frag_int.append([])
                 
                 # Observed intensities from DIA spectrum
                 valid_row_indices = row_indices[row_indices < len(dia_spectrum)]
@@ -451,7 +471,8 @@ def calculate_all_features(
     decoy_spec_offset: int = 0,
     lib_peaks_matched: Optional[List[np.ndarray]] = None,
     prec_frags: Optional[List[Dict[str, Any]]] = None,
-    ordered_frags: Optional[List[List[str]]] = None
+    ordered_frags: Optional[List[List[str]]] = None,
+    pep_cand_list: Optional[List[np.ndarray]] = None
 ) -> List[SpectralFeatures]:
     """
     Calculate all spectral features for each peptide.
@@ -472,6 +493,7 @@ def calculate_all_features(
         lib_peaks_matched: Matched library peaks
         prec_frags: Fragment information
         ordered_frags: Ordered fragment names
+        pep_cand_list: Original peptide candidate spectra
         
     Returns:
         List of SpectralFeatures for each peptide
@@ -492,7 +514,7 @@ def calculate_all_features(
     )
     
     fragment_info = calculate_fragment_features(
-        spectrum_matrix, dia_spectrum, lib_peaks_matched or [], prec_frags, ordered_frags
+        spectrum_matrix, dia_spectrum, lib_peaks_matched or [], prec_frags, ordered_frags, pep_cand_list
     )
     
     # RT and m/z errors
