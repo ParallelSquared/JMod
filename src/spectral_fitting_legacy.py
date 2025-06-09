@@ -296,9 +296,10 @@ def create_entries(centroid_breaks,
     lib_peaks_matched = [j%2==1 for j in pep_cand_loc]
     
     # Calculate row indices with bounds checking
-    max_peak_idx = len(centroid_breaks) // 2 - 1  # Maximum valid peak index
+    # searchsorted can return values up to len(centroid_breaks)
+    # When converted to peak indices, this could exceed the valid range
     row_indices_split = [
-        np.int32(np.minimum(((i[j]+1)/2)-1, max_peak_idx)) 
+        np.array([np.int32(min(((idx+1)/2)-1, (len(centroid_breaks)//2)-1)) for idx in i[j]], dtype=np.int32)
         for i,j in zip(pep_cand_loc,lib_peaks_matched)
     ]
     num_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched]) #f1

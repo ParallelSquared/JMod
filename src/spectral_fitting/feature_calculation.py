@@ -147,6 +147,12 @@ def calculate_similarity_metrics(
     
     for idx, is_decoy in enumerate(spectrum_matrix.is_decoy):
         row_idx, col_idx, values = spectrum_matrix.get_peptide_indices(idx)
+        # Filter out indices that are out of bounds
+        valid_mask = row_idx < len(dia_spectrum)
+        row_idx = row_idx[valid_mask]
+        col_idx = col_idx[valid_mask]
+        values = values[valid_mask]
+        
         if is_decoy and decoy_matrix is not None:
             decoy_row_split.append(row_idx)
             decoy_col_split.append(col_idx)
