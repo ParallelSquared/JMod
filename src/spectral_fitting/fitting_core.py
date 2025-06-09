@@ -321,10 +321,11 @@ def fit_spectrum_to_library(
     )
     
     # Process decoy peptides if requested
-    decoy_spec_row_indices_split = None
-    decoy_spec_col_indices_split = None
-    decoy_spec_values_split = None
-    decoy_pep_cand = None
+    decoy_spec_row_indices_split = []
+    decoy_spec_col_indices_split = []
+    decoy_spec_values_split = []
+    decoy_pep_cand = []
+    decoy_ms1_error = np.array([])
     
     if include_decoys and decoy_library is not None:
         # Create decoy candidates
@@ -365,13 +366,13 @@ def fit_spectrum_to_library(
     )
     
     # Handle no matches case
-    if len(spectrum_matrix.row_indices) == 0:
+    if len(spectrum_matrix.row_indices) == 0 or len(ref_pep_cand) == 0:
         return SpectralFitResult(
             features=[],
             coefficients=np.array([]),
-            peptide_ids=spectrum_matrix.peptide_candidates,
-            is_decoy=spectrum_matrix.is_decoy,
-            sparse_matrix=sparse.coo_matrix((0, 0)),
+            peptide_ids=spectrum_matrix.peptide_candidates if len(spectrum_matrix.peptide_candidates) > 0 else [],
+            is_decoy=spectrum_matrix.is_decoy if len(spectrum_matrix.is_decoy) > 0 else np.array([], dtype=bool),
+            sparse_matrix=sparse.coo_matrix((1, 1)),  # Avoid empty matrix
             matched_peak_indices=np.array([])
         )
     
@@ -390,10 +391,17 @@ def fit_spectrum_to_library(
         spectrum_matrix, dia_spec_int
     )
     
+    # Ensure dia_spec_int is the right length for the sparse matrix
+    if sparse_matrix.shape[0] > len(dia_spec_int):
+        dia_spec_int = np.append(dia_spec_int, [0] * (sparse_matrix.shape[0] - len(dia_spec_int)))
+    elif sparse_matrix.shape[0] < len(dia_spec_int):
+        dia_spec_int = dia_spec_int[:sparse_matrix.shape[0]]
+    
     # Perform sparse NNLS fitting
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        lib_coefficients = sparse_nnls.nnls(sparse_matrix, dia_spec_int)[0]
+        fit_results = sparse_nnls.lsqnonneg(sparse_matrix, dia_spec_int, {"show_progress": False})
+        lib_coefficients = fit_results['x']
     
     # Calculate all features
     ref_spec_offset = 0

@@ -186,15 +186,29 @@ def rank_and_create_sparse_matrix(
     Returns:
         Sparse matrix for fitting and updated DIA spectrum intensities
     """
+    # Handle empty matrix case
+    if len(spectrum_matrix.row_indices) == 0:
+        # Create empty matrix with appropriate shape
+        n_rows = len(dia_spec_int) + 1  # +1 for unmatched peaks row
+        n_cols = len(spectrum_matrix.peptide_candidates) if spectrum_matrix.peptide_candidates else 1
+        sparse_matrix = sparse.coo_matrix((n_rows, n_cols))
+        dia_spec_int = np.append(dia_spec_int, [0])
+        return sparse_matrix, dia_spec_int
+    
     # Rank row indices to handle missing rows
     ranked_row_indices = stats.rankdata(spectrum_matrix.row_indices, method="dense").astype(int) - 1
     
-    # Add zero intensity for unmatched library peaks
-    dia_spec_int = np.append(dia_spec_int, [0])
+    # Calculate matrix dimensions
+    n_rows = max(ranked_row_indices) + 2 if len(ranked_row_indices) > 0 else 1  # +1 for 0-indexing, +1 for unmatched peaks
+    n_cols = max(spectrum_matrix.col_indices) + 1 if len(spectrum_matrix.col_indices) > 0 else 1
     
-    # Create sparse matrix
+    # Add zero intensity for unmatched library peaks  
+    dia_spec_int = np.append(dia_spec_int, [0] * (n_rows - len(dia_spec_int)))
+    
+    # Create sparse matrix with explicit shape
     sparse_matrix = sparse.coo_matrix(
-        (spectrum_matrix.values, (ranked_row_indices, spectrum_matrix.col_indices))
+        (spectrum_matrix.values, (ranked_row_indices, spectrum_matrix.col_indices)),
+        shape=(n_rows, n_cols)
     )
     
     return sparse_matrix, dia_spec_int

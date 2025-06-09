@@ -237,7 +237,8 @@ def fit_to_lib(
         rt_tol=rt_tol,
         ms1_tol=ms1_tol,
         mz_tol=mz_tol,
-        include_decoys=False  # fit_to_lib doesn't include decoys
+        include_decoys=False,  # fit_to_lib doesn't include decoys
+        decoy_library=None
     )
     
     # Get MS1 scan number
