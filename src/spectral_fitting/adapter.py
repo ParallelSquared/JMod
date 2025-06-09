@@ -125,25 +125,35 @@ def _convert_result_to_legacy_format(
         
         # Extract fragment information if available
         if hasattr(features.fragment_info, 'frag_names') and features.fragment_info.frag_names:
-            if coeff_idx < len(features.fragment_info.frag_names) and features.fragment_info.frag_names[coeff_idx]:
-                frag_names_str = ";".join(map(str, features.fragment_info.frag_names[coeff_idx]))
+            if coeff_idx < len(features.fragment_info.frag_names):
+                frag_data = features.fragment_info.frag_names[coeff_idx]
+                if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
+                    frag_names_str = ";".join(map(str, frag_data))
             
         if hasattr(features.fragment_info, 'frag_errors') and features.fragment_info.frag_errors:
-            if coeff_idx < len(features.fragment_info.frag_errors) and features.fragment_info.frag_errors[coeff_idx]:
-                frag_errors_str = ";".join(map(str, features.fragment_info.frag_errors[coeff_idx]))
+            if coeff_idx < len(features.fragment_info.frag_errors):
+                frag_data = features.fragment_info.frag_errors[coeff_idx]
+                if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
+                    frag_errors_str = ";".join(map(str, frag_data))
                 
         if hasattr(features.fragment_info, 'frag_mz') and features.fragment_info.frag_mz:
-            if coeff_idx < len(features.fragment_info.frag_mz) and features.fragment_info.frag_mz[coeff_idx]:
-                frag_mz_str = ";".join(map(str, features.fragment_info.frag_mz[coeff_idx]))
+            if coeff_idx < len(features.fragment_info.frag_mz):
+                frag_data = features.fragment_info.frag_mz[coeff_idx]
+                if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
+                    frag_mz_str = ";".join(map(str, frag_data))
                 
         # Check if fragment_info has frag_int and obs_int attributes (not in the current types definition)
         if hasattr(features.fragment_info, 'frag_int'):
-            if coeff_idx < len(features.fragment_info.frag_int) and features.fragment_info.frag_int[coeff_idx]:
-                frag_int_str = ";".join(map(str, features.fragment_info.frag_int[coeff_idx]))
+            if coeff_idx < len(features.fragment_info.frag_int):
+                frag_data = features.fragment_info.frag_int[coeff_idx]
+                if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
+                    frag_int_str = ";".join(map(str, frag_data))
                 
         if hasattr(features.fragment_info, 'obs_int'):
-            if coeff_idx < len(features.fragment_info.obs_int) and features.fragment_info.obs_int[coeff_idx]:
-                obs_int_str = ";".join(map(str, features.fragment_info.obs_int[coeff_idx]))
+            if coeff_idx < len(features.fragment_info.obs_int):
+                obs_data = features.fragment_info.obs_int[coeff_idx]
+                if isinstance(obs_data, (list, np.ndarray)) and len(obs_data) > 0:
+                    obs_int_str = ";".join(map(str, obs_data))
         
         frag_info = [frag_names_str, frag_errors_str, frag_mz_str, frag_int_str, obs_int_str, unique_frag_mz_str, unique_obs_int_str]
         
