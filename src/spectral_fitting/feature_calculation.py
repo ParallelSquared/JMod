@@ -309,6 +309,7 @@ def calculate_statistical_features(
 
 def calculate_fragment_features(
     spectrum_matrix: SpectrumMatrix,
+    dia_spectrum: np.ndarray,
     lib_peaks_matched: List[np.ndarray],
     prec_frags: Optional[List[Dict[str, Any]]] = None,
     ordered_frags: Optional[List[List[str]]] = None
@@ -318,6 +319,7 @@ def calculate_fragment_features(
     
     Args:
         spectrum_matrix: Unified spectrum matrix
+        dia_spectrum: DIA spectrum [mz, intensity]
         lib_peaks_matched: Boolean arrays of matched library peaks
         prec_frags: Fragment information dictionaries
         ordered_frags: Ordered fragment names
@@ -355,10 +357,53 @@ def calculate_fragment_features(
         y_counts = np.zeros(num_peptides)
         longest_y_ions = np.zeros(num_peptides)
     
-    # Fragment errors and m/z values (placeholder for now)
+    # Fragment errors and m/z values
     frag_errors = []
     frag_mz = []
     frag_names = []
+    frag_int = []
+    obs_int = []
+    
+    # Extract fragment information for each peptide
+    if lib_peaks_matched is not None and len(lib_peaks_matched) > 0:
+        # Get split data for each peptide
+        peptide_data_split = []
+        for idx in range(len(spectrum_matrix.peptide_candidates)):
+            row_idx, col_idx, values = spectrum_matrix.get_peptide_indices(idx)
+            peptide_data_split.append((row_idx, col_idx, values))
+        
+        # Process fragment information for each peptide
+        for idx in range(min(len(lib_peaks_matched), len(peptide_data_split))):
+            if idx < len(lib_peaks_matched):
+                matched = lib_peaks_matched[idx]
+                row_indices = peptide_data_split[idx][0]
+                values = peptide_data_split[idx][2]
+                
+                # Get matched fragments
+                if ordered_frags and idx < len(ordered_frags):
+                    matched_frag_names = [ordered_frags[idx][i] for i in range(len(ordered_frags[idx])) if i < len(matched) and matched[i]]
+                    frag_names.append(matched_frag_names)
+                else:
+                    frag_names.append([])
+                
+                # Fragment errors would need bin_centers from DIA spectrum processing
+                # For now, append empty lists
+                frag_errors.append([])
+                frag_mz.append([])
+                frag_int.append(values[matched] if hasattr(matched, '__len__') else [])
+                
+                # Observed intensities from DIA spectrum
+                valid_row_indices = row_indices[row_indices < len(dia_spectrum)]
+                if len(valid_row_indices) > 0:
+                    obs_int.append(dia_spectrum[valid_row_indices, 1])
+                else:
+                    obs_int.append([])
+            else:
+                frag_names.append([])
+                frag_errors.append([])
+                frag_mz.append([])
+                frag_int.append([])
+                obs_int.append([])
     
     return FragmentInfo(
         hyperscores=np.array(hyperscores),
@@ -367,7 +412,9 @@ def calculate_fragment_features(
         longest_y_ions=np.array(longest_y_ions),
         frag_errors=frag_errors,
         frag_mz=frag_mz,
-        frag_names=frag_names
+        frag_names=frag_names,
+        frag_int=frag_int,
+        obs_int=obs_int
     )
 
 
@@ -445,7 +492,7 @@ def calculate_all_features(
     )
     
     fragment_info = calculate_fragment_features(
-        spectrum_matrix, lib_peaks_matched or [], prec_frags, ordered_frags
+        spectrum_matrix, dia_spectrum, lib_peaks_matched or [], prec_frags, ordered_frags
     )
     
     # RT and m/z errors
@@ -486,7 +533,9 @@ def calculate_all_features(
                 longest_y_ions=fragment_info.longest_y_ions[idx:idx+1],
                 frag_errors=fragment_info.frag_errors[idx:idx+1] if idx < len(fragment_info.frag_errors) else [],
                 frag_mz=fragment_info.frag_mz[idx:idx+1] if idx < len(fragment_info.frag_mz) else [],
-                frag_names=fragment_info.frag_names[idx:idx+1] if idx < len(fragment_info.frag_names) else []
+                frag_names=fragment_info.frag_names[idx:idx+1] if idx < len(fragment_info.frag_names) else [],
+                frag_int=fragment_info.frag_int[idx:idx+1] if idx < len(fragment_info.frag_int) else [],
+                obs_int=fragment_info.obs_int[idx:idx+1] if idx < len(fragment_info.obs_int) else []
             ),
             ms1_error=ms1_errors[idx:idx+1] if idx < len(ms1_errors) else np.array([0]),
             rt_error=rt_errors[idx:idx+1] if idx < len(rt_errors) else np.array([0]),

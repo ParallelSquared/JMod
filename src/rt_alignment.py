@@ -157,6 +157,12 @@ def initstepfit(x,y,n_knots=2,z=None,k1=1):
     x=np.array(x)[x_exists]
     y=np.array(y)[x_exists]
     z=np.array(z)[x_exists]
+    
+    # Handle empty arrays
+    if len(y) == 0:
+        # Return identity function if no data
+        return lambda x_val: x_val
+    
     y_range = np.max(y)-np.min(y)
     x_range = np.max(x)-np.min(x)
     sorted_idxs = np.argsort(x)
@@ -193,7 +199,23 @@ def lowess_fit(x,y,frac=.2, it=3):
 
     # plt.scatter(x,y,s=1)
     
+    # Handle empty input arrays
+    if len(x) == 0 or len(y) == 0:
+        # Return identity function if no data
+        return lambda x_val: x_val
+    
+    # Handle case with too few points for lowess
+    if len(x) < 3:
+        # Return mean of y values as constant function
+        mean_y = np.mean(y)
+        return lambda x_val: np.full_like(x_val, mean_y) if hasattr(x_val, '__len__') else mean_y
+    
     lowess = sm.nonparametric.lowess(y, x, frac=frac,it=it)
+    
+    # Check if lowess returned empty result
+    if len(lowess) == 0:
+        # Return identity function
+        return lambda x_val: x_val
     
     # unpack the lowess smoothed points to their values
     lowess_x = list(zip(*lowess))[0]
@@ -751,6 +773,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
     frag_cosines_p = np.array([fragment_cor(output_df,i,fn="p") for i in range(len(output_df))])
+    
+    # Replace NaN values with 0 to avoid filtering out all data
+    frag_cosines = np.nan_to_num(frag_cosines, nan=0.0)
+    frag_cosines_p = np.nan_to_num(frag_cosines_p, nan=0.0)
+    
     frag_multiply = frag_cosines*frag_cosines_p
     # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
     output_df["frag_cosines"] = frag_cosines
@@ -1524,6 +1551,11 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
     frag_cosines_p = np.array([fragment_cor(output_df,i,fn="p") for i in range(len(output_df))])
+    
+    # Replace NaN values with 0 to avoid filtering out all data
+    frag_cosines = np.nan_to_num(frag_cosines, nan=0.0)
+    frag_cosines_p = np.nan_to_num(frag_cosines_p, nan=0.0)
+    
     frag_multiply = frag_cosines*frag_cosines_p
     # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
     output_df["frag_cosines"] = frag_cosines

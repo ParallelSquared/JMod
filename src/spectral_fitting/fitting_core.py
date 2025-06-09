@@ -326,6 +326,7 @@ def fit_spectrum_to_library(
     decoy_spec_values_split = []
     decoy_pep_cand = []
     decoy_ms1_error = np.array([])
+    decoy_lib_peaks_matched = []
     
     if include_decoys and decoy_library is not None:
         # Create decoy candidates
@@ -438,6 +439,52 @@ def fit_spectrum_to_library(
             matched_peak_indices=unique_row_idxs
         )
     
+    # Extract fragment information from library for feature calculation
+    prec_frags = []
+    ordered_frags = []
+    for pep_id in ref_pep_cand:
+        if pep_id in library:
+            if "frags" in library[pep_id]:
+                prec_frags.append(library[pep_id]["frags"])
+            else:
+                prec_frags.append({})
+                
+            if "ordered_frags" in library[pep_id]:
+                ordered_frags.append(library[pep_id]["ordered_frags"])
+            else:
+                ordered_frags.append([])
+        else:
+            prec_frags.append({})
+            ordered_frags.append([])
+    
+    # Combine with decoy fragments if present
+    all_lib_peaks_matched = lib_peaks_matched.copy()
+    if include_decoys and len(decoy_pep_cand) > 0:
+        all_lib_peaks_matched.extend(decoy_lib_peaks_matched)
+        # For decoys, we need to get fragment info from the original (non-decoy) peptides
+        for pep_id in decoy_pep_cand:
+            # Remove "Decoy_" prefix to get original peptide ID
+            if isinstance(pep_id, str) and pep_id.startswith("Decoy_"):
+                orig_id = pep_id[6:]
+            elif isinstance(pep_id, tuple) and pep_id[0].startswith("Decoy_"):
+                orig_id = (pep_id[0][6:], *pep_id[1:])
+            else:
+                orig_id = pep_id
+                
+            if orig_id in decoy_library:
+                if "frags" in decoy_library[orig_id]:
+                    prec_frags.append(decoy_library[orig_id]["frags"])
+                else:
+                    prec_frags.append({})
+                    
+                if "ordered_frags" in decoy_library[orig_id]:
+                    ordered_frags.append(decoy_library[orig_id]["ordered_frags"])
+                else:
+                    ordered_frags.append([])
+            else:
+                prec_frags.append({})
+                ordered_frags.append([])
+    
     # Pass the original spectrum_matrix (with original indices) and the full processed_spectrum 
     # to feature calculations, not the ranked/filtered versions
     features = calculate_all_features(
@@ -451,9 +498,9 @@ def fit_spectrum_to_library(
         np.concatenate([ref_ms1_error, decoy_ms1_error]) if len(decoy_pep_cand) > 0 else ref_ms1_error,
         ref_spec_offset,
         decoy_spec_offset,
-        lib_peaks_matched,
-        None,  # prec_frags
-        None   # ordered_frags
+        all_lib_peaks_matched,
+        prec_frags,
+        ordered_frags
     )
     
     return SpectralFitResult(

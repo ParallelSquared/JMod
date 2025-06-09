@@ -114,22 +114,38 @@ def _convert_result_to_legacy_format(
         # The 7 fragment-related fields are:
         # frag_names, frag_errors, frag_mz, frag_int, obs_int, unique_frag_mz, unique_obs_int
         
-        # For now, populate with proper default values that won't break downstream parsing
-        # These should be semicolon-delimited strings of values, not empty strings
-        frag_names = ""
-        frag_errors = "0"  # Also needs to be a valid float string since it's parsed by unstring_floats
-        frag_mz = "0"  # Same for these numeric fields
-        frag_int = "0"
-        obs_int = "0"  # This needs to be a valid float string, not empty
-        unique_frag_mz = "0"
-        unique_obs_int = "0"  # This also needs to be a valid float string
+        # Initialize with defaults
+        frag_names_str = ""
+        frag_errors_str = "0"
+        frag_mz_str = "0"
+        frag_int_str = "0"
+        obs_int_str = "0"
+        unique_frag_mz_str = "0"
+        unique_obs_int_str = "0"
         
-        # TODO: Properly extract these from features.fragment_info when available
+        # Extract fragment information if available
         if hasattr(features.fragment_info, 'frag_names') and features.fragment_info.frag_names:
-            if coeff_idx < len(features.fragment_info.frag_names):
-                frag_names = ";".join(features.fragment_info.frag_names[coeff_idx])
+            if coeff_idx < len(features.fragment_info.frag_names) and features.fragment_info.frag_names[coeff_idx]:
+                frag_names_str = ";".join(map(str, features.fragment_info.frag_names[coeff_idx]))
+            
+        if hasattr(features.fragment_info, 'frag_errors') and features.fragment_info.frag_errors:
+            if coeff_idx < len(features.fragment_info.frag_errors) and features.fragment_info.frag_errors[coeff_idx]:
+                frag_errors_str = ";".join(map(str, features.fragment_info.frag_errors[coeff_idx]))
+                
+        if hasattr(features.fragment_info, 'frag_mz') and features.fragment_info.frag_mz:
+            if coeff_idx < len(features.fragment_info.frag_mz) and features.fragment_info.frag_mz[coeff_idx]:
+                frag_mz_str = ";".join(map(str, features.fragment_info.frag_mz[coeff_idx]))
+                
+        # Check if fragment_info has frag_int and obs_int attributes (not in the current types definition)
+        if hasattr(features.fragment_info, 'frag_int'):
+            if coeff_idx < len(features.fragment_info.frag_int) and features.fragment_info.frag_int[coeff_idx]:
+                frag_int_str = ";".join(map(str, features.fragment_info.frag_int[coeff_idx]))
+                
+        if hasattr(features.fragment_info, 'obs_int'):
+            if coeff_idx < len(features.fragment_info.obs_int) and features.fragment_info.obs_int[coeff_idx]:
+                obs_int_str = ";".join(map(str, features.fragment_info.obs_int[coeff_idx]))
         
-        frag_info = [frag_names, frag_errors, frag_mz, frag_int, obs_int, unique_frag_mz, unique_obs_int]
+        frag_info = [frag_names_str, frag_errors_str, frag_mz_str, frag_int_str, obs_int_str, unique_frag_mz_str, unique_obs_int_str]
         
         # Handle protein column
         if return_prot:

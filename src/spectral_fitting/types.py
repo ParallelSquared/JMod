@@ -144,9 +144,11 @@ class FragmentInfo(NamedTuple):
     b_counts: np.ndarray
     y_counts: np.ndarray
     longest_y_ions: np.ndarray
-    frag_errors: List[np.ndarray]
-    frag_mz: List[np.ndarray]
-    frag_names: List[List[str]]
+    frag_errors: List[Any]
+    frag_mz: List[Any]
+    frag_names: List[Any]
+    frag_int: List[Any]  # Fragment intensities from library
+    obs_int: List[Any]   # Observed intensities from DIA spectrum
     
 
 class SpectralFeatures(NamedTuple):
