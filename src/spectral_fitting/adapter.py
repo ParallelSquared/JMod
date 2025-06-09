@@ -110,8 +110,26 @@ def _convert_result_to_legacy_format(
             features.precursor_mz
         ])
         
-        # Format fragment information (placeholder for now)
-        frag_info = ["", "", "", "", "", "", ""]  # 7 fragment-related fields
+        # Format fragment information
+        # The 7 fragment-related fields are:
+        # frag_names, frag_errors, frag_mz, frag_int, obs_int, unique_frag_mz, unique_obs_int
+        
+        # For now, populate with proper default values that won't break downstream parsing
+        # These should be semicolon-delimited strings of values, not empty strings
+        frag_names = ""
+        frag_errors = "0"  # Also needs to be a valid float string since it's parsed by unstring_floats
+        frag_mz = "0"  # Same for these numeric fields
+        frag_int = "0"
+        obs_int = "0"  # This needs to be a valid float string, not empty
+        unique_frag_mz = "0"
+        unique_obs_int = "0"  # This also needs to be a valid float string
+        
+        # TODO: Properly extract these from features.fragment_info when available
+        if hasattr(features.fragment_info, 'frag_names') and features.fragment_info.frag_names:
+            if coeff_idx < len(features.fragment_info.frag_names):
+                frag_names = ";".join(features.fragment_info.frag_names[coeff_idx])
+        
+        frag_info = [frag_names, frag_errors, frag_mz, frag_int, obs_int, unique_frag_mz, unique_obs_int]
         
         # Handle protein column
         if return_prot:
