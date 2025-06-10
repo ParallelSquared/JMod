@@ -2,10 +2,15 @@
 
 This directory contains utility functions and helper modules used throughout JMod.
 
+## Navigation
+- [← Back to Main Documentation](../../CLAUDE.md)
+- [→ Spectral Fitting Module](../spectral_fitting/CLAUDE.md)
+- [→ I/O Subdirectory](io/CLAUDE.md)
+
 ## Overview
 
 The utils module provides low-level functionality for:
-- File I/O operations
+- File I/O operations (see [I/O subdirectory](io/CLAUDE.md))
 - Mathematical calculations
 - Spectral processing utilities
 - Peptide parsing and modification handling
@@ -42,18 +47,10 @@ The utils module provides low-level functionality for:
 
 ### I/O Subdirectory (io/)
 
-1. **load_files.py**: File loading utilities
-   - `MzMLSpectrumFile`: Load mzML format files
-   - `ArrowSpectrumFile`: Load Apache Arrow format files
-   - Abstract base classes for extensibility
-
-2. **load_fasta.py**: FASTA file handling
-   - Load protein sequences
-   - Parse FASTA headers
-
-3. **read_output.py**: Output file utilities
-   - Column name definitions (`names` list)
-   - Result file parsing
+See [I/O Module Documentation](io/CLAUDE.md) for detailed information about:
+- File loading utilities (mzML, Arrow formats)
+- FASTA file handling
+- Output file management
 
 ## Key Functions and Usage
 
@@ -129,3 +126,14 @@ else:
 3. **Improve error handling**: More informative error messages
 4. **Type hints**: Add comprehensive type annotations
 5. **Vectorize operations**: Replace loops with vectorized NumPy operations where possible
+
+## Used By
+
+- [Spectral Fitting Module](../spectral_fitting/CLAUDE.md): Uses fragment correlation, NNLS solver, similarity metrics
+- [RT Alignment](../rt_alignment.py): Uses statistical functions, lowess fitting
+- [Post Processing](../post_process.py): Uses output utilities, misc functions
+
+## Related Documentation
+- [Main JMod Documentation](../../CLAUDE.md)
+- [Spectral Fitting Module](../spectral_fitting/CLAUDE.md)
+- [I/O Subdirectory](io/CLAUDE.md)

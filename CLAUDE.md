@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 JMod (Joint Modeling) is an open-source proteomics software that increases mass spectrometry throughput by supporting multiplexing in mass and time domains. It performs joint modeling of mass spectra to deconvolve overlapping isotopic envelopes in both MS1 and MS2 space.
 
+## Documentation Structure
+
+- **Main Documentation** (this file): Overview, commands, architecture
+- **[Spectral Fitting Module](src/spectral_fitting/CLAUDE.md)**: Core matching algorithm implementation
+- **[Utils Module](src/utils/CLAUDE.md)**: Utility functions and helpers
+- **[I/O Module](src/utils/io/CLAUDE.md)**: File loading and data handling
+
 ## Common Development Commands
 
 ### Running JMod Analysis
@@ -64,11 +71,19 @@ mypy src/
 5. **Post Processing** (`post_process.py`): Final result compilation and output generation
 
 ### Key Module Relationships
-- `src/utils/`: Low-level utilities used throughout the pipeline
+- **[src/spectral_fitting/](src/spectral_fitting/CLAUDE.md)**: Refactored spectral matching implementation
+  - Core algorithm for spectrum-to-library matching
+  - Feature calculation and scoring
+  - Backward compatibility adapter
+- **[src/utils/](src/utils/CLAUDE.md)**: Low-level utilities used throughout the pipeline
   - `iso_functions.py`: Isotope pattern calculations critical for deconvolution
   - `parse_peptides.py`: Peptide sequence parsing with modification handling
   - `sparse_nnls.py`: Mathematical solver for spectral deconvolution
-  - `spectral_similarity_metrics.py`: Spectral similarity scoring functions (SCRIBE, Manhattan distance, goodness-of-fit)
+  - `spectral_similarity_metrics.py`: Spectral similarity scoring functions
+- **[src/utils/io/](src/utils/io/CLAUDE.md)**: Input/output operations
+  - `load_files.py`: mzML and Arrow file loading
+  - `read_output.py`: Result file handling
+  - `load_fasta.py`: Protein sequence loading
 - `src/mass_tags.py`: Tag library definitions for different labeling methods (mTRAQ, diethyl, etc.)
 - `src/models/spec_lib/`: Spectral library handling and indexing
 - `rt_models/`: Pre-trained TensorFlow models for RT prediction

@@ -2,6 +2,11 @@
 
 This directory contains the refactored spectral fitting implementation for JMod.
 
+## Navigation
+- [← Back to Main Documentation](../../CLAUDE.md)
+- [→ Utils Module](../utils/CLAUDE.md)
+- [→ I/O Module](../utils/io/CLAUDE.md)
+
 ## Overview
 
 The spectral fitting module performs spectrum-to-library matching with isotope deconvolution. It has been refactored from the original monolithic implementation to a modular architecture with clear separation of concerns.
@@ -99,4 +104,13 @@ else:
 
 - NumPy for numerical operations
 - SciPy for sparse matrices and NNLS solving
-- Internal modules: utils.misc_functions, utils.sparse_nnls
+- Internal modules:
+  - [utils.misc_functions](../utils/CLAUDE.md#misс_functionspy): Fragment correlation, string conversions
+  - [utils.sparse_nnls](../utils/CLAUDE.md#sparse_nnlspy): NNLS solver
+  - [utils.spectral_similarity_metrics](../utils/CLAUDE.md#spectral_similarity_metricspy): Similarity calculations
+  - [utils.io.read_output](../utils/io/CLAUDE.md#read_outputpy): Column definitions
+
+## Related Documentation
+- [Main JMod Documentation](../../CLAUDE.md)
+- [Utils Module Documentation](../utils/CLAUDE.md)
+- [I/O Module Documentation](../utils/io/CLAUDE.md)
