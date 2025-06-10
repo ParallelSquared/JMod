@@ -537,7 +537,19 @@ def cosim(x: npt.NDArray[np.float64],y: npt.NDArray[np.float64]) -> np.float64:
     assert len(x)==len(y)
     x = np.squeeze(x)
     y = np.squeeze(y)
-    return np.dot(x,y)/(np.sqrt(np.sum(np.power(x,2)))*np.sqrt(np.sum(np.power(y,2))))
+    
+    # Handle edge cases
+    if len(x) == 0 or len(y) == 0:
+        return 0.0
+    
+    x_norm = np.sqrt(np.sum(np.power(x,2)))
+    y_norm = np.sqrt(np.sum(np.power(y,2)))
+    
+    # Handle zero vectors
+    if x_norm == 0 or y_norm == 0:
+        return 0.0
+        
+    return np.dot(x,y)/(x_norm * y_norm)
 
 
 
@@ -814,9 +826,25 @@ def fragment_cor(df: pd.core.frame.DataFrame,didx: int,fn: str="cos") -> np.floa
     # include_frags = {i:j for i,j in d2.items() if j>.05}
     shared_d = set(d1).intersection(set(d2))
     # shared_d = {i for i in shared_d for j in include_frags if j  in i}
+    
+    # Handle case where there are no shared fragments
+    if len(shared_d) == 0:
+        return 0.0
+    
+    # Extract values for shared fragments
+    x = np.array([d1[i] for i in shared_d])
+    y = np.array([d2[i] for i in shared_d])
+    
+    # Handle case where all values are zero
+    if np.all(x == 0) or np.all(y == 0):
+        return 0.0
+        
     if fn=="cos":
-        return cosim(np.array([d1[i] for i in shared_d]),np.array([d2[i] for i in shared_d]))
+        return cosim(x, y)
     else: 
-        return np_pearson_cor(np.array([d1[i] for i in shared_d]),np.array([d2[i] for i in shared_d])).statistic
+        # Handle case where there's no variance
+        if np.var(x) == 0 or np.var(y) == 0:
+            return 0.0
+        return np_pearson_cor(x, y).statistic
     
     

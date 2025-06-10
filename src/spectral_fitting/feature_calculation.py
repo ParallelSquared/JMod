@@ -393,16 +393,20 @@ def calculate_fragment_features(
                 frag_errors.append([])
                 frag_mz.append([])
                 
-                # Get fragment intensities from original peptide candidate list if available
-                if pep_cand_list and idx < len(pep_cand_list) and hasattr(matched, '__len__'):
-                    # Use original peptide spectrum intensities
-                    pep_spectrum = pep_cand_list[idx]
-                    if len(pep_spectrum) > 0 and pep_spectrum.shape[1] >= 2:
-                        # Extract intensities for matched peaks
-                        if len(matched) <= pep_spectrum.shape[0]:
-                            frag_int.append(pep_spectrum[:len(matched), 1][matched])
-                        else:
-                            frag_int.append([])
+                # Get fragment intensities from prec_frags dictionary if available
+                if prec_frags and idx < len(prec_frags) and ordered_frags and idx < len(ordered_frags):
+                    # Extract intensities for matched fragments
+                    frag_dict = prec_frags[idx]
+                    frag_order = ordered_frags[idx]
+                    if frag_dict and frag_order and len(matched_frag_names) > 0:
+                        # Get intensities for matched fragments
+                        matched_intensities = []
+                        for frag_name in matched_frag_names:
+                            if frag_name in frag_dict:
+                                matched_intensities.append(frag_dict[frag_name])
+                            else:
+                                matched_intensities.append(0.0)
+                        frag_int.append(matched_intensities)
                     else:
                         frag_int.append([])
                 else:
