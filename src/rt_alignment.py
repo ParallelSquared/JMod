@@ -1023,12 +1023,27 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
         emp_data = np.append(emp_data,limit)
-        emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
-        emp_cdf_auc = auc(emp_data,emp_p)
+        
+        # Handle case where we have too few data points for AUC calculation
+        if len(emp_data) < 2:
+            emp_data = np.array([0.0, limit])
+            emp_p = np.array([0.0, 1.0])
+            emp_cdf_auc = 0.5 * limit
+        else:
+            emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
+            emp_cdf_auc = auc(emp_data,emp_p)
+            
         pred_data = np.sort(np.abs(all_pred_diffs)[np.abs(all_pred_diffs) < limit])
         pred_data = np.append(pred_data,limit)
-        pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
-        pred_cdf_auc = auc(pred_data,pred_p)
+        
+        # Handle case where we have too few data points for AUC calculation
+        if len(pred_data) < 2:
+            pred_data = np.array([0.0, limit])
+            pred_p = np.array([0.0, 1.0])
+            pred_cdf_auc = 0.5 * limit
+        else:
+            pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
+            pred_cdf_auc = auc(pred_data,pred_p)
         
         
         
@@ -1106,8 +1121,16 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
         emp_data = np.append(emp_data,limit)
-        emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
-        emp_cdf_auc = auc(emp_data,emp_p)
+        
+        # Handle case where we have too few data points for AUC calculation
+        if len(emp_data) < 2:
+            # If only 1 point, add a second point to enable AUC calculation
+            emp_data = np.array([0.0, limit])
+            emp_p = np.array([0.0, 1.0])
+            emp_cdf_auc = 0.5 * limit  # Area of triangle
+        else:
+            emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
+            emp_cdf_auc = auc(emp_data,emp_p)
         boundary = fit_errors(all_emp_diffs,limit,percentile)
     
     new_lib_rt = np.array([updatedLibrary[k]["iRT"] for k in id_keys])
