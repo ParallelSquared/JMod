@@ -19,7 +19,11 @@ from ..utils.spectral_similarity_metrics import (
 )
 from ..utils.misc_functions import hyperscore_b_y, longest_y, cosim
 
+# Temporary timing imports for debugging
+from ..utils.timing_debug import time_function, Timer
 
+
+@time_function("feature_calc.basic_features")
 def calculate_basic_features(
     spectrum_matrix: SpectrumMatrix,
     dia_spectrum: np.ndarray,
@@ -462,6 +466,7 @@ def hyperscore2(frags: Dict[str, Any], frag_names_matched: List[str]) -> Tuple[f
     return hyperscore, num_b, num_y
 
 
+@time_function("feature_calc.all_features")
 def calculate_all_features(
     spectrum_matrix: SpectrumMatrix,
     dia_spectrum: np.ndarray,

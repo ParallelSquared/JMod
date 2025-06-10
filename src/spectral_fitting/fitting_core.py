@@ -44,6 +44,9 @@ def get_current_sampling_logger():
 # This will be initialized when first used
 sampling_logger = None
 
+# Temporary timing imports for debugging
+from ..utils.timing_debug import time_function, Timer
+
 
 def prepare_dia_spectrum(
     dia_spectrum: np.ndarray,
@@ -88,6 +91,7 @@ def prepare_dia_spectrum(
     return processed_spectrum, centroid_breaks, bin_centers
 
 
+@time_function("fitting_core.filter_candidates")
 def filter_candidates_by_window(
     rt_mz: np.ndarray,
     prec_info: PrecursorInfo,
@@ -150,6 +154,7 @@ def filter_candidates_by_window(
     return window_idxs
 
 
+@time_function("fitting_core.create_entries")
 def create_entries(
     centroid_breaks: np.ndarray,
     candidate_peaks: List[np.ndarray],
@@ -263,6 +268,7 @@ def create_entries(
             ref_spec_values_split, norm_intensities, lib_peaks_matched, ref_ms1_error)
 
 
+@time_function("fitting_core.fit_spectrum_to_library")
 def fit_spectrum_to_library(
     dia_spec: Any,
     library: Dict[Union[int, str], Dict[str, Any]],
@@ -357,8 +363,9 @@ def fit_spectrum_to_library(
         )
     
     # Get candidate peptides and their spectra
-    mass_window_candidates = [all_keys[i] for i in window_idxs]
-    candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
+    with Timer("fitting_core.get_candidates"):
+        mass_window_candidates = [all_keys[i] for i in window_idxs]
+        candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
     
     # Process DIA spectrum
     processed_spectrum, centroid_breaks, bin_centers = prepare_dia_spectrum(
@@ -481,19 +488,20 @@ def fit_spectrum_to_library(
     dia_spec_int = dia_spec_int.reshape(-1)
     
     # Perform sparse NNLS fitting
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        # Check if we have a valid matrix
-        if sparse_matrix_dense.shape[0] == 0 or sparse_matrix_dense.shape[1] == 0:
-            lib_coefficients = np.array([])
-        else:
-            fit_results = sparse_nnls.lsqnonneg(sparse_matrix_dense, dia_spec_int, {"show_progress": False})
-            lib_coefficients = fit_results['x']
-            # Convert to numpy array if it's a cvxopt matrix
-            if hasattr(lib_coefficients, '__array__'):
-                lib_coefficients = np.array(lib_coefficients).flatten()
+    with Timer("fitting_core.nnls_solve"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # Check if we have a valid matrix
+            if sparse_matrix_dense.shape[0] == 0 or sparse_matrix_dense.shape[1] == 0:
+                lib_coefficients = np.array([])
             else:
-                lib_coefficients = np.asarray(lib_coefficients).flatten()
+                fit_results = sparse_nnls.lsqnonneg(sparse_matrix_dense, dia_spec_int, {"show_progress": False})
+                lib_coefficients = fit_results['x']
+                # Convert to numpy array if it's a cvxopt matrix
+                if hasattr(lib_coefficients, '__array__'):
+                    lib_coefficients = np.array(lib_coefficients).flatten()
+                else:
+                    lib_coefficients = np.asarray(lib_coefficients).flatten()
     
     # Calculate all features
     ref_spec_offset = 0
@@ -561,7 +569,8 @@ def fit_spectrum_to_library(
     
     # Pass the original spectrum_matrix (with original indices) and the full processed_spectrum 
     # to feature calculations, not the ranked/filtered versions
-    features = calculate_all_features(
+    with Timer("fitting_core.calculate_features"):
+        features = calculate_all_features(
         spectrum_matrix,  # This has the original row indices
         processed_spectrum,  # This is the full spectrum
         lib_coefficients,

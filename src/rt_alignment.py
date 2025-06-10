@@ -31,6 +31,9 @@ import logging
 # Get logger for this module
 logger = logging.getLogger('jmod_debug.rt_alignment')
 
+# Temporary timing imports for debugging
+from .utils.timing_debug import get_timing_summary, reset_timing
+
 
 from .mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
 
@@ -642,7 +645,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         fit_outputs=[]
         
         frags = []
+        # Add progress monitoring with timing
+        print(f"\nProcessing {len(top_n)} spectra...")
         for idx in tqdm.trange(len(top_n)):
+            # Print timing summary every 100 iterations
+            if idx > 0 and idx % 100 == 0:
+                print(f"\n--- Timing after {idx} iterations ---")
+                print(get_timing_summary())
+                print("-" * 80 + "\n")
+            
             if ms2:
                 fit_output,frag_errors = fit_to_lib(top_n_spectra[idx],
                                         library=librarySpectra,

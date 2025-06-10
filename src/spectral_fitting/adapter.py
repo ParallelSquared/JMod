@@ -14,6 +14,9 @@ from .types import SpectralFitResult
 from ..utils.io.read_output import names
 import src.config as config
 
+# Temporary timing imports for debugging
+from ..utils.timing_debug import time_function, Timer
+
 
 def _convert_result_to_legacy_format(
     result: SpectralFitResult,
@@ -281,6 +284,7 @@ def _convert_result_to_legacy_format(
     return output
 
 
+@time_function("adapter.fit_to_lib")
 def fit_to_lib(
     dia_spec,
     library,
