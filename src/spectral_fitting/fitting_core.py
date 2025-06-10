@@ -161,14 +161,19 @@ def create_entries(
     all_norm_intensities = [M[:, 1] / sum(M[:, 1]) for M in candidate_peaks]
     
     # Filter peptides meeting criteria
-    ref_peaks_in_dia = [
-        i for i in range(len(candidate_peaks))
-        if (np.sum(all_norm_intensities[i][(ref_coords[i] % 2) == 1]) > frac_matched and
-            np.sum(top_ten[i] % 2) > atleast_m and
-            ms1_peak[i] and
-            top_ten[i][0] % 2 == 1 and
-            np.sum(top_ten[i][:3] % 2 == 1) >= 2)
-    ]
+    if config.match_ms1:
+        ref_peaks_in_dia = [
+            i for i in range(len(candidate_peaks))
+            if ((all_norm_intensities[i][(ref_coords[i] % 2) == 1]).sum() > config.frac_lib_matched and
+                (top_ten[i] % 2).sum() > atleast_m and
+                ms1_peak[i])
+        ]
+    else:
+        ref_peaks_in_dia = [
+            i for i in range(len(candidate_peaks))
+            if ((all_norm_intensities[i][(ref_coords[i] % 2) == 1]).sum() > config.frac_lib_matched and
+                (top_ten[i] % 2).sum() > atleast_m)
+        ]
     
     # Extract data for filtered peptides
     ref_pep_cand_loc = [ref_coords[i] for i in ref_peaks_in_dia]
