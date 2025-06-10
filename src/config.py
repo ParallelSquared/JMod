@@ -43,9 +43,7 @@ parser.add_argument('--initial_percentile', default=50, type=float)
 parser.add_argument('--user_percentile', action='store_true') 
 parser.add_argument('--no_ms1_req', action='store_false') 
 parser.add_argument("--ms1_ppm",default=0, type=float)
-parser.add_argument('--debug_log', action='store_true', help='Enable debug logging to file')
-parser.add_argument('--debug_log_level', default='DEBUG', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], help='Debug log level')
-parser.add_argument('--debug_sample_rate', type=float, default=0.001, help='Sampling rate for debug logs (0.001 = 1 in 1000)')
+# Debug logging options removed - reverted to pre-refactoring state
 
 #These options are for test mode. Limit spectra to process for speed
 parser.add_argument('--config_json', type=str, help='Path to JSON configuration file')
