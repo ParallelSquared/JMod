@@ -55,10 +55,6 @@ def _convert_result_to_legacy_format(
     non_zero_coeffs = result.coefficients[non_zero_mask]
     non_zero_idxs = np.where(non_zero_mask)[0]
     
-    # Debug output
-    if len(result.coefficients) > 0:
-        print(f"DEBUG: Total coeffs: {len(result.coefficients)}, Non-zero: {len(non_zero_coeffs)}, Max coeff: {np.max(result.coefficients) if len(result.coefficients) > 0 else 0}")
-    
     if len(non_zero_coeffs) == 0:
         if config.args.timeplex:
             empty_output = [[0, spec_idx, ms1_scan_num, 0, 0, -1, prec_mz, prec_rt, *np.zeros(len(names)-7)]]
