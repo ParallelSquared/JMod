@@ -1227,9 +1227,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     # set optimised rt tol to 95th percentile of search (assumes a few outliers)
     # buffer = 1.2
-    # config.opt_rt_tol = np.round(np.sort(np.abs(dia_rt-rt_spl(output_rts)))[int(config.n_most_intense*.95)]*buffer,5) 
+    # config.opt_rt_tol = np.round(np.sort(np.abs(np.array(dia_rt)-rt_spl(output_rts)))[int(config.n_most_intense*.95)]*buffer,5) 
     
-    # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
+    # new_rt_tol = get_tol(np.array(dia_rt)-rt_spl(output_rts))
     new_rt_tol = boundary#4*np.abs(rt_stddev) 
     if config.args.user_rt_tol:
         print("Using user specified RT tolerance")
@@ -1302,7 +1302,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         plt.subplots()
         plt.scatter(np.array([updatedLibrary[k]["iRT"] for k in id_keys])[cor_filter],
-                    (dia_rt-rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]))[cor_filter],label="Original_RT",s=.1)
+                    (np.array(dia_rt)-rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]))[cor_filter],label="Original_RT",s=.1)
         min_rt = np.min([updatedLibrary[k]["iRT"] for k in id_keys])
         max_rt = np.max([updatedLibrary[k]["iRT"] for k in id_keys])
         plt.plot([min_rt,max_rt],[0,0],color="r",linestyle="--",alpha=.5)
@@ -1318,8 +1318,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         
         plt.subplots()
-        vals,bins,_ = plt.hist((dia_rt-emp_rt_spl(output_rts))[cor_filter],100,density=True,alpha=.5,label="Original RT")
-        vals,bins,_ = plt.hist((dia_rt-rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]))[cor_filter],100,density=True,alpha=.5,label="Updated RT")
+        vals,bins,_ = plt.hist((np.array(dia_rt)-emp_rt_spl(output_rts))[cor_filter],100,density=True,alpha=.5,label="Original RT")
+        vals,bins,_ = plt.hist((np.array(dia_rt)-rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]))[cor_filter],100,density=True,alpha=.5,label="Updated RT")
         plt.plot(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100),gaussian(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100), rt_amplitude, rt_mean, rt_stddev),label="Updated RT fit")
         plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
         # plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
@@ -2042,7 +2042,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
    
     
-    # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
+    # new_rt_tol = get_tol(np.array(dia_rt)-rt_spl(output_rts))
     new_rt_tol =np.abs(boundary)# 4*np.abs(rt_stddev)
     if config.args.user_rt_tol:
         print("Using user specified RT tolerance")
