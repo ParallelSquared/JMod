@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 import numpy as np
 import warnings
 from scipy import sparse
+import logging
 
 from .types import (
     SpectralFitResult, FittingParameters, PrecursorInfo,
@@ -28,6 +29,9 @@ from ..utils.io.read_output import names
 from ..spectral_fitting_legacy import create_entries
 import src.config as config
 import ptinnls as sparse_nnls
+
+# Get logger for this module
+logger = logging.getLogger('jmod_debug.spectral_fitting.fitting_core')
 
 
 def prepare_dia_spectrum(
@@ -94,25 +98,25 @@ def filter_candidates_by_window(
         Indices of candidates within window
     """
     # DEBUG: Window filtering
-    print(f"\nDEBUG filter_candidates: prec_mz={prec_info.mz:.4f}, rt={prec_info.rt:.2f}, window={prec_info.window_width:.4f}")
-    print(f"  Total library entries: {len(rt_mz)}")
+    logger.debug(f"filter_candidates: prec_mz={prec_info.mz:.4f}, rt={prec_info.rt:.2f}, window={prec_info.window_width:.4f}")
+    logger.debug(f"  Total library entries: {len(rt_mz)}")
     
     if ms1_mz:
         _bool = np.abs(rt_mz[:, 1] - ms1_mz) < params.ms1_tol
-        print(f"  Using MS1 m/z filtering: {ms1_mz:.4f}, tol={params.ms1_tol}")
+        logger.debug(f"  Using MS1 m/z filtering: {ms1_mz:.4f}, tol={params.ms1_tol}")
     else:
         if params.use_rt:
             _bool = np.logical_and(
                 np.abs(rt_mz[:, 1] - prec_info.mz) < (prec_info.window_width / 2),
                 np.abs(rt_mz[:, 0] - prec_info.rt) < params.rt_tol
             )
-            print(f"  Using RT filtering: rt_tol={params.rt_tol}")
+            logger.debug(f"  Using RT filtering: rt_tol={params.rt_tol}")
         else:
             _bool = np.abs(rt_mz[:, 1] - prec_info.mz) < (prec_info.window_width / 2)
-            print(f"  RT filtering disabled")
+            logger.debug(f"  RT filtering disabled")
     
     window_idxs = np.where(_bool)[0]
-    print(f"  Candidates in m/z window: {len(window_idxs)}")
+    logger.debug(f"  Candidates in m/z window: {len(window_idxs)}")
     
     # Additional filtering with DINO features if provided
     if dino_features is not None:
@@ -125,9 +129,9 @@ def filter_candidates_by_window(
         window_idxs = window_idxs[
             np.where((np.searchsorted(window_edges, rt_mz[window_idxs, 1]) % 2) == 1)[0]
         ]
-        print(f"  After DINO filtering: {before_dino} -> {len(window_idxs)}")
+        logger.debug(f"  After DINO filtering: {before_dino} -> {len(window_idxs)}")
     
-    print(f"  Final window_idxs: {len(window_idxs)}")
+    logger.debug(f"  Final window_idxs: {len(window_idxs)}")
     return window_idxs
 
 
@@ -153,10 +157,10 @@ def create_entries(
     prepares the data structures needed for fitting.
     """
     # DEBUG: Entry creation
-    print(f"\nDEBUG create_entries: {len(candidate_peaks)} candidates")
+    logger.debug(f"create_entries: {len(candidate_peaks)} candidates")
     if len(candidate_peaks) > 0:
-        print(f"  First candidate has {len(candidate_peaks[0])} peaks")
-    print(f"  Centroid breaks: {len(centroid_breaks)} breaks")
+        logger.debug(f"  First candidate has {len(candidate_peaks[0])} peaks")
+    logger.debug(f"  Centroid breaks: {len(centroid_breaks)} breaks")
     
     # Find coordinates of library peaks in DIA spectrum
     ref_coords = [np.searchsorted(centroid_breaks, M[:, 0]) for M in candidate_peaks]
@@ -174,15 +178,15 @@ def create_entries(
     # Filter by MS1 peak presence
     ms1_error = np.array([closest_peak_diff(mz, ms1_spec.mz, max_diff=ms1_tol) for mz in prec_mzs])
     ms1_peak = ~np.isnan(ms1_error)
-    print(f"  MS1 peaks found: {np.sum(ms1_peak)} / {len(ms1_peak)}")
+    logger.debug(f"  MS1 peaks found: {np.sum(ms1_peak)} / {len(ms1_peak)}")
     
     # Normalize intensities
     all_norm_intensities = [M[:, 1] / sum(M[:, 1]) for M in candidate_peaks]
     
     # DEBUG: Show filtering criteria
-    print(f"  Filtering criteria: frac_lib_matched={config.frac_lib_matched}, atleast_m={atleast_m}")
-    print(f"  Peaks passing intensity filter: {sum(1 for i in range(len(candidate_peaks)) if (all_norm_intensities[i][(ref_coords[i] % 2) == 1]).sum() > config.frac_lib_matched)}")
-    print(f"  Peaks passing top_n filter: {sum(1 for i in range(len(candidate_peaks)) if (top_ten[i] % 2).sum() > atleast_m)}")
+    logger.debug(f"  Filtering criteria: frac_lib_matched={config.frac_lib_matched}, atleast_m={atleast_m}")
+    logger.debug(f"  Peaks passing intensity filter: {sum(1 for i in range(len(candidate_peaks)) if (all_norm_intensities[i][(ref_coords[i] % 2) == 1]).sum() > config.frac_lib_matched)}")
+    logger.debug(f"  Peaks passing top_n filter: {sum(1 for i in range(len(candidate_peaks)) if (top_ten[i] % 2).sum() > atleast_m)}")
     
     # Filter peptides meeting criteria
     if config.match_ms1:
@@ -199,15 +203,15 @@ def create_entries(
                 (top_ten[i] % 2).sum() > atleast_m)
         ]
     
-    print(f"  Final peaks_in_dia: {len(ref_peaks_in_dia)}")
+    logger.debug(f"  Final peaks_in_dia: {len(ref_peaks_in_dia)}")
     
     # Show example of peak matching for first candidate
     if len(candidate_peaks) > 0:
-        print(f"\n  Example peak matching for first candidate:")
-        print(f"    Library peaks (first 5): {candidate_peaks[0][:5, 0] if len(candidate_peaks[0]) > 0 else 'None'}")
-        print(f"    Coords (first 5): {ref_coords[0][:5] if len(ref_coords[0]) > 0 else 'None'}")
-        print(f"    Matched (first 5): {[c % 2 == 1 for c in ref_coords[0][:5]] if len(ref_coords[0]) > 0 else 'None'}")
-        print(f"    Total matched: {sum(1 for c in ref_coords[0] if c % 2 == 1)} / {len(ref_coords[0])}")
+        logger.debug(f"  Example peak matching for first candidate:")
+        logger.debug(f"    Library peaks (first 5): {candidate_peaks[0][:5, 0] if len(candidate_peaks[0]) > 0 else 'None'}")
+        logger.debug(f"    Coords (first 5): {ref_coords[0][:5] if len(ref_coords[0]) > 0 else 'None'}")
+        logger.debug(f"    Matched (first 5): {[c % 2 == 1 for c in ref_coords[0][:5]] if len(ref_coords[0]) > 0 else 'None'}")
+        logger.debug(f"    Total matched: {sum(1 for c in ref_coords[0] if c % 2 == 1)} / {len(ref_coords[0])}")
     
     # Extract data for filtered peptides
     ref_pep_cand_loc = [ref_coords[i] for i in ref_peaks_in_dia]
@@ -349,7 +353,9 @@ def fit_spectrum_to_library(
     
     # Get top N indices if available
     top_n_idxs = [library[i].get('top_n') for i in mass_window_candidates]
+
     spec_frags = None
+
     if "spec_frags" in library[all_keys[0]]:
         spec_frags = [library[i]['spec_frags'] for i in mass_window_candidates]
     
@@ -412,9 +418,9 @@ def fit_spectrum_to_library(
     )
     
     # DEBUG: Matrix creation
-    print(f"\n  Matrix created: {len(spectrum_matrix.row_indices)} non-zero entries")
-    print(f"  Unique rows: {len(np.unique(spectrum_matrix.row_indices)) if len(spectrum_matrix.row_indices) > 0 else 0}")
-    print(f"  Total peptides: {len(spectrum_matrix.peptide_candidates)}")
+    logger.debug(f"  Matrix created: {len(spectrum_matrix.row_indices)} non-zero entries")
+    logger.debug(f"  Unique rows: {len(np.unique(spectrum_matrix.row_indices)) if len(spectrum_matrix.row_indices) > 0 else 0}")
+    logger.debug(f"  Total peptides: {len(spectrum_matrix.peptide_candidates)}")
     
     # Handle no matches case
     if len(spectrum_matrix.row_indices) == 0 or len(ref_pep_cand) == 0:
