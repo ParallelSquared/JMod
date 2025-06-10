@@ -44,6 +44,11 @@ def prepare_dia_spectrum(
     Returns:
         Tuple of (processed_spectrum, centroid_breaks, bin_centers)
     """
+    # DEBUG: DIA spectrum processing
+    print(f"\nDEBUG prepare_dia: Original spectrum {dia_spectrum.shape}")
+    print(f"  m/z range: [{dia_spectrum[:, 0].min():.4f}, {dia_spectrum[:, 0].max():.4f}]")
+    print(f"  mz_tol: {mz_tol}")
+    
     # Find first indices of peaks grouped by tolerance
     merged_coords_idxs = np.searchsorted(
         dia_spectrum[:, 0] + mz_tol * dia_spectrum[:, 0],
@@ -61,6 +66,7 @@ def prepare_dia_spectrum(
     
     # Update spectrum to merged values
     processed_spectrum = np.array((merged_coords, merged_intensities)).transpose()
+    print(f"  Processed spectrum: {processed_spectrum.shape} peaks")
     
     # Calculate tolerance windows
     centroid_breaks = np.concatenate((
@@ -69,6 +75,10 @@ def prepare_dia_spectrum(
     ))
     centroid_breaks = np.sort(centroid_breaks)
     bin_centers = np.mean(np.stack((centroid_breaks[::2], centroid_breaks[1::2]), 1), 1)
+    
+    print(f"  Centroid breaks: {len(centroid_breaks)} breaks")
+    if len(centroid_breaks) > 0:
+        print(f"  Centroid breaks example (first 10): {centroid_breaks[:10]}")
     
     return processed_spectrum, centroid_breaks, bin_centers
 
@@ -93,18 +103,26 @@ def filter_candidates_by_window(
     Returns:
         Indices of candidates within window
     """
+    # DEBUG: Window filtering
+    print(f"\nDEBUG filter_candidates: prec_mz={prec_info.mz:.4f}, rt={prec_info.rt:.2f}, window={prec_info.window_width:.4f}")
+    print(f"  Total library entries: {len(rt_mz)}")
+    
     if ms1_mz:
         _bool = np.abs(rt_mz[:, 1] - ms1_mz) < params.ms1_tol
+        print(f"  Using MS1 m/z filtering: {ms1_mz:.4f}, tol={params.ms1_tol}")
     else:
         if params.use_rt:
             _bool = np.logical_and(
                 np.abs(rt_mz[:, 1] - prec_info.mz) < (prec_info.window_width / 2),
                 np.abs(rt_mz[:, 0] - prec_info.rt) < params.rt_tol
             )
+            print(f"  Using RT filtering: rt_tol={params.rt_tol}")
         else:
             _bool = np.abs(rt_mz[:, 1] - prec_info.mz) < (prec_info.window_width / 2)
+            print(f"  RT filtering disabled")
     
     window_idxs = np.where(_bool)[0]
+    print(f"  Candidates in m/z window: {len(window_idxs)}")
     
     # Additional filtering with DINO features if provided
     if dino_features is not None:
@@ -113,10 +131,13 @@ def filter_candidates_by_window(
             prec_info.mz, prec_info.window_width
         )
         window_edges = createTolWindows(filtered_dino.mz, tolerance=params.ms1_tol)
+        before_dino = len(window_idxs)
         window_idxs = window_idxs[
             np.where((np.searchsorted(window_edges, rt_mz[window_idxs, 1]) % 2) == 1)[0]
         ]
+        print(f"  After DINO filtering: {before_dino} -> {len(window_idxs)}")
     
+    print(f"  Final window_idxs: {len(window_idxs)}")
     return window_idxs
 
 
@@ -141,6 +162,12 @@ def create_entries(
     This function filters peptides based on peak matching requirements and
     prepares the data structures needed for fitting.
     """
+    # DEBUG: Entry creation
+    print(f"\nDEBUG create_entries: {len(candidate_peaks)} candidates")
+    if len(candidate_peaks) > 0:
+        print(f"  First candidate has {len(candidate_peaks[0])} peaks")
+    print(f"  Centroid breaks: {len(centroid_breaks)} breaks")
+    
     # Find coordinates of library peaks in DIA spectrum
     ref_coords = [np.searchsorted(centroid_breaks, M[:, 0]) for M in candidate_peaks]
     
@@ -157,9 +184,15 @@ def create_entries(
     # Filter by MS1 peak presence
     ms1_error = np.array([closest_peak_diff(mz, ms1_spec.mz, max_diff=ms1_tol) for mz in prec_mzs])
     ms1_peak = ~np.isnan(ms1_error)
+    print(f"  MS1 peaks found: {np.sum(ms1_peak)} / {len(ms1_peak)}")
     
     # Normalize intensities
     all_norm_intensities = [M[:, 1] / sum(M[:, 1]) for M in candidate_peaks]
+    
+    # DEBUG: Show filtering criteria
+    print(f"  Filtering criteria: frac_lib_matched={config.frac_lib_matched}, atleast_m={atleast_m}")
+    print(f"  Peaks passing intensity filter: {sum(1 for i in range(len(candidate_peaks)) if (all_norm_intensities[i][(ref_coords[i] % 2) == 1]).sum() > config.frac_lib_matched)}")
+    print(f"  Peaks passing top_n filter: {sum(1 for i in range(len(candidate_peaks)) if (top_ten[i] % 2).sum() > atleast_m)}")
     
     # Filter peptides meeting criteria
     if config.match_ms1:
@@ -175,6 +208,16 @@ def create_entries(
             if ((all_norm_intensities[i][(ref_coords[i] % 2) == 1]).sum() > config.frac_lib_matched and
                 (top_ten[i] % 2).sum() > atleast_m)
         ]
+    
+    print(f"  Final peaks_in_dia: {len(ref_peaks_in_dia)}")
+    
+    # Show example of peak matching for first candidate
+    if len(candidate_peaks) > 0:
+        print(f"\n  Example peak matching for first candidate:")
+        print(f"    Library peaks (first 5): {candidate_peaks[0][:5, 0] if len(candidate_peaks[0]) > 0 else 'None'}")
+        print(f"    Coords (first 5): {ref_coords[0][:5] if len(ref_coords[0]) > 0 else 'None'}")
+        print(f"    Matched (first 5): {[c % 2 == 1 for c in ref_coords[0][:5]] if len(ref_coords[0]) > 0 else 'None'}")
+        print(f"    Total matched: {sum(1 for c in ref_coords[0] if c % 2 == 1)} / {len(ref_coords[0])}")
     
     # Extract data for filtered peptides
     ref_pep_cand_loc = [ref_coords[i] for i in ref_peaks_in_dia]
@@ -293,8 +336,14 @@ def fit_spectrum_to_library(
         rt_mz, prec_info, params, ms1_mz, dino_features
     )
     
+    # DEBUG: Window filtering results
+    print(f"\nDEBUG fit_spectrum_to_library: scan_num={spec.scan_num}")
+    print(f"  DIA spectrum: {len(dia_spectrum)} peaks, m/z=[{dia_spectrum[:, 0].min():.4f}, {dia_spectrum[:, 0].max():.4f}]")
+    print(f"  Window candidates: {len(window_idxs)} found")
+    
     if len(window_idxs) == 0:
         # No candidates found
+        print(f"  WARNING: No candidates found in window!")
         return SpectralFitResult(
             features=[],
             coefficients=np.array([]),
@@ -312,6 +361,10 @@ def fit_spectrum_to_library(
     processed_spectrum, centroid_breaks, bin_centers = prepare_dia_spectrum(
         dia_spectrum, params.mz_tol
     )
+    
+    # DEBUG: DIA spectrum processing
+    print(f"  Processed spectrum: {processed_spectrum.shape} peaks")
+    print(f"  Centroid breaks: {len(centroid_breaks)} breaks, first 10: {centroid_breaks[:10] if len(centroid_breaks) > 0 else 'None'}")
     
     # Get top N indices if available
     top_n_idxs = [library[i].get('top_n') for i in mass_window_candidates]
@@ -376,6 +429,11 @@ def fit_spectrum_to_library(
         decoy_spec_values_split,
         decoy_pep_cand
     )
+    
+    # DEBUG: Matrix creation
+    print(f"\n  Matrix created: {len(spectrum_matrix.row_indices)} non-zero entries")
+    print(f"  Unique rows: {len(np.unique(spectrum_matrix.row_indices)) if len(spectrum_matrix.row_indices) > 0 else 0}")
+    print(f"  Total peptides: {len(spectrum_matrix.peptide_candidates)}")
     
     # Handle no matches case
     if len(spectrum_matrix.row_indices) == 0 or len(ref_pep_cand) == 0:
