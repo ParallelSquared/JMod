@@ -22,7 +22,7 @@ from .utils.misc_functions import write_to_csv
 from .utils import iso_functions as iso_f
 from .mass_tags import tag_library, available_tags
 from .fdr_analysis import process_data
-from .utils.debug_logger import setup_debug_logger, get_debug_logger
+from .utils.debug_logger import setup_debug_logger, get_debug_logger, set_global_sample_rate, get_all_sampling_summaries
 
 def main():
     """Main function to run JMod analysis."""
@@ -107,12 +107,17 @@ def main():
     
     # Initialize debug logger if enabled
     if config.args.debug_log:
+        # Set the global sample rate
+        set_global_sample_rate(config.args.debug_sample_rate)
+        
         logger = setup_debug_logger(results_folder_path, config.args.debug_log_level)
         main_logger = get_debug_logger('run_jmod')
         main_logger.info(f"Starting JMod analysis")
         main_logger.info(f"Results folder: {results_folder_path}")
         main_logger.info(f"Configuration: {config.args}")
+        main_logger.info(f"Debug sampling rate: {config.args.debug_sample_rate} ({config.args.debug_sample_rate * 100:.3f}% of messages)")
         print(f"Debug logging enabled. Writing to: {results_folder_path}/debug.log")
+        print(f"Debug sampling rate: 1 in {int(1/config.args.debug_sample_rate)} messages")
     else:
         # Disable debug logging
         from .utils.debug_logger import set_debug_enabled
@@ -306,6 +311,16 @@ def main():
                  library=spectrumLibrary,
                  mass_tag=mass_tag,
                  timeplex=config.args.timeplex)
+    
+    # Print debug sampling summary if debug logging was enabled
+    if config.args.debug_log:
+        main_logger = get_debug_logger('run_jmod')
+        main_logger.info("Debug sampling summary:")
+        summaries = get_all_sampling_summaries()
+        if summaries:
+            main_logger.info(summaries)
+            print("\nDebug sampling summary:")
+            print(summaries)
     
     # """
     

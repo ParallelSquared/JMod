@@ -33,6 +33,17 @@ import ptinnls as sparse_nnls
 # Get logger for this module
 logger = logging.getLogger('jmod_debug.spectral_fitting.fitting_core')
 
+# Import sampling logger for high-frequency logs
+from ..utils.debug_logger import get_sampling_logger, get_global_sample_rate
+
+# Function to get the sampling logger with current rate
+def get_current_sampling_logger():
+    """Get a sampling logger with the current global sample rate."""
+    return get_sampling_logger('spectral_fitting.fitting_core', sample_rate=get_global_sample_rate())
+
+# This will be initialized when first used
+sampling_logger = None
+
 
 def prepare_dia_spectrum(
     dia_spectrum: np.ndarray,
@@ -97,26 +108,30 @@ def filter_candidates_by_window(
     Returns:
         Indices of candidates within window
     """
-    # DEBUG: Window filtering
-    logger.debug(f"filter_candidates: prec_mz={prec_info.mz:.4f}, rt={prec_info.rt:.2f}, window={prec_info.window_width:.4f}")
-    logger.debug(f"  Total library entries: {len(rt_mz)}")
+    # DEBUG: Window filtering - use sampling logger for high-frequency calls
+    global sampling_logger
+    if sampling_logger is None:
+        sampling_logger = get_current_sampling_logger()
+    
+    sampling_logger.debug(f"filter_candidates: prec_mz={prec_info.mz:.4f}, rt={prec_info.rt:.2f}, window={prec_info.window_width:.4f}")
+    sampling_logger.debug(f"  Total library entries: {len(rt_mz)}")
     
     if ms1_mz:
         _bool = np.abs(rt_mz[:, 1] - ms1_mz) < params.ms1_tol
-        logger.debug(f"  Using MS1 m/z filtering: {ms1_mz:.4f}, tol={params.ms1_tol}")
+        sampling_logger.debug(f"  Using MS1 m/z filtering: {ms1_mz:.4f}, tol={params.ms1_tol}")
     else:
         if params.use_rt:
             _bool = np.logical_and(
                 np.abs(rt_mz[:, 1] - prec_info.mz) < (prec_info.window_width / 2),
                 np.abs(rt_mz[:, 0] - prec_info.rt) < params.rt_tol
             )
-            logger.debug(f"  Using RT filtering: rt_tol={params.rt_tol}")
+            sampling_logger.debug(f"  Using RT filtering: rt_tol={params.rt_tol}")
         else:
             _bool = np.abs(rt_mz[:, 1] - prec_info.mz) < (prec_info.window_width / 2)
-            logger.debug(f"  RT filtering disabled")
+            sampling_logger.debug(f"  RT filtering disabled")
     
     window_idxs = np.where(_bool)[0]
-    logger.debug(f"  Candidates in m/z window: {len(window_idxs)}")
+    sampling_logger.debug(f"  Candidates in m/z window: {len(window_idxs)}")
     
     # Additional filtering with DINO features if provided
     if dino_features is not None:
@@ -129,9 +144,9 @@ def filter_candidates_by_window(
         window_idxs = window_idxs[
             np.where((np.searchsorted(window_edges, rt_mz[window_idxs, 1]) % 2) == 1)[0]
         ]
-        logger.debug(f"  After DINO filtering: {before_dino} -> {len(window_idxs)}")
+        sampling_logger.debug(f"  After DINO filtering: {before_dino} -> {len(window_idxs)}")
     
-    logger.debug(f"  Final window_idxs: {len(window_idxs)}")
+    sampling_logger.debug(f"  Final window_idxs: {len(window_idxs)}")
     return window_idxs
 
 
@@ -156,11 +171,11 @@ def create_entries(
     This function filters peptides based on peak matching requirements and
     prepares the data structures needed for fitting.
     """
-    # DEBUG: Entry creation
-    logger.debug(f"create_entries: {len(candidate_peaks)} candidates")
+    # DEBUG: Entry creation - use sampling logger
+    sampling_logger.debug(f"create_entries: {len(candidate_peaks)} candidates")
     if len(candidate_peaks) > 0:
-        logger.debug(f"  First candidate has {len(candidate_peaks[0])} peaks")
-    logger.debug(f"  Centroid breaks: {len(centroid_breaks)} breaks")
+        sampling_logger.debug(f"  First candidate has {len(candidate_peaks[0])} peaks")
+    sampling_logger.debug(f"  Centroid breaks: {len(centroid_breaks)} breaks")
     
     # Find coordinates of library peaks in DIA spectrum
     ref_coords = [np.searchsorted(centroid_breaks, M[:, 0]) for M in candidate_peaks]
@@ -178,15 +193,15 @@ def create_entries(
     # Filter by MS1 peak presence
     ms1_error = np.array([closest_peak_diff(mz, ms1_spec.mz, max_diff=ms1_tol) for mz in prec_mzs])
     ms1_peak = ~np.isnan(ms1_error)
-    logger.debug(f"  MS1 peaks found: {np.sum(ms1_peak)} / {len(ms1_peak)}")
+    sampling_logger.debug(f"  MS1 peaks found: {np.sum(ms1_peak)} / {len(ms1_peak)}")
     
     # Normalize intensities
     all_norm_intensities = [M[:, 1] / sum(M[:, 1]) for M in candidate_peaks]
     
-    # DEBUG: Show filtering criteria
-    logger.debug(f"  Filtering criteria: frac_lib_matched={config.frac_lib_matched}, atleast_m={atleast_m}")
-    logger.debug(f"  Peaks passing intensity filter: {sum(1 for i in range(len(candidate_peaks)) if (all_norm_intensities[i][(ref_coords[i] % 2) == 1]).sum() > config.frac_lib_matched)}")
-    logger.debug(f"  Peaks passing top_n filter: {sum(1 for i in range(len(candidate_peaks)) if (top_ten[i] % 2).sum() > atleast_m)}")
+    # DEBUG: Show filtering criteria - use sampling logger
+    sampling_logger.debug(f"  Filtering criteria: frac_lib_matched={config.frac_lib_matched}, atleast_m={atleast_m}")
+    sampling_logger.debug(f"  Peaks passing intensity filter: {sum(1 for i in range(len(candidate_peaks)) if (all_norm_intensities[i][(ref_coords[i] % 2) == 1]).sum() > config.frac_lib_matched)}")
+    sampling_logger.debug(f"  Peaks passing top_n filter: {sum(1 for i in range(len(candidate_peaks)) if (top_ten[i] % 2).sum() > atleast_m)}")
     
     # Filter peptides meeting criteria
     if config.match_ms1:
@@ -203,15 +218,15 @@ def create_entries(
                 (top_ten[i] % 2).sum() > atleast_m)
         ]
     
-    logger.debug(f"  Final peaks_in_dia: {len(ref_peaks_in_dia)}")
+    sampling_logger.debug(f"  Final peaks_in_dia: {len(ref_peaks_in_dia)}")
     
-    # Show example of peak matching for first candidate
+    # Show example of peak matching for first candidate - use sampling logger
     if len(candidate_peaks) > 0:
-        logger.debug(f"  Example peak matching for first candidate:")
-        logger.debug(f"    Library peaks (first 5): {candidate_peaks[0][:5, 0] if len(candidate_peaks[0]) > 0 else 'None'}")
-        logger.debug(f"    Coords (first 5): {ref_coords[0][:5] if len(ref_coords[0]) > 0 else 'None'}")
-        logger.debug(f"    Matched (first 5): {[c % 2 == 1 for c in ref_coords[0][:5]] if len(ref_coords[0]) > 0 else 'None'}")
-        logger.debug(f"    Total matched: {sum(1 for c in ref_coords[0] if c % 2 == 1)} / {len(ref_coords[0])}")
+        sampling_logger.debug(f"  Example peak matching for first candidate:")
+        sampling_logger.debug(f"    Library peaks (first 5): {candidate_peaks[0][:5, 0] if len(candidate_peaks[0]) > 0 else 'None'}")
+        sampling_logger.debug(f"    Coords (first 5): {ref_coords[0][:5] if len(ref_coords[0]) > 0 else 'None'}")
+        sampling_logger.debug(f"    Matched (first 5): {[c % 2 == 1 for c in ref_coords[0][:5]] if len(ref_coords[0]) > 0 else 'None'}")
+        sampling_logger.debug(f"    Total matched: {sum(1 for c in ref_coords[0] if c % 2 == 1)} / {len(ref_coords[0])}")
     
     # Extract data for filtered peptides
     ref_pep_cand_loc = [ref_coords[i] for i in ref_peaks_in_dia]
@@ -417,10 +432,10 @@ def fit_spectrum_to_library(
         decoy_pep_cand
     )
     
-    # DEBUG: Matrix creation
-    logger.debug(f"  Matrix created: {len(spectrum_matrix.row_indices)} non-zero entries")
-    logger.debug(f"  Unique rows: {len(np.unique(spectrum_matrix.row_indices)) if len(spectrum_matrix.row_indices) > 0 else 0}")
-    logger.debug(f"  Total peptides: {len(spectrum_matrix.peptide_candidates)}")
+    # DEBUG: Matrix creation - use sampling logger
+    sampling_logger.debug(f"  Matrix created: {len(spectrum_matrix.row_indices)} non-zero entries")
+    sampling_logger.debug(f"  Unique rows: {len(np.unique(spectrum_matrix.row_indices)) if len(spectrum_matrix.row_indices) > 0 else 0}")
+    sampling_logger.debug(f"  Total peptides: {len(spectrum_matrix.peptide_candidates)}")
     
     # Handle no matches case
     if len(spectrum_matrix.row_indices) == 0 or len(ref_pep_cand) == 0:
