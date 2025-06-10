@@ -569,23 +569,57 @@ def fit_spectrum_to_library(
     
     # Pass the original spectrum_matrix (with original indices) and the full processed_spectrum 
     # to feature calculations, not the ranked/filtered versions
+    
+    # TEMPORARY: Quick test to check if feature calculation is the bottleneck
+    SKIP_HEAVY_FEATURES = True  # Set to False to re-enable full features
+    
     with Timer("fitting_core.calculate_features"):
-        features = calculate_all_features(
-        spectrum_matrix,  # This has the original row indices
-        processed_spectrum,  # This is the full spectrum
-        lib_coefficients,
-        sparse_matrix,
-        rt_mz,
-        window_idxs,
-        prec_info.rt,
-        np.concatenate([ref_ms1_error, decoy_ms1_error]) if len(decoy_pep_cand) > 0 else ref_ms1_error,
-        ref_spec_offset,
-        decoy_spec_offset,
-        all_lib_peaks_matched,
-        prec_frags,
-        ordered_frags,
-        all_pep_cand_list
-    )
+        if SKIP_HEAVY_FEATURES:
+            # Create minimal features for performance testing
+            from .types import SpectralFeatures, BasicFeatures, SimilarityMetrics, StatisticalFeatures, FragmentInfo
+            features = SpectralFeatures(
+                basic=BasicFeatures(
+                    num_peaks_matched=np.ones(len(spectrum_matrix.peptide_candidates)),
+                    frac_lib_intensity=np.ones(len(spectrum_matrix.peptide_candidates)) * 0.5,
+                    total_intensity=np.ones(len(spectrum_matrix.peptide_candidates)),
+                    normalized_intensity=np.ones(len(spectrum_matrix.peptide_candidates)) * 0.5
+                ),
+                similarity=SimilarityMetrics(
+                    cosine_similarity=np.ones(len(spectrum_matrix.peptide_candidates)) * 0.8,
+                    manhattan_distance=np.ones(len(spectrum_matrix.peptide_candidates)) * 0.2,
+                    scribe_score=np.ones(len(spectrum_matrix.peptide_candidates)) * 0.8
+                ),
+                statistical=StatisticalFeatures(
+                    residuals=np.ones(len(spectrum_matrix.peptide_candidates)) * 0.1,
+                    goodness_of_fit=np.ones(len(spectrum_matrix.peptide_candidates)) * 0.9
+                ),
+                fragment_info=FragmentInfo(
+                    frag_errors=[],
+                    frag_names=[],
+                    frag_mz=[],
+                    frag_int=[],
+                    obs_int=[],
+                    unique_frag_mz=[],
+                    unique_obs_int=[]
+                )
+            )
+        else:
+            features = calculate_all_features(
+                spectrum_matrix,  # This has the original row indices
+                processed_spectrum,  # This is the full spectrum
+                lib_coefficients,
+                sparse_matrix,
+                rt_mz,
+                window_idxs,
+                prec_info.rt,
+                np.concatenate([ref_ms1_error, decoy_ms1_error]) if len(decoy_pep_cand) > 0 else ref_ms1_error,
+                ref_spec_offset,
+                decoy_spec_offset,
+                all_lib_peaks_matched,
+                prec_frags,
+                ordered_frags,
+                all_pep_cand_list
+            )
     
     return SpectralFitResult(
         features=features,
