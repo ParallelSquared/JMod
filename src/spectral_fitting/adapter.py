@@ -124,34 +124,35 @@ def _convert_result_to_legacy_format(
         unique_obs_int_str = "0"
         
         # Extract fragment information if available
+        # The fragment info in features is already specific to this peptide, so we access index 0
         if hasattr(features.fragment_info, 'frag_names') and features.fragment_info.frag_names:
-            if coeff_idx < len(features.fragment_info.frag_names):
-                frag_data = features.fragment_info.frag_names[coeff_idx]
+            if len(features.fragment_info.frag_names) > 0:
+                frag_data = features.fragment_info.frag_names[0]
                 if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
                     frag_names_str = ";".join(map(str, frag_data))
             
         if hasattr(features.fragment_info, 'frag_errors') and features.fragment_info.frag_errors:
-            if coeff_idx < len(features.fragment_info.frag_errors):
-                frag_data = features.fragment_info.frag_errors[coeff_idx]
+            if len(features.fragment_info.frag_errors) > 0:
+                frag_data = features.fragment_info.frag_errors[0]
                 if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
                     frag_errors_str = ";".join(map(str, frag_data))
                 
         if hasattr(features.fragment_info, 'frag_mz') and features.fragment_info.frag_mz:
-            if coeff_idx < len(features.fragment_info.frag_mz):
-                frag_data = features.fragment_info.frag_mz[coeff_idx]
+            if len(features.fragment_info.frag_mz) > 0:
+                frag_data = features.fragment_info.frag_mz[0]
                 if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
                     frag_mz_str = ";".join(map(str, frag_data))
                 
         # Check if fragment_info has frag_int and obs_int attributes (not in the current types definition)
         if hasattr(features.fragment_info, 'frag_int'):
-            if coeff_idx < len(features.fragment_info.frag_int):
-                frag_data = features.fragment_info.frag_int[coeff_idx]
+            if len(features.fragment_info.frag_int) > 0:
+                frag_data = features.fragment_info.frag_int[0]
                 if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
                     frag_int_str = ";".join(map(str, frag_data))
                 
         if hasattr(features.fragment_info, 'obs_int'):
-            if coeff_idx < len(features.fragment_info.obs_int):
-                obs_data = features.fragment_info.obs_int[coeff_idx]
+            if len(features.fragment_info.obs_int) > 0:
+                obs_data = features.fragment_info.obs_int[0]
                 if isinstance(obs_data, (list, np.ndarray)) and len(obs_data) > 0:
                     obs_int_str = ";".join(map(str, obs_data))
         
