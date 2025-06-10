@@ -93,3 +93,22 @@ Key parameters to understand:
 - Test data fixtures in `tests/fixtures/test_data.py`
 - Coverage reporting integrated (currently ~27% coverage)
 - Focus on unit tests for utility functions
+
+## Recent Issues and Fixes
+
+### Fragment Information Indexing (Fixed in commits cc32aa5, 6ba76c2)
+After the spectral_fitting refactoring, fragment correlation calculations were returning 0 for all entries due to incorrect indexing:
+- **Issue**: The adapter was using `coeff_idx` to index fragment information lists
+- **Fix**: Changed to use `i` (position in non-zero coefficients list) instead
+- **Files affected**: `src/spectral_fitting/adapter.py`
+
+### Division by Zero Errors (Fixed)
+Multiple division by zero errors in RT alignment:
+- **bad_IDs calculation**: Added check for empty arrays before division
+- **AUC calculation**: Added handling for cases with < 2 data points
+- **Files affected**: `src/rt_alignment.py`
+
+### Known Issues
+- Test mode with Arrow files may select 0 MS2 scans with restrictive m/z and RT ranges
+- Spline fitting may fail with too few data points
+- Some RT alignment models expect specific tag types (mTRAQ, diethyl, etc.)
