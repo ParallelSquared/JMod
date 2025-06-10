@@ -398,7 +398,7 @@ def calculate_fragment_features(
                     # Extract intensities for matched fragments
                     frag_dict = prec_frags[idx]
                     frag_order = ordered_frags[idx]
-                    if frag_dict and frag_order and len(matched_frag_names) > 0:
+                    if frag_dict and len(frag_order) > 0 and len(matched_frag_names) > 0:
                         # Get intensities for matched fragments
                         matched_intensities = []
                         for frag_name in matched_frag_names:
