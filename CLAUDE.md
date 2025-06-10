@@ -12,6 +12,8 @@ JMod (Joint Modeling) is an open-source proteomics software that increases mass 
 - **[Spectral Fitting Module](src/spectral_fitting/CLAUDE.md)**: Core matching algorithm implementation
 - **[Utils Module](src/utils/CLAUDE.md)**: Utility functions and helpers
 - **[I/O Module](src/utils/io/CLAUDE.md)**: File loading and data handling
+- **[Models Module](src/models/CLAUDE.md)**: Spectral library management
+- **[RT Models](rt_models/CLAUDE.md)**: Pre-trained retention time prediction models
 
 ## Common Development Commands
 
@@ -84,9 +86,12 @@ mypy src/
   - `load_files.py`: mzML and Arrow file loading
   - `read_output.py`: Result file handling
   - `load_fasta.py`: Protein sequence loading
+- **[src/models/](src/models/CLAUDE.md)**: Model-related functionality
+  - `spec_lib/spec_lib.py`: Spectral library handling and indexing
+- **[rt_models/](rt_models/CLAUDE.md)**: Pre-trained TensorFlow models for RT prediction
+  - CNN models for different labeling methods
+  - Ensemble predictions for robustness
 - `src/mass_tags.py`: Tag library definitions for different labeling methods (mTRAQ, diethyl, etc.)
-- `src/models/spec_lib/`: Spectral library handling and indexing
-- `rt_models/`: Pre-trained TensorFlow models for RT prediction
 
 ### Configuration System
 JMod uses a flexible parameter system that accepts:

@@ -6,6 +6,7 @@ This directory contains the refactored spectral fitting implementation for JMod.
 - [← Back to Main Documentation](../../CLAUDE.md)
 - [→ Utils Module](../utils/CLAUDE.md)
 - [→ I/O Module](../utils/io/CLAUDE.md)
+- [→ Models Module](../models/CLAUDE.md)
 
 ## Overview
 
@@ -109,6 +110,7 @@ else:
   - [utils.sparse_nnls](../utils/CLAUDE.md#sparse_nnlspy): NNLS solver
   - [utils.spectral_similarity_metrics](../utils/CLAUDE.md#spectral_similarity_metricspy): Similarity calculations
   - [utils.io.read_output](../utils/io/CLAUDE.md#read_outputpy): Column definitions
+  - [models.spec_lib](../models/CLAUDE.md): Spectral library access
 
 ## Related Documentation
 - [Main JMod Documentation](../../CLAUDE.md)

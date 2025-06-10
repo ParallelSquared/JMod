@@ -6,6 +6,7 @@ This subdirectory handles all input/output operations for JMod.
 - [← Back to Main Documentation](../../../CLAUDE.md)
 - [← Back to Utils Module](../CLAUDE.md)
 - [→ Spectral Fitting Module](../../spectral_fitting/CLAUDE.md)
+- [→ Models Module](../../models/CLAUDE.md)
 
 ## Overview
 

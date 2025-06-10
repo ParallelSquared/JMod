@@ -6,6 +6,7 @@ This directory contains utility functions and helper modules used throughout JMo
 - [← Back to Main Documentation](../../CLAUDE.md)
 - [→ Spectral Fitting Module](../spectral_fitting/CLAUDE.md)
 - [→ I/O Subdirectory](io/CLAUDE.md)
+- [→ Models Module](../models/CLAUDE.md)
 
 ## Overview
 
