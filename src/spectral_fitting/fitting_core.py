@@ -145,8 +145,9 @@ def create_entries(
     ref_coords = [np.searchsorted(centroid_breaks, M[:, 0]) for M in candidate_peaks]
     
     # Get top N peaks by intensity
-    if top_n_idxs is not None and spec_frags is not None:
-        top_ten = top_n_idxs
+    if top_n_idxs is not None:
+        # Use pre-calculated indices with coords (like legacy version)
+        top_ten = [c[idxs] for c, idxs in zip(ref_coords, top_n_idxs)]
     else:
         top_ten = [
             np.searchsorted(centroid_breaks, M[np.argsort(-M[:, 1])[0:min(top_n, M.shape[0])], 0])
@@ -189,7 +190,7 @@ def create_entries(
     ]
     num_lib_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched])
     ref_spec_col_indices_split = [
-        np.array([idx] * i) 
+        np.array([idx] * i, dtype=int) 
         for idx, i in zip(range(len(ref_pep_cand)), num_lib_peaks_matched)
     ]
     ref_spec_values_split = [
