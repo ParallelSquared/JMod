@@ -180,8 +180,11 @@ def create_entries(
     lib_peaks_matched = [j % 2 == 1 for j in ref_pep_cand_loc]
     
     # Create split arrays for matrix construction
+    # Calculate row indices with bounds checking
+    # searchsorted can return values up to len(centroid_breaks)
+    # When converted to peak indices, this could exceed the valid range
     ref_spec_row_indices_split = [
-        np.int32(((i[j] + 1) / 2) - 1) 
+        np.array([np.int32(min(((idx+1)/2)-1, (len(centroid_breaks)//2)-1)) for idx in i[j]], dtype=np.int32)
         for i, j in zip(ref_pep_cand_loc, lib_peaks_matched)
     ]
     num_lib_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched])
