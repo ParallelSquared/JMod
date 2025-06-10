@@ -403,7 +403,7 @@ def fit_gaussian(data,init_std=None,bin_n=50):
     
     # Check if we have valid data after removing NaN
     if len(data) == 0:
-        logger.warning("No valid data for Gaussian fitting after removing NaN. Returning default values.")
+        # logger.warning("No valid data for Gaussian fitting after removing NaN. Returning default values.")
         return 1.0, 0.0, 1.0  # amplitude, mean, stddev defaults
     
     # Create a histogram
@@ -415,7 +415,7 @@ def fit_gaussian(data,init_std=None,bin_n=50):
     
     # Check if histogram has valid values
     if np.all(hist == 0) or np.max(hist) == 0:
-        logger.warning("Histogram has all zero values. Using data statistics.")
+        # logger.warning("Histogram has all zero values. Using data statistics.")
         return 1.0, np.mean(data), np.std(data) if len(data) > 1 else 1.0
     
     # Find peaks in the histogram
@@ -480,11 +480,11 @@ def fit_errors(errors,limit=10,percentile=.999):
     if e_cdf_sq_err<g_cdf_sq_err:
         scale_param = mad/np.log(2)
         boundary = stats.expon.ppf(percentile,loc=0,scale=scale_param)
-        logger.info("Fitted Exponential to RT errors")
+        # logger.info("Fitted Exponential to RT errors")
     else:
         scale_param = mad*1.4826
         boundary = stats.halfnorm.ppf(percentile,loc=0,scale=scale_param)
-        logger.info("Fitted Gaussian to RT errors")
+        # logger.info("Fitted Gaussian to RT errors")
         
     # print(boundary)
     return boundary
@@ -573,7 +573,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     else:
         scans_per_cycle = 1
 
-    logger.info("Initial search")
+    # logger.info("Initial search")
     # logger.info(f"Fitting the {config.n_most_intense} most intense spectra")
     
     ms1spectra = dia_spectra.ms1scans
@@ -822,7 +822,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         cor_filter = np.logical_and(frag_multiply>cor_limit,output_hyper>hyper_cutoff)
         feature_percentile = 0
         # for feature_percentile in [50,60,70,80,90]: 
-        logger.info("Filtering IDs from initial search")
+        # logger.info("Filtering IDs from initial search")
         for feature_percentile in  range(20,80,5):
         
         ## empirically derived cutoffs
@@ -1471,7 +1471,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     config.n_most_intense_features = int(1e8) # larger than possible, essentually all
     
     scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
-    logger.info("Initial search")
+    # logger.info("Initial search")
     # logger.info(f"Fitting the {config.n_most_intense} most intense spectra")
     
     ms1spectra = dia_spectra.ms1scans
