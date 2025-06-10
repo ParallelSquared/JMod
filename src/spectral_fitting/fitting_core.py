@@ -155,7 +155,8 @@ def create_entries(
         ]
     
     # Filter by MS1 peak presence
-    ms1_peak = ~np.isnan([closest_peak_diff(mz, ms1_spec.mz) for mz in prec_mzs])
+    ms1_error = np.array([closest_peak_diff(mz, ms1_spec.mz, max_diff=ms1_tol) for mz in prec_mzs])
+    ms1_peak = ~np.isnan(ms1_error)
     
     # Normalize intensities
     all_norm_intensities = [M[:, 1] / sum(M[:, 1]) for M in candidate_peaks]
@@ -202,8 +203,8 @@ def create_entries(
         ints[i] for ints, i in zip(norm_intensities, lib_peaks_matched)
     ]
     
-    # Calculate MS1 errors
-    ref_ms1_error = np.zeros(len(ref_peaks_in_dia))  # Placeholder
+    # Get MS1 errors for filtered peaks
+    ref_ms1_error = ms1_error[ref_peaks_in_dia]
     
     return (ref_peaks_in_dia, ref_pep_cand, ref_pep_cand_loc, ref_pep_cand_list,
             ref_spec_row_indices_split, ref_spec_col_indices_split,
