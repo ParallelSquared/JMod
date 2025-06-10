@@ -125,8 +125,8 @@ def main():
                 filtered_ms2_scans.append(scan)
         
         print(f"Selected {len(filtered_ms2_scans)} out of {len(DIAspectra.ms2scans)} MS2 scans for test mode")
-        DIAspectra.ms2scans = filtered_ms2_scans
-        spectra_to_fit = DIAspectra.ms2scans
+        # For ArrowSpectrumFile, we can't reassign ms2scans, so just use filtered list
+        spectra_to_fit = filtered_ms2_scans
         
         # Pre-filter the library to speed up processing
         # Note: This is a rough filter that will be refined after RT alignment

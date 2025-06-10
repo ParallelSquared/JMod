@@ -926,7 +926,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             
             # plt.vlines([-first_rt_tolerance,first_rt_tolerance],[0]*2,[max(vals)]*2)
             
-            bad_IDs  = (np.abs(first_rt_diffs)>np.min([first_rt_tolerance,np.ptp(dia_rt)/5]))[cor_filter]
+            bad_IDs  = (np.abs(first_rt_diffs)>np.min([first_rt_tolerance,np.ptp(np.array(dia_rt))/5]))[cor_filter]
             if len(bad_IDs) > 0:
                 outside_ratio = sum(bad_IDs)/len(bad_IDs)
             else:
@@ -1136,7 +1136,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     new_lib_rt = np.array([updatedLibrary[k]["iRT"] for k in id_keys])
     converted_rt = rt_spl([updatedLibrary[k]["iRT"] for k in id_keys])
     
-    rt_amplitude, rt_mean, rt_stddev = fit_gaussian((dia_rt-converted_rt)[cor_filter])
+    rt_amplitude, rt_mean, rt_stddev = fit_gaussian((np.array(dia_rt)-converted_rt)[cor_filter])
     # rt_spl = twostepfit(all_lib_rts,[i[1] for i in all_id_rt]) # does not work
     
     # mz_spl = twostepfit(id_mzs, diffs)
