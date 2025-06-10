@@ -124,37 +124,69 @@ def _convert_result_to_legacy_format(
         unique_obs_int_str = "0"
         
         # Extract fragment information if available
-        # The fragment info in features is already specific to this peptide, so we access index 0
+        # The fragment info is indexed by position in non-zero coefficients, not by coeff_idx
         if hasattr(features.fragment_info, 'frag_names') and features.fragment_info.frag_names:
-            if len(features.fragment_info.frag_names) > 0:
-                frag_data = features.fragment_info.frag_names[0]
+            if len(features.fragment_info.frag_names) > i:
+                frag_data = features.fragment_info.frag_names[i]
                 if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
                     frag_names_str = ";".join(map(str, frag_data))
             
         if hasattr(features.fragment_info, 'frag_errors') and features.fragment_info.frag_errors:
-            if len(features.fragment_info.frag_errors) > 0:
-                frag_data = features.fragment_info.frag_errors[0]
+            if len(features.fragment_info.frag_errors) > i:
+                frag_data = features.fragment_info.frag_errors[i]
                 if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
-                    frag_errors_str = ";".join(map(str, frag_data))
+                    frag_errors_str = ";".join([str(float(x)) for x in frag_data])
                 
         if hasattr(features.fragment_info, 'frag_mz') and features.fragment_info.frag_mz:
-            if len(features.fragment_info.frag_mz) > 0:
-                frag_data = features.fragment_info.frag_mz[0]
+            if len(features.fragment_info.frag_mz) > i:
+                frag_data = features.fragment_info.frag_mz[i]
                 if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
-                    frag_mz_str = ";".join(map(str, frag_data))
+                    frag_mz_str = ";".join([str(float(x)) for x in frag_data])
                 
         # Check if fragment_info has frag_int and obs_int attributes (not in the current types definition)
         if hasattr(features.fragment_info, 'frag_int'):
-            if len(features.fragment_info.frag_int) > 0:
-                frag_data = features.fragment_info.frag_int[0]
+            if len(features.fragment_info.frag_int) > i:
+                frag_data = features.fragment_info.frag_int[i]
                 if isinstance(frag_data, (list, np.ndarray)) and len(frag_data) > 0:
-                    frag_int_str = ";".join(map(str, frag_data))
+                    # Handle nested lists or arrays properly
+                    try:
+                        # If it's already flat, use it directly
+                        if isinstance(frag_data[0], (int, float, np.number)):
+                            frag_int_str = ";".join([str(float(x)) for x in frag_data])
+                        else:
+                            # If it's nested, flatten it
+                            flat_data = []
+                            for item in frag_data:
+                                if isinstance(item, (list, np.ndarray)):
+                                    flat_data.extend([float(x) for x in item])
+                                else:
+                                    flat_data.append(float(item))
+                            frag_int_str = ";".join([str(x) for x in flat_data])
+                    except (TypeError, ValueError, IndexError):
+                        # If all else fails, keep default
+                        pass
                 
         if hasattr(features.fragment_info, 'obs_int'):
-            if len(features.fragment_info.obs_int) > 0:
-                obs_data = features.fragment_info.obs_int[0]
+            if len(features.fragment_info.obs_int) > i:
+                obs_data = features.fragment_info.obs_int[i]
                 if isinstance(obs_data, (list, np.ndarray)) and len(obs_data) > 0:
-                    obs_int_str = ";".join(map(str, obs_data))
+                    # Handle nested lists or arrays properly
+                    try:
+                        # If it's already flat, use it directly
+                        if isinstance(obs_data[0], (int, float, np.number)):
+                            obs_int_str = ";".join([str(float(x)) for x in obs_data])
+                        else:
+                            # If it's nested, flatten it
+                            flat_data = []
+                            for item in obs_data:
+                                if isinstance(item, (list, np.ndarray)):
+                                    flat_data.extend([float(x) for x in item])
+                                else:
+                                    flat_data.append(float(item))
+                            obs_int_str = ";".join([str(x) for x in flat_data])
+                    except (TypeError, ValueError, IndexError):
+                        # If all else fails, keep default
+                        pass
         
         frag_info = [frag_names_str, frag_errors_str, frag_mz_str, frag_int_str, obs_int_str, unique_frag_mz_str, unique_obs_int_str]
         

@@ -396,6 +396,12 @@ def fit_gaussian(data,init_std=None,bin_n=50):
     
     data = np.array(data)
     data = data[~np.isnan(data)]
+    
+    # Check if we have valid data after removing NaN
+    if len(data) == 0:
+        print("Warning: No valid data for Gaussian fitting after removing NaN. Returning default values.")
+        return 1.0, 0.0, 1.0  # amplitude, mean, stddev defaults
+    
     # Create a histogram
     hist, bin_edges = np.histogram(data, bins=bin_n, density=True)
     
@@ -403,14 +409,26 @@ def fit_gaussian(data,init_std=None,bin_n=50):
     # background = np.min(hist)
     # hist-=background
     
+    # Check if histogram has valid values
+    if np.all(hist == 0) or np.max(hist) == 0:
+        print("Warning: Histogram has all zero values. Using data statistics.")
+        return 1.0, np.mean(data), np.std(data) if len(data) > 1 else 1.0
+    
     # Find peaks in the histogram
     # peaks, _ = signal.find_peaks(hist, height=0.01, distance=10)
     peaks, _ = signal.find_peaks(hist, height=max(hist)*0.5, distance=10)
     
-    # Find the highest peak
-    highest_peak_index = np.argmax(hist[peaks])
-    highest_peak_height = hist[peaks][highest_peak_index]
-    highest_peak_x = bin_edges[peaks][highest_peak_index]
+    # Handle case where no peaks are found
+    if len(peaks) == 0:
+        # If no peaks found, use the bin with maximum value as the peak
+        highest_peak_index = np.argmax(hist)
+        highest_peak_height = hist[highest_peak_index]
+        highest_peak_x = (bin_edges[highest_peak_index] + bin_edges[highest_peak_index + 1]) / 2
+    else:
+        # Find the highest peak
+        highest_peak_index = np.argmax(hist[peaks])
+        highest_peak_height = hist[peaks][highest_peak_index]
+        highest_peak_x = bin_edges[peaks][highest_peak_index]
     
     # Calculate the width of the highest peak using Gaussian fit
     # split bins in 2 to get x values
@@ -890,7 +908,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
            
             
             first_rt_diffs = (f(output_rts)-output_df.rt)
-            rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
+            
+            # Check if we have any data after filtering
+            filtered_diffs = first_rt_diffs[cor_filter]
+            if len(filtered_diffs) == 0:
+                # If no data passes the filter, use all data or set default values
+                print(f"Warning: No data passed correlation filter at percentile {feature_percentile}. Using all data.")
+                filtered_diffs = first_rt_diffs
+            
+            rt_amplitude, rt_mean, rt_stddev = fit_gaussian(filtered_diffs)
             first_rt_tolerance = 4*np.abs(rt_stddev)
             # rt_mean, rt_stddev = stats.norm.fit(first_rt_diffs[cor_filter])
             # vals,bins,_=plt.hist(first_rt_diffs[cor_filter],np.linspace(-10,10,100),density=True)
@@ -901,7 +927,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             # plt.vlines([-first_rt_tolerance,first_rt_tolerance],[0]*2,[max(vals)]*2)
             
             bad_IDs  = (np.abs(first_rt_diffs)>np.min([first_rt_tolerance,np.ptp(dia_rt)/5]))[cor_filter]
-            outside_ratio = sum(bad_IDs)/len(bad_IDs)
+            if len(bad_IDs) > 0:
+                outside_ratio = sum(bad_IDs)/len(bad_IDs)
+            else:
+                outside_ratio = 0.0
             print(f"Testing Percentile: {feature_percentile}, Ratio: {np.round(outside_ratio,4)}, #IDs: {sum(cor_filter)}")
             if outside_ratio<.05 or (sum(cor_filter)-sum(bad_IDs)<800):
                 break
