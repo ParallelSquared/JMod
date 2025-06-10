@@ -44,11 +44,6 @@ def prepare_dia_spectrum(
     Returns:
         Tuple of (processed_spectrum, centroid_breaks, bin_centers)
     """
-    # DEBUG: DIA spectrum processing
-    print(f"\nDEBUG prepare_dia: Original spectrum {dia_spectrum.shape}")
-    print(f"  m/z range: [{dia_spectrum[:, 0].min():.4f}, {dia_spectrum[:, 0].max():.4f}]")
-    print(f"  mz_tol: {mz_tol}")
-    
     # Find first indices of peaks grouped by tolerance
     merged_coords_idxs = np.searchsorted(
         dia_spectrum[:, 0] + mz_tol * dia_spectrum[:, 0],
@@ -66,7 +61,6 @@ def prepare_dia_spectrum(
     
     # Update spectrum to merged values
     processed_spectrum = np.array((merged_coords, merged_intensities)).transpose()
-    print(f"  Processed spectrum: {processed_spectrum.shape} peaks")
     
     # Calculate tolerance windows
     centroid_breaks = np.concatenate((
@@ -75,10 +69,6 @@ def prepare_dia_spectrum(
     ))
     centroid_breaks = np.sort(centroid_breaks)
     bin_centers = np.mean(np.stack((centroid_breaks[::2], centroid_breaks[1::2]), 1), 1)
-    
-    print(f"  Centroid breaks: {len(centroid_breaks)} breaks")
-    if len(centroid_breaks) > 0:
-        print(f"  Centroid breaks example (first 10): {centroid_breaks[:10]}")
     
     return processed_spectrum, centroid_breaks, bin_centers
 
@@ -336,14 +326,8 @@ def fit_spectrum_to_library(
         rt_mz, prec_info, params, ms1_mz, dino_features
     )
     
-    # DEBUG: Window filtering results
-    print(f"\nDEBUG fit_spectrum_to_library: scan_num={spec.scan_num}")
-    print(f"  DIA spectrum: {len(dia_spectrum)} peaks, m/z=[{dia_spectrum[:, 0].min():.4f}, {dia_spectrum[:, 0].max():.4f}]")
-    print(f"  Window candidates: {len(window_idxs)} found")
-    
     if len(window_idxs) == 0:
         # No candidates found
-        print(f"  WARNING: No candidates found in window!")
         return SpectralFitResult(
             features=[],
             coefficients=np.array([]),
@@ -362,9 +346,6 @@ def fit_spectrum_to_library(
         dia_spectrum, params.mz_tol
     )
     
-    # DEBUG: DIA spectrum processing
-    print(f"  Processed spectrum: {processed_spectrum.shape} peaks")
-    print(f"  Centroid breaks: {len(centroid_breaks)} breaks, first 10: {centroid_breaks[:10] if len(centroid_breaks) > 0 else 'None'}")
     
     # Get top N indices if available
     top_n_idxs = [library[i].get('top_n') for i in mass_window_candidates]
