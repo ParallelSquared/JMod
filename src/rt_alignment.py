@@ -10,12 +10,12 @@ import re
 import matplotlib.pyplot as plt
 import tqdm
 import src.config as config
-from .spectral_fitting import fit_to_lib
+from src.spectral_fitting import fit_to_lib
 
 from scipy.interpolate import LSQUnivariateSpline as spline
 #from scipy.optimize import isotonic_regression
 from statistics import quantiles
-from .utils.misc_functions import within_tol
+from src.utils.misc_functions import within_tol
 from scipy import signal
 from scipy.optimize import curve_fit
 from scipy import stats
@@ -28,14 +28,14 @@ from scipy.interpolate import interp1d
 import statsmodels.api as sm
 
 
-from .mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
+from src.mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
 
-from .utils.misc_functions import within_tol,moving_average, \
+from src.utils.misc_functions import within_tol,moving_average, \
     closest_ms1spec, closest_peak_diff, unstring_floats, fragment_cor
 
 
-from .finetune_funs import fine_tune_rt, one_hot_encode_sequence
-from .utils.io.read_output import names, dtypes
+from src.finetune_funs import fine_tune_rt, one_hot_encode_sequence
+from src.utils.io.read_output import names, dtypes
 
 colours = ["tab:blue","tab:orange","tab:green","tab:red",
 'tab:purple',
@@ -47,6 +47,29 @@ colours = ["tab:blue","tab:orange","tab:green","tab:red",
 
 
 def twostepfit(x,y,n_knots=2,z=None,k1=1):
+    """
+    Get spline that maps x to y in 2 steps. Outliers are removed after first step
+
+    Parameters
+    ----------
+    x : array
+        Series of x values.
+    y : array
+        Series of x values.
+    n_knots : int, optional
+        How many knots in the spline. The default is 2.
+    z : array, optional
+        If present, attributes used to weight the spline fitting. The default is None.
+    k1 : int, optional
+        Degree of spline. The default is 1.
+
+    Returns
+    -------
+    spl2 : scipy.interpolate.UnivariateSpline
+        Spline mapping x to y.
+
+    """
+    
     if z is None:
         z= np.ones_like(x)
     y_exists = np.isfinite(y)
@@ -73,6 +96,28 @@ def twostepfit(x,y,n_knots=2,z=None,k1=1):
     return spl2
 
 def threestepfit(x,y,n_knots=2,z=None,k1=1):
+    """
+    Get spline that maps x to y in 3 steps. Outliers are removed after each step
+
+    Parameters
+    ----------
+    x : array
+        Series of x values.
+    y : array
+        Series of x values.
+    n_knots : int, optional
+        How many knots in the spline. The default is 2.
+    z : array, optional
+        If present, attributes used to weight the spline fitting. The default is None.
+    k1 : int, optional
+        Degree of spline. The default is 1.
+
+    Returns
+    -------
+    spl2 : scipy.interpolate.UnivariateSpline
+        Spline mapping x to y.
+
+    """
     if z is None:
         z= np.ones_like(x)
     y_exists = np.isfinite(y)
@@ -111,44 +156,31 @@ def threestepfit(x,y,n_knots=2,z=None,k1=1):
     return spl3
 
 
-from numpy.polynomial import legendre as leg
-from sklearn.linear_model import SGDRegressor
-from sklearn.preprocessing import StandardScaler
-
-def sgd_fit(x,y,z=None,deg=2,penalty="l1"):
-    if z is None:
-        z= np.ones_like(x)
-    y_exists = np.isfinite(y)
-    x_exists = np.isfinite(x)*y_exists
-    x=np.array(x)[x_exists]
-    y=np.array(y)[x_exists]
-    z=np.array(z)[x_exists]
-    
-    sorted_idxs = np.argsort(x)
-    sort_x = np.array(x)[sorted_idxs]
-    sort_y = np.array(y)[sorted_idxs]
-    sort_z = np.array(z)[sorted_idxs]
-    
-    
-    sort_x = StandardScaler().fit_transform(sort_x[:,np.newaxis])
-    V=leg.legvander(sort_x.flatten(),deg)
-    
-    
-    sgdr = SGDRegressor(loss="huber",max_iter=10000,alpha=0.0001,penalty=penalty,learning_rate="adaptive")
-    sgdr.fit(V, sort_y)
-    
-    # plt.scatter(sort_x,sort_y,s=1)
-    # plt.scatter(sort_x,sgdr.predict(V),s=1)
-    # plt.yscale("log")
-    # plt.ylim(0,70)
-    
-    def spl(x_vals):
-        V_vals = leg.legvander(x_vals,deg)
-        return sgdr.predict(V_vals)
-    
-    return spl
 
 def initstepfit(x,y,n_knots=2,z=None,k1=1):
+    """
+    Get spline that maps x to y in 3 steps. Outliers are removed after each step.
+    SIinitial guess is a straight line from [min_x,min_] to [max_x,max_y]
+    
+    Parameters
+    ----------
+    x : array
+        Series of x values.
+    y : array
+        Series of x values.
+    n_knots : int, optional
+        How many knots in the spline. The default is 2.
+    z : array, optional
+        If present, attributes used to weight the spline fitting. The default is None.
+    k1 : int, optional
+        Degree of spline. The default is 1.
+
+    Returns
+    -------
+    spl2 : scipy.interpolate.UnivariateSpline
+        Spline mapping x to y.
+
+    """
     ### like above but initial guess is just a straight line from [min_x,min_] to [max_x,max_y]
     if z is None:
         z= np.ones_like(x)
@@ -190,7 +222,27 @@ def initstepfit(x,y,n_knots=2,z=None,k1=1):
 
 
 def lowess_fit(x,y,frac=.2, it=3):
+    
+    """    
+    Fit LOWESS regression line mapping x to y
+    
+    Parameters
+    ----------
+    x : array
+        Series of x values.
+    y : array
+        Series of y values.
+    frac : float, optional
+        Fraction of the data used for each estimate . The default is .2.
+    it : int, optional
+        Number of rewightings to perform. The default is 3.
 
+    Returns
+    -------
+    f: scipy.interpolate.interp1d
+    Mapping from x to y
+
+    """
     # plt.scatter(x,y,s=1)
     
     lowess = sm.nonparametric.lowess(y, x, frac=frac,it=it)
@@ -205,151 +257,27 @@ def lowess_fit(x,y,frac=.2, it=3):
     return f
 
 
-
-def get_diff(mz,peaks,window,tol):
     
-    log_diff = within_tol(mz, peaks, atol=0, rtol=tol) 
-    idxs = np.where(log_diff[...,0])[0]
-    
-    
-    # if a match
-    if idxs.size > 0:
-        
-        # in case of multiple matches
-        # select idx with smallest error
-        closest_idx = idxs[np.argmin(log_diff[idxs,1])]
-        
-        return (peaks[closest_idx]-mz)/mz
-    
-    else:
-        return np.nan
-            
-
-def lin_func(x,a,b,c):
-    return (a*np.array(x[0]))+(b*np.array(x[1]))+c
-
-def curve_param(x,y,z,func=lin_func):
-    # z are predictions
-    x = np.array(x)
-    y = np.array(y)
-    z = np.array(z)
-    
-    z_exists = np.isfinite(z) # some diffs may be nans
-    parameters, covariance = curve_fit(func, [x[z_exists],y[z_exists] ], z[z_exists])
-    return parameters
-
-def contains_peak(window,mz):
-    return window[0]<mz<window[1]
-
-def max_intens(peaks,window):
-    
-    window_peaks = peaks[np.logical_and(peaks[:,0]>window[0],peaks[:,0]<window[1])]
-                                        
-    if len(window_peaks)>0:
-        return window_peaks[np.argmax(window_peaks[:,1])]
-    else:
-        return np.zeros(2)
-    
-        
-# find largest peak in each spectrum
-def get_largest(dia_spectra):
-    
-    ms1spectra = dia_spectra.ms1scans
-    ms2spectra = dia_spectra.ms2scans
-    all_windows = [tuple(i.ms1window) for i in ms2spectra]
-    set_windows = sorted(set(all_windows))
-    all_windows = np.stack(all_windows)
-    min_mz = np.min(all_windows[:,0])
-    max_mz = np.max(all_windows[:,1])
-    
-    # num_windows if non-overalpping
-    ms2_ms1_ratio = round(len(ms2spectra)/len(ms1spectra))
-    peaks_per_window = config.n_most_intense//ms2_ms1_ratio
-   
-    mp_window_mp_spec = np.array([np.append(np.pad([max_intens(i.peak_list().T,window) for window in all_windows[idx*ms2_ms1_ratio:(idx+1)*ms2_ms1_ratio]],((0,ms2_ms1_ratio),(0,0)))[:ms2_ms1_ratio],
-                                            np.ones(ms2_ms1_ratio)[:,np.newaxis]*idx,1) 
-                                  for idx,i in enumerate(ms1spectra)])
-    
-    top_window = np.argsort(-mp_window_mp_spec[:,:,1],axis=0)[:peaks_per_window]
-    top_mzs = np.array([i[j] for i,j in zip(np.transpose(mp_window_mp_spec,[1,0,2]),top_window.T)])
-    top_mzs[:,:,2] = (top_mzs[:,:,2]*ms2_ms1_ratio)+np.arange(ms2_ms1_ratio)[:,np.newaxis]
-    return top_mzs.reshape(-1,3)
-
-
-    
-    
-def closest_feature(mz,rt,dino_features,rt_tol,mz_tol):
-    
-    _bool = np.logical_and(dino_features.rtStart<(rt+rt_tol),(rt-rt_tol)<dino_features.rtEnd)
-    
-    feature_mzs = np.array(dino_features.mz[_bool])
-    
-    log_diff = within_tol(mz, feature_mzs, atol=0, rtol=mz_tol) 
-    idxs = np.where(log_diff[...,0])[0]
-    
-    
-    # if a match
-    if idxs.size > 0:
-        
-        # in case of multiple matches
-        # select idx with smallest error
-        closest_idx = idxs[np.argmin(log_diff[idxs,1])]
-        
-        return (feature_mzs[closest_idx]-mz)/mz
-    
-    else:
-        return np.nan
-        
-def closest_feature2(mz,rt,dino_features,rt_tol,mz_tol):
-    
-    _bool = np.logical_and(dino_features.rtStart<(rt+rt_tol),(rt-rt_tol)<dino_features.rtEnd)
-    
-    feature_mzs = np.array(dino_features.mz[_bool])
-    
-    log_diff = within_tol(mz, feature_mzs, atol=0, rtol=mz_tol)
-    idxs = np.where(log_diff[...,0])[0]
-    
-    
-    # if a match
-    if idxs.size > 0:
-        
-        # in case of multiple matches
-        # select idx with smallest error
-        closest_idx = idxs[np.argmin(log_diff[idxs,1])]
-        
-        return feature_mzs[closest_idx]
-    
-    else:
-        return np.nan
-    
-def get_tol(x):
-    x= x[np.isfinite(x)]
-    max_scale = np.max(x)
-    min_scale = np.min(x)
-    bin_size = (max_scale-min_scale)/300 # found to work well but not optimised
-    bins = np.arange(min_scale,max_scale+bin_size,bin_size)
-    vals,bins = np.histogram(x,bins)
-    smooth_vals = moving_average(vals, 10) # found to work well but not optimised
-    _,peak=signal.find_peaks(smooth_vals,height=max(smooth_vals),width=1,rel_height=.5)
-    return(peak["widths"][0]*bin_size*2) # twice fwhm
-
-def closest_spec(dia_rt_mzwin,mz,rt):
-    
-    _bool = np.logical_and(dia_rt_mzwin[:,1]<mz,mz<dia_rt_mzwin[:,2])
-    contender_idxs = np.where(_bool)
-    contenders = dia_rt_mzwin[_bool]
-    if len(contenders)==0: ## should not happen has been observed with mismade acquisition schemes
-        return 0
-    closest_idx = contender_idxs[0][np.argmin(np.abs(contenders[:,0]-rt))]
-    return closest_idx
-    # try:
-    #     closest_idx = contender_idxs[0][np.argmin(np.abs(contenders[:,0]-rt))]
-    #     return closest_idx
-    # except:
-    #     print(mz,rt)
-    #     return 0
     
 def closest_spec(dia_rt_mzwin, mz, rt):
+    """
+    Find which window is closest to the desired m/z and RT 
+
+    Parameters
+    ----------
+    dia_rt_mzwin : array
+        3D Array of bottom of mz window, top of mz window, mz window retention time.
+    mz : float
+        Desired mz.
+    rt : float
+        Desired retention time.
+
+    Returns
+    -------
+    int
+        Index of the closest window/spectrum.
+
+    """
     contender_idxs = np.where((dia_rt_mzwin[:,1] < mz) & (mz < dia_rt_mzwin[:,2]))[0]
     
     if contender_idxs.size == 0:  # More efficient size check
@@ -361,17 +289,52 @@ def closest_spec(dia_rt_mzwin, mz, rt):
     return closest_idx
     
 def gaussian(x, amplitude, mean, stddev):
+    """
+    Get y values for gaussian distribution
+
+    Parameters
+    ----------
+    x : array
+        Array of x values.
+    amplitude : float
+        Scale factor for amplitude of distribution.
+    mean : float
+        Mean of gaussian distribution.
+    stddev : float
+        Standard deviation of gaussia distribution.
+
+    Returns
+    -------
+    array
+        y values correspond to the input x values for the gaussian with parameters given.
+
+    """
     return (amplitude/ (np.abs(stddev) * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mean) / stddev) ** 2)
 
-def fwhm(stddev):
-    return 2 * np.sqrt(2 * np.log(2)) * stddev
 
 # NB: Need to make the folowing changes to this code
 ## if there is a background uniform distribution, it will not fit the gaussian well
 # therefore we can subtract the min val in all bins fram all bins and then fit
 ### This seems to work for some data but need to robustly test
 def fit_gaussian(data,init_std=None,bin_n=50):
-    
+    """
+    Given a distribution of data points, try to fit a gaussian, then return the parameters that define it
+
+    Parameters
+    ----------
+    data : array
+        Distribution of points that aproximate a gaussian distribution.
+    init_std : float, optional
+        Intitial guess at the standard deviation of the gaussian. The default is None.
+    bin_n : int, optional
+        Number of bins used to fit the distribution. The default is 50.
+
+    Returns
+    -------
+    list
+        Parameters defing the fitted gaussian; amplitude, mean, standard deviation
+
+    """
     data = np.array(data)
     data = data[~np.isnan(data)]
     # Create a histogram
@@ -402,19 +365,28 @@ def fit_gaussian(data,init_std=None,bin_n=50):
     
     return fit_params#, background
 
-from math import erf, sqrt
-def phi(x):
-    #'Cumulative distribution function for the standard normal distribution'
-    return (1.0 + erf(x / sqrt(2.0))) / 2.0
-
-def half_gaussian_cdf(x, mean, stddev):
-    return stats.halfnorm.cdf(x, loc=mean, scale=stddev)
-
-def exp_cdf(x, loc, mean):
-    return stats.expon.cdf(x,loc=loc,scale=mean)
 
 
 def fit_errors(errors,limit=10,percentile=.999):
+    """
+    Given a distribution of errors, find if if is best explained by gaussian/exponential.
+    When best, return the boundary that defines the provided percentile.
+
+    Parameters
+    ----------
+    errors : array
+        Array of errors.
+    limit : float, optional
+        Maximum error that is considered. The default is 10.
+    percentile : float [0,1], optional
+        Percentile to define the boundary. The default is .999.
+
+    Returns
+    -------
+    boundary : float
+        Value below which 'percentile' errors fall.
+
+    """
     ### try to fit half gaussian or exponential to absolute rt errors
     
     errors_filtered = np.array(errors)[np.array(errors)<limit]
@@ -447,62 +419,6 @@ def fit_errors(errors,limit=10,percentile=.999):
 
     
     
-# all_emp_diffs=all_emp_diffs
-# all_pred_diffs = all_pred_diffs
-
-# limit=3 ## exlcude RT diffs larger than this (outliers)
-# emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
-# emp_data = np.append(emp_data,limit)
-# emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
-# emp_cdf_auc = auc(emp_data,emp_p)
-# pred_data = np.sort(np.abs(all_pred_diffs)[np.abs(all_pred_diffs) < limit])
-# pred_data = np.append(pred_data,limit)
-# pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
-# pred_cdf_auc = auc(pred_data,pred_p)
-
-# plt.plot(emp_data,emp_p,label="Empirical RT")
-# plt.legend()
-# plt.xlabel("RT difference")
-# plt.ylabel("Fraction of Precursors")
-# emp_abs_errors_med = np.median(np.abs(all_emp_diffs-np.median(all_emp_diffs)))
-# pred_abs_errors_med = np.median(np.abs(all_pred_diffs-np.median(all_pred_diffs)))
-
-
-# plt.plot(pred_data,pred_p,label="Predicted RT")
-# plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)))
-# plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)))
-
-
-# plt.plot(emp_data,emp_p,label="Empirical RT")
-# plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)))
-# plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)))
-
-# plt.hist(np.power(stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med*2)-pred_p,2))
-# plt.hist(np.power(stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1))-pred_p,2),alpha=.5)
-
-# plt.hist(np.power(stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med*2)-emp_p,2))
-# plt.hist(np.power(stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1))-emp_p,2),alpha=.5)
-
-
-# ### laplace
-# errors = all_pred_diffs
-# # errors = np.random.normal(loc=0,scale=mad*1.4826/2,size=10000)
-# mad = np.median(np.abs(errors))
-# x=np.linspace(-2,2,100)
-# plt.hist(errors,x,density=True)
-# plt.plot(x,stats.laplace.pdf(x,loc=0,scale=mad/np.log(2)))
-# plt.plot(x,stats.norm.pdf(x,loc=0,scale=mad*1.4826))
-# plt.xlim(-2,2)
-
-
-
-# mad = np.median(np.abs(errors))
-# x=np.linspace(-2,2,100)
-# plt.hist(np.abs(errors),x,density=True)
-# plt.plot(x,stats.expon.pdf(x,loc=0,scale=mad/np.log(2)))
-# plt.plot(x,stats.halfnorm.pdf(x,loc=0,scale=mad*1.4826))
-# plt.xlim(-2,2)
-
 
 
 
@@ -517,6 +433,37 @@ def fit_errors(errors,limit=10,percentile=.999):
 
 
 def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False):
+    """
+    Perform a preliminary search of the specrta to align the library mz and RT values
+
+    Parameters
+    ----------
+    dia_spectra : src.utisl.io.load_files.SpectrumFile
+        Spectra to align the library to.
+    librarySpectra : dict
+        Spectrum library.
+    dino_features : pd.DataFrame
+        Dataframe of features identified using Biosaur2.
+    mz_tol : float
+        MS1 mz tolerance.
+    ms1 : bool, optional
+        DESCRIPTION. The default is False.
+    results_folder : String, optional
+        If provided, where to save the logs/figures. The default is None.
+    ms2 : bool, optional
+        (Not active) Whether to align at MS2 level. The default is False.
+
+    Returns
+    -------
+    (rt_spl, mz_func), updatedLibrary
+    
+        rt_spl: Spline fitting library retention time to observed values
+        mz_func: Function that aligns library precuror m/z to observed values
+        updatedLibrary: Copy of the library with updated Retention time if fine-tuning
+        
+
+    """
+    
     ## for testing
     # mz_tol,ms1,results_folder,ms2 = (config.ms1_tol,False,None,False) 
     # here spectra are both ms1 and ms2 
@@ -650,7 +597,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         # lf_spectra = [np.argmin(np.abs(np.array(all_dia_rt)-i)) for i in lf_rt]
         dia_rt_mzwin = np.array([[i.RT,*i.ms1window] for i in ms2spectra])
         lf_spectra = [closest_spec(dia_rt_mzwin,i,j) for i,j in zip(lf_mz,lf_rt)] 
-        # mz_int_n = get_largest(dia_spec,tra)
+        
         fit_outputs2=[]
         frags = []
         for idx in tqdm.trange(len(lf_spectra)):
@@ -1150,7 +1097,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # buffer = 1.2
     # config.opt_rt_tol = np.round(np.sort(np.abs(dia_rt-rt_spl(output_rts)))[int(config.n_most_intense*.95)]*buffer,5) 
     
-    # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
     new_rt_tol = boundary#4*np.abs(rt_stddev) 
     if config.args.user_rt_tol:
         print("Using user specified RT tolerance")
@@ -1166,8 +1112,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     #                             np.abs(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs
     #                                    )[is_real])[int(sum(is_real)*.95)]*buffer,6+5)#6 for 1e-6 the 5 decimal places
 
-    # new_ms1_tol = get_tol(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs)
-    # new_ms1_tol = get_tol(diffs-mz_spl(id_mzs))
+
     new_ms1_tol = np.abs(4*mz_stddev)
     print(f"Optimsed ms1 tolerance: {new_ms1_tol}")
     
@@ -1372,10 +1317,22 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
 def filter_rts_by_dense(rts,n_bins=20):
     """
-    Input list of RTs
-    Where they are not dense is probably FPs
-    return bool of those from dense region
+    Given a list of retention times, trim the ends if these areas are not dense (e.g. wash)    
+
+    Parameters
+    ----------
+    rts : array
+        Input list of RTs.
+    n_bins : int, optional
+        Number of bins to consider. The default is 20.
+
+    Returns
+    -------
+    Boolean array
+        Which entries to consider; part of the dense region.
+
     """
+
     hist,bins = np.histogram(rts,n_bins)
     med = np.mean(hist[hist!=0])
     where_larger = np.where(hist>med/2)[0]
@@ -1383,6 +1340,39 @@ def filter_rts_by_dense(rts,n_bins=20):
     return np.logical_and(np.greater(rts,smallest),np.less(rts,largest))
 
 def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False):
+    """
+    Perform a preliminary search of the timeplex spectra to align the library mz and RT values
+
+    Parameters
+    ----------
+    dia_spectra : src.utisl.io.load_files.SpectrumFile
+        Spectra to align the library to.
+    librarySpectra : dict
+        Spectrum library.
+    dino_features : pd.DataFrame
+        Dataframe of features identified using Biosaur2.
+    mz_tol : float
+        MS1 mz tolerance.
+    ms1 : bool, optional
+        DESCRIPTION. The default is False.
+    results_folder : String, optional
+        If provided, where to save the logs/figures. The default is None.
+    ms2 : bool, optional
+        (Not active) Whether to align at MS2 level. The default is False.
+
+    Returns
+    -------
+    (rt_spl, mz_func), updatedLibrary
+    
+        rt_spl: Spline fitting library retention time to observed values
+        
+        mz_func: Function that aligns library precuror m/z to observed values
+        
+        updatedLibrary: Copy of the library with duplicates of each precursor for each timePlex and each with their own specific retention time
+                        
+        
+
+    """
     ## for testing
     # mz_tol,ms1,results_folder,ms2 = (config.ms1_tol,False,None,False)
     # here spectra are both ms1 and ms2 
@@ -1958,7 +1948,6 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
    
     
-    # new_rt_tol = get_tol(dia_rt-rt_spl(output_rts))
     new_rt_tol =np.abs(boundary)# 4*np.abs(rt_stddev)
     if config.args.user_rt_tol:
         print("Using user specified RT tolerance")
@@ -2007,8 +1996,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     #                             np.abs(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs
     #                                    )[is_real])[int(sum(is_real)*.95)]*buffer,6+5)#6 for 1e-6 the 5 decimal places
 
-    # new_ms1_tol = get_tol(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs)
-    # new_ms1_tol = get_tol(diffs-mz_spl(id_mzs))
+
     new_ms1_tol = np.abs(4*mz_stddev)
     print(f"Optimsed ms1 tolerance: {new_ms1_tol}")
     
