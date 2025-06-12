@@ -428,64 +428,13 @@ def fit_errors(errors,limit=10,percentile=.999):
 ##################################################################################################################################
 
 
-                                        
+def fit_without_features(dia_spectra, librarySpectra):
 
-
-
-def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False):
-    """
-    Perform a preliminary search of the specrta to align the library mz and RT values
-
-    Parameters
-    ----------
-    dia_spectra : src.utisl.io.load_files.SpectrumFile
-        Spectra to align the library to.
-    librarySpectra : dict
-        Spectrum library.
-    dino_features : pd.DataFrame
-        Dataframe of features identified using Biosaur2.
-    mz_tol : float
-        MS1 mz tolerance.
-    ms1 : bool, optional
-        DESCRIPTION. The default is False.
-    results_folder : String, optional
-        If provided, where to save the logs/figures. The default is None.
-    ms2 : bool, optional
-        (Not active) Whether to align at MS2 level. The default is False.
-
-    Returns
-    -------
-    (rt_spl, mz_func), updatedLibrary
-    
-        rt_spl: Spline fitting library retention time to observed values
-        mz_func: Function that aligns library precuror m/z to observed values
-        updatedLibrary: Copy of the library with updated Retention time if fine-tuning
-        
-
-    """
-    
-    ## for testing
-    # mz_tol,ms1,results_folder,ms2 = (config.ms1_tol,False,None,False) 
-    # here spectra are both ms1 and ms2 
-    
-    config.n_most_intense_features = int(1e5) # larger than possible, essentually all
-    
-    # Calculate scans_per_cycle safely
-    if len(dia_spectra.ms1scans) > 0:
-        scans_per_cycle = max(1, round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans)))
-    else:
-        scans_per_cycle = 1
-
-    print("Intitial search")
-    # print(f"Fitting the {config.n_most_intense} most intense spectra")
-    
-    ms1spectra = dia_spectra.ms1scans
-    ms2spectra = dia_spectra.ms2scans
-    
-    ms1_rt = np.array([i.RT for i in ms1spectra])
+    all_keys = list(librarySpectra)
+    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
     
     # Adjust partitioning based on available data
-    totalIC = np.array([np.sum(i.intens) for i in ms2spectra])
+    totalIC = np.array([np.sum(i.intens) for i in dia_spectra.ms2scans])
     total_scans = len(totalIC)
     
     # Dynamically adjust number of partitions based on data size
@@ -520,123 +469,95 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         top_n = np.random.choice(np.arange(total_scans), 
                                 min(total_scans, config.n_most_intense), 
                                 replace=False)
+   
     
-    # Safely calculate top_n_ms1
-    if scans_per_cycle > 0:
-        top_n_ms1 = top_n // scans_per_cycle
-    else:
-        top_n_ms1 = top_n
 
-    # top_n = np.argsort(-totalIC)[:config.n_most_intense]
-    top_n_ms1 = top_n//scans_per_cycle
+    
+
+    top_n_spectra = [dia_spectra.ms2scans[i] for i in top_n]
+
+
+
+    ### redefine "top_n_spectra" to evenly span Rt and m/z
+    np.random.seed(0)
+    #top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
+    
+    
+    fit_outputs=[]
+    
+    frags = []
+    for idx in tqdm.trange(len(top_n)):
+            fit_output = fit_to_lib(top_n_spectra[idx],
+                                    library=librarySpectra,
+                                    rt_mz=rt_mz,
+                                    all_keys=all_keys,
+                                    dino_features=None,
+                                    rt_filter=False,
+                                    return_frags=False,
+                                    ms1_spectra = dia_spectra.ms1scans,
+                                    frac_matched=.8
+                                    )
+            fit_outputs.append(fit_output)
+    
+    return fit_outputs                                    
+
+def fit_with_features(dia_spectra, librarySpectra, dino_features):
+    
     all_keys = list(librarySpectra)
     rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
+    
+    all_dia_rt = [i.RT for i in dia_spectra.ms2scans]
+    all_dia_windows = np.array([i.ms1window for i in dia_spectra.ms2scans])
+    lowest_mz = np.min(all_dia_windows,0)[0] # assume window span is constant over time
+    largest_mz = np.max(all_dia_windows,0)[1]
+    mz_bins = np.linspace(lowest_mz,largest_mz,6)
+    
+    ## remove charge 1+ features
+    dino_features = dino_features[dino_features["charge"]!=1]
+    dino_features = dino_features.reset_index(drop=True)
+    sorted_features = np.argsort(-np.array(dino_features.intensityApex))
+    sorted_mz = dino_features.mz[sorted_features]
+    large_feature_indices = sorted_features[np.array(np.logical_and(sorted_mz>lowest_mz,sorted_mz<largest_mz))][:config.n_most_intense_features] 
+    
+    sorted_feature_mz_bins = [sorted_features[np.logical_and(sorted_mz>mz_bins[i],sorted_mz<mz_bins[i+1])] for i in range(len(mz_bins)-1)]
+    large_feature_indices = [j for i in sorted_feature_mz_bins for j in i[:(config.n_most_intense_features//(len(mz_bins)-1))]]
+    
+    lf_rt = np.array(dino_features.rtApex[large_feature_indices])
+    lf_mz = np.array(dino_features.mz[large_feature_indices])
+    # print("Finding correct spectra")
+    # lf_spectra = [np.argmin(np.abs(np.array(all_dia_rt)-i)) for i in lf_rt]
+    dia_rt_mzwin = np.array([[i.RT,*i.ms1window] for i in dia_spectra.ms2scans])
+    lf_spectra = [closest_spec(dia_rt_mzwin,i,j) for i,j in zip(lf_mz,lf_rt)] 
+    
+    fit_outputs=[]
+    frags = []
+    for idx in tqdm.trange(len(lf_spectra)):
+        fit_output = fit_to_lib(dia_spectra.ms2scans[int(lf_spectra[idx])],
+                                    library=librarySpectra,
+                                    rt_mz=rt_mz,
+                                    all_keys=all_keys,
+                                    dino_features=None,
+                                    rt_filter=False,
+                                    ms1_mz=lf_mz[idx],
+                                    ms1_spectra = dia_spectra.ms1scans,
+                                    frac_matched=.8,## NB: this may be selcting for smaller peptides
+                                    ms1_tol=config.ms1_tol
+                                    )
+        fit_outputs.append(fit_output)
+        
+    top_n_spectra = [dia_spectra.ms2scans[i] for i in lf_spectra]
+    
+    return fit_outputs, top_n_spectra, large_feature_indices, lf_mz
 
-    top_n_spectra = [ms2spectra[i] for i in top_n]
+
+def process_prelim_search(fit_outputs,
+                          librarySpectra,
+                          top_n_spectra,
+                          dino_features,
+                          large_feature_indices,
+                          lf_mz
+                          ):
     
-    
-    if dino_features is None:
-    
-        ### redefine "top_n_spectra" to evenly span Rt and m/z
-        np.random.seed(0)
-        #top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
-        
-        
-        fit_outputs=[]
-        
-        frags = []
-        for idx in tqdm.trange(len(top_n)):
-            if ms2:
-                fit_output,frag_errors = fit_to_lib(top_n_spectra[idx],
-                                        library=librarySpectra,
-                                        rt_mz=rt_mz,
-                                        all_keys=all_keys,
-                                        dino_features=None,
-                                        rt_filter=False,
-                                        return_frags=True,
-                                        ms1_spectra = ms1spectra,
-                                        frac_matched=.8
-                                        )
-                frags.append(frag_errors)
-            else:
-                fit_output = fit_to_lib(top_n_spectra[idx],
-                                        library=librarySpectra,
-                                        rt_mz=rt_mz,
-                                        all_keys=all_keys,
-                                        dino_features=None,
-                                        rt_filter=False,
-                                        return_frags=False,
-                                        ms1_spectra = ms1spectra,
-                                        frac_matched=.8
-                                        )
-            fit_outputs.append(fit_output)
-        fit_outputs1=fit_outputs
-    # """
-    #################################################################################
-    # """
-    else:
-        all_dia_rt = [i.RT for i in ms2spectra]
-        all_dia_windows = np.array([i.ms1window for i in ms2spectra])
-        lowest_mz = np.min(all_dia_windows,0)[0] # assume window span is constant over time
-        largest_mz = np.max(all_dia_windows,0)[1]
-        mz_bins = np.linspace(lowest_mz,largest_mz,6)
-        
-        ## remove charge 1+ features
-        dino_features = dino_features[dino_features["charge"]!=1]
-        dino_features = dino_features.reset_index(drop=True)
-        sorted_features = np.argsort(-np.array(dino_features.intensityApex))
-        sorted_mz = dino_features.mz[sorted_features]
-        large_feature_indices = sorted_features[np.array(np.logical_and(sorted_mz>lowest_mz,sorted_mz<largest_mz))][:config.n_most_intense_features] 
-        
-        sorted_feature_mz_bins = [sorted_features[np.logical_and(sorted_mz>mz_bins[i],sorted_mz<mz_bins[i+1])] for i in range(len(mz_bins)-1)]
-        large_feature_indices = [j for i in sorted_feature_mz_bins for j in i[:(config.n_most_intense_features//(len(mz_bins)-1))]]
-        
-        lf_rt = np.array(dino_features.rtApex[large_feature_indices])
-        lf_mz = np.array(dino_features.mz[large_feature_indices])
-        # print("Finding correct spectra")
-        # lf_spectra = [np.argmin(np.abs(np.array(all_dia_rt)-i)) for i in lf_rt]
-        dia_rt_mzwin = np.array([[i.RT,*i.ms1window] for i in ms2spectra])
-        lf_spectra = [closest_spec(dia_rt_mzwin,i,j) for i,j in zip(lf_mz,lf_rt)] 
-        
-        fit_outputs2=[]
-        frags = []
-        for idx in tqdm.trange(len(lf_spectra)):
-            if ms2:
-                fit_output,frag_errors = fit_to_lib(ms2spectra[int(lf_spectra[idx])],
-                                                    library=librarySpectra,
-                                                    rt_mz=rt_mz,
-                                                    all_keys=all_keys,
-                                                    dino_features=None,
-                                                    rt_filter=False,
-                                                    ms1_mz=lf_mz[idx],
-                                                    return_frags = True,
-                                                    ms1_spectra = ms1spectra,
-                                                    frac_matched=.8, ## NB: this may be selcting for smaller peptides
-                                                    ms1_tol=config.ms1_tol
-                                                    )
-                
-                frags.append(frag_errors)
-            else:
-                
-                fit_output = fit_to_lib(ms2spectra[int(lf_spectra[idx])],
-                                        library=librarySpectra,
-                                        rt_mz=rt_mz,
-                                        all_keys=all_keys,
-                                        dino_features=None,
-                                        rt_filter=False,
-                                        ms1_mz=lf_mz[idx],
-                                        ms1_spectra = ms1spectra,
-                                        frac_matched=.8,## NB: this may be selcting for smaller peptides
-                                        ms1_tol=config.ms1_tol
-                                        )
-            fit_outputs2.append(fit_output)
-            
-        fit_outputs = fit_outputs2
-        top_n_spectra = [ms2spectra[i] for i in lf_spectra]
-    # """
-     ########################################################################
-     
-     
     dia_rt = []
     lib_rt = []
     output=[]
@@ -652,9 +573,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             output.append(fit_output)
             max_id = np.argmax([i[0] for i in fit_output])
             max_ids.append(max_id)
-            if ms2:
-                lc_frags_errors.append(frags[idx][0][max_id])
-                lc_frags.append(frags[idx][1][max_id])
+            # if ms2:
+            #     lc_frags_errors.append(frags[idx][0][max_id])
+            #     lc_frags.append(frags[idx][1][max_id])
             if dino_features is not None:
                 feature_mzs.append(lf_mz[idx])
                 feature_idxs.append(large_feature_indices[idx])
@@ -687,168 +608,280 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         return librarySpectra[(outputs[max_id][3],outputs[max_id][4])]["iRT"]
     
     
-    output_rts = np.array([max_coeff_rt(i) for i in output])
-    output_coeff = np.array([i[j][0] for i,j in zip(output,max_ids)])
-    output_hyper = np.array([i[j][19] for i,j in zip(output,max_ids)])
-    all_lib_rts = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
+    all_output_df = pd.DataFrame([j for i in output for j in i if j[0]>min_int],columns=names[:len(output[0][0])])
+    all_output_df["lib_rt"] = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
+    
+    all_frag_cosines = np.array([fragment_cor(all_output_df,i) for i in range(len(all_output_df))])
+    all_frag_cosines_p = np.array([fragment_cor(all_output_df,i,fn="p") for i in range(len(all_output_df))])
+    # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
+    all_output_df["frag_cosines"] = all_frag_cosines
+    all_output_df["frag_cosines_p"] = all_frag_cosines_p
+
+    all_frag_errors = [unstring_floats(mz) for mz in all_output_df.frag_errors]
+    all_median  = np.median(np.concatenate([i for i in all_frag_errors]))
+    all_output_df["med_frag_error"] = [np.median(np.abs(all_median-i)) for i in all_frag_errors]
+    all_output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in all_output_df["seq"]])
+    all_output_df["last_aa"]=[i[-1] for i in all_output_df.stripped_seq]
+
     
     output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
-    
-    all_output_df = pd.DataFrame([j for i in output for j in i],columns=names[:len(output[0][0])])
+    output_df["lib_rt"] = np.array([max_coeff_rt(i) for i in output])
     
     frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
     frag_cosines_p = np.array([fragment_cor(output_df,i,fn="p") for i in range(len(output_df))])
-    frag_multiply = frag_cosines*frag_cosines_p
+
     # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
     output_df["frag_cosines"] = frag_cosines
     output_df["frag_cosines_p"] = frag_cosines_p
-    
+
     frag_errors = [unstring_floats(mz) for mz in output_df.frag_errors]
     median  = np.median(np.concatenate([i for i in frag_errors]))
     output_df["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
     
     output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in output_df["seq"]])
     output_df["last_aa"]=[i[-1] for i in output_df.stripped_seq]
+
+    return output_df, all_output_df, id_keys, feature_mzs
+
+def empirical_fit(output_df,results_folder=None):
+    """
+    Filter data by confidence then fit LOWESS to empirical RT
+
+    Parameters
+    ----------
+    output_df : pd.DataFrame
+        Dataframe of IDs from the preliminary search.
+
+    Returns
+    -------
+    cor_filter : np.ndarray(bool)
+        DESCRIPTION.
+    emp_rt_spl : TYPE
+        DESCRIPTION.
+
+    """
     
+    
+    
+    print("Filtering IDs from initial search")
+    for feature_percentile in  range(20,80,5):
+    
+    ## empirically derived cutoffs
+        
+    
+                                
+        cor_filter = np.logical_and.reduce(
+                                            [output_df[feat]>np.percentile(output_df[feat],feature_percentile) for feat in ["hyperscore",
+                                                                                                      "frag_cosines_p",
+                                                                                                      "frag_cosines_p",
+                                                                                                      "manhattan_distances",
+                                                                                                      ]]
+                                            +
+                                            [output_df[feat]<np.percentile(output_df[feat],100-feature_percentile) for feat in [
+                                                                                                              "scribe_scores",
+                                                                                                              "gof_stats",
+                                                                                                              "max_matched_residuals",
+                                                                                                              "med_frag_error"]]
+                                                                                                            )
+        
+        
+        f = lowess_fit(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.1)
+        plt.subplots()
+        plt.scatter(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],s=1)
+        plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)
+        plt.title(str(feature_percentile))
+        if results_folder is not None:
+            plt.savefig(results_folder+f"/Percentile_{str(feature_percentile)}.png",dpi=600,bbox_inches="tight")
+        
+        # plt.subplots()
+        # f = lowess_fit(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],.1)
+        # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],s=1)
+        # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],
+        #             f(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter]),s=1)
+        # plt.title(str(feature_percentile))
+        
+        # r_filter =np.logical_and(output_df.last_aa=="R",cor_filter)
+        # fr = lowess_fit(output_rts[r_filter], output_df.rt[r_filter],.1)
+        # plt.subplots()
+        # plt.scatter(output_rts[r_filter],output_df.rt[r_filter],s=1)
+        # x = np.linspace(min(output_rts[r_filter]),max(output_rts[r_filter]),100)
+        # plt.scatter(x,fr(x),s=1)
+        # plt.title(str(feature_percentile))
+        
+        
+        # k_filter =np.logical_and(output_df.last_aa=="K",cor_filter)
+        # fk = lowess_fit(output_rts[k_filter], output_df.rt[k_filter],.1)
+        # # plt.subplots()
+        # plt.scatter(output_rts[k_filter],output_df.rt[k_filter],s=1)
+        # x = np.linspace(min(output_rts[k_filter]),max(output_rts[k_filter]),100)
+        # plt.scatter(x,fk(x),s=1)
+        # plt.title(str(feature_percentile))
+        
+     
+       
+        
+        first_rt_diffs = (f(output_df.lib_rt)-output_df.rt)
+        rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
+        first_rt_tolerance = 4*np.abs(rt_stddev)
+        # rt_mean, rt_stddev = stats.norm.fit(first_rt_diffs[cor_filter])
+        # vals,bins,_=plt.hist(first_rt_diffs[cor_filter],np.linspace(-10,10,100),density=True)
+        # plt.title(str(feature_percentile))
+        # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),gaussian(np.linspace(-first_rt_tolerance,first_rt_tolerance,100), rt_amplitude, rt_mean, rt_stddev))
+        # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),stats.norm.pdf(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),loc= rt_mean, scale=rt_stddev))
+        
+        # plt.vlines([-first_rt_tolerance,first_rt_tolerance],[0]*2,[max(vals)]*2)
+        
+        bad_IDs  = (np.abs(first_rt_diffs)>np.min([first_rt_tolerance,np.ptp(output_df.rt)/5]))[cor_filter]
+        outside_ratio = sum(bad_IDs)/len(bad_IDs)
+        print(f"Testing Percentile: {feature_percentile}, Ratio: {np.round(outside_ratio,4)}, #IDs: {sum(cor_filter)}")
+        if outside_ratio<.05 or (sum(cor_filter)-sum(bad_IDs)<800):
+            break
+    
+    print(feature_percentile,np.round(outside_ratio,4),sum(cor_filter))
+            
+    
+    cor_filter = np.logical_and(cor_filter,np.abs(first_rt_diffs)<first_rt_tolerance)
+    # plt.scatter(output_rts[cor_filter],output_df.rt[cor_filter],s=1)
+    # plt.scatter(output_rts[cor_filter],f(output_rts[cor_filter]),s=1)
+    # plt.title(str(feature_percentile))
+    
+    # x = f(output_rts[cor_filter])-output_df.rt[cor_filter]
+    # x_d = np.linspace(-10,10,100)
+    # density = sum(stats.norm(xi).pdf(x_d) for xi in x)
+    # # plt.subplots()
+    # # plt.plot(x_d,density)
+    # # plt.title(str(feature_percentile))
+    # print(str(feature_percentile),min(density))
+    
+    
+    emp_rt_spl = lowess_fit(np.array(output_df.lib_rt)[cor_filter],np.array(output_df.rt)[cor_filter],.02)
+
+
+    return cor_filter, emp_rt_spl
+
+def cdf_data(rt_diffs,limit=3):
+    """
+    Convert differnces to format for cdf cacluation    
+
+    Parameters
+    ----------
+    rt_diffs : array
+        Retention time errors.
+    limit : float, optional
+        Exclude errors greater than this value. The default is 3.
+
+    Returns
+    -------
+    data : array
+        Filtered and ordered retention time errors.
+    p : array
+        Corresponding proportions less than each error.
+    cdf_auc : float
+        Area under the CDF described by data and p.
+
+    """
+    data = np.sort(np.abs(rt_diffs)[np.abs(rt_diffs) < limit])
+    data = np.append(data,limit)
+    p = np.arange(len(data)) / (len(data) - 1)
+    cdf_auc = auc(data,p)
+    
+    return data, p, cdf_auc
+        
+
+def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False):
+    """
+    Perform a preliminary search of the specrta to align the library mz and RT values
+
+    Parameters
+    ----------
+    dia_spectra : src.utisl.io.load_files.SpectrumFile
+        Spectra to align the library to.
+    librarySpectra : dict
+        Spectrum library.
+    dino_features : pd.DataFrame
+        Dataframe of features identified using Biosaur2.
+    mz_tol : float
+        MS1 mz tolerance.
+    ms1 : bool, optional
+        DESCRIPTION. The default is False.
+    results_folder : String, optional
+        If provided, where to save the logs/figures. The default is None.
+    ms2 : bool, optional
+        (Not active) Whether to align at MS2 level. The default is False.
+
+    Returns
+    -------
+    (rt_spl, mz_func), updatedLibrary
+    
+        rt_spl: Spline fitting library retention time to observed values
+        
+        mz_func: Function that aligns library precuror m/z to observed values
+        
+        updatedLibrary: Copy of the library with updated Retention time if fine-tuning
+        
+
+    """
+    
+    ## for testing
+    # mz_tol,ms1,results_folder,ms2 = (config.ms1_tol,False,None,False) 
+
+    
+    config.n_most_intense_features = int(1e5) 
+    
+    # Calculate scans_per_cycle safely
+    if len(dia_spectra.ms1scans) > 0:
+        scans_per_cycle = max(1, round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans)))
+    else:
+        scans_per_cycle = 1
+
+    print("Intitial search")
+    # print(f"Fitting the {config.n_most_intense} most intense spectra")
+    
+    ms1spectra = dia_spectra.ms1scans
+    ms2spectra = dia_spectra.ms2scans
+    # """ 
+    ms1_rt = np.array([i.RT for i in ms1spectra])
+    
+    all_keys = list(librarySpectra)
+    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
+    
+
+    if dino_features is None:
+        fit_outputs = fit_without_features(dia_spectra, librarySpectra)
+
+    else:
+        fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
+        
+    
+    #################################################################################
+    
+    ########################################################################
+     
+    output_df, all_output_df, id_keys, feature_mzs =  process_prelim_search(fit_outputs,
+                                                                              librarySpectra,
+                                                                              top_n_spectra,
+                                                                              dino_features,
+                                                                              large_feature_indices,
+                                                                              lf_mz
+                                                                              )
+    
+
     if results_folder is not None:
         output_df.to_csv(results_folder+"/firstSearch.csv", index=False)
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
     
     
-    cor_filter = np.ones_like(dia_rt,dtype=bool)
+    cor_filter = np.ones_like(output_df.rt,dtype=bool)
     if dino_features is not None:
-        cor_limit = 0.8
-        hyper_cutoff = np.percentile(output_hyper,50)
-        cor_filter = np.logical_and(frag_multiply>cor_limit,output_hyper>hyper_cutoff)
-        feature_percentile = 0
-        # for feature_percentile in [50,60,70,80,90]: 
-        print("Filtering IDs from initial search")
-        for feature_percentile in  range(20,80,5):
         
-        ## empirically derived cutoffs
-            
-        
-                                    
-            cor_filter = np.logical_and.reduce(
-                                                [output_df[feat]>np.percentile(output_df[feat],feature_percentile) for feat in ["hyperscore",
-                                                                                                          "frag_cosines_p",
-                                                                                                          "frag_cosines_p",
-                                                                                                          "manhattan_distances",
-                                                                                                          ]]
-                                                +
-                                                [output_df[feat]<np.percentile(output_df[feat],100-feature_percentile) for feat in [
-                                                                                                                  "scribe_scores",
-                                                                                                                  "gof_stats",
-                                                                                                                  "max_matched_residuals",
-                                                                                                                  "med_frag_error"]]
-                                                                                                                )
-            
-            # greater_than_feat = {'hyperscore': 10,
-            #                          'frag_cosines_p': 0,#0.9,
-            #                          'manhattan_distances': 1.3}
-            # less_than_feat = {'scribe_scores': 0.02,
-            #                      'gof_stats': -1.1,
-            #                      'max_matched_residuals': -2.5,
-            #                      'med_frag_error': 4.2e-06}
-            # cor_filter = np.logical_and.reduce(
-            #                                     [output_df[feat]>greater_than_feat[feat] for feat in ["hyperscore",
-            #                                                                                               "frag_cosines_p",
-            #                                                                                               "frag_cosines_p",
-            #                                                                                               "manhattan_distances",
-            #                                                                                               ]]
-            #                                     +
-            #                                     [output_df[feat]<less_than_feat[feat] for feat in [
-            #                                                                                                       "scribe_scores",
-            #                                                                                                       "gof_stats",
-            #                                                                                                       # "manhattan_distances",
-            #                                                                                                       "max_matched_residuals",
-            #                                                                                                       "med_frag_error"]]
-            #                                                                                                     )
-            # plt.scatter(output_rts[cor_filter],output_df.rt[cor_filter],s=.01)
-            # print(sum(cor_filter))
-            # plt.subplots()
-            # plt.scatter(np.array(diffs)[cor_filter],output_df.rt[cor_filter],s=1)
-            # plt.title(str(feature_percentile))
-            
-            # plt.subplots()
-            # plt.scatter(np.array([(i-mz)/mz for i,mz in zip(feature_mzs,id_mzs)])[cor_filter],output_df.rt[cor_filter],s=1)
-            # plt.title(str(feature_percentile))
-            
-            
-            f = lowess_fit(output_rts[cor_filter],output_df.rt[cor_filter],.1)
-            plt.subplots()
-            plt.scatter(output_rts[cor_filter],output_df.rt[cor_filter],s=1)
-            plt.scatter(output_rts[cor_filter],f(output_rts[cor_filter]),s=1)
-            plt.title(str(feature_percentile))
-            plt.savefig(results_folder+f"/Percentile_{str(feature_percentile)}.png",dpi=600,bbox_inches="tight")
-            
-            # plt.subplots()
-            # f = lowess_fit(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],.1)
-            # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],s=1)
-            # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],
-            #             f(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter]),s=1)
-            # plt.title(str(feature_percentile))
-            
-            # r_filter =np.logical_and(output_df.last_aa=="R",cor_filter)
-            # fr = lowess_fit(output_rts[r_filter], output_df.rt[r_filter],.1)
-            # plt.subplots()
-            # plt.scatter(output_rts[r_filter],output_df.rt[r_filter],s=1)
-            # x = np.linspace(min(output_rts[r_filter]),max(output_rts[r_filter]),100)
-            # plt.scatter(x,fr(x),s=1)
-            # plt.title(str(feature_percentile))
-            
-            
-            # k_filter =np.logical_and(output_df.last_aa=="K",cor_filter)
-            # fk = lowess_fit(output_rts[k_filter], output_df.rt[k_filter],.1)
-            # # plt.subplots()
-            # plt.scatter(output_rts[k_filter],output_df.rt[k_filter],s=1)
-            # x = np.linspace(min(output_rts[k_filter]),max(output_rts[k_filter]),100)
-            # plt.scatter(x,fk(x),s=1)
-            # plt.title(str(feature_percentile))
-            
-         
-           
-            
-            first_rt_diffs = (f(output_rts)-output_df.rt)
-            rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
-            first_rt_tolerance = 4*np.abs(rt_stddev)
-            # rt_mean, rt_stddev = stats.norm.fit(first_rt_diffs[cor_filter])
-            # vals,bins,_=plt.hist(first_rt_diffs[cor_filter],np.linspace(-10,10,100),density=True)
-            # plt.title(str(feature_percentile))
-            # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),gaussian(np.linspace(-first_rt_tolerance,first_rt_tolerance,100), rt_amplitude, rt_mean, rt_stddev))
-            # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),stats.norm.pdf(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),loc= rt_mean, scale=rt_stddev))
-            
-            # plt.vlines([-first_rt_tolerance,first_rt_tolerance],[0]*2,[max(vals)]*2)
-            
-            bad_IDs  = (np.abs(first_rt_diffs)>np.min([first_rt_tolerance,np.ptp(dia_rt)/5]))[cor_filter]
-            outside_ratio = sum(bad_IDs)/len(bad_IDs)
-            print(f"Testing Percentile: {feature_percentile}, Ratio: {np.round(outside_ratio,4)}, #IDs: {sum(cor_filter)}")
-            if outside_ratio<.05 or (sum(cor_filter)-sum(bad_IDs)<800):
-                break
-        
-        print(feature_percentile,np.round(outside_ratio,4),sum(cor_filter))
-                
-        
-        cor_filter = np.logical_and(cor_filter,np.abs(first_rt_diffs)<first_rt_tolerance)
-        # plt.scatter(output_rts[cor_filter],output_df.rt[cor_filter],s=1)
-        # plt.scatter(output_rts[cor_filter],f(output_rts[cor_filter]),s=1)
-        # plt.title(str(feature_percentile))
-        
-        # x = f(output_rts[cor_filter])-output_df.rt[cor_filter]
-        # x_d = np.linspace(-10,10,100)
-        # density = sum(stats.norm(xi).pdf(x_d) for xi in x)
-        # # plt.subplots()
-        # # plt.plot(x_d,density)
-        # # plt.title(str(feature_percentile))
-        # print(str(feature_percentile),min(density))
-        
-        
-        emp_rt_spl = lowess_fit(np.array(output_rts)[cor_filter],np.array(dia_rt)[cor_filter],.02)
+        cor_filter, emp_rt_spl = empirical_fit(output_df)
     else:
-        hyper_cutoff = np.percentile(all_hyper,80)
-        all_cor_filter = all_hyper>hyper_cutoff
-        cor_filter = output_hyper>hyper_cutoff
-        emp_rt_spl = initstepfit(np.array(all_lib_rts)[all_cor_filter],np.array([i[1] for i in all_id_rt])[all_cor_filter],1,z=np.array(all_hyper)[all_cor_filter])
+        
+        hyper_cutoff = np.percentile(all_output_df.hyperscore,80)
+        all_cor_filter = all_output_df.hyperscore>hyper_cutoff
+        cor_filter = output_df.hyperscore>hyper_cutoff
+        # emp_rt_spl = initstepfit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter],1,z=np.array(all_output_df.hyperscore)[all_cor_filter])
+        emp_rt_spl = lowess_fit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter])
         
     
     
@@ -866,7 +899,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         ## filter for only a single channel for each
         print("Trying RT Prediction")
         seq_rt = {}
-        for s,rt in zip(np.array(id_keys)[cor_filter],np.array(dia_rt)[cor_filter]):
+        for s,rt in zip(np.array(id_keys)[cor_filter],np.array(output_df.rt)[cor_filter]):
             key=librarySpectra[(s[0],float(s[1]))]["seq"]
             seq_rt.setdefault(key,[])
             seq_rt[key].append(rt)
@@ -879,21 +912,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         data_split, models, convertor = fine_tune_rt(grouped_df,qc_plots=True,results_path=results_folder)
         
         
-        # plt.scatter(output_rts[cor_filter],np.array(dia_rt)[cor_filter],label="Original_RT",s=.5,c=[len(seq_rt[librarySpectra[(s[0],float(s[1]))]["seq"]]) for s in np.array(id_keys)[cor_filter]]);plt.colorbar()
-        # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
-        
-        # plt.scatter(all_lib_rts,np.array(np.array([i[1] for i in all_id_rt])),label="Original_RT",s=.5,c=np.log10(all_hyper))
-        # plt.scatter(all_lib_rts,rt_spl(all_lib_rts),label="Predicted_RT",s=1)
-        # plt.colorbar(label="log coeff")
-        # # plt.scatter(output_rts,dia_rt,label="Original_RT",s=1)
-        # # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
-        # plt.xlabel("Library RT");plt.ylabel("Observed RT");
-        
-        # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
-        # plt.scatter(all_lib_rts,rt_spl(all_lib_rts),label="Predicted_RT",s=1)
-        
-        
-        all_emp_diffs = (emp_rt_spl(output_rts)-np.array(dia_rt))[cor_filter]
+        all_emp_diffs = (emp_rt_spl(output_df.lib_rt)-np.array(output_df.rt))[cor_filter]
         
         
         lib_seqs = [one_hot_encode_sequence(librarySpectra[key]["seq"]) for key in id_keys]
@@ -903,70 +922,33 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         validation_rt_diffs = data_split[3]-validation_rts
         
         pred_rt_spl = lowess_fit(predicted_rts[cor_filter],
-                               np.array(dia_rt)[cor_filter] ,frac=.2)
+                               np.array(output_df.rt)[cor_filter] ,frac=.2)
         # plt.scatter(new_lib_rts[cor_filter],np.array(dia_rt)[cor_filter],s=1)
         # plt.scatter(new_lib_rts[cor_filter],pred_rt_spl(new_lib_rts[cor_filter]),s=1)
         
-        all_pred_diffs = (pred_rt_spl(predicted_rts) - np.array(dia_rt))[cor_filter]
+        all_pred_diffs = (pred_rt_spl(predicted_rts) - np.array(output_df.rt))[cor_filter]
         
         all_pred_diffs = validation_rt_diffs
         
+        emp_data, emp_p, emp_cdf_auc = cdf_data(all_emp_diffs,limit=limit)
+        pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs,limit=limit)
         
-        emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
-        emp_data = np.append(emp_data,limit)
-        emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
-        emp_cdf_auc = auc(emp_data,emp_p)
-        pred_data = np.sort(np.abs(all_pred_diffs)[np.abs(all_pred_diffs) < limit])
-        pred_data = np.append(pred_data,limit)
-        pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
-        pred_cdf_auc = auc(pred_data,pred_p)
+        # emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
+        # emp_data = np.append(emp_data,limit)
+        # emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
+        # emp_cdf_auc = auc(emp_data,emp_p)
+        # pred_data = np.sort(np.abs(all_pred_diffs)[np.abs(all_pred_diffs) < limit])
+        # pred_data = np.append(pred_data,limit)
+        # pred_p = np.arange(len(pred_data)) / (len(pred_data) - 1)
+        # pred_cdf_auc = auc(pred_data,pred_p)
         
-        
-        
-        # plt.plot(emp_data,emp_p,label="Empirical RT",color=colours[0])
-        # plt.plot(pred_data,pred_p,label="Predicted RT",color=colours[1])
-        # plt.legend()
-        # plt.xlabel("RT difference")
-        # plt.ylabel("Fraction of Precursors")
-        
-        # emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
-        # pred_abs_errors_med = np.median(np.abs(all_pred_diffs[all_pred_diffs<limit]-np.median(all_pred_diffs[all_pred_diffs<limit])))
-        # plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),label="Emp Expon",linestyle="--",color=colours[0])
-        # plt.scatter([stats.expon.ppf(.999,scale=emp_abs_errors_med/np.log(2))], [.999],c=colours[0])
-        # plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)),label="Emp Gauss",linestyle=":",color=colours[0])
-        # plt.scatter([stats.halfnorm.ppf(.999,scale=emp_abs_errors_med*1.4826)], [.999],c=colours[0])
-        # plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),label="Pred Expon",linestyle="--",color=colours[1])
-        # plt.scatter([stats.expon.ppf(.999,scale=pred_abs_errors_med/np.log(2))], [.999],c=colours[1])
-        # plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),label="Pred Gauss",linestyle=":",color=colours[1])
-        # plt.scatter([stats.halfnorm.ppf(.999,scale=pred_abs_errors_med*1.4826)], [.999],c=colours[1])
-        # plt.legend()
-        # plt.xlim(0,1)
-        # plt.hist(np.power(stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med*2)-pred_p,2))
-        # plt.hist(np.power(stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1))-pred_p,2),alpha=.5)
-        
-        # vals,bins,_=plt.hist(np.power(stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2))-emp_p,2),100,alpha=.5)
-        # plt.hist(np.power(stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1))-emp_p,2),bins,alpha=.5)
-        
-        
-    
-        ###Apply the KneeLocator method to find the elbow for empirical CDF
-        # kneedle_emp = KneeLocator(emp_data, emp_p, curve="concave", direction="increasing",S=25)
-        # elbow_emp_x = kneedle_emp.knee
-        # elbow_emp_y = emp_p[np.argmin(np.abs(emp_data - elbow_emp_x))]
-        
-    
-        ###Apply the KneeLocator method to find the elbow for empirical CDF
-        # kneedle_emp = KneeLocator(emp_data, emp_p, curve="concave", direction="increasing",S=25)
-        # elbow_emp_x = kneedle_emp.knee
-        # elbow_emp_y = emp_p[np.argmin(np.abs(emp_data - elbow_emp_x))]
-        
-    
-        
-        #plt.show()
         
         
         updatedLibrary = copy.deepcopy(librarySpectra)
         all_lib_keys = list(librarySpectra)
+        
+        
+        ###### Check if fine-tuning iproves alignment
         
         if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
             # boundary = elbow_pred_x
@@ -986,13 +968,19 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             ## keep the library RTs and splines the same
             rt_spl = emp_rt_spl
         
+        
+        
+    ###############################################################
+    ####### NO fine tuning
+    ###############################################################
+    
     else:
 
         print("Using Empirical w/o Fine Tuning")
         updatedLibrary = copy.deepcopy(librarySpectra)
         all_lib_keys = list(librarySpectra)
         rt_spl = emp_rt_spl
-        all_emp_diffs = (emp_rt_spl(output_rts)-np.array(dia_rt))[cor_filter]
+        all_emp_diffs = (emp_rt_spl(output_df.lib_rt)-np.array(output_df.rt))[cor_filter]
         
         
         emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
@@ -1004,58 +992,29 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     new_lib_rt = np.array([updatedLibrary[k]["iRT"] for k in id_keys])
     converted_rt = rt_spl([updatedLibrary[k]["iRT"] for k in id_keys])
     
-    rt_amplitude, rt_mean, rt_stddev = fit_gaussian((dia_rt-converted_rt)[cor_filter])
-    # rt_spl = twostepfit(all_lib_rts,[i[1] for i in all_id_rt]) # does not work
+    rt_amplitude, rt_mean, rt_stddev = fit_gaussian((output_df.rt-converted_rt)[cor_filter])
+   
     
-    # mz_spl = twostepfit(id_mzs, diffs)
-    # mz_spl = twostepfit(output_rts, diffs)
-    
-    ## old version (failed)
-    # diffs = [get_diff(mz, ms1spectra[ms1_idx].mz, window, mz_tol) for  mz,ms1_idx,window in zip(id_mzs,top_n_ms1,ms1windows)]
-    
-    
-    # all_diffs = [closest_feature(all_id_mzs[i],all_id_rt[i][1],dino_features,1,20*1e-6) for i in range(len(all_id_mzs))]
-    # all_coeffs = [closest_feature(all_id_mzs[i],all_id_rt[i][1],dino_features,1,10*1e-6) for i in range(len(all_id_mzs))]
-    
-    if dino_features is None:
-        resp_ms1scans = [closest_ms1spec(dia_rt[i], ms1_rt) for i in range(len(dia_rt))]
-        diffs = [closest_peak_diff(mz, ms1spectra[i].mz) for i,mz in zip(resp_ms1scans,id_mzs)]
-    else:
-        diffs = np.array([(i-mz)/mz for i,mz in zip(feature_mzs,id_mzs)])
-    # # diffs = [closest_feature(id_mzs[i],dia_rt[i],dino_features,0,10*1e-6) for i in range(len(id_mzs))]
-    
-    # # feature_mz = [closest_feature2(id_mzs[i],converted_rt[i],dino_features,1,30*1e-6) for i in range(len(id_mzs))]
-    # mz_spl = twostepfit(np.array(id_mzs)[cor_filter],np.array(diffs)[cor_filter],1)
-    # # mz_spl = twostepfit(id_mzs,diffs,1,z=np.log10(output_coeff))
-    
-    # # plt.scatter(all_id_mzs,[i for i in all_diffs],label="Original_RT",s=1)
-
-
-    # def mz_func(mz):
-    #     return mz+(mz_spl(mz)*mz)
-    
-    # mz_amplitude, mz_mean, mz_stddev = fit_gaussian((diffs-mz_spl(id_mzs))[cor_filter])
-    
-    
+   
     ################################################
     ########### correct mz errors wrt RT    ########
     ################################################
     
     
+    
+    if dino_features is None:
+        resp_ms1scans = [closest_ms1spec(output_df.rt[i], ms1_rt) for i in range(len(output_df.rt))]
+        diffs = [closest_peak_diff(mz, ms1spectra[i].mz) for i,mz in zip(resp_ms1scans,output_df.mz)]
+    else:
+        diffs = np.array([(i-mz)/mz for i,mz in zip(feature_mzs,output_df.mz)])
+    
+
+    
     f_rt_mz = lowess_fit(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],.02)
-    # plt.subplots()
-    # plt.scatter(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=.1,alpha=1)
-    # plt.scatter(new_lib_rt[cor_filter],f_rt_mz(new_lib_rt)[cor_filter],s=1,alpha=.2)
-    # plt.xlim(10,42);plt.ylim(-1.5e-5,1.5e-5)
-    # plt.scatter(id_mzs,diffs,label="Original_MZ",s=1,alpha=.1)
-    # plt.scatter(id_mzs,diffs-f_rt_mz(dia_rt),label="Original_MZ",s=1,alpha=.1)
     
     # mz_spl = twostepfit(np.array(id_mzs)[rt_filter_bool],(diffs-f_rt_mz(dia_rt))[r t_filter_bool],1)
-    mz_spl = lowess_fit(np.array(id_mzs)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter])
-    # plt.subplots()
-    # plt.scatter(np.array(id_mzs)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter],label="Original_MZ",s=1,alpha=1)
-    # plt.scatter(id_mzs,mz_spl(id_mzs),label="Original_MZ",s=1,alpha=.1)
-    # plt.hlines(0,400,900)
+    mz_spl = lowess_fit(np.array(output_df.mz)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter])
+
 
     def mz_func(mz,rt):
         return mz+((mz_spl(mz)+f_rt_mz(rt))*mz)
@@ -1063,28 +1022,19 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # orig_mzs = id_mzs+(diffs*np.array(id_mzs))
     # plt.hist(((mz_func(id_mzs,rts)-orig_mzs)/id_mzs)[rt_filter_bool],100)
     
-    corrected_mz_diffs = (diffs-(f_rt_mz(new_lib_rt)+mz_spl(id_mzs)))[cor_filter]
+    corrected_mz_diffs = (diffs-(f_rt_mz(new_lib_rt)+mz_spl(output_df.mz)))[cor_filter]
     mz_amplitude, mz_mean, mz_stddev = fit_gaussian(corrected_mz_diffs)
     
-    ### MS2 alignment
-    if ms2:
-        all_frag_errors = np.concatenate(lc_frags_errors)
-        all_frags = np.concatenate(lc_frags)
-        ms2_spl = twostepfit(all_frags,all_frag_errors,1)
-        def ms2_func(mz):
-            return mz+(ms2_spl(mz)*mz)
+    # ### MS2 alignment
+    # if ms2:
+    #     all_frag_errors = np.concatenate(lc_frags_errors)
+    #     all_frags = np.concatenate(lc_frags)
+    #     ms2_spl = twostepfit(all_frags,all_frag_errors,1)
+    #     def ms2_func(mz):
+    #         return mz+(ms2_spl(mz)*mz)
         
-        ms2_amplitude, ms2_mean, ms2_stddev = fit_gaussian(all_frag_errors-ms2_spl(all_frags))
+    #     ms2_amplitude, ms2_mean, ms2_stddev = fit_gaussian(all_frag_errors-ms2_spl(all_frags))
     
-    # plt.hist(diffs,50)
-    # plt.subplots()
-    # plt.scatter(id_mzs,np.array(diffs)*1e6,s=1)
-    # plt.xlabel("m/z")
-    # plt.ylabel("m/z error (ppm)")
-    # plt.subplots()
-    # plt.scatter(dia_rt,np.array(diffs)*1e6,s=1)
-    # plt.xlabel("RT")
-    # plt.ylabel("m/z error (ppm)")
     
     # ## 2D plane fitting
     # function = lin_func
@@ -1127,9 +1077,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
     config.opt_ms1_tol  = new_ms1_tol
     
-    if ms2:
-        new_ms2_tol = 5*ms2_stddev
-        config.opt_ms2_tol  = new_ms2_tol
+    # if ms2:
+    #     new_ms2_tol = 5*ms2_stddev
+    #     config.opt_ms2_tol  = new_ms2_tol
     
     if results_folder is not None:
         
@@ -1140,14 +1090,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         with open(results_folder+"/mz_func","wb") as dill_file:
             dill.dump(mz_func,dill_file)
         
-        if ms2:
-            with open(results_folder+"/ms2_func","wb") as dill_file:
-                dill.dump(ms2_func,dill_file)
+        # if ms2:
+        #     with open(results_folder+"/ms2_func","wb") as dill_file:
+        #         dill.dump(ms2_func,dill_file)
             
         ##plot RT alignment
         plt.subplots()
-        plt.scatter(output_rts[cor_filter],np.array(dia_rt)[cor_filter],label="Original_RT",s=.1)
-        plt.scatter(output_rts,emp_rt_spl(output_rts),label="Predicted_RT",s=1)
+        plt.scatter(output_df.lib_rt[cor_filter],np.array(output_df.rt)[cor_filter],label="Original_RT",s=.1)
+        plt.scatter(output_df.lib_rt,emp_rt_spl(output_df.lib_rt),label="Predicted_RT",s=1)
         # plt.legend()
         plt.xlabel("Library RT")
         plt.ylabel("Observed RT")
@@ -1157,7 +1107,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         ##plot RT alignment
         plt.subplots()
-        plt.scatter(np.array([updatedLibrary[k]["iRT"] for k in id_keys])[cor_filter],np.array(dia_rt)[cor_filter],label="Original_RT",s=.1)
+        plt.scatter(np.array([updatedLibrary[k]["iRT"] for k in id_keys])[cor_filter],np.array(output_df.rt)[cor_filter],label="Original_RT",s=.1)
         plt.scatter([updatedLibrary[k]["iRT"] for k in id_keys],rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]),label="Predicted_RT",s=1)
         # plt.legend()
         plt.xlabel("Updated Library RT")
@@ -1168,7 +1118,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         plt.subplots()
         plt.scatter(np.array([updatedLibrary[k]["iRT"] for k in id_keys])[cor_filter],
-                    (dia_rt-rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]))[cor_filter],label="Original_RT",s=.1)
+                    (output_df.rt-rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]))[cor_filter],label="Original_RT",s=.1)
         min_rt = np.min([updatedLibrary[k]["iRT"] for k in id_keys])
         max_rt = np.max([updatedLibrary[k]["iRT"] for k in id_keys])
         plt.plot([min_rt,max_rt],[0,0],color="r",linestyle="--",alpha=.5)
@@ -1176,7 +1126,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         plt.plot([min_rt,max_rt],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
         # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
         # plt.legend()
-        plt.ylim(-15,15)
+        lims = plt.ylim()
+        y_lim = min(10,np.max(np.abs(lims)))
+        # plt.ylim(-y_lim,y_lim)
         plt.xlabel("Updated Library RT")
         plt.ylabel("RT Residuals")
         # plt.show()
@@ -1184,8 +1136,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         
         plt.subplots()
-        vals,bins,_ = plt.hist((dia_rt-emp_rt_spl(output_rts))[cor_filter],100,density=True,alpha=.5,label="Original RT")
-        vals,bins,_ = plt.hist((dia_rt-rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]))[cor_filter],100,density=True,alpha=.5,label="Updated RT")
+        vals,bins,_ = plt.hist((output_df.rt-emp_rt_spl(output_df.lib_rt))[cor_filter],100,density=True,alpha=.5,label="Original RT")
+        vals,bins,_ = plt.hist((output_df.rt-rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]))[cor_filter],100,density=True,alpha=.5,label="Updated RT")
         plt.plot(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100),gaussian(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100), rt_amplitude, rt_mean, rt_stddev),label="Updated RT fit")
         plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
         # plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
@@ -1240,7 +1192,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         ##plot mz rt alignment
         plt.subplots()
-        plt.scatter(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(dia_rt)[cor_filter])//1000)+1)))
+        plt.scatter(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(output_df.rt)[cor_filter])//1000)+1)))
         plt.scatter(new_lib_rt,f_rt_mz(new_lib_rt),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("Updated RT")
@@ -1252,8 +1204,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
         ##plot mz alignment
         plt.subplots()
-        plt.scatter(np.array(id_mzs)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(new_lib_rt)[cor_filter])//1000)+1)))
-        plt.scatter(id_mzs,mz_spl(id_mzs),label="Predicted_MZ",s=1)
+        plt.scatter(np.array(output_df.mz)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter],label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(new_lib_rt)[cor_filter])//1000)+1)))
+        plt.scatter(output_df.mz,mz_spl(output_df.mz),label="Predicted_MZ",s=1)
         # plt.legend()
         plt.xlabel("m/z")
         plt.ylabel("m/z difference (relative)")
@@ -1267,7 +1219,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         plt.hist(np.array(diffs)[cor_filter],100)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs,100,alpha=.5)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_spl(id_mzs))/id_mzs,100,alpha=.5)
-        vals,bins,_ = plt.hist((diffs-mz_spl(id_mzs)-f_rt_mz(new_lib_rt))[cor_filter],100,alpha=.5)
+        vals,bins,_ = plt.hist((diffs-mz_spl(output_df.mz)-f_rt_mz(new_lib_rt))[cor_filter],100,alpha=.5)
         plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,max(vals)*.8,color="r")
         # plt.vlines([-4*mz_stddev,4*mz_stddev],0,50,color="g")
         plt.text(config.opt_ms1_tol,max(vals)*.8,f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
@@ -1276,40 +1228,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         # plt.show()
         plt.savefig(results_folder+"/MZdiff.png",dpi=600,bbox_inches="tight")
     
-    
-        if ms2:
-            ##plot mz alignment
-            plt.subplots()
-            plt.scatter(all_frags,all_frag_errors,label="Original_MS2",s=1)
-            plt.scatter(all_frags,ms2_spl(all_frags),label="Predicted_MS2",s=1)
-            # plt.legend()
-            plt.xlabel("m/z")
-            plt.ylabel("m/z difference (relative)")
-            # plt.show()
-            plt.savefig(results_folder+"/MS2fit.png",dpi=600,bbox_inches="tight")
-            
-            
-            ## plot mz alignment
-            plt.subplots()
-            plt.hist(all_frag_errors,100)
-            # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs,100,alpha=.5)
-            # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_spl(id_mzs))/id_mzs,100,alpha=.5)
-            plt.hist(all_frag_errors-ms2_spl(all_frags),100,alpha=.5)
-            plt.vlines([-config.opt_ms2_tol,config.opt_ms2_tol],0,50,color="r")
-            # plt.vlines([-4*mz_stddev,4*mz_stddev],0,50,color="g")
-            plt.text(config.opt_ms2_tol,50,np.round(config.opt_ms2_tol,2))
-            plt.xlabel("m/z difference (relative)")
-            plt.ylabel("Frequency")
-            # plt.show()
-            plt.savefig(results_folder+"/MS2diff.png",dpi=600,bbox_inches="tight")
-    # plt.scatter(id_mzs,diffs)
-    # plt.scatter(output_rts,diffs)
     plt.close("all")
     
-    if ms2:
-        return (rt_spl, mz_func, ms2_func), updatedLibrary
-    else:
-        return (rt_spl, mz_func), updatedLibrary
+    # if ms2:
+    #     return (rt_spl, mz_func, ms2_func), updatedLibrary
+    # else:
+    return (rt_spl, mz_func), updatedLibrary
 
 ###################################################################################################
 ###################################################################################################
