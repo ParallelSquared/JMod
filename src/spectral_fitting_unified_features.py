@@ -120,8 +120,7 @@ def calculate_features_unified(
     unique_row_idxs: np.ndarray,
     rt_mz: np.ndarray,
     window_idxs: np.ndarray,
-    library: Dict,
-    decoy_mz_offset: float = 20.0
+    library: Dict
 ) -> UnifiedFeatures:
     """
     Calculate all features for unified candidates in a single pass.
@@ -192,7 +191,6 @@ def calculate_features_unified(
     # Calculate features for each candidate
     for i in range(n_candidates):
         candidate_idx = peaks_in_dia[i]
-        is_decoy = is_decoy_matched[i]
         
         # Feature 1: Number of library peaks matched
         features[i, 0] = np.sum(lib_peaks_matched[i])
@@ -208,15 +206,13 @@ def calculate_features_unified(
         features[i, 3] = ms1_error[i]
         
         # Feature 5: RT error
-        # Different calculation for decoys
-        if is_decoy:
-            # Decoys use offset m/z for RT lookup
-            decoy_mz = rt_mz[window_idxs[candidate_idx], 1] - decoy_mz_offset
-            # For now, simplified - would need proper RT prediction for decoys
-            features[i, 4] = 0  # Placeholder
-        else:
+        # Use same calculation for all candidates (unified approach)
+        if candidate_idx < len(window_idxs):
             candidate_rt = rt_mz[window_idxs[candidate_idx], 0]
             features[i, 4] = prec_rt - candidate_rt
+        else:
+            # Handle case where index is out of bounds
+            features[i, 4] = 0  # Default value
         
         # Feature 6: Fraction intensity matched
         if len(spec_values_split[i]) > 0:
@@ -288,7 +284,6 @@ def calculate_features_unified(
     # Continue with remaining features
     for i in range(n_candidates):
         candidate_idx = peaks_in_dia[i]
-        is_decoy = is_decoy_matched[i]
         
         # Features 23-24: More intensity features
         features[i, 22] = features[i, 5]  # frac_int_matched_pred
@@ -298,10 +293,12 @@ def calculate_features_unified(
         features[i, 24] = 0  # Placeholder
         
         # Feature 26: m/z value
-        if is_decoy:
-            features[i, 25] = rt_mz[window_idxs[candidate_idx], 1] - decoy_mz_offset
-        else:
+        # Use same logic for all candidates (unified approach)
+        if candidate_idx < len(window_idxs):
             features[i, 25] = rt_mz[window_idxs[candidate_idx], 1]
+        else:
+            # Handle case where index is out of bounds
+            features[i, 25] = 0  # Default value
     
     # Define feature names
     feature_names = [

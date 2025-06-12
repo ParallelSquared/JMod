@@ -1736,8 +1736,7 @@ def fit_to_lib2(dia_spec,
         unique_row_idxs=matrix_results['unique_row_idxs'],
         rt_mz=rt_mz,
         window_idxs=window_idxs,
-        library=library,
-        decoy_mz_offset=config.decoy_mz_offset
+        library=library
     )
     
     # 8. Format output for compatibility
