@@ -112,9 +112,9 @@ def build_sparse_matrix_unified(
     Returns:
         Tuple of (sparse_matrix, target_vector, peak_idx_convertor)
     """
-    # Combine matched and unmatched peaks
-    all_row_indices = np.concatenate([matrix_data.row_indices, unmatched_row_indices])
-    all_col_indices = np.concatenate([matrix_data.col_indices, unmatched_col_indices])
+    # Combine matched and unmatched peaks (ensure integer indices)
+    all_row_indices = np.concatenate([matrix_data.row_indices, unmatched_row_indices]).astype(int)
+    all_col_indices = np.concatenate([matrix_data.col_indices, unmatched_col_indices]).astype(int)
     all_values = np.concatenate([matrix_data.values, unmatched_values])
     
     # Rank rows to remove gaps
