@@ -1788,6 +1788,15 @@ def fit_to_lib2(dia_spec,
                     config.args.mzml if hasattr(config, 'args') else "",
                     protein
                 ]
+                # Debug: Print first row to check column alignment
+                if len(output) == 0:
+                    print(f"DEBUG: First output row columns:")
+                    print(f"  [0] coeff: {row[0]}")
+                    print(f"  [1] spec_id: {row[1]}")
+                    print(f"  [2] Ms1_spec_id: {row[2]}")
+                    print(f"  [3] seq: {row[3]}")
+                    print(f"  [4] z: {row[4]}")
+                    print(f"  Row length: {len(row)}")
                 output.append(row)
     
     if return_frags:

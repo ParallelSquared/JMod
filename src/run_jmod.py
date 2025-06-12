@@ -254,6 +254,11 @@ def main():
     ms2_info_path = results_folder_path+"/ms2scans.csv"
     write_to_csv(ms2scans_info,ms2_info_path)
     
+    ## Clear output file before starting
+    decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
+    if os.path.exists(decoylib_search_path):
+        os.remove(decoylib_search_path)
+    
     ## process in batches
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
@@ -283,7 +288,7 @@ def main():
         long_outputs = [j for i in outputs for j in i]
         print(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         
-        decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
+        # Use the already defined decoylib_search_path
         write_to_csv(long_outputs,decoylib_search_path)
         
     
