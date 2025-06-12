@@ -80,6 +80,47 @@ def calculate_features_unified(
     spec_row_indices_split = matrix_data.row_indices_split
     spec_col_indices_split = matrix_data.col_indices_split
     
+    # First, calculate residuals and y_pred for all candidates
+    # This is needed for manhattan distance and residual features
+    residuals = None
+    y_pred = None
+    if n_candidates > 0:
+        # Need to get offsets from matrix data
+        target_mask = ~is_decoy_matched
+        n_targets = np.sum(target_mask)
+        ref_spec_offset = 0
+        decoy_spec_offset = n_targets
+        
+        # Prepare data for get_residuals
+        all_row_indices = np.concatenate([arr for arr in spec_row_indices_split if len(arr) > 0])
+        all_col_indices = np.concatenate([arr for arr in spec_col_indices_split if len(arr) > 0])
+        all_values = np.concatenate([arr for arr in spec_values_split if len(arr) > 0])
+        
+        if len(all_row_indices) > 0:
+            # Split by type
+            ref_mask = all_col_indices < n_targets
+            ref_sparse_row = all_row_indices[ref_mask]
+            ref_sparse_col = all_col_indices[ref_mask]
+            ref_sparse_val = all_values[ref_mask]
+            
+            decoy_sparse_row = all_row_indices[~ref_mask]
+            decoy_sparse_col = all_col_indices[~ref_mask] - n_targets
+            decoy_sparse_val = all_values[~ref_mask]
+            
+            # Calculate residuals and predictions
+            residuals, y_pred = get_residuals(
+                ref_sparse_val,
+                ref_sparse_row,
+                ref_sparse_col,
+                decoy_sparse_val,
+                decoy_sparse_row,
+                decoy_sparse_col,
+                dia_spectrum[:, 1],
+                lib_coefficients,
+                ref_spec_offset,
+                decoy_spec_offset
+            )
+    
     # Calculate features for each candidate
     for i in range(n_candidates):
         candidate_idx = peaks_in_dia[i]
@@ -150,23 +191,33 @@ def calculate_features_unified(
                 features[i, 16] = 0
         
         # Features 18-19: Residuals
-        if len(spec_row_indices_split[i]) > 0:
-            # Would need y_pred from get_residuals
-            features[i, 17] = 0  # max_unmatched_residuals
-            features[i, 18] = 0  # max_matched_residuals
+        if residuals is not None and len(spec_row_indices_split[i]) > 0:
+            # Get residuals for this candidate's peaks
+            candidate_residuals = residuals[spec_row_indices_split[i]]
+            if len(candidate_residuals) > 0:
+                features[i, 17] = np.max(np.abs(candidate_residuals))  # max_unmatched_residuals
+                features[i, 18] = np.max(candidate_residuals)  # max_matched_residuals
         
         # Feature 20: Goodness of fit
-        features[i, 19] = 0  # Placeholder
-        
-        # Feature 21: Manhattan distance
-        if len(spec_values_split[i]) > 0 and len(spec_row_indices_split[i]) > 0:
-            features[i, 20] = get_manhattan_distance(
-                spec_values_split[i],
-                dia_spectrum[spec_row_indices_split[i], 1]
-            )
-        
-        # Feature 22: Fitted spectral contrast
-        features[i, 21] = 0  # Placeholder
+        # Skip for now as gof_stat requires different structure
+        features[i, 19] = 0
+    
+    # Calculate manhattan distance and spectral contrast for all candidates at once
+    if residuals is not None and y_pred is not None and n_candidates > 0:
+        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance(
+            spec_row_indices_split,
+            spec_col_indices_split,
+            spec_values_split,
+            dia_spectrum[:, 1],
+            y_pred
+        )
+        features[:, 20] = manhattan_distances
+        features[:, 21] = fitted_spectral_contrasts
+    
+    # Continue with remaining features
+    for i in range(n_candidates):
+        candidate_idx = peaks_in_dia[i]
+        is_decoy = is_decoy_matched[i]
         
         # Features 23-24: More intensity features
         features[i, 22] = features[i, 5]  # frac_int_matched_pred
