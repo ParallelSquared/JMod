@@ -262,7 +262,7 @@ def create_entries_unified(
     # Add parent directory to path for imports
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
-    from src.utils.spectral_similarity_metrics import closest_peak_diff
+    from src.utils.misc_functions import closest_peak_diff
     
     # Extract data from unified structure
     candidate_peaks = unified_candidates.peaks

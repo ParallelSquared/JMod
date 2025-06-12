@@ -9,9 +9,10 @@ import numpy as np
 from typing import List, Dict, Optional, Tuple
 from .spectral_fitting_unified import UnifiedCandidates, UnifiedMatrixData, UnifiedFeatures
 from .utils.spectral_similarity_metrics import (
-    get_scribe, manhattan_distance, fitted_spectral_contrast, 
-    goodness_of_fit, get_residuals, np_cosine_similarity
+    get_scribe, get_manhattan_distance, 
+    gof_stat, get_residuals, max_matched_residual
 )
+from .utils.misc_functions import cosim, np_pearson_cor
 
 
 def calculate_features_unified(
@@ -159,7 +160,7 @@ def calculate_features_unified(
         
         # Feature 21: Manhattan distance
         if len(spec_values_split[i]) > 0 and len(spec_row_indices_split[i]) > 0:
-            features[i, 20] = manhattan_distance(
+            features[i, 20] = get_manhattan_distance(
                 spec_values_split[i],
                 dia_spectrum[spec_row_indices_split[i], 1]
             )

@@ -27,6 +27,17 @@ from .utils.spectral_similarity_metrics import (
     gof_stat, get_manhattan_distance
 )
 
+# Import unified spectral fitting modules
+from .spectral_fitting_unified import (
+    UnifiedCandidates, UnifiedMatrixData, UnifiedFeatures,
+    create_unified_candidates, create_entries_unified
+)
+from .spectral_fitting_unified_matrix import (
+    process_matrix_unified, build_sparse_matrix_unified
+)
+from .spectral_fitting_unified_features import calculate_features_unified
+# Adapter functions are not needed for direct unified implementation
+
 def hyperscore2(frags,frag_names_matched):
     
     num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
@@ -304,7 +315,7 @@ def create_entries(centroid_breaks,
 
 
 #@profile
-def fit_to_lib2(dia_spec,
+def fit_to_lib2_original(dia_spec,
                 library,
                 rt_mz,
                 all_keys,
@@ -1584,5 +1595,206 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
         # output = [[non_zero_coeffs[i],spec_idx,lib_spec_ids[i][0],lib_spec_ids[i][1],prec_mz,prec_rt,*features[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
     
     return output
+
+
+def fit_to_lib2(dia_spec,
+                library,
+                rt_mz,
+                all_keys,
+                dino_features=None,rt_filter=False,ms1_mz=None,
+               ms1_spectra = None,
+               rt_tol = config.rt_tol,
+               ms1_tol = config.ms1_tol,
+               mz_tol = config.mz_tol,
+               return_frags = False,
+               decoy=False,
+               decoy_library=None):
+    """
+    Unified implementation of fit_to_lib2 using unified data structures.
+    
+    This version processes targets and decoys together in a single pass,
+    eliminating code duplication while maintaining identical output.
+    """
+    # 1. Extract spectrum information (same as original)
+    spec_idx = dia_spec.scan_num
+    dia_spectrum = np.stack(dia_spec.peak_list(), 1)
+    prec_mz = dia_spec.prec_mz
+    prec_rt = dia_spec.RT
+    windowWidth = window_width(dia_spec)
+    
+    ms1_spec = None
+    if ms1_spectra is not None:
+        ms1_spec = get_closest_ms1(prec_rt, ms1_spectra)
+    
+    # 2. Filter candidates by mass window (same as original)
+    if ms1_mz:
+        _bool = (np.abs(rt_mz[:, 1] - ms1_mz) / ms1_mz) < ms1_tol
+    else:
+        if rt_filter:
+            _bool = np.logical_and(
+                np.abs(rt_mz[:, 1] - prec_mz) < (windowWidth / 2),
+                np.abs(rt_mz[:, 0] - prec_rt) < rt_tol
+            )
+        else:
+            _bool = np.abs(rt_mz[:, 1] - prec_mz) < (windowWidth / 2)
+    
+    window_idxs = np.where(_bool)[0]
+    
+    # Filter by dino features if provided
+    if dino_features is not None:
+        filtered_dino = feature_list_mz(feature_list_rt(dino_features, prec_rt, rt_tol=rt_tol),
+                                      prec_mz, windowWidth)
+        window_edges = createTolWindows(filtered_dino.mz, tolerance=ms1_tol)
+        window_idxs = window_idxs[np.where((np.searchsorted(window_edges, rt_mz[window_idxs, 1]) % 2) == 1)[0]]
+    
+    mass_window_candidates = [all_keys[i] for i in window_idxs]
+    candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
+    
+    # Early exit if no candidates
+    if len(mass_window_candidates) == 0:
+        return [[0, spec_idx, ms1_spec.scan_num if ms1_spec else 0, 0, 0, 
+                prec_mz, prec_rt, *np.zeros(len(names) - 7)]]
+    
+    # 3. Process DIA spectrum
+    # Merge peaks within tolerance
+    merged_coords_idxs = np.searchsorted(dia_spectrum[:, 0] + mz_tol * dia_spectrum[:, 0], dia_spectrum[:, 0])
+    merged_coords = dia_spectrum[np.unique(merged_coords_idxs), 0]
+    
+    # Sum intensities for merged peaks
+    merged_intensities = np.zeros(len(merged_coords_idxs))
+    for j, val in zip(merged_coords_idxs, dia_spectrum[:, 1]):
+        merged_intensities[j] += val
+    merged_intensities = merged_intensities[merged_intensities != 0]
+    
+    # Update spectrum
+    dia_spectrum = np.array((merged_coords, merged_intensities)).transpose()
+    
+    # Calculate centroid breaks and bin centers
+    centroid_breaks = np.concatenate((dia_spectrum[:, 0] - mz_tol * dia_spectrum[:, 0],
+                                    dia_spectrum[:, 0] + mz_tol * dia_spectrum[:, 0]))
+    centroid_breaks = np.sort(centroid_breaks)
+    bin_centers = np.mean(np.stack((centroid_breaks[::2], centroid_breaks[1::2]), 1), 1)
+    
+    # ===== UNIFIED PROCESSING STARTS HERE =====
+    
+    # 4. Create unified candidates structure
+    if decoy and decoy_library:
+        # Generate decoy candidates
+        decoy_candidates = [(f"Decoy_{k[0]}", k[1]) for k in mass_window_candidates]
+        decoy_peaks = [decoy_library[k]["spectrum"] for k in mass_window_candidates]
+        
+        unified = create_unified_candidates(
+            target_candidates=mass_window_candidates,
+            target_peaks=candidate_peaks,
+            decoy_candidates=decoy_candidates,
+            decoy_peaks=decoy_peaks
+        )
+    else:
+        unified = create_unified_candidates(
+            target_candidates=mass_window_candidates,
+            target_peaks=candidate_peaks
+        )
+    
+    # 5. Process all candidates in ONE call
+    updated_unified, matrix_data, additional_outputs = create_entries_unified(
+        centroid_breaks=centroid_breaks,
+        unified_candidates=unified,
+        top_n=config.top_n,
+        atleast_m=config.atleast_m,
+        prec_mzs=rt_mz[:, 1][window_idxs] if not decoy else np.concatenate([
+            rt_mz[:, 1][window_idxs],
+            rt_mz[:, 1][window_idxs] - config.decoy_mz_offset
+        ]),
+        ms1_spec=ms1_spec,
+        ms1_tol=ms1_tol
+    )
+    
+    # Check if any candidates passed filtering
+    if len(updated_unified.peaks_in_dia) == 0:
+        return [[0, spec_idx, ms1_spec.scan_num if ms1_spec else 0, 0, 0,
+                prec_mz, prec_rt, *np.zeros(len(names) - 7)]]
+    
+    # 6. Build matrix and solve NNLS
+    matrix_results = process_matrix_unified(
+        unified_candidates=updated_unified,
+        matrix_data=matrix_data,
+        additional_outputs=additional_outputs,
+        dia_spectrum=dia_spectrum,
+        unmatched_fit_type=config.unmatched_fit_type
+    )
+    
+    # 7. Calculate features
+    unified_features = calculate_features_unified(
+        unified_candidates=updated_unified,
+        matrix_data=matrix_data,
+        additional_outputs=additional_outputs,
+        dia_spectrum=dia_spectrum,
+        prec_rt=prec_rt,
+        lib_coefficients=matrix_results['lib_coefficients'],
+        sparse_matrix=matrix_results['sparse_matrix'],
+        peak_idx_convertor=matrix_results['peak_idx_convertor'],
+        unique_row_idxs=matrix_results['unique_row_idxs'],
+        rt_mz=rt_mz,
+        window_idxs=window_idxs,
+        library=library,
+        decoy_mz_offset=config.decoy_mz_offset
+    )
+    
+    # 8. Format output for compatibility
+    lib_coefficients = matrix_results['lib_coefficients']
+    non_zero_coeffs = [c for c in lib_coefficients if c != 0]
+    non_zero_coeffs_idxs = [i for i, c in enumerate(lib_coefficients) if c != 0]
+    
+    output = [[0, spec_idx, ms1_spec.scan_num if ms1_spec else 0, 0, 0,
+              prec_mz, prec_rt, *np.zeros(len(names) - 7)]]
+    
+    if len(non_zero_coeffs) > 0:
+        # Get matched candidates
+        matched_candidates = [updated_unified.candidates[i] for i in updated_unified.peaks_in_dia]
+        
+        # Build output rows
+        output = []
+        for i, j in zip(range(len(non_zero_coeffs)), non_zero_coeffs_idxs):
+            if j < len(matched_candidates):
+                candidate = matched_candidates[j]
+                features = unified_features.features[j]
+                
+                # Get fragment data if needed
+                if return_frags:
+                    frag_data = additional_outputs.get('frag_data', {})
+                    ms2_frags = frag_data.get(j, [""] * 7)
+                else:
+                    ms2_frags = [""] * 7
+                
+                # Get protein info if available
+                if config.protein_column and library:
+                    try:
+                        clean_key = (candidate[0].replace("Decoy_", ""), candidate[1])
+                        protein = library.get(clean_key, {}).get(config.protein_column, "NA")
+                    except:
+                        protein = "NA"
+                else:
+                    protein = "NA"
+                
+                row = [
+                    non_zero_coeffs[i],
+                    spec_idx,
+                    candidate[0],
+                    candidate[1],
+                    prec_mz,
+                    prec_rt,
+                    *features,
+                    *ms2_frags,
+                    config.args.mzml if hasattr(config, 'args') else "",
+                    protein
+                ]
+                output.append(row)
+    
+    if return_frags:
+        frag_errors = matrix_results.get('frag_errors', [])
+        lib_frag_mz = matrix_results.get('lib_frag_mz', [])
+        return output, [frag_errors, lib_frag_mz]
+    else:
+        return output
 
 
