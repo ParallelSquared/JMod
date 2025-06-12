@@ -1778,8 +1778,9 @@ def fit_to_lib2(dia_spec,
                 row = [
                     non_zero_coeffs[i],
                     spec_idx,
-                    candidate[0],
-                    candidate[1],
+                    ms1_spec.scan_num if ms1_spec else 0,  # Ms1_spec_id
+                    candidate[0],  # sequence
+                    candidate[1],  # charge
                     prec_mz,
                     prec_rt,
                     *features,
