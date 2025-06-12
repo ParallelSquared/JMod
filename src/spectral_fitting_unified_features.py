@@ -13,6 +13,99 @@ from .utils.spectral_similarity_metrics import (
     gof_stat, get_residuals, max_matched_residual
 )
 from .utils.misc_functions import cosim, np_pearson_cor
+import scipy.sparse as sp
+
+
+def get_residuals_unified(
+    row_indices_split: List[np.ndarray],
+    col_indices_split: List[np.ndarray],
+    values_split: List[np.ndarray],
+    is_decoy: np.ndarray,
+    val_obs: np.ndarray,
+    coeffs: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calculate residuals for unified candidates.
+    
+    This function computes residuals without separating ref/decoy data.
+    It uses the is_decoy mask to apply correct offsets internally.
+    """
+    coeffs = np.asarray(coeffs).ravel()
+    N = len(val_obs)  # Number of rows in the sparse matrix
+    
+    # Initialize prediction array
+    y_pred = np.zeros(N)
+    
+    # Compute predictions for all candidates
+    n_targets = np.sum(~is_decoy)
+    
+    for i, (row_idx, col_idx, vals) in enumerate(zip(row_indices_split, col_indices_split, values_split)):
+        if len(row_idx) == 0:
+            continue
+            
+        # Apply offset for decoys
+        if is_decoy[i]:
+            adjusted_col_idx = col_idx - n_targets + n_targets  # This simplifies to just col_idx
+            offset = n_targets
+        else:
+            adjusted_col_idx = col_idx
+            offset = 0
+            
+        # Compute predictions
+        for r, c, v in zip(row_idx, adjusted_col_idx, vals):
+            if c + offset < len(coeffs):
+                y_pred[r] += v * coeffs[c + offset]
+    
+    # Compute residuals
+    residuals = val_obs - y_pred
+    
+    return residuals, y_pred
+
+
+def get_manhattan_distance_unified(
+    row_indices_split: List[np.ndarray],
+    col_indices_split: List[np.ndarray],
+    values_split: List[np.ndarray],
+    val_obs: np.ndarray,
+    y_pred: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calculate manhattan distance and spectral contrast for unified candidates.
+    
+    This version works directly with unified data structures.
+    """
+    n_precursors = len(row_indices_split)
+    manhattan_distances = np.zeros(n_precursors)
+    spectral_contrasts = np.zeros(n_precursors)
+    
+    for i in range(n_precursors):
+        if len(row_indices_split[i]) == 0:
+            manhattan_distances[i] = -np.inf
+            spectral_contrasts[i] = 0
+            continue
+            
+        # Get values for this precursor
+        rows = row_indices_split[i]
+        obs_vals = val_obs[rows]
+        pred_vals = y_pred[rows]
+        
+        # Manhattan distance
+        if np.sum(obs_vals) > 0:
+            manhattan_distances[i] = np.log10(np.sum(np.abs(pred_vals - obs_vals)) / np.sum(obs_vals))
+        else:
+            manhattan_distances[i] = -np.inf
+            
+        # Spectral contrast
+        if np.sum(pred_vals) > 0 and np.sum(obs_vals) > 0:
+            # Normalize and compute angle
+            pred_norm = pred_vals / np.sqrt(np.sum(pred_vals**2))
+            obs_norm = obs_vals / np.sqrt(np.sum(obs_vals**2))
+            dot_product = np.clip(np.sum(pred_norm * obs_norm), -1, 1)
+            spectral_contrasts[i] = 1 - (2 * np.arccos(dot_product) / np.pi)
+        else:
+            spectral_contrasts[i] = 0
+    
+    return manhattan_distances, spectral_contrasts
 
 
 def calculate_features_unified(
@@ -84,42 +177,17 @@ def calculate_features_unified(
     # This is needed for manhattan distance and residual features
     residuals = None
     y_pred = None
+    
     if n_candidates > 0:
-        # Need to get offsets from matrix data
-        target_mask = ~is_decoy_matched
-        n_targets = np.sum(target_mask)
-        ref_spec_offset = 0
-        decoy_spec_offset = n_targets
-        
-        # Prepare data for get_residuals
-        all_row_indices = np.concatenate([arr for arr in spec_row_indices_split if len(arr) > 0])
-        all_col_indices = np.concatenate([arr for arr in spec_col_indices_split if len(arr) > 0])
-        all_values = np.concatenate([arr for arr in spec_values_split if len(arr) > 0])
-        
-        if len(all_row_indices) > 0:
-            # Split by type
-            ref_mask = all_col_indices < n_targets
-            ref_sparse_row = all_row_indices[ref_mask]
-            ref_sparse_col = all_col_indices[ref_mask]
-            ref_sparse_val = all_values[ref_mask]
-            
-            decoy_sparse_row = all_row_indices[~ref_mask]
-            decoy_sparse_col = all_col_indices[~ref_mask] - n_targets
-            decoy_sparse_val = all_values[~ref_mask]
-            
-            # Calculate residuals and predictions
-            residuals, y_pred = get_residuals(
-                ref_sparse_val,
-                ref_sparse_row,
-                ref_sparse_col,
-                decoy_sparse_val,
-                decoy_sparse_row,
-                decoy_sparse_col,
-                dia_spectrum[:, 1],
-                lib_coefficients,
-                ref_spec_offset,
-                decoy_spec_offset
-            )
+        # Calculate residuals and predictions using unified function
+        residuals, y_pred = get_residuals_unified(
+            spec_row_indices_split,
+            spec_col_indices_split,
+            spec_values_split,
+            is_decoy_matched,
+            dia_spectrum[:, 1],
+            lib_coefficients
+        )
     
     # Calculate features for each candidate
     for i in range(n_candidates):
@@ -204,13 +272,16 @@ def calculate_features_unified(
     
     # Calculate manhattan distance and spectral contrast for all candidates at once
     if residuals is not None and y_pred is not None and n_candidates > 0:
-        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance(
+        # Use unified function
+        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance_unified(
             spec_row_indices_split,
             spec_col_indices_split,
             spec_values_split,
             dia_spectrum[:, 1],
             y_pred
         )
+        
+        # Results are already in the correct order
         features[:, 20] = manhattan_distances
         features[:, 21] = fitted_spectral_contrasts
     
