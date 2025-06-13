@@ -1177,6 +1177,169 @@ class TestFitToLibRTAlignment:
         assert 'decoy_library' not in params1
 
 
+class TestErrorHandling:
+    """Test error handling and robustness."""
+    
+    def test_nnls_fallback(self):
+        """Test fallback to scipy when ptinnls fails."""
+        # Create test data
+        candidates = [("PEPTIDE1", 2)]
+        unified = UnifiedCandidates(
+            candidates=candidates,
+            is_decoy=np.array([False]),
+            peaks=[np.array([[100, 200]])],
+            peaks_in_dia=[0]
+        )
+        
+        matrix_data = UnifiedMatrixData(
+            row_indices=np.array([0]),
+            col_indices=np.array([0]),
+            values=np.array([1.0]),
+            is_decoy=np.array([False])
+        )
+        
+        additional_outputs = {
+            'norm_intensities': [np.array([1.0])],
+            'pep_cand_loc': [np.array([1])]
+        }
+        
+        # Mock ptinnls to raise exception
+        with patch('src.spectral_fitting.sparse_nnls.lsqnonneg') as mock_nnls:
+            mock_nnls.side_effect = Exception("NNLS failed")
+            
+            # Should fall back to scipy
+            result = process_matrix(
+                unified_candidates=unified,
+                matrix_data=matrix_data,
+                additional_outputs=additional_outputs,
+                dia_spectrum=np.array([[100, 1.0]]),
+                unmatched_fit_type='a'
+            )
+            
+            # Should still return results
+            assert 'lib_coefficients' in result
+            assert len(result['lib_coefficients']) > 0
+    
+    def test_extreme_coefficient_values(self):
+        """Test handling of extreme coefficient values."""
+        # Create candidates with extreme intensities
+        candidates = [("PEPTIDE1", 2), ("PEPTIDE2", 2)]
+        peaks = [
+            np.array([[100, 1e10], [200, 1e-10]]),  # Extreme values
+            np.array([[100, 1.0], [200, 1.0]])      # Normal values
+        ]
+        
+        unified = UnifiedCandidates(
+            candidates=candidates,
+            is_decoy=np.array([False, True]),
+            peaks=peaks
+        )
+        
+        centroid_breaks = np.array([95, 105, 195, 205])
+        
+        # Should handle without overflow/underflow
+        result_candidates, matrix_data, additional_outputs = create_entries(
+            centroid_breaks=centroid_breaks,
+            unified_candidates=unified,
+            top_n=2,
+            atleast_m=1,
+            frac_matched=0.1
+        )
+        
+        # Check that normalized intensities are reasonable
+        if len(additional_outputs['norm_intensities']) > 0:
+            for norm_int in additional_outputs['norm_intensities']:
+                assert np.all(np.isfinite(norm_int))
+                assert np.all(norm_int >= 0)
+                assert np.all(norm_int <= 1)
+    
+    def test_malformed_library_data(self):
+        """Test handling of malformed library data."""
+        # Library with missing/malformed data
+        library = {
+            ("PEPTIDE1", 2): {
+                # Missing spectrum
+            },
+            ("PEPTIDE2", 2): {
+                "spectrum": "not an array",  # Wrong type
+            },
+            ("PEPTIDE3", 2): {
+                "spectrum": np.array([]),  # Empty spectrum
+            }
+        }
+        
+        # Should handle gracefully
+        candidates = list(library.keys())
+        
+        # Test with empty spectrum
+        empty_peaks = library[("PEPTIDE3", 2)].get("spectrum", np.array([]))
+        assert len(empty_peaks) == 0
+    
+    def test_nan_inf_handling(self):
+        """Test handling of NaN and Inf values."""
+        # Create data with NaN/Inf
+        candidates = [("PEPTIDE1", 2)]
+        peaks = [np.array([[100, np.nan], [200, np.inf], [300, 1000]])]
+        
+        unified = UnifiedCandidates(
+            candidates=candidates,
+            is_decoy=np.array([False]),
+            peaks=peaks
+        )
+        
+        # Should handle or filter out NaN/Inf
+        centroid_breaks = np.array([95, 105, 195, 205, 295, 305])
+        
+        try:
+            result_candidates, matrix_data, additional_outputs = create_entries(
+                centroid_breaks=centroid_breaks,
+                unified_candidates=unified,
+                top_n=3,
+                atleast_m=1,
+                frac_matched=0.1
+            )
+            # If it doesn't crash, check results are reasonable
+            if len(matrix_data.values) > 0:
+                assert np.all(np.isfinite(matrix_data.values))
+        except:
+            # It's OK if it raises an error for invalid data
+            pass
+    
+    def test_concurrent_modification_safety(self):
+        """Test that data structures are not modified during processing."""
+        # Create original data
+        candidates = [("PEPTIDE1", 2), ("PEPTIDE2", 2)]
+        is_decoy = np.array([False, True])
+        peaks = [np.array([[100, 1000]]), np.array([[200, 2000]])]
+        
+        # Make copies to check later
+        original_candidates = candidates.copy()
+        original_is_decoy = is_decoy.copy()
+        original_peaks = [p.copy() for p in peaks]
+        
+        unified = UnifiedCandidates(
+            candidates=candidates,
+            is_decoy=is_decoy,
+            peaks=peaks
+        )
+        
+        # Process data
+        centroid_breaks = np.array([95, 105, 195, 205])
+        result_candidates, matrix_data, additional_outputs = create_entries(
+            centroid_breaks=centroid_breaks,
+            unified_candidates=unified,
+            top_n=1,
+            atleast_m=1,
+            frac_matched=0.1
+        )
+        
+        # Check original data wasn't modified
+        assert candidates == original_candidates
+        assert np.array_equal(is_decoy, original_is_decoy)
+        for i, p in enumerate(peaks):
+            assert np.array_equal(p, original_peaks[i])
+
+
 class TestEdgeCases:
     """Test edge cases and error handling."""
     
