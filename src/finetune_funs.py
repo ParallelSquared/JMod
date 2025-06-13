@@ -313,6 +313,7 @@ def fine_tune_rt(grouped_df,
                 print(f"Traceback: {traceback.format_exc()}")
         
         orig_predictions = np.mean(model_outputs, axis=0)
+        
     except Exception as e:
         print(f"Error making predictions: {e}")
         # Define fallback
