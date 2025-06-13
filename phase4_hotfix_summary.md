@@ -45,3 +45,9 @@ When refactoring and consolidating code:
 ✅ Issue resolved and tested
 ✅ Code functioning correctly
 ✅ Ready for continued use
+
+## Update: Second Fix Required
+After the initial fix, discovered that `fit_to_lib` was incorrectly changed to use `compute_residuals`. 
+- `fit_to_lib` must use the imported `get_residuals` and `get_manhattan_distance` (old signatures)
+- `fit_to_lib2` uses the new `compute_residuals` and `compute_manhattan_distance` (unified approach)
+- This properly separates the two implementations
