@@ -29,7 +29,7 @@ from .utils.spectral_similarity_metrics import (
 )
 
 
-# ===== UNIFIED DATA STRUCTURES (consolidated from spectral_fitting_unified.py) =====
+# ===== DATA STRUCTURES =====
 
 @dataclass
 class UnifiedCandidates:
@@ -222,7 +222,7 @@ def create_unified_candidates(
     )
 
 
-def create_entries_unified(
+def create_entries_v2(
     centroid_breaks: np.ndarray,
     unified_candidates: UnifiedCandidates,
     top_n: int = 10,
@@ -239,7 +239,7 @@ def create_entries_unified(
     dia_spectrum: Optional[np.ndarray] = None
 ) -> Tuple[UnifiedCandidates, UnifiedMatrixData, Dict[str, Any]]:
     """
-    Unified version of create_entries that processes targets and decoys together.
+    Create entries for spectral fitting, processing targets and decoys together.
     
     Args:
         centroid_breaks: Sorted array of m/z bin boundaries
@@ -435,9 +435,9 @@ def create_entries_unified(
     return unified_candidates, matrix_data, additional_outputs
 
 
-# ===== UNIFIED FEATURE FUNCTIONS (consolidated from spectral_fitting_unified_features.py) =====
+# ===== FEATURE FUNCTIONS =====
 
-def get_residuals_unified(
+def get_residuals_v2(
     row_indices_split: List[np.ndarray],
     col_indices_split: List[np.ndarray],
     values_split: List[np.ndarray],
@@ -446,7 +446,7 @@ def get_residuals_unified(
     coeffs: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Calculate residuals for unified candidates.
+    Calculate residuals for all candidates.
     
     This function computes residuals without separating ref/decoy data.
     It uses the is_decoy mask to apply correct offsets internally.
@@ -483,7 +483,7 @@ def get_residuals_unified(
     return residuals, y_pred
 
 
-def get_manhattan_distance_unified(
+def get_manhattan_distance_v2(
     row_indices_split: List[np.ndarray],
     col_indices_split: List[np.ndarray],
     values_split: List[np.ndarray],
@@ -491,7 +491,7 @@ def get_manhattan_distance_unified(
     y_pred: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Calculate manhattan distance and spectral contrast for unified candidates.
+    Calculate manhattan distance and spectral contrast for all candidates.
     
     This version works directly with unified data structures.
     """
@@ -529,7 +529,7 @@ def get_manhattan_distance_unified(
     return manhattan_distances, spectral_contrasts
 
 
-def calculate_features_unified(
+def calculate_features_v2(
     unified_candidates: UnifiedCandidates,
     matrix_data: UnifiedMatrixData,
     additional_outputs: Dict,
@@ -544,14 +544,14 @@ def calculate_features_unified(
     library: Dict
 ) -> UnifiedFeatures:
     """
-    Calculate all features for unified candidates in a single pass.
+    Calculate all features for all candidates in a single pass.
     
     This replaces calling get_features twice (once for targets, once for decoys).
     
     Args:
         unified_candidates: Unified candidates with type tracking
         matrix_data: Matrix data from unified processing
-        additional_outputs: Additional data from create_entries_unified
+        additional_outputs: Additional data from create_entries_v2
         dia_spectrum: DIA spectrum
         prec_rt: Precursor retention time
         lib_coefficients: NNLS coefficients
@@ -598,8 +598,8 @@ def calculate_features_unified(
     y_pred = None
     
     if n_candidates > 0:
-        # Calculate residuals and predictions using unified function
-        residuals, y_pred = get_residuals_unified(
+        # Calculate residuals and predictions
+        residuals, y_pred = get_residuals_v2(
             spec_row_indices_split,
             spec_col_indices_split,
             spec_values_split,
@@ -688,8 +688,8 @@ def calculate_features_unified(
     
     # Calculate manhattan distance and spectral contrast for all candidates at once
     if residuals is not None and y_pred is not None and n_candidates > 0:
-        # Use unified function
-        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance_unified(
+        # Calculate manhattan distance and spectral contrast
+        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance_v2(
             spec_row_indices_split,
             spec_col_indices_split,
             spec_values_split,
@@ -739,9 +739,9 @@ def calculate_features_unified(
     )
 
 
-# ===== UNIFIED MATRIX FUNCTIONS (consolidated from spectral_fitting_unified_matrix.py) =====
+# ===== MATRIX FUNCTIONS =====
 
-def unmatched_peaks_unified(
+def unmatched_peaks_v2(
     unified_candidates: UnifiedCandidates,
     norm_intensities: List[np.ndarray],
     pep_cand_loc: List[np.ndarray],
@@ -750,7 +750,7 @@ def unmatched_peaks_unified(
     lower_limit: float = 1e-10
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Calculate unmatched peaks for all candidates in a unified manner.
+    Calculate unmatched peaks for all candidates.
     
     This replaces calling unmatched_peaks twice (once for targets, once for decoys).
     
@@ -820,7 +820,7 @@ def unmatched_peaks_unified(
     return not_dia_row_indices, not_dia_col_indices, not_dia_values, not_dia_is_decoy
 
 
-def build_sparse_matrix_unified(
+def build_sparse_matrix_v2(
     matrix_data: UnifiedMatrixData,
     unmatched_row_indices: np.ndarray,
     unmatched_col_indices: np.ndarray,
@@ -829,7 +829,7 @@ def build_sparse_matrix_unified(
     unique_row_idxs: np.ndarray
 ) -> Tuple[sparse.coo_matrix, np.ndarray, Dict[int, int]]:
     """
-    Build sparse matrix for NNLS optimization with unified data.
+    Build sparse matrix for NNLS optimization.
     
     Args:
         matrix_data: Unified matrix data with matched peaks
@@ -865,7 +865,7 @@ def build_sparse_matrix_unified(
     return sparse_lib_matrix, dia_spec_int, peak_idx_convertor
 
 
-def process_matrix_unified(
+def process_matrix_v2(
     unified_candidates: UnifiedCandidates,
     matrix_data: UnifiedMatrixData,
     additional_outputs: Dict,
@@ -873,14 +873,14 @@ def process_matrix_unified(
     unmatched_fit_type: str = "a"
 ) -> Dict[str, any]:
     """
-    Complete matrix processing pipeline with unified data.
+    Complete matrix processing pipeline.
     
     This replaces the entire matrix construction section of fit_to_lib2.
     
     Args:
         unified_candidates: Unified candidates
         matrix_data: Initial matrix data from create_entries_unified
-        additional_outputs: Additional data from create_entries_unified
+        additional_outputs: Additional data from create_entries_v2
         dia_spectrum: DIA spectrum
         unmatched_fit_type: How to handle unmatched peaks
         
@@ -908,7 +908,7 @@ def process_matrix_unified(
     
     # Calculate unmatched peaks for all candidates
     last_row = max(unique_row_idxs)
-    unmatched_row_idx, unmatched_col_idx, unmatched_vals, _ = unmatched_peaks_unified(
+    unmatched_row_idx, unmatched_col_idx, unmatched_vals, _ = unmatched_peaks_v2(
         unified_candidates=unified_candidates,
         norm_intensities=additional_outputs['norm_intensities'],
         pep_cand_loc=additional_outputs['pep_cand_loc'],
@@ -917,7 +917,7 @@ def process_matrix_unified(
     )
     
     # Build sparse matrix
-    sparse_matrix, target_vector, peak_idx_convertor = build_sparse_matrix_unified(
+    sparse_matrix, target_vector, peak_idx_convertor = build_sparse_matrix_v2(
         matrix_data=matrix_data,
         unmatched_row_indices=unmatched_row_idx,
         unmatched_col_indices=unmatched_col_idx,
@@ -1463,7 +1463,7 @@ def fit_to_lib2(dia_spec,
                decoy=False,
                decoy_library=None):
     """
-    Unified implementation of fit_to_lib2 using unified data structures.
+    Modern implementation of fit_to_lib2 that processes targets and decoys together.
     
     This version processes targets and decoys together in a single pass,
     eliminating code duplication while maintaining identical output.
@@ -1528,7 +1528,7 @@ def fit_to_lib2(dia_spec,
     centroid_breaks = np.sort(centroid_breaks)
     bin_centers = np.mean(np.stack((centroid_breaks[::2], centroid_breaks[1::2]), 1), 1)
     
-    # ===== UNIFIED PROCESSING STARTS HERE =====
+    # ===== PROCESSING STARTS HERE =====
     
     # 4. Create unified candidates structure
     if decoy and decoy_library:
@@ -1549,7 +1549,7 @@ def fit_to_lib2(dia_spec,
         )
     
     # 5. Process all candidates in ONE call
-    updated_unified, matrix_data, additional_outputs = create_entries_unified(
+    updated_unified, matrix_data, additional_outputs = create_entries_v2(
         centroid_breaks=centroid_breaks,
         unified_candidates=unified,
         top_n=config.top_n,
@@ -1572,7 +1572,7 @@ def fit_to_lib2(dia_spec,
                 prec_mz, prec_rt, *np.zeros(len(names) - 7)]]
     
     # 6. Build matrix and solve NNLS
-    matrix_results = process_matrix_unified(
+    matrix_results = process_matrix_v2(
         unified_candidates=updated_unified,
         matrix_data=matrix_data,
         additional_outputs=additional_outputs,
@@ -1581,7 +1581,7 @@ def fit_to_lib2(dia_spec,
     )
     
     # 7. Calculate features
-    unified_features = calculate_features_unified(
+    unified_features = calculate_features_v2(
         unified_candidates=updated_unified,
         matrix_data=matrix_data,
         additional_outputs=additional_outputs,
