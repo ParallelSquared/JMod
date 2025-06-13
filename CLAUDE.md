@@ -93,3 +93,127 @@ Key parameters to understand:
 - Test data fixtures in `tests/fixtures/test_data.py`
 - Coverage reporting integrated (currently ~27% coverage)
 - Focus on unit tests for utility functions
+
+## Phase 4: Unified Spectral Fitting Cleanup Implementation Plan
+
+### Overview
+Phase 4 completes the unified spectral fitting refactoring by removing the original implementation and consolidating all code to use the unified approach. This phase should be implemented carefully to ensure no functionality is lost.
+
+### Prerequisites
+- Ensure Phase 3 is fully tested and working
+- Create a backup branch before starting Phase 4
+- Run full test suite and save results for comparison
+
+### Step-by-Step Implementation
+
+#### Step 1: Create Backup and Branch
+```bash
+# Create backup tag
+git tag pre-phase4-backup
+
+# Create new branch for Phase 4
+git checkout -b phase4-cleanup
+```
+
+#### Step 2: Remove Original Functions (spectral_fitting.py)
+1. Delete `fit_to_lib2_original` function
+2. Delete the original `create_entries` function
+3. Remove any helper functions only used by the original implementation
+4. Keep only the unified versions
+
+#### Step 3: Consolidate Unified Modules
+1. **Merge spectral_fitting_unified.py into spectral_fitting.py**
+   - Move `UnifiedCandidates`, `UnifiedMatrixData`, `UnifiedFeatures` classes
+   - Move `create_unified_candidates` function
+   - Update imports throughout codebase
+
+2. **Merge spectral_fitting_unified_features.py**
+   - Move unified feature calculation functions into main feature module
+   - Remove "_unified" suffix from function names
+   - Update all callers
+
+3. **Merge spectral_fitting_unified_matrix.py**
+   - Integrate matrix operations into main spectral fitting module
+   - Consolidate sparse matrix construction code
+
+4. **Remove spectral_fitting_unified_integration.py**
+   - This was a demo file and is no longer needed
+
+#### Step 4: Rename and Simplify Functions
+1. Remove "_unified" suffix from all function names
+2. Update all function calls throughout the codebase
+3. Ensure consistent naming conventions
+
+#### Step 5: Update Imports and Dependencies
+1. Search and replace all imports of unified modules
+2. Remove imports of deleted modules
+3. Update __init__.py files if needed
+
+#### Step 6: Clean Up Configuration
+1. Remove any config options related to choosing between original/unified
+2. Remove unused configuration parameters
+3. Update config documentation
+
+#### Step 7: Update Documentation
+1. Update all docstrings to reflect unified approach
+2. Remove references to "ref" and "decoy" separation
+3. Update this CLAUDE.md file with new architecture
+4. Update README if it references the old approach
+
+#### Step 8: Test Suite Updates
+1. Update tests that explicitly test ref/decoy separation
+2. Add tests for unified data structure integrity
+3. Ensure all existing tests pass
+4. Add performance benchmarks
+
+#### Step 9: Code Optimization
+1. Profile the unified implementation
+2. Identify any performance bottlenecks
+3. Optimize memory usage where possible
+4. Consider parallelization opportunities
+
+#### Step 10: Final Validation
+1. Run full test suite
+2. Compare results with pre-Phase 4 backup
+3. Test with multiple datasets (mTRAQ, LFQ, etc.)
+4. Benchmark performance improvements
+5. Check memory usage
+
+### Specific Files to Modify
+
+#### Files to Delete:
+- `src/spectral_fitting_unified.py`
+- `src/spectral_fitting_unified_features.py`
+- `src/spectral_fitting_unified_matrix.py`
+- `src/spectral_fitting_unified_integration.py`
+
+#### Files to Update:
+- `src/spectral_fitting.py` - Main consolidation target
+- `src/rt_alignment.py` - Update function calls
+- `src/run_jmod.py` - Update imports
+- `src/config.py` - Remove obsolete options
+- Tests that reference old functions
+
+### Testing Checklist
+- [ ] All unit tests pass
+- [ ] Integration tests pass
+- [ ] Performance is equal or better
+- [ ] Memory usage is reasonable
+- [ ] Results match Phase 3 output
+- [ ] Works with all tag types (mTRAQ, diethyl, etc.)
+- [ ] Works with isotope patterns
+- [ ] FDR analysis produces same results
+
+### Rollback Plan
+If issues are encountered:
+1. `git checkout main`
+2. `git checkout pre-phase4-backup`
+3. Document specific issues encountered
+4. Create targeted fixes before retry
+
+### Success Metrics
+- Code reduction of ~40%
+- Improved maintainability
+- Equal or better performance
+- All tests passing
+- Consistent results with previous implementation
