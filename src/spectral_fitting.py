@@ -451,7 +451,7 @@ def create_entries(
 
 # ===== FEATURE CALCULATION FUNCTIONS =====
 
-def get_residuals(
+def compute_residuals(
     row_indices_split: List[np.ndarray],
     col_indices_split: List[np.ndarray],
     values_split: List[np.ndarray],
@@ -497,7 +497,7 @@ def get_residuals(
     return residuals, y_pred
 
 
-def get_manhattan_distance(
+def compute_manhattan_distance(
     row_indices_split: List[np.ndarray],
     col_indices_split: List[np.ndarray],
     values_split: List[np.ndarray],
@@ -613,7 +613,7 @@ def calculate_features(
     
     if n_candidates > 0:
         # Calculate residuals and predictions
-        residuals, y_pred = get_residuals(
+        residuals, y_pred = compute_residuals(
             spec_row_indices_split,
             spec_col_indices_split,
             spec_values_split,
@@ -703,7 +703,7 @@ def calculate_features(
     # Calculate manhattan distance and spectral contrast for all candidates at once
     if residuals is not None and y_pred is not None and n_candidates > 0:
         # Calculate manhattan distance and spectral contrast
-        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance(
+        manhattan_distances, fitted_spectral_contrasts = compute_manhattan_distance(
             spec_row_indices_split,
             spec_col_indices_split,
             spec_values_split,
@@ -1244,7 +1244,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
             dia_spectrum[:,1]
         )
     
-        residuals, y_pred = get_residuals(
+        residuals, y_pred = compute_residuals(
             ref_spec_values_split,
             ref_spec_row_indices_split,
             ref_spec_col_indices_split,
@@ -1257,7 +1257,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
             0
         )
         # Then use y_pred for the manhattan distance
-        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance(
+        manhattan_distances, fitted_spectral_contrasts = compute_manhattan_distance(
             ref_spec_row_indices_split,
             ref_spec_col_indices_split,
             ref_spec_values_split,
