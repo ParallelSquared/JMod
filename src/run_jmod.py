@@ -293,12 +293,12 @@ def main():
         
     
     # Debug: Print first few lines of the output file
-    print("\nDEBUG: First 5 lines of output CSV:")
-    with open(decoylib_search_path, 'r') as f:
-        for i, line in enumerate(f):
-            if i >= 5:
-                break
-            print(f"  Line {i}: {line.strip()[:100]}{'...' if len(line.strip()) > 100 else ''}")
+    # print("\nDEBUG: First 5 lines of output CSV:")
+    # with open(decoylib_search_path, 'r') as f:
+    #     for i, line in enumerate(f):
+    #         if i >= 5:
+    #             break
+    #         print(f"  Line {i}: {line.strip()[:100]}{'...' if len(line.strip()) > 100 else ''}")
     
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,

@@ -184,10 +184,10 @@ def write_to_csv(data: list[list],filepath: str,colnames: list[str] = None):
             else:
                 println("WARNING: Column names do not match data columns. Skipping header row.")
         # Debug: Check for any non-numeric values in first column
-        if len(data) > 0 and len(data[0]) > 0:
-            first_val = data[0][0]
-            if isinstance(first_val, str) and not first_val.replace('.','').replace('-','').isdigit():
-                print(f"WARNING: First column contains non-numeric value: {first_val}")
+        # if len(data) > 0 and len(data[0]) > 0:
+        #     first_val = data[0][0]
+        #     if isinstance(first_val, str) and not first_val.replace('.','').replace('-','').isdigit():
+        #         print(f"WARNING: First column contains non-numeric value: {first_val}")
         writer.writerows(data)
         
         
