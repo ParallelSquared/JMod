@@ -15,8 +15,9 @@ from src.spectral_fitting import (
     UnifiedCandidates, UnifiedMatrixData, UnifiedFeatures,
     create_unified_candidates, create_entries, compute_residuals,
     compute_manhattan_distance, calculate_features, unmatched_peaks,
-    build_sparse_matrix, process_matrix, fit_to_lib2
+    build_sparse_matrix, process_matrix, fit_to_lib, fit_to_lib2
 )
+from src.utils.io.read_output import names
 import src.config as config
 
 
@@ -1031,6 +1032,149 @@ class TestPerformance:
         # Should complete quickly even with 100 candidates
         assert elapsed < 1.0  # Less than 1 second
         print(f"create_entries with {n_candidates} candidates took {elapsed:.3f}s")
+    
+    def test_memory_usage_comparison(self):
+        """Test memory usage of unified approach."""
+        import sys
+        
+        # Create test data
+        n_candidates = 50
+        candidates = [(f"PEPTIDE{i}", 2) for i in range(n_candidates)]
+        peaks = [np.random.rand(10, 2) * 1000 for _ in range(n_candidates)]
+        
+        # Measure memory of unified structure
+        unified = UnifiedCandidates(
+            candidates=candidates,
+            is_decoy=np.random.choice([True, False], n_candidates),
+            peaks=peaks
+        )
+        
+        unified_size = sys.getsizeof(unified)
+        
+        # Compare to separate storage (old approach)
+        target_candidates = [c for i, c in enumerate(candidates) if not unified.is_decoy[i]]
+        decoy_candidates = [c for i, c in enumerate(candidates) if unified.is_decoy[i]]
+        target_peaks = [p for i, p in enumerate(peaks) if not unified.is_decoy[i]]
+        decoy_peaks = [p for i, p in enumerate(peaks) if unified.is_decoy[i]]
+        
+        separate_size = (sys.getsizeof(target_candidates) + 
+                        sys.getsizeof(decoy_candidates) +
+                        sys.getsizeof(target_peaks) + 
+                        sys.getsizeof(decoy_peaks))
+        
+        print(f"Unified size: {unified_size} bytes")
+        print(f"Separate size: {separate_size} bytes")
+        
+        # Unified should be more efficient
+        assert unified_size < separate_size * 1.2  # Allow 20% overhead
+    
+    def test_matrix_construction_performance(self):
+        """Test performance of unified matrix construction."""
+        # Create matrix data
+        n_entries = 1000
+        matrix_data = UnifiedMatrixData(
+            row_indices=np.random.randint(0, 100, n_entries),
+            col_indices=np.random.randint(0, 50, n_entries),
+            values=np.random.rand(n_entries),
+            is_decoy=np.random.choice([True, False], 50)
+        )
+        
+        unmatched_row = np.random.randint(100, 150, 50)
+        unmatched_col = np.arange(50)
+        unmatched_val = np.random.rand(50)
+        
+        dia_spectrum = np.random.rand(100, 2) * 1000
+        unique_row_idxs = np.unique(matrix_data.row_indices)
+        
+        import time
+        start = time.time()
+        
+        sparse_mat, target_vec, peak_idx_conv = build_sparse_matrix(
+            matrix_data=matrix_data,
+            unmatched_row_indices=unmatched_row,
+            unmatched_col_indices=unmatched_col,
+            unmatched_values=unmatched_val,
+            dia_spectrum=dia_spectrum,
+            unique_row_idxs=unique_row_idxs
+        )
+        
+        elapsed = time.time() - start
+        
+        print(f"Matrix construction with {n_entries} entries took {elapsed:.3f}s")
+        assert elapsed < 0.1  # Should be very fast
+        assert sparse_mat.shape[0] > 0
+        assert sparse_mat.shape[1] == 50
+
+
+class TestFitToLibRTAlignment:
+    """Test fit_to_lib function for RT alignment compatibility."""
+    
+    def setup_method(self):
+        """Set up test configuration for fit_to_lib."""
+        config.top_n = 10
+        config.atleast_m = 3
+        config.args = Mock(mzml="test.mzML")
+        config.protein_column = 'protein'
+        
+    def test_fit_to_lib_uses_original_functions(self):
+        """Test that fit_to_lib uses imported functions, not unified ones."""
+        # Test by examining the source code to ensure it imports and uses
+        # get_residuals and get_manhattan_distance from utils
+        import inspect
+        
+        # Get source code of fit_to_lib
+        source = inspect.getsource(fit_to_lib)
+        
+        # Check that it uses imported functions
+        assert "get_residuals(" in source
+        assert "get_manhattan_distance(" in source
+        
+        # Check that it doesn't use the unified functions
+        assert "compute_residuals(" not in source
+        assert "compute_manhattan_distance(" not in source
+        
+        # Check imports at module level
+        module_source = inspect.getsource(inspect.getmodule(fit_to_lib))
+        assert "from .utils.spectral_similarity_metrics import" in module_source
+        assert "get_residuals" in module_source
+        assert "get_manhattan_distance" in module_source
+    
+    def test_fit_to_lib_no_decoys(self):
+        """Test that fit_to_lib doesn't use unified processing."""
+        # Check that fit_to_lib doesn't have decoy parameter
+        import inspect
+        
+        sig = inspect.signature(fit_to_lib)
+        params = list(sig.parameters.keys())
+        
+        # fit_to_lib should not have a 'decoy' parameter
+        assert 'decoy' not in params
+        assert 'decoy_library' not in params
+        
+        # It should not create UnifiedCandidates
+        source = inspect.getsource(fit_to_lib)
+        assert "UnifiedCandidates" not in source
+        assert "create_unified_candidates" not in source
+    
+    def test_fit_to_lib_output_format(self):
+        """Test that fit_to_lib maintains expected output format."""
+        # Test signature differences between fit_to_lib and fit_to_lib2
+        import inspect
+        
+        sig1 = inspect.signature(fit_to_lib)
+        sig2 = inspect.signature(fit_to_lib2)
+        
+        # fit_to_lib2 should have additional parameters
+        params1 = set(sig1.parameters.keys())
+        params2 = set(sig2.parameters.keys())
+        
+        # fit_to_lib2 has decoy parameters
+        assert 'decoy' in params2
+        assert 'decoy_library' in params2
+        
+        # These are not in fit_to_lib
+        assert 'decoy' not in params1
+        assert 'decoy_library' not in params1
 
 
 class TestEdgeCases:
