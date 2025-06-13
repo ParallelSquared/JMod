@@ -1,4 +1,18 @@
 """
+Spectral fitting module for JMod proteomics software.
+
+This module implements the core spectral matching algorithm that processes
+both target and decoy peptides together in a unified approach. It performs
+joint modeling of mass spectra to deconvolve overlapping isotopic envelopes
+in DIA (Data-Independent Acquisition) MS/MS data.
+
+Key Components:
+- UnifiedCandidates: Data structure combining targets and decoys
+- create_entries: Processes candidates and matches to DIA spectrum
+- Matrix construction: Builds sparse matrices for NNLS optimization
+- Feature calculation: Computes scoring features for FDR analysis
+- fit_to_lib/fit_to_lib2: Main entry points for spectral matching
+
 This Source Code Form is subject to the terms of the Oxford Nanopore
 Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
@@ -435,7 +449,7 @@ def create_entries(
     return unified_candidates, matrix_data, additional_outputs
 
 
-# ===== FEATURE FUNCTIONS =====
+# ===== FEATURE CALCULATION FUNCTIONS =====
 
 def get_residuals(
     row_indices_split: List[np.ndarray],
@@ -739,7 +753,7 @@ def calculate_features(
     )
 
 
-# ===== MATRIX FUNCTIONS =====
+# ===== MATRIX CONSTRUCTION FUNCTIONS =====
 
 def unmatched_peaks(
     unified_candidates: UnifiedCandidates,
@@ -947,6 +961,8 @@ def process_matrix(
         'unique_row_idxs': unique_row_idxs
     }
 
+# ===== UTILITY FUNCTIONS =====
+
 def hyperscore2(frags,frag_names_matched):
     
     num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
@@ -956,8 +972,9 @@ def hyperscore2(frags,frag_names_matched):
 
 
 
+# ===== MAIN FITTING FUNCTIONS =====
+
 #@profile
-# #@profile
 def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=False,ms1_mz=None,
                ms1_spectra = None,
                rt_tol = config.rt_tol,
