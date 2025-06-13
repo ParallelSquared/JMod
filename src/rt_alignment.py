@@ -787,8 +787,19 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
     
     
+    if len(dia_rt) == 0:
+        # No matches found, return early with identity functions
+        print("No matches found in initial search. Returning identity RT/MZ functions.")
+        rt_spl = interp1d([0, 100], [0, 100], fill_value="extrapolate")
+        mz_func = lambda mz, rt: mz
+        if ms2:
+            ms2_func = lambda mz: mz
+            return [rt_spl, mz_func, ms2_func], librarySpectra
+        else:
+            return [rt_spl, mz_func], librarySpectra
+    
     cor_filter = np.ones_like(dia_rt,dtype=bool)
-    if dino_features is not None:
+    if dino_features is not None and len(output_hyper) > 0:
         cor_limit = 0.8
         hyper_cutoff = np.percentile(output_hyper,50)
         cor_filter = np.logical_and(frag_multiply>cor_limit,output_hyper>hyper_cutoff)
