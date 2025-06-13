@@ -294,28 +294,42 @@ def create_entries(
         top_ten = [np.searchsorted(centroid_breaks, M[top_n_idxs[i], 0]) 
                    for i, M in enumerate(candidate_peaks)]
     
-    # MS1 filtering
+    # MS1 filtering - vectorized
     ms1_peak = np.ones(n_candidates, dtype=bool)  # Default to True
     if ms1_spec is not None and prec_mzs is not None:
-        ms1_diffs = [closest_peak_diff(mz, ms1_spec.mz) for mz in prec_mzs]
+        # Vectorized MS1 difference calculation
+        ms1_diffs = np.array([closest_peak_diff(mz, ms1_spec.mz) for mz in prec_mzs])
         ms1_peak = ~np.isnan(ms1_diffs)
-        ms1_error = np.array([diff / prec_mzs[i] * 1e6 if not np.isnan(diff) else np.nan 
-                              for i, diff in enumerate(ms1_diffs)])
+        
+        # Vectorized error calculation
+        ms1_error = np.where(
+            ~np.isnan(ms1_diffs),
+            ms1_diffs / prec_mzs * 1e6,
+            np.nan
+        )
     else:
         ms1_error = np.zeros(n_candidates)
     
     # Normalize intensities
     all_norm_intensities = [M[:, 1] / np.sum(M[:, 1]) for M in candidate_peaks]
     
-    # Find candidates with peaks in DIA
-    peaks_in_dia = [
-        i for i in range(n_candidates) 
-        if (np.sum(all_norm_intensities[i][(ref_coords[i] % 2) == 1]) > frac_matched and
-            np.sum(top_ten[i] % 2) > atleast_m and
-            ms1_peak[i] and
-            len(top_ten[i]) > 0 and top_ten[i][0] % 2 == 1 and
-            np.sum(top_ten[i][:3] % 2 == 1) >= 2)
-    ]
+    # Find candidates with peaks in DIA - vectorized approach
+    peaks_in_dia = []
+    for i in range(n_candidates):
+        if not ms1_peak[i] or len(top_ten[i]) == 0:
+            continue
+        
+        # Vectorized checks
+        ref_coords_i = ref_coords[i]
+        top_ten_i = top_ten[i]
+        in_dia_mask = (ref_coords_i % 2) == 1
+        
+        # Check all conditions
+        if (np.sum(all_norm_intensities[i][in_dia_mask]) > frac_matched and
+            np.sum(top_ten_i % 2) > atleast_m and
+            top_ten_i[0] % 2 == 1 and
+            np.sum(top_ten_i[:min(3, len(top_ten_i))] % 2 == 1) >= 2):
+            peaks_in_dia.append(i)
     
     # Update unified candidates with peaks_in_dia
     unified_candidates.peaks_in_dia = peaks_in_dia
@@ -606,6 +620,10 @@ def calculate_features(
     spec_row_indices_split = matrix_data.row_indices_split
     spec_col_indices_split = matrix_data.col_indices_split
     
+    # Pre-compute commonly used values
+    dia_total_intensity = np.sum(dia_spectrum[:, 1])
+    lib_coeffs_array = np.asarray(lib_coefficients)
+    
     # First, calculate residuals and y_pred for all candidates
     # This is needed for manhattan distance and residual features
     residuals = None
@@ -634,7 +652,7 @@ def calculate_features(
         
         # Feature 3: Fraction of DIA intensity matched
         if len(spec_row_indices_split[i]) > 0:
-            features[i, 2] = np.sum(dia_spectrum[spec_row_indices_split[i], 1]) / np.sum(dia_spectrum[:, 1])
+            features[i, 2] = np.sum(dia_spectrum[spec_row_indices_split[i], 1]) / dia_total_intensity
         
         # Feature 4: MS1 relative error
         features[i, 3] = ms1_error[i]

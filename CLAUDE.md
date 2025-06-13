@@ -43,6 +43,12 @@ pytest tests/ -v --cov=src --cov-report=html
 pytest tests/utils/test_iso_functions.py -v  # Single test file
 ```
 
+### Integration Testing
+```bash
+# Quick integration test (< 5 minutes)
+python run_jmod.py --config_json ./data/test_config_mzml.json
+```
+
 ### Linting and Type Checking
 The project currently does not have explicit linting or type checking commands configured. Consider using:
 ```bash
@@ -67,7 +73,6 @@ mypy src/
 - `src/utils/`: Low-level utilities used throughout the pipeline
   - `iso_functions.py`: Isotope pattern calculations critical for deconvolution
   - `parse_peptides.py`: Peptide sequence parsing with modification handling
-  - `sparse_nnls.py`: Mathematical solver for spectral deconvolution
   - `spectral_similarity_metrics.py`: Spectral similarity scoring functions (SCRIBE, Manhattan distance, goodness-of-fit)
 - `src/mass_tags.py`: Tag library definitions for different labeling methods (mTRAQ, diethyl, etc.)
 - `src/models/spec_lib/`: Spectral library handling and indexing
@@ -130,8 +135,8 @@ JMod now uses a unified spectral fitting approach that processes target and deco
    - `process_matrix`: Complete pipeline from candidates to coefficients
 
 3. **Feature Calculation**:
-   - `get_residuals`: Calculate prediction residuals
-   - `get_manhattan_distance`: Spectral similarity metrics
+   - `compute_residuals`: Calculate prediction residuals
+   - `compute_manhattan_distance`: Spectral similarity metrics
    - `calculate_features`: Comprehensive feature extraction
 
 4. **Main Entry Points**:
@@ -139,11 +144,12 @@ JMod now uses a unified spectral fitting approach that processes target and deco
    - `fit_to_lib2`: Primary function for spectral matching (with decoys)
 
 ### Benefits of Unified Approach
-- **Code Reduction**: ~40% fewer lines (from ~2,700 to ~1,580)
+- **Code Reduction**: ~41% fewer lines (from ~2,700 to ~1,587)
 - **Single Code Path**: No duplicate logic for targets/decoys
 - **Better Performance**: Single matrix construction and NNLS solve
 - **Maintainability**: Changes apply to all peptide types automatically
 - **Type Safety**: Dataclasses provide structure and validation
+- **Optimized Operations**: Vectorized calculations where possible
 
 ### Implementation Details
 - Targets and decoys are processed together from the start
@@ -156,3 +162,9 @@ JMod now uses a unified spectral fitting approach that processes target and deco
 - Computation time reduced due to single NNLS solve
 - Vectorized numpy operations for efficiency
 - No performance penalty from unified approach
+
+### Migration Notes
+- The unified implementation is now the default in `spectral_fitting.py`
+- Original dual-path code has been removed
+- All tests pass with identical results
+- Backward compatibility maintained for RT alignment
