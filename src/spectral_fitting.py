@@ -222,7 +222,7 @@ def create_unified_candidates(
     )
 
 
-def create_entries_v2(
+def create_entries(
     centroid_breaks: np.ndarray,
     unified_candidates: UnifiedCandidates,
     top_n: int = 10,
@@ -437,7 +437,7 @@ def create_entries_v2(
 
 # ===== FEATURE FUNCTIONS =====
 
-def get_residuals_v2(
+def get_residuals(
     row_indices_split: List[np.ndarray],
     col_indices_split: List[np.ndarray],
     values_split: List[np.ndarray],
@@ -483,7 +483,7 @@ def get_residuals_v2(
     return residuals, y_pred
 
 
-def get_manhattan_distance_v2(
+def get_manhattan_distance(
     row_indices_split: List[np.ndarray],
     col_indices_split: List[np.ndarray],
     values_split: List[np.ndarray],
@@ -529,7 +529,7 @@ def get_manhattan_distance_v2(
     return manhattan_distances, spectral_contrasts
 
 
-def calculate_features_v2(
+def calculate_features(
     unified_candidates: UnifiedCandidates,
     matrix_data: UnifiedMatrixData,
     additional_outputs: Dict,
@@ -551,7 +551,7 @@ def calculate_features_v2(
     Args:
         unified_candidates: Unified candidates with type tracking
         matrix_data: Matrix data from unified processing
-        additional_outputs: Additional data from create_entries_v2
+        additional_outputs: Additional data from create_entries
         dia_spectrum: DIA spectrum
         prec_rt: Precursor retention time
         lib_coefficients: NNLS coefficients
@@ -599,7 +599,7 @@ def calculate_features_v2(
     
     if n_candidates > 0:
         # Calculate residuals and predictions
-        residuals, y_pred = get_residuals_v2(
+        residuals, y_pred = get_residuals(
             spec_row_indices_split,
             spec_col_indices_split,
             spec_values_split,
@@ -689,7 +689,7 @@ def calculate_features_v2(
     # Calculate manhattan distance and spectral contrast for all candidates at once
     if residuals is not None and y_pred is not None and n_candidates > 0:
         # Calculate manhattan distance and spectral contrast
-        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance_v2(
+        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance(
             spec_row_indices_split,
             spec_col_indices_split,
             spec_values_split,
@@ -741,7 +741,7 @@ def calculate_features_v2(
 
 # ===== MATRIX FUNCTIONS =====
 
-def unmatched_peaks_v2(
+def unmatched_peaks(
     unified_candidates: UnifiedCandidates,
     norm_intensities: List[np.ndarray],
     pep_cand_loc: List[np.ndarray],
@@ -820,7 +820,7 @@ def unmatched_peaks_v2(
     return not_dia_row_indices, not_dia_col_indices, not_dia_values, not_dia_is_decoy
 
 
-def build_sparse_matrix_v2(
+def build_sparse_matrix(
     matrix_data: UnifiedMatrixData,
     unmatched_row_indices: np.ndarray,
     unmatched_col_indices: np.ndarray,
@@ -865,7 +865,7 @@ def build_sparse_matrix_v2(
     return sparse_lib_matrix, dia_spec_int, peak_idx_convertor
 
 
-def process_matrix_v2(
+def process_matrix(
     unified_candidates: UnifiedCandidates,
     matrix_data: UnifiedMatrixData,
     additional_outputs: Dict,
@@ -880,7 +880,7 @@ def process_matrix_v2(
     Args:
         unified_candidates: Unified candidates
         matrix_data: Initial matrix data from create_entries_unified
-        additional_outputs: Additional data from create_entries_v2
+        additional_outputs: Additional data from create_entries
         dia_spectrum: DIA spectrum
         unmatched_fit_type: How to handle unmatched peaks
         
@@ -908,7 +908,7 @@ def process_matrix_v2(
     
     # Calculate unmatched peaks for all candidates
     last_row = max(unique_row_idxs)
-    unmatched_row_idx, unmatched_col_idx, unmatched_vals, _ = unmatched_peaks_v2(
+    unmatched_row_idx, unmatched_col_idx, unmatched_vals, _ = unmatched_peaks(
         unified_candidates=unified_candidates,
         norm_intensities=additional_outputs['norm_intensities'],
         pep_cand_loc=additional_outputs['pep_cand_loc'],
@@ -917,7 +917,7 @@ def process_matrix_v2(
     )
     
     # Build sparse matrix
-    sparse_matrix, target_vector, peak_idx_convertor = build_sparse_matrix_v2(
+    sparse_matrix, target_vector, peak_idx_convertor = build_sparse_matrix(
         matrix_data=matrix_data,
         unmatched_row_indices=unmatched_row_idx,
         unmatched_col_indices=unmatched_col_idx,
@@ -1437,7 +1437,7 @@ def fit_to_lib2(dia_spec,
         )
     
     # 5. Process all candidates in ONE call
-    updated_unified, matrix_data, additional_outputs = create_entries_v2(
+    updated_unified, matrix_data, additional_outputs = create_entries(
         centroid_breaks=centroid_breaks,
         unified_candidates=unified,
         top_n=config.top_n,
@@ -1460,7 +1460,7 @@ def fit_to_lib2(dia_spec,
                 prec_mz, prec_rt, *np.zeros(len(names) - 7)]]
     
     # 6. Build matrix and solve NNLS
-    matrix_results = process_matrix_v2(
+    matrix_results = process_matrix(
         unified_candidates=updated_unified,
         matrix_data=matrix_data,
         additional_outputs=additional_outputs,
@@ -1469,7 +1469,7 @@ def fit_to_lib2(dia_spec,
     )
     
     # 7. Calculate features
-    unified_features = calculate_features_v2(
+    unified_features = calculate_features(
         unified_candidates=updated_unified,
         matrix_data=matrix_data,
         additional_outputs=additional_outputs,
