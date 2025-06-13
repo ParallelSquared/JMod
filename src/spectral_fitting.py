@@ -435,12 +435,517 @@ def create_entries_unified(
     return unified_candidates, matrix_data, additional_outputs
 
 
-# ===== UNIFIED FEATURE AND MATRIX FUNCTIONS (to be consolidated next) =====
-# Temporarily keeping these imports until we consolidate the functions
-from .spectral_fitting_unified_matrix import (
-    process_matrix_unified, build_sparse_matrix_unified
-)
-from .spectral_fitting_unified_features import calculate_features_unified
+# ===== UNIFIED FEATURE FUNCTIONS (consolidated from spectral_fitting_unified_features.py) =====
+
+def get_residuals_unified(
+    row_indices_split: List[np.ndarray],
+    col_indices_split: List[np.ndarray],
+    values_split: List[np.ndarray],
+    is_decoy: np.ndarray,
+    val_obs: np.ndarray,
+    coeffs: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calculate residuals for unified candidates.
+    
+    This function computes residuals without separating ref/decoy data.
+    It uses the is_decoy mask to apply correct offsets internally.
+    """
+    coeffs = np.asarray(coeffs).ravel()
+    N = len(val_obs)  # Number of rows in the sparse matrix
+    
+    # Initialize prediction array
+    y_pred = np.zeros(N)
+    
+    # Compute predictions for all candidates
+    n_targets = np.sum(~is_decoy)
+    
+    for i, (row_idx, col_idx, vals) in enumerate(zip(row_indices_split, col_indices_split, values_split)):
+        if len(row_idx) == 0:
+            continue
+            
+        # Apply offset for decoys
+        if is_decoy[i]:
+            adjusted_col_idx = col_idx - n_targets + n_targets  # This simplifies to just col_idx
+            offset = n_targets
+        else:
+            adjusted_col_idx = col_idx
+            offset = 0
+            
+        # Compute predictions
+        for r, c, v in zip(row_idx, adjusted_col_idx, vals):
+            if c + offset < len(coeffs):
+                y_pred[r] += v * coeffs[c + offset]
+    
+    # Compute residuals
+    residuals = val_obs - y_pred
+    
+    return residuals, y_pred
+
+
+def get_manhattan_distance_unified(
+    row_indices_split: List[np.ndarray],
+    col_indices_split: List[np.ndarray],
+    values_split: List[np.ndarray],
+    val_obs: np.ndarray,
+    y_pred: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calculate manhattan distance and spectral contrast for unified candidates.
+    
+    This version works directly with unified data structures.
+    """
+    n_precursors = len(row_indices_split)
+    manhattan_distances = np.zeros(n_precursors)
+    spectral_contrasts = np.zeros(n_precursors)
+    
+    for i in range(n_precursors):
+        if len(row_indices_split[i]) == 0:
+            manhattan_distances[i] = -np.inf
+            spectral_contrasts[i] = 0
+            continue
+            
+        # Get values for this precursor
+        rows = row_indices_split[i]
+        obs_vals = val_obs[rows]
+        pred_vals = y_pred[rows]
+        
+        # Manhattan distance
+        if np.sum(obs_vals) > 0:
+            manhattan_distances[i] = np.log10(np.sum(np.abs(pred_vals - obs_vals)) / np.sum(obs_vals))
+        else:
+            manhattan_distances[i] = -np.inf
+            
+        # Spectral contrast
+        if np.sum(pred_vals) > 0 and np.sum(obs_vals) > 0:
+            # Normalize and compute angle
+            pred_norm = pred_vals / np.sqrt(np.sum(pred_vals**2))
+            obs_norm = obs_vals / np.sqrt(np.sum(obs_vals**2))
+            dot_product = np.clip(np.sum(pred_norm * obs_norm), -1, 1)
+            spectral_contrasts[i] = 1 - (2 * np.arccos(dot_product) / np.pi)
+        else:
+            spectral_contrasts[i] = 0
+    
+    return manhattan_distances, spectral_contrasts
+
+
+def calculate_features_unified(
+    unified_candidates: UnifiedCandidates,
+    matrix_data: UnifiedMatrixData,
+    additional_outputs: Dict,
+    dia_spectrum: np.ndarray,
+    prec_rt: float,
+    lib_coefficients: np.ndarray,
+    sparse_matrix,
+    peak_idx_convertor: Dict[int, int],
+    unique_row_idxs: np.ndarray,
+    rt_mz: np.ndarray,
+    window_idxs: np.ndarray,
+    library: Dict
+) -> UnifiedFeatures:
+    """
+    Calculate all features for unified candidates in a single pass.
+    
+    This replaces calling get_features twice (once for targets, once for decoys).
+    
+    Args:
+        unified_candidates: Unified candidates with type tracking
+        matrix_data: Matrix data from unified processing
+        additional_outputs: Additional data from create_entries_unified
+        dia_spectrum: DIA spectrum
+        prec_rt: Precursor retention time
+        lib_coefficients: NNLS coefficients
+        sparse_matrix: Sparse matrix from NNLS
+        peak_idx_convertor: Peak index mapping
+        unique_row_idxs: Unique row indices
+        rt_mz: RT and m/z array for all library entries
+        window_idxs: Window indices for candidates
+        library: Spectral library
+        
+    Returns:
+        UnifiedFeatures object with all calculated features
+    """
+    # Extract needed data
+    peaks_in_dia = unified_candidates.peaks_in_dia
+    is_decoy_matched = unified_candidates.is_decoy[peaks_in_dia]
+    n_candidates = len(peaks_in_dia)
+    
+    if n_candidates == 0:
+        # Return empty features
+        return UnifiedFeatures(
+            features=np.zeros((0, 26)),
+            is_decoy=np.array([], dtype=bool)
+        )
+    
+    # Get data for matched candidates
+    pep_cand = additional_outputs['pep_cand']
+    norm_intensities = additional_outputs['norm_intensities']
+    lib_peaks_matched = additional_outputs['lib_peaks_matched']
+    pep_cand_list = additional_outputs['pep_cand_list']
+    ms1_error = additional_outputs['ms1_error_matched']
+    
+    # Initialize feature arrays
+    features = np.zeros((n_candidates, 26))
+    
+    # Get split arrays from matrix data
+    spec_values_split = matrix_data.values_split
+    spec_row_indices_split = matrix_data.row_indices_split
+    spec_col_indices_split = matrix_data.col_indices_split
+    
+    # First, calculate residuals and y_pred for all candidates
+    # This is needed for manhattan distance and residual features
+    residuals = None
+    y_pred = None
+    
+    if n_candidates > 0:
+        # Calculate residuals and predictions using unified function
+        residuals, y_pred = get_residuals_unified(
+            spec_row_indices_split,
+            spec_col_indices_split,
+            spec_values_split,
+            is_decoy_matched,
+            dia_spectrum[:, 1],
+            lib_coefficients
+        )
+    
+    # Calculate features for each candidate
+    for i in range(n_candidates):
+        candidate_idx = peaks_in_dia[i]
+        
+        # Feature 1: Number of library peaks matched
+        features[i, 0] = np.sum(lib_peaks_matched[i])
+        
+        # Feature 2: Fraction of library intensity matched
+        features[i, 1] = np.sum(spec_values_split[i])
+        
+        # Feature 3: Fraction of DIA intensity matched
+        if len(spec_row_indices_split[i]) > 0:
+            features[i, 2] = np.sum(dia_spectrum[spec_row_indices_split[i], 1]) / np.sum(dia_spectrum[:, 1])
+        
+        # Feature 4: MS1 relative error
+        features[i, 3] = ms1_error[i]
+        
+        # Feature 5: RT error
+        # Use same calculation for all candidates (unified approach)
+        if candidate_idx < len(window_idxs):
+            candidate_rt = rt_mz[window_idxs[candidate_idx], 0]
+            features[i, 4] = prec_rt - candidate_rt
+        else:
+            # Handle case where index is out of bounds
+            features[i, 4] = 0  # Default value
+        
+        # Feature 6: Fraction intensity matched
+        if len(spec_values_split[i]) > 0:
+            features[i, 5] = np.sum(spec_values_split[i] * lib_coefficients[i])
+        
+        # Feature 7: Fraction intensity predicted
+        features[i, 6] = features[i, 5] * lib_coefficients[i] if i < len(lib_coefficients) else 0
+        
+        # Features 8-10: Correlation features (placeholder)
+        features[i, 7:10] = 0  # r2all, r2_lib_spec, r2_unique
+        
+        # Feature 11: Fraction unique predicted
+        # Requires single_matched_rows calculation
+        features[i, 10] = 0  # Placeholder
+        
+        # Feature 12: Fraction DIA intensity predicted
+        features[i, 11] = features[i, 1] * lib_coefficients[i] / features[i, 2] if features[i, 2] > 0 else 0
+        
+        # Feature 13-16: Hyperscore features
+        # Count b and y ions if fragment names available
+        if 'frag_names' in additional_outputs and i < len(additional_outputs['frag_names']):
+            frag_names = additional_outputs['frag_names'][i]
+            b_count = sum(1 for f in frag_names if f.startswith('b'))
+            y_count = sum(1 for f in frag_names if f.startswith('y'))
+            features[i, 13] = b_count  # b_counts
+            features[i, 14] = y_count  # y_counts
+            # Hyperscore calculation would go here
+            features[i, 12] = 0  # hyperscores placeholder
+            features[i, 15] = 0  # longest_y_ions placeholder
+        
+        # Feature 17: SCRIBE score
+        if len(spec_row_indices_split[i]) > 0 and len(spec_values_split[i]) > 0:
+            try:
+                features[i, 16] = get_scribe(
+                    spec_values_split[i],
+                    dia_spectrum[:, 1],  # Full spectrum intensities
+                    spec_row_indices_split[i]
+                )
+            except:
+                features[i, 16] = 0
+        
+        # Features 18-19: Residuals
+        if residuals is not None and len(spec_row_indices_split[i]) > 0:
+            # Get residuals for this candidate's peaks
+            candidate_residuals = residuals[spec_row_indices_split[i]]
+            if len(candidate_residuals) > 0:
+                features[i, 17] = np.max(np.abs(candidate_residuals))  # max_unmatched_residuals
+                features[i, 18] = np.max(candidate_residuals)  # max_matched_residuals
+        
+        # Feature 20: Goodness of fit
+        # Skip for now as gof_stat requires different structure
+        features[i, 19] = 0
+    
+    # Calculate manhattan distance and spectral contrast for all candidates at once
+    if residuals is not None and y_pred is not None and n_candidates > 0:
+        # Use unified function
+        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance_unified(
+            spec_row_indices_split,
+            spec_col_indices_split,
+            spec_values_split,
+            dia_spectrum[:, 1],
+            y_pred
+        )
+        
+        # Results are already in the correct order
+        features[:, 20] = manhattan_distances
+        features[:, 21] = fitted_spectral_contrasts
+    
+    # Continue with remaining features
+    for i in range(n_candidates):
+        candidate_idx = peaks_in_dia[i]
+        
+        # Features 23-24: More intensity features
+        features[i, 22] = features[i, 5]  # frac_int_matched_pred
+        features[i, 23] = features[i, 5] if lib_coefficients[i] > 0.1 else 0  # with significance cutoff
+        
+        # Feature 25: Large coefficient cosine similarity
+        features[i, 24] = 0  # Placeholder
+        
+        # Feature 26: m/z value
+        # Use same logic for all candidates (unified approach)
+        if candidate_idx < len(window_idxs):
+            features[i, 25] = rt_mz[window_idxs[candidate_idx], 1]
+        else:
+            # Handle case where index is out of bounds
+            features[i, 25] = 0  # Default value
+    
+    # Define feature names
+    feature_names = [
+        "num_lib_peaks_matched", "frac_lib_intensity", "frac_dia_intensity",
+        "rel_error", "rt_error", "frac_int_matched", "frac_int_pred",
+        "r2all", "r2_lib_spec", "r2_unique", "frac_unique_pred",
+        "frac_dia_intensity_pred", "hyperscores", "b_counts", "y_counts",
+        "longest_y_ions", "scribe_scores", "max_unmatched_residuals",
+        "max_matched_residuals", "gof_stats", "manhattan_distances",
+        "fitted_spectral_contrasts", "frac_int_matched_pred",
+        "frac_int_matched_pred_sigcoeff", "large_coeff_cosine", "rt_mz"
+    ]
+    
+    return UnifiedFeatures(
+        features=features,
+        is_decoy=is_decoy_matched,
+        feature_names=feature_names
+    )
+
+
+# ===== UNIFIED MATRIX FUNCTIONS (consolidated from spectral_fitting_unified_matrix.py) =====
+
+def unmatched_peaks_unified(
+    unified_candidates: UnifiedCandidates,
+    norm_intensities: List[np.ndarray],
+    pep_cand_loc: List[np.ndarray],
+    last_row: int,
+    fit_type: str = "a",
+    lower_limit: float = 1e-10
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Calculate unmatched peaks for all candidates in a unified manner.
+    
+    This replaces calling unmatched_peaks twice (once for targets, once for decoys).
+    
+    Args:
+        unified_candidates: Unified candidates with type tracking
+        norm_intensities: Normalized intensities for matched candidates
+        pep_cand_loc: Peak locations for matched candidates
+        last_row: Last row index in the matrix
+        fit_type: How to fit unmatched peaks ('a', 'b', or 'c')
+        lower_limit: Minimum intensity threshold for type 'c'
+        
+    Returns:
+        Tuple of (row_indices, col_indices, values, is_decoy) for unmatched peaks
+    """
+    assert fit_type in ["a", "b", "c"]
+    
+    n_candidates = len(pep_cand_loc)
+    
+    if fit_type == "a":
+        # All unmatched peaks go to a single zero-intensity row
+        not_dia_col_indices = np.arange(n_candidates)
+        not_dia_row_indices = np.array([last_row] * n_candidates, dtype=int)
+        not_dia_values = np.array([
+            np.sum([norm_intensities[idx][peak_idx] 
+                    for peak_idx in range(len(norm_intensities[idx])) 
+                    if pep_cand_loc[idx][peak_idx] % 2 == 0])
+            for idx in range(n_candidates)
+        ])
+        
+    elif fit_type == "b":
+        # Each candidate gets its own zero-intensity row
+        not_dia_col_indices = np.arange(n_candidates)
+        not_dia_row_indices = np.array([last_row + 1 + idx for idx in range(n_candidates)], dtype=int)
+        not_dia_values = np.array([
+            np.sum([norm_intensities[idx][peak_idx] 
+                    for peak_idx in range(len(norm_intensities[idx])) 
+                    if pep_cand_loc[idx][peak_idx] % 2 == 0])
+            for idx in range(n_candidates)
+        ])
+        
+    elif fit_type == "c":
+        # Each unmatched peak gets its own row
+        all_unmatched_peaks = [
+            [norm_intensities[idx][peak_idx] 
+             for peak_idx in range(len(norm_intensities[idx])) 
+             if pep_cand_loc[idx][peak_idx] % 2 == 0 and 
+                norm_intensities[idx][peak_idx] > lower_limit]
+            for idx in range(n_candidates)
+        ]
+        num_unmatched_to_fit = [len(i) for i in all_unmatched_peaks]
+        not_dia_col_indices = np.concatenate([[idx] * n for idx, n in enumerate(num_unmatched_to_fit)])
+        not_dia_row_indices = np.arange(np.sum(num_unmatched_to_fit)) + last_row + 1
+        not_dia_values = np.concatenate(all_unmatched_peaks)
+    
+    # Track which entries are decoys based on matched candidates
+    is_decoy_matched = unified_candidates.is_decoy[unified_candidates.peaks_in_dia]
+    
+    # Create is_decoy array for unmatched peaks
+    if fit_type in ["a", "b"]:
+        not_dia_is_decoy = is_decoy_matched
+    else:  # type "c"
+        not_dia_is_decoy = np.concatenate([
+            [is_decoy_matched[idx]] * n 
+            for idx, n in enumerate(num_unmatched_to_fit)
+        ])
+    
+    return not_dia_row_indices, not_dia_col_indices, not_dia_values, not_dia_is_decoy
+
+
+def build_sparse_matrix_unified(
+    matrix_data: UnifiedMatrixData,
+    unmatched_row_indices: np.ndarray,
+    unmatched_col_indices: np.ndarray,
+    unmatched_values: np.ndarray,
+    dia_spectrum: np.ndarray,
+    unique_row_idxs: np.ndarray
+) -> Tuple[sparse.coo_matrix, np.ndarray, Dict[int, int]]:
+    """
+    Build sparse matrix for NNLS optimization with unified data.
+    
+    Args:
+        matrix_data: Unified matrix data with matched peaks
+        unmatched_row_indices: Row indices for unmatched peaks
+        unmatched_col_indices: Column indices for unmatched peaks
+        unmatched_values: Values for unmatched peaks
+        dia_spectrum: DIA spectrum
+        unique_row_idxs: Unique row indices from matched peaks
+        
+    Returns:
+        Tuple of (sparse_matrix, target_vector, peak_idx_convertor)
+    """
+    # Combine matched and unmatched peaks (ensure integer indices)
+    all_row_indices = np.concatenate([matrix_data.row_indices, unmatched_row_indices]).astype(int)
+    all_col_indices = np.concatenate([matrix_data.col_indices, unmatched_col_indices]).astype(int)
+    all_values = np.concatenate([matrix_data.values, unmatched_values])
+    
+    # Rank rows to remove gaps
+    new_row_indices = stats.rankdata(all_row_indices, method="dense").astype(int) - 1
+    peak_idx_convertor = {old: new for old, new in zip(all_row_indices, new_row_indices)}
+    
+    # Create sparse matrix
+    sparse_lib_matrix = sparse.coo_matrix(
+        (all_values, (new_row_indices, all_col_indices))
+    )
+    
+    # Create target vector
+    dia_spec_int = dia_spectrum[unique_row_idxs, 1]
+    # Pad with zeros for unmatched peak rows
+    n_extra_rows = sparse_lib_matrix.shape[0] - len(dia_spec_int)
+    dia_spec_int = np.append(dia_spec_int, [0] * n_extra_rows)
+    
+    return sparse_lib_matrix, dia_spec_int, peak_idx_convertor
+
+
+def process_matrix_unified(
+    unified_candidates: UnifiedCandidates,
+    matrix_data: UnifiedMatrixData,
+    additional_outputs: Dict,
+    dia_spectrum: np.ndarray,
+    unmatched_fit_type: str = "a"
+) -> Dict[str, any]:
+    """
+    Complete matrix processing pipeline with unified data.
+    
+    This replaces the entire matrix construction section of fit_to_lib2.
+    
+    Args:
+        unified_candidates: Unified candidates
+        matrix_data: Initial matrix data from create_entries_unified
+        additional_outputs: Additional data from create_entries_unified
+        dia_spectrum: DIA spectrum
+        unmatched_fit_type: How to handle unmatched peaks
+        
+    Returns:
+        Dictionary with:
+        - sparse_matrix: Sparse matrix for NNLS
+        - target_vector: Target intensity vector
+        - peak_idx_convertor: Mapping of peak indices
+        - lib_coefficients: NNLS solution
+        - unique_row_idxs: Unique row indices
+    """
+    # Early exit if no matches
+    if len(matrix_data.row_indices) == 0:
+        return {
+            'sparse_matrix': sparse.coo_matrix((0, 0)),
+            'target_vector': np.array([]),
+            'peak_idx_convertor': {},
+            'lib_coefficients': np.array([]),
+            'unique_row_idxs': np.array([])
+        }
+    
+    # Get unique row indices
+    unique_row_idxs = np.unique(matrix_data.row_indices)
+    unique_row_idxs = np.sort(unique_row_idxs).astype(int)
+    
+    # Calculate unmatched peaks for all candidates
+    last_row = max(unique_row_idxs)
+    unmatched_row_idx, unmatched_col_idx, unmatched_vals, _ = unmatched_peaks_unified(
+        unified_candidates=unified_candidates,
+        norm_intensities=additional_outputs['norm_intensities'],
+        pep_cand_loc=additional_outputs['pep_cand_loc'],
+        last_row=last_row,
+        fit_type=unmatched_fit_type
+    )
+    
+    # Build sparse matrix
+    sparse_matrix, target_vector, peak_idx_convertor = build_sparse_matrix_unified(
+        matrix_data=matrix_data,
+        unmatched_row_indices=unmatched_row_idx,
+        unmatched_col_indices=unmatched_col_idx,
+        unmatched_values=unmatched_vals,
+        dia_spectrum=dia_spectrum,
+        unique_row_idxs=unique_row_idxs
+    )
+    
+    # Solve NNLS
+    try:
+        fit_results = sparse_nnls.lsqnonneg(
+            sparse_matrix, 
+            target_vector, 
+            {"show_progress": False}
+        )
+        lib_coefficients = fit_results['x']
+    except Exception as e:
+        # Fallback to scipy if ptinnls fails
+        from scipy.optimize import nnls
+        lib_coefficients, _ = nnls(sparse_matrix.toarray(), target_vector)
+    
+    return {
+        'sparse_matrix': sparse_matrix,
+        'target_vector': target_vector,
+        'peak_idx_convertor': peak_idx_convertor,
+        'lib_coefficients': lib_coefficients,
+        'unique_row_idxs': unique_row_idxs
+    }
 
 def hyperscore2(frags,frag_names_matched):
     
