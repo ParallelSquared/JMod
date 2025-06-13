@@ -745,23 +745,42 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     output_hyper = np.array([i[j][19] for i,j in zip(output,max_ids)])
     all_lib_rts = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
     
-    output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
+    # Check if we have any output
+    if len(output) == 0 or len(output[0]) == 0:
+        # No matches found, create empty dataframes
+        output_df = pd.DataFrame(columns=names)
+        all_output_df = pd.DataFrame(columns=names)
+    else:
+        output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
+        all_output_df = pd.DataFrame([j for i in output for j in i],columns=names[:len(output[0][0])])
     
-    all_output_df = pd.DataFrame([j for i in output for j in i],columns=names[:len(output[0][0])])
+    if len(output_df) > 0:
+        frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
+        frag_cosines_p = np.array([fragment_cor(output_df,i,fn="p") for i in range(len(output_df))])
+        frag_multiply = frag_cosines*frag_cosines_p
+        # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
+        output_df["frag_cosines"] = frag_cosines
+        output_df["frag_cosines_p"] = frag_cosines_p
+        
+        frag_errors = [unstring_floats(mz) for mz in output_df.frag_errors]
+    else:
+        frag_cosines = np.array([])
+        frag_cosines_p = np.array([])
+        frag_multiply = np.array([])
+        frag_errors = []
     
-    frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
-    frag_cosines_p = np.array([fragment_cor(output_df,i,fn="p") for i in range(len(output_df))])
-    frag_multiply = frag_cosines*frag_cosines_p
-    # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
-    output_df["frag_cosines"] = frag_cosines
-    output_df["frag_cosines_p"] = frag_cosines_p
+    if len(frag_errors) > 0 and any(len(e) > 0 for e in frag_errors):
+        median = np.median(np.concatenate([i for i in frag_errors if len(i) > 0]))
+        output_df["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
+    else:
+        output_df["med_frag_error"] = []
     
-    frag_errors = [unstring_floats(mz) for mz in output_df.frag_errors]
-    median  = np.median(np.concatenate([i for i in frag_errors]))
-    output_df["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
-    
-    output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in output_df["seq"]])
-    output_df["last_aa"]=[i[-1] for i in output_df.stripped_seq]
+    if len(output_df) > 0:
+        output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in output_df["seq"]])
+        output_df["last_aa"]=[i[-1] for i in output_df.stripped_seq]
+    else:
+        output_df["stripped_seq"] = []
+        output_df["last_aa"] = []
     
     if results_folder is not None:
         output_df.to_csv(results_folder+"/firstSearch.csv", index=False)
