@@ -787,12 +787,11 @@ def unmatched_peaks(
         # All unmatched peaks go to a single zero-intensity row
         not_dia_col_indices = np.arange(n_candidates)
         not_dia_row_indices = np.array([last_row] * n_candidates, dtype=int)
-        not_dia_values = np.array([
-            np.sum([norm_intensities[idx][peak_idx] 
-                    for peak_idx in range(len(norm_intensities[idx])) 
-                    if pep_cand_loc[idx][peak_idx] % 2 == 0])
-            for idx in range(n_candidates)
-        ])
+        # Vectorized calculation of unmatched peak sums
+        not_dia_values = np.zeros(n_candidates)
+        for idx in range(n_candidates):
+            mask = pep_cand_loc[idx] % 2 == 0
+            not_dia_values[idx] = np.sum(norm_intensities[idx][mask])
         
     elif fit_type == "b":
         # Each candidate gets its own zero-intensity row
@@ -806,14 +805,11 @@ def unmatched_peaks(
         ])
         
     elif fit_type == "c":
-        # Each unmatched peak gets its own row
-        all_unmatched_peaks = [
-            [norm_intensities[idx][peak_idx] 
-             for peak_idx in range(len(norm_intensities[idx])) 
-             if pep_cand_loc[idx][peak_idx] % 2 == 0 and 
-                norm_intensities[idx][peak_idx] > lower_limit]
-            for idx in range(n_candidates)
-        ]
+        # Each unmatched peak gets its own row - vectorized approach
+        all_unmatched_peaks = []
+        for idx in range(n_candidates):
+            mask = (pep_cand_loc[idx] % 2 == 0) & (norm_intensities[idx] > lower_limit)
+            all_unmatched_peaks.append(norm_intensities[idx][mask])
         num_unmatched_to_fit = [len(i) for i in all_unmatched_peaks]
         not_dia_col_indices = np.concatenate([[idx] * n for idx, n in enumerate(num_unmatched_to_fit)])
         not_dia_row_indices = np.arange(np.sum(num_unmatched_to_fit)) + last_row + 1
