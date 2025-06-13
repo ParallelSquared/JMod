@@ -493,7 +493,7 @@ def get_manhattan_distance(
     """
     Calculate manhattan distance and spectral contrast for all candidates.
     
-    This version works directly with unified data structures.
+    Works with both targets and decoys in a single pass.
     """
     n_precursors = len(row_indices_split)
     manhattan_distances = np.zeros(n_precursors)
@@ -549,8 +549,8 @@ def calculate_features(
     This replaces calling get_features twice (once for targets, once for decoys).
     
     Args:
-        unified_candidates: Unified candidates with type tracking
-        matrix_data: Matrix data from unified processing
+        unified_candidates: Candidates with target/decoy tracking
+        matrix_data: Matrix data from create_entries
         additional_outputs: Additional data from create_entries
         dia_spectrum: DIA spectrum
         prec_rt: Precursor retention time
@@ -752,10 +752,10 @@ def unmatched_peaks(
     """
     Calculate unmatched peaks for all candidates.
     
-    This replaces calling unmatched_peaks twice (once for targets, once for decoys).
+    Calculate unmatched peaks for both targets and decoys in a single pass.
     
     Args:
-        unified_candidates: Unified candidates with type tracking
+        unified_candidates: Candidates with target/decoy tracking
         norm_intensities: Normalized intensities for matched candidates
         pep_cand_loc: Peak locations for matched candidates
         last_row: Last row index in the matrix
