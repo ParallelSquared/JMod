@@ -1706,7 +1706,11 @@ def fit_to_lib2(dia_spec,
             rt_mz[:, 1][window_idxs] - config.decoy_mz_offset
         ]),
         ms1_spec=ms1_spec,
-        ms1_tol=ms1_tol
+        ms1_tol=ms1_tol,
+        library=library,
+        decoy_library=decoy_library,
+        bin_centers=bin_centers,
+        dia_spectrum=dia_spectrum
     )
     
     # Check if any candidates passed filtering
@@ -1758,10 +1762,30 @@ def fit_to_lib2(dia_spec,
                 candidate = matched_candidates[j]
                 features = unified_features.features[j]
                 
-                # Get fragment data if needed
-                if return_frags:
-                    frag_data = additional_outputs.get('frag_data', {})
-                    ms2_frags = frag_data.get(j, [""] * 7)
+                # Get fragment data and format it
+                if j < len(additional_outputs.get('frag_names', [])):
+                    # Get fragment data from additional_outputs
+                    frag_names = additional_outputs['frag_names'][j]
+                    frag_errors = additional_outputs['frag_errors'][j]
+                    lib_frag_mz = additional_outputs['lib_frag_mz'][j]
+                    lib_frag_int = additional_outputs['lib_frag_int'][j]
+                    obs_frag_int = additional_outputs['obs_frag_int'][j]
+                    
+                    # Calculate unique fragments after matrix construction
+                    # For now, use empty arrays for unique fragments
+                    unique_frags = np.array([])
+                    unique_frags_int = np.array([])
+                    
+                    # Format as semicolon-delimited strings
+                    ms2_frags = [
+                        ";".join(map(str, frag_names)) if len(frag_names) > 0 else "",
+                        ";".join(map(str, frag_errors)) if len(frag_errors) > 0 else "",
+                        ";".join(map(str, lib_frag_mz)) if len(lib_frag_mz) > 0 else "",
+                        ";".join(map(str, lib_frag_int)) if len(lib_frag_int) > 0 else "",
+                        ";".join(map(str, obs_frag_int)) if len(obs_frag_int) > 0 else "",
+                        ";".join(map(str, unique_frags)) if len(unique_frags) > 0 else "",
+                        ";".join(map(str, unique_frags_int)) if len(unique_frags_int) > 0 else ""
+                    ]
                 else:
                     ms2_frags = [""] * 7
                 

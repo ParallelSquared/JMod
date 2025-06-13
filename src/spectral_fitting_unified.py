@@ -233,7 +233,11 @@ def create_entries_unified(
     ms1_tol: float = 25.,
     spec_frags: Optional[List] = None,
     top_n_idxs: Optional[List[np.ndarray]] = None,
-    frac_matched: float = 0.25
+    frac_matched: float = 0.25,
+    library: Optional[Dict] = None,
+    decoy_library: Optional[Dict] = None,
+    bin_centers: Optional[np.ndarray] = None,
+    dia_spectrum: Optional[np.ndarray] = None
 ) -> Tuple[UnifiedCandidates, UnifiedMatrixData, Dict[str, Any]]:
     """
     Unified version of create_entries that processes targets and decoys together.
@@ -249,6 +253,10 @@ def create_entries_unified(
         spec_frags: Optional fragment specifications
         top_n_idxs: Pre-computed top N peak indices
         frac_matched: Minimum fraction of intensity matched
+        library: Spectral library for fragment information
+        decoy_library: Decoy spectral library
+        bin_centers: Center m/z values for bins
+        dia_spectrum: DIA spectrum data
         
     Returns:
         Tuple of:
@@ -372,6 +380,52 @@ def create_entries_unified(
         values_split=spec_values_split
     )
     
+    # Calculate fragment data if needed
+    frag_names = []
+    frag_errors = []
+    lib_frag_mz = []
+    lib_frag_int = []
+    obs_frag_int = []
+    
+    if library is not None and bin_centers is not None and dia_spectrum is not None:
+        for i, cand in enumerate(pep_cand):
+            if len(spec_row_indices_split[i]) > 0:
+                # Get library entry - handle both target and decoy
+                if cand[0].startswith("Decoy_") and decoy_library is not None:
+                    # For decoys, look up in decoy library with original sequence
+                    lib_entry = decoy_library.get(cand, {})
+                else:
+                    lib_entry = library.get(cand, {})
+                
+                # Get fragment names
+                if "ordered_frags" in lib_entry:
+                    all_frag_names = np.array(lib_entry["ordered_frags"])
+                    matched_frag_names = all_frag_names[lib_peaks_matched[i]]
+                else:
+                    matched_frag_names = np.array(["" for _ in range(np.sum(lib_peaks_matched[i]))])
+                
+                # Calculate fragment errors
+                matched_bin_centers = bin_centers[spec_row_indices_split[i]]
+                matched_lib_mz = pep_cand_list[i][:, 0][lib_peaks_matched[i]]
+                matched_errors = (matched_bin_centers - matched_lib_mz) / matched_bin_centers
+                
+                # Get intensities
+                matched_lib_int = pep_cand_list[i][:, 1][lib_peaks_matched[i]]
+                matched_obs_int = dia_spectrum[spec_row_indices_split[i], 1]
+                
+                frag_names.append(matched_frag_names)
+                frag_errors.append(matched_errors)
+                lib_frag_mz.append(matched_lib_mz)
+                lib_frag_int.append(matched_lib_int)
+                obs_frag_int.append(matched_obs_int)
+            else:
+                # Empty data for candidates with no matches
+                frag_names.append(np.array([]))
+                frag_errors.append(np.array([]))
+                lib_frag_mz.append(np.array([]))
+                lib_frag_int.append(np.array([]))
+                obs_frag_int.append(np.array([]))
+    
     # Additional outputs for compatibility
     additional_outputs = {
         'lib_peaks_matched': lib_peaks_matched,
@@ -379,7 +433,12 @@ def create_entries_unified(
         'pep_cand_loc': pep_cand_loc,
         'pep_cand_list': pep_cand_list,
         'pep_cand': pep_cand,
-        'ms1_error_matched': ms1_error[peaks_in_dia]
+        'ms1_error_matched': ms1_error[peaks_in_dia],
+        'frag_names': frag_names,
+        'frag_errors': frag_errors,
+        'lib_frag_mz': lib_frag_mz,
+        'lib_frag_int': lib_frag_int,
+        'obs_frag_int': obs_frag_int
     }
     
     return unified_candidates, matrix_data, additional_outputs

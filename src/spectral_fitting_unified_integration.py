@@ -118,7 +118,11 @@ def fit_to_lib2_unified_demo(
         atleast_m=config.atleast_m,
         prec_mzs=all_prec_mzs,
         ms1_spec=ms1_spec,
-        ms1_tol=ms1_tol
+        ms1_tol=ms1_tol,
+        library=library,
+        decoy_library=decoy_library,
+        bin_centers=bin_centers,
+        dia_spectrum=dia_spectrum
     )
     
     # 6. Build matrix and solve NNLS - ONE call instead of complex logic
