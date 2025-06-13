@@ -1244,7 +1244,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
             dia_spectrum[:,1]
         )
     
-        residuals, y_pred = compute_residuals(
+        residuals, y_pred = get_residuals(
             ref_spec_values_split,
             ref_spec_row_indices_split,
             ref_spec_col_indices_split,
@@ -1257,7 +1257,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
             0
         )
         # Then use y_pred for the manhattan distance
-        manhattan_distances, fitted_spectral_contrasts = compute_manhattan_distance(
+        manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance(
             ref_spec_row_indices_split,
             ref_spec_col_indices_split,
             ref_spec_values_split,
