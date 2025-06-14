@@ -34,7 +34,7 @@ from .utils.io.read_output import names
 import src.config as config
 
 from .utils.misc_functions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
-hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim,np_pearson_cor
+hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim, np_pearson_cor, ms1_error
 from .utils.parse_peptides import change_seq, convert_frags
 from .models.spec_lib.spec_lib import frag_to_peak
 from .utils.spectral_similarity_metrics import (
@@ -248,7 +248,6 @@ def create_entries(
     top_n_idxs: Optional[List[np.ndarray]] = None,
     frac_matched: float = 0.25,
     library: Optional[Dict] = None,
-    decoy_library: Optional[Dict] = None,
     bin_centers: Optional[np.ndarray] = None,
     dia_spectrum: Optional[np.ndarray] = None
 ) -> Tuple[UnifiedCandidates, UnifiedMatrixData, Dict[str, Any]]:
@@ -409,12 +408,8 @@ def create_entries(
     if library is not None and bin_centers is not None and dia_spectrum is not None:
         for i, cand in enumerate(pep_cand):
             if len(spec_row_indices_split[i]) > 0:
-                # Get library entry - handle both target and decoy
-                if cand[0].startswith("Decoy_") and decoy_library is not None:
-                    # For decoys, look up in decoy library with original sequence
-                    lib_entry = decoy_library.get(cand, {})
-                else:
-                    lib_entry = library.get(cand, {})
+                # Get library entry from unified library
+                lib_entry = library.get(cand, {})
                 
                 # Get fragment names
                 if "ordered_frags" in lib_entry:
@@ -1043,7 +1038,8 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
         window_idxs = window_idxs[np.where((np.searchsorted(window_edges,rt_mz[window_idxs,1])%2)==1)[0]]
         
     
-    mass_window_candidates = [all_keys[i] for i in window_idxs] 
+    # Filter out decoys for RT alignment (fit_to_lib is only used for RT alignment)
+    mass_window_candidates = [all_keys[i] for i in window_idxs if not library[all_keys[i]].get('is_decoy', False)] 
     candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
     
     # # filter possible lib entries for windows.. NB: DONT LIKE HOW I DO SAME LOOP TWICE
@@ -1379,13 +1375,12 @@ def fit_to_lib2(dia_spec,
                ms1_tol = config.ms1_tol,
                mz_tol = config.mz_tol,
                return_frags = False,
-               decoy=False,
-               decoy_library=None):
+               decoy=True):
     """
-    Modern implementation of fit_to_lib2 that processes targets and decoys together.
+    Modern implementation of fit_to_lib2 using unified library structure.
     
-    This version processes targets and decoys together in a single pass,
-    eliminating code duplication while maintaining identical output.
+    This version uses a single unified library containing both targets and decoys,
+    identified by the 'is_decoy' flag in each library entry.
     """
     # 1. Extract spectrum information (same as original)
     spec_idx = dia_spec.scan_num
@@ -1450,21 +1445,35 @@ def fit_to_lib2(dia_spec,
     # ===== PROCESSING STARTS HERE =====
     
     # 4. Create unified candidates structure
-    if decoy and decoy_library:
-        # Generate decoy candidates
-        decoy_candidates = [(f"Decoy_{k[0]}", k[1]) for k in mass_window_candidates]
-        decoy_peaks = [decoy_library[k]["spectrum"] for k in mass_window_candidates]
+    if decoy:
+        # With unified library, separate targets and decoys
+        target_candidates = [k for k in mass_window_candidates if not library[k].get("is_decoy", False)]
+        target_peaks = [library[k]["spectrum"] for k in target_candidates]
+        
+        decoy_candidates = [k for k in mass_window_candidates if library[k].get("is_decoy", False)]
+        decoy_peaks = [library[k]["spectrum"] for k in decoy_candidates]
+        
+        if len(decoy_candidates) > 0:
+            unified = create_unified_candidates(
+                target_candidates=target_candidates,
+                target_peaks=target_peaks,
+                decoy_candidates=decoy_candidates,
+                decoy_peaks=decoy_peaks
+            )
+        else:
+            # No decoys found, just use targets
+            unified = create_unified_candidates(
+                target_candidates=target_candidates,
+                target_peaks=target_peaks
+            )
+    else:
+        # RT alignment mode - filter out decoys
+        target_candidates = [k for k in mass_window_candidates if not library[k].get("is_decoy", False)]
+        target_peaks = [library[k]["spectrum"] for k in target_candidates]
         
         unified = create_unified_candidates(
-            target_candidates=mass_window_candidates,
-            target_peaks=candidate_peaks,
-            decoy_candidates=decoy_candidates,
-            decoy_peaks=decoy_peaks
-        )
-    else:
-        unified = create_unified_candidates(
-            target_candidates=mass_window_candidates,
-            target_peaks=candidate_peaks
+            target_candidates=target_candidates,
+            target_peaks=target_peaks
         )
     
     # 5. Process all candidates in ONE call
@@ -1473,14 +1482,10 @@ def fit_to_lib2(dia_spec,
         unified_candidates=unified,
         top_n=config.top_n,
         atleast_m=config.atleast_m,
-        prec_mzs=rt_mz[:, 1][window_idxs] if not decoy else np.concatenate([
-            rt_mz[:, 1][window_idxs],
-            rt_mz[:, 1][window_idxs] - config.decoy_mz_offset
-        ]),
+        prec_mzs=np.array([library[k]["prec_mz"] for k in unified.candidates]),
         ms1_spec=ms1_spec,
         ms1_tol=ms1_tol,
         library=library,
-        decoy_library=decoy_library,
         bin_centers=bin_centers,
         dia_spectrum=dia_spectrum
     )

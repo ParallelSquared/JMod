@@ -406,7 +406,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "protein"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
 
-    # DEBUG: Check each column for infinity or very large values
+    # 
+    # : Check each column for infinity or very large values
     #problem_columns = []
     #for col in X.columns:
     #    try:

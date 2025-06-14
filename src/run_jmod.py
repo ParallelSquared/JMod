@@ -111,7 +111,8 @@ def main():
     
     ######################################################
     #### Load the data
-    spectrumLibrary = spec_lib.loadSpecLib(lib_file)
+    # Load library with isotope generation deferred if needed
+    spectrumLibrary = spec_lib.loadSpecLib(lib_file, create_decoys=True, skip_isotopes=config.args.iso)
     DIAspectra=load_files.loadSpectra(mzml_file)
 
     if config.args.test_mode:
@@ -214,19 +215,14 @@ def main():
         
         
     if config.args.iso:
-        # spectrumLibrary = iso_f.iso_library(spectrumLibrary)
+        # Generate isotopes for the unified library (targets and decoys)
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary)
         
-    # with open(results_folder_path+"/slib","wb") as dill_file:
-    #     slib = dill.dump(spectrumLibrary,dill_file)   
-      
-    print("Creating Decoy Library")
-    decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev")
+    # Add top_n indices for all entries (targets and decoys)
+    print("Processing library entries...")
     for key in spectrumLibrary:
-        spectrumLibrary[key]["top_n"]=np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
-    for key in decoy_lib:
-        decoy_lib[key]["top_n"]=np.argsort(-decoy_lib[key]["spectrum"][:,1])[:config.top_n]
-    print("... Finished Decoy Library")
+        spectrumLibrary[key]["top_n"] = np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
+    print("... Finished processing library")
     
     
     ######################################################
@@ -282,8 +278,7 @@ def main():
                             ms1_tol = config.opt_ms1_tol,
                             ms1_spectra=DIAspectra.ms1scans,
                             return_frags=False,
-                            decoy=True,
-                            decoy_library=decoy_lib))
+                            decoy=True))
             
         long_outputs = [j for i in outputs for j in i]
         print(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
