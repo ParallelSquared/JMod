@@ -16,6 +16,7 @@ import sys
 
 from .utils.io import load_files 
 from .models.spec_lib import spec_lib
+from .models.spec_lib.spec_lib import add_decoys_to_library
 from .spectral_fitting import fit_to_lib2
 from .rt_alignment import MZRTfit, MZRTfit_timeplex
 from .utils.misc_functions import write_to_csv
@@ -111,8 +112,8 @@ def main():
     
     ######################################################
     #### Load the data
-    # Load library with isotope generation deferred if needed
-    spectrumLibrary = spec_lib.loadSpecLib(lib_file, create_decoys=True, skip_isotopes=config.args.iso)
+    # Load library WITHOUT decoys initially
+    spectrumLibrary = spec_lib.loadSpecLib(lib_file, create_decoys=False)
     DIAspectra=load_files.loadSpectra(mzml_file)
 
     if config.args.test_mode:
@@ -215,8 +216,13 @@ def main():
         
         
     if config.args.iso:
-        # Generate isotopes for the unified library (targets and decoys)
+        # Generate isotopes for TARGET library only
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary)
+    
+    # NOW add decoys to the isotope-enriched library
+    print("Adding decoys to library...")
+    spectrumLibrary = add_decoys_to_library(spectrumLibrary, rules="rev")
+    print("... Finished adding decoys")
         
     # Add top_n indices for all entries (targets and decoys)
     print("Processing library entries...")
