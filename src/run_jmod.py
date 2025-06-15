@@ -223,6 +223,21 @@ def main():
     print("Adding decoys to library...")
     spectrumLibrary = add_decoys_to_library(spectrumLibrary, rules="rev")
     print("... Finished adding decoys")
+    
+    # CRITICAL: Update rt_mz and all_keys to include decoys
+    print("Updating RT/MZ mappings to include decoys...")
+    all_keys = list(spectrumLibrary)  # Now includes both targets and decoys
+    
+    # Regenerate rt_mz for the expanded library
+    if config.args.timeplex:
+        # For timeplex, rt_mz was already updated when plex_lib was created
+        # Just need to update all_keys which is already done above
+        pass
+    else:
+        # For non-timeplex, regenerate rt_mz with decoys included
+        rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
+    
+    print(f"Total library entries: {len(all_keys)}")
         
     # Add top_n indices for all entries (targets and decoys)
     print("Processing library entries...")
