@@ -1397,6 +1397,10 @@ def preprocess_dia_spectrum(dia_spectrum: np.ndarray, mz_tol: float) -> Tuple[np
         >>> spectrum = np.array([[100.0, 50.0], [100.001, 30.0], [200.0, 100.0]])
         >>> merged, breaks, centers = preprocess_dia_spectrum(spectrum, 10e-6)
     """
+    # Handle empty spectrum
+    if len(dia_spectrum) == 0:
+        return np.array([]).reshape(0, 2), np.array([]), np.array([])
+    
     # Find groups of peaks within tolerance
     merged_coords_idxs = np.searchsorted(
         dia_spectrum[:, 0] + mz_tol * dia_spectrum[:, 0], 
@@ -1811,14 +1815,62 @@ def fit_to_lib2(dia_spec,
                return_frags = False,
                decoy=True):
     """
-    Modern implementation of fit_to_lib2 using unified library structure.
+    Perform spectral fitting of DIA spectrum against spectral library.
     
-    This version uses a single unified library containing both targets and decoys,
-    identified by the 'is_decoy' flag in each library entry.
+    This is the main entry point for spectral matching in JMod. It processes a DIA
+    (Data-Independent Acquisition) spectrum and matches it against a spectral library
+    containing both target and decoy peptides.
+    
+    Pipeline Overview:
+    1. Extract spectrum information and handle empty spectra
+    2. Find candidates within mass window (filter_candidates_by_window)
+    3. Preprocess DIA spectrum by merging peaks (preprocess_dia_spectrum)
+    4. Separate targets/decoys and create unified structure (separate_library_candidates)
+    5. Process candidates and create sparse matrix (create_entries)
+    6. Solve NNLS optimization (process_matrix)
+    7. Calculate scoring features (calculate_features)
+    8. Format output rows (format_spectral_fitting_output)
+    
+    Args:
+        dia_spec: DIA spectrum object with scan_num, prec_mz, RT, peak_list()
+        library: Spectral library dict with peptide info and spectra
+        rt_mz: Array of retention times and m/z values for all library entries
+        all_keys: List of (sequence, charge) tuples for all library entries
+        dino_features: Optional DINO features for filtering
+        rt_filter: Whether to apply retention time filtering
+        ms1_mz: Optional MS1 m/z values for filtering
+        ms1_spectra: Optional list of MS1 spectra for MS1 matching
+        rt_tol: Retention time tolerance (default from config)
+        ms1_tol: MS1 mass tolerance (default from config)
+        mz_tol: MS2 mass tolerance (default from config)
+        return_frags: Whether to return fragment information
+        decoy: Whether to include decoy peptides in matching
+        
+    Returns:
+        If return_frags=False:
+            List of output rows, each containing coefficient, IDs, features, etc.
+        If return_frags=True:
+            Tuple of (output_rows, [frag_errors, lib_frag_mz])
+            
+    Example:
+        >>> result = fit_to_lib2(
+        ...     dia_spec=spectrum,
+        ...     library=spec_lib,
+        ...     rt_mz=rt_mz_array,
+        ...     all_keys=peptide_keys
+        ... )
+        >>> for row in result:
+        ...     if row[0] > 0:  # Non-zero coefficient
+        ...         print(f"Matched {row[3]} with score {row[0]}")
     """
     # 1. Extract spectrum information (same as original)
     spec_idx = dia_spec.scan_num
-    dia_spectrum = np.stack(dia_spec.peak_list(), 1)
+    peak_list = dia_spec.peak_list()
+    # Handle empty spectrum
+    if len(peak_list) == 0:
+        dia_spectrum = np.array([]).reshape(0, 2)  # Empty 0x2 array
+    else:
+        dia_spectrum = np.stack(peak_list, 1)
     prec_mz = dia_spec.prec_mz
     prec_rt = dia_spec.RT
     windowWidth = window_width(dia_spec)
@@ -1845,13 +1897,17 @@ def fit_to_lib2(dia_spec,
     
     # Early exit if no candidates
     if len(mass_window_candidates) == 0:
-        return [create_empty_output_row(
+        empty_result = [create_empty_output_row(
             spec_idx, 
             ms1_spec.scan_num if ms1_spec else 0,
             prec_mz, 
             prec_rt, 
             len(names)
         )]
+        if return_frags:
+            return empty_result, [[], []]
+        else:
+            return empty_result
     
     # 3. Process DIA spectrum using extracted function
     dia_spectrum, centroid_breaks, bin_centers = preprocess_dia_spectrum(dia_spectrum, mz_tol)
@@ -1881,13 +1937,17 @@ def fit_to_lib2(dia_spec,
     
     # Check if any candidates passed filtering
     if len(updated_unified.peaks_in_dia) == 0:
-        return [create_empty_output_row(
+        empty_result = [create_empty_output_row(
             spec_idx,
             ms1_spec.scan_num if ms1_spec else 0,
             prec_mz,
             prec_rt,
             len(names)
         )]
+        if return_frags:
+            return empty_result, [[], []]
+        else:
+            return empty_result
     
     # 6. Build matrix and solve NNLS
     matrix_results = process_matrix(

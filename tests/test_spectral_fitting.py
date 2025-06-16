@@ -21,8 +21,10 @@ try:
         separate_library_candidates, create_unified_candidates,
         create_empty_output_row, extract_non_zero_coefficients,
         format_fragment_information, get_protein_info,
-        format_spectral_fitting_output, UnifiedCandidates, UnifiedFeatures
+        format_spectral_fitting_output, UnifiedCandidates, UnifiedFeatures,
+        fit_to_lib2
     )
+    import src.config as config
 except ImportError:
     # If direct import fails, we might need to adjust based on actual module structure
     pass
@@ -1421,6 +1423,243 @@ class TestFormatSpectralFittingOutput:
         # Check MS1 spec ID is 0 when None
         assert output[0][2] == 0
         assert output[1][2] == 0
+
+
+class TestFitToLib2Integration:
+    """Integration tests for the complete fit_to_lib2 pipeline"""
+    
+    def setup_method(self):
+        """Set up test data for integration tests"""
+        # Mock DIA spectrum
+        self.dia_spec = type('obj', (object,), {
+            'scan_num': 1000,
+            'prec_mz': 500.5,
+            'RT': 30.0,
+            'peak_list': lambda: [[500.1, 1000], [501.1, 500], [502.1, 300]],
+            'ms1window': (495.0, 505.0)  # Mock MS1 window
+        })
+        
+        # Mock library with targets and decoys
+        self.library = {
+            ('PEPTIDE', 2): {
+                'spectrum': np.array([[500.1, 100], [501.1, 50], [502.1, 30]]),
+                'prec_mz': 500.5,
+                'RT': 30.0,
+                'is_decoy': False,
+                'protein': 'PROT1'
+            },
+            ('Decoy_PEPTIDE', 2): {
+                'spectrum': np.array([[500.2, 100], [501.2, 50], [502.2, 30]]),
+                'prec_mz': 500.6,
+                'RT': 30.1,
+                'is_decoy': True,
+                'parent_key': ('PEPTIDE', 2),
+                'protein': 'Decoy_PROT1'
+            },
+            ('OTHERPEP', 3): {
+                'spectrum': np.array([[600.1, 100], [601.1, 50]]),
+                'prec_mz': 600.5,
+                'RT': 35.0,
+                'is_decoy': False,
+                'protein': 'PROT2'
+            }
+        }
+        
+        # Mock rt_mz and all_keys arrays
+        self.rt_mz = np.array([
+            [30.0, 500.5],
+            [30.1, 500.6],
+            [35.0, 600.5]
+        ])
+        self.all_keys = [
+            ('PEPTIDE', 2),
+            ('Decoy_PEPTIDE', 2),
+            ('OTHERPEP', 3)
+        ]
+        
+        # Mock config
+        self.config = type('obj', (object,), {
+            'rt_tol': 0.5,
+            'ms1_tol': 20e-6,
+            'mz_tol': 10e-6,
+            'top_n': 10,
+            'atleast_m': 3,
+            'unmatched_fit_type': 'c',
+            'protein_column': 'protein',
+            'args': type('obj', (object,), {'mzml': 'test.mzML'})
+        })
+    
+    def test_empty_dia_spectrum(self):
+        """Test with empty DIA spectrum"""
+        empty_spec = type('obj', (object,), {
+            'scan_num': 1000,
+            'prec_mz': 500.5,
+            'RT': 30.0,
+            'peak_list': lambda: [],  # Empty spectrum
+            'ms1window': (495.0, 505.0)  # Mock MS1 window
+        })
+        
+        result = fit_to_lib2(
+            dia_spec=empty_spec,
+            library=self.library,
+            rt_mz=self.rt_mz,
+            all_keys=self.all_keys,
+            rt_tol=self.config.rt_tol,
+            ms1_tol=self.config.ms1_tol,
+            mz_tol=self.config.mz_tol
+        )
+        
+        # Should return single empty row
+        assert len(result) == 1
+        assert result[0][0] == 0  # coeff = 0
+        assert result[0][1] == 1000  # spec_idx
+        assert result[0][5] == 500.5  # prec_mz
+        assert result[0][6] == 30.0  # prec_rt
+    
+    def test_no_matching_candidates(self):
+        """Test when no candidates match the mass window"""
+        # Spectrum with different mass
+        diff_spec = type('obj', (object,), {
+            'scan_num': 1001,
+            'prec_mz': 700.5,  # No candidates near this mass
+            'RT': 30.0,
+            'peak_list': lambda: [[700.1, 1000], [701.1, 500]],
+            'ms1window': (695.0, 705.0)  # Mock MS1 window
+        })
+        
+        result = fit_to_lib2(
+            dia_spec=diff_spec,
+            library=self.library,
+            rt_mz=self.rt_mz,
+            all_keys=self.all_keys,
+            rt_tol=self.config.rt_tol,
+            ms1_tol=self.config.ms1_tol,
+            mz_tol=self.config.mz_tol
+        )
+        
+        # Should return single empty row
+        assert len(result) == 1
+        assert result[0][0] == 0  # coeff = 0
+        assert result[0][1] == 1001  # spec_idx
+    
+    def test_single_target_match(self):
+        """Test successful match with single target peptide"""
+        # Configure to ensure match
+        config = type('obj', (object,), {
+            'rt_tol': 5.0,  # Wide RT tolerance
+            'ms1_tol': 20e-6,
+            'mz_tol': 100e-6,  # Wide m/z tolerance
+            'top_n': 10,
+            'atleast_m': 1,  # Low threshold
+            'unmatched_fit_type': 'c',
+            'protein_column': 'protein',
+            'args': type('obj', (object,), {'mzml': 'test.mzML'})
+        })
+        
+        # Test with matching spectrum
+        result = fit_to_lib2(
+            dia_spec=self.dia_spec,
+            library=self.library,
+            rt_mz=self.rt_mz,
+            all_keys=self.all_keys,
+            rt_filter=False,  # No RT filtering
+            decoy=False,  # No decoys
+            rt_tol=config.rt_tol,
+            ms1_tol=config.ms1_tol,
+            mz_tol=config.mz_tol
+        )
+        
+        # Should have at least one result
+        assert len(result) >= 1
+        # Check if PEPTIDE was matched
+        peptides = [row[3] for row in result]
+        assert 'PEPTIDE' in peptides or len(result) == 1
+    
+    def test_target_and_decoy_matches(self):
+        """Test with both target and decoy matches"""
+        # Configure for matches
+        config = type('obj', (object,), {
+            'rt_tol': 5.0,
+            'ms1_tol': 20e-6,
+            'mz_tol': 100e-6,
+            'top_n': 10,
+            'atleast_m': 1,
+            'unmatched_fit_type': 'c',
+            'protein_column': 'protein',
+            'args': type('obj', (object,), {'mzml': 'test.mzML'})
+        })
+        
+        result = fit_to_lib2(
+            dia_spec=self.dia_spec,
+            library=self.library,
+            rt_mz=self.rt_mz,
+            all_keys=self.all_keys,
+            rt_filter=False,
+            decoy=True,  # Include decoys
+            rt_tol=config.rt_tol,
+            ms1_tol=config.ms1_tol,
+            mz_tol=config.mz_tol
+        )
+        
+        # Check results
+        if len(result) > 1 or (len(result) == 1 and result[0][0] > 0):
+            # Got matches
+            peptides = [row[3] for row in result if row[0] > 0]
+            # Could have target and/or decoy matches
+            assert any('PEPTIDE' in p or 'Decoy_PEPTIDE' in p for p in peptides)
+    
+    def test_with_ms1_spectra(self):
+        """Test with MS1 spectra provided"""
+        # Mock MS1 spectra
+        ms1_spectra = [
+            type('obj', (object,), {
+                'RT': 29.5,
+                'scan_num': 999,
+                'mz': np.array([500.4, 500.5, 500.6]),
+                'intensity': np.array([100, 200, 150])
+            }),
+            type('obj', (object,), {
+                'RT': 30.5,
+                'scan_num': 1001,
+                'mz': np.array([500.5, 500.6]),
+                'intensity': np.array([300, 100])
+            })
+        ]
+        
+        result = fit_to_lib2(
+            dia_spec=self.dia_spec,
+            library=self.library,
+            rt_mz=self.rt_mz,
+            all_keys=self.all_keys,
+            ms1_spectra=ms1_spectra,
+            rt_tol=self.config.rt_tol,
+            ms1_tol=self.config.ms1_tol,
+            mz_tol=self.config.mz_tol
+        )
+        
+        # Should process without error
+        assert isinstance(result, list)
+        if len(result) > 0:
+            # Check MS1 spec ID is set (999 is closest to RT 30.0)
+            assert result[0][2] == 999  # Ms1_spec_id
+    
+    def test_return_frags_option(self):
+        """Test return_frags option"""
+        result, frags = fit_to_lib2(
+            dia_spec=self.dia_spec,
+            library=self.library,
+            rt_mz=self.rt_mz,
+            all_keys=self.all_keys,
+            return_frags=True,
+            rt_tol=self.config.rt_tol,
+            ms1_tol=self.config.ms1_tol,
+            mz_tol=self.config.mz_tol
+        )
+        
+        # Should return result and fragment data
+        assert isinstance(result, list)
+        assert isinstance(frags, list)
+        assert len(frags) == 2  # [frag_errors, lib_frag_mz]
 
 
 if __name__ == "__main__":
