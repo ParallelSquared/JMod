@@ -16,7 +16,10 @@ try:
         get_scribe, get_residuals, gof_stat, get_manhattan_distance,
         get_closest_ms1, max_matched_residual
     )
-    from src.spectral_fitting import preprocess_dia_spectrum, filter_candidates_by_window
+    from src.spectral_fitting import (
+        preprocess_dia_spectrum, filter_candidates_by_window, 
+        separate_library_candidates, create_unified_candidates
+    )
 except ImportError:
     # If direct import fails, we might need to adjust based on actual module structure
     pass
@@ -902,6 +905,168 @@ class TestFilterCandidatesByWindow:
         assert len(window_idxs) == 3
         assert list(window_idxs) == [1, 2, 3]
         assert candidates == ['pep2', 'pep3', 'pep4']
+
+
+class TestSeparateLibraryCandidates:
+    """Test cases for the separate_library_candidates function"""
+    
+    def test_separate_targets_and_decoys(self):
+        """Test basic separation of targets and decoys"""
+        # Create test data
+        candidates = ['PEPTIDE/2', 'Decoy_PEPTIDE/2', 'PEPTIDEK/3', 'Decoy_PEPTIDEK/3']
+        library = {
+            'PEPTIDE/2': {
+                'spectrum': np.array([[500.1, 100], [600.1, 50]]),
+                'is_decoy': False
+            },
+            'Decoy_PEPTIDE/2': {
+                'spectrum': np.array([[500.1, 100], [600.1, 50]]),
+                'is_decoy': True
+            },
+            'PEPTIDEK/3': {
+                'spectrum': np.array([[700.1, 200]]),
+                'is_decoy': False
+            },
+            'Decoy_PEPTIDEK/3': {
+                'spectrum': np.array([[700.1, 200]]),
+                'is_decoy': True
+            }
+        }
+        
+        unified = separate_library_candidates(candidates, library, include_decoys=True)
+        
+        # Check counts
+        assert unified.n_targets == 2
+        assert unified.n_decoys == 2
+        assert len(unified.candidates) == 4
+        
+        # Check order and decoy flags
+        assert unified.candidates == ['PEPTIDE/2', 'PEPTIDEK/3', 'Decoy_PEPTIDE/2', 'Decoy_PEPTIDEK/3']
+        assert list(unified.is_decoy) == [False, False, True, True]
+        
+        # Check peaks are correctly assigned
+        assert len(unified.peaks) == 4
+        np.testing.assert_array_equal(unified.peaks[0], library['PEPTIDE/2']['spectrum'])
+        np.testing.assert_array_equal(unified.peaks[2], library['Decoy_PEPTIDE/2']['spectrum'])
+    
+    def test_no_decoys_in_candidates(self):
+        """Test when no decoys are present in candidates"""
+        candidates = ['PEPTIDE/2', 'PEPTIDEK/3']
+        library = {
+            'PEPTIDE/2': {
+                'spectrum': np.array([[500.1, 100]]),
+                'is_decoy': False
+            },
+            'PEPTIDEK/3': {
+                'spectrum': np.array([[700.1, 200]]),
+                'is_decoy': False
+            }
+        }
+        
+        unified = separate_library_candidates(candidates, library, include_decoys=True)
+        
+        # Should only have targets
+        assert unified.n_targets == 2
+        assert unified.n_decoys == 0
+        assert np.all(~unified.is_decoy)
+    
+    def test_exclude_decoys(self):
+        """Test RT alignment mode where decoys are excluded"""
+        candidates = ['PEPTIDE/2', 'Decoy_PEPTIDE/2', 'PEPTIDEK/3']
+        library = {
+            'PEPTIDE/2': {
+                'spectrum': np.array([[500.1, 100]]),
+                'is_decoy': False
+            },
+            'Decoy_PEPTIDE/2': {
+                'spectrum': np.array([[500.1, 100]]),
+                'is_decoy': True
+            },
+            'PEPTIDEK/3': {
+                'spectrum': np.array([[700.1, 200]]),
+                'is_decoy': False
+            }
+        }
+        
+        unified = separate_library_candidates(candidates, library, include_decoys=False)
+        
+        # Should only include targets
+        assert unified.n_targets == 2
+        assert unified.n_decoys == 0
+        assert len(unified.candidates) == 2
+        assert unified.candidates == ['PEPTIDE/2', 'PEPTIDEK/3']
+    
+    def test_all_decoys(self):
+        """Test when all candidates are decoys"""
+        candidates = ['Decoy_PEPTIDE/2', 'Decoy_PEPTIDEK/3']
+        library = {
+            'Decoy_PEPTIDE/2': {
+                'spectrum': np.array([[500.1, 100]]),
+                'is_decoy': True
+            },
+            'Decoy_PEPTIDEK/3': {
+                'spectrum': np.array([[700.1, 200]]),
+                'is_decoy': True
+            }
+        }
+        
+        unified = separate_library_candidates(candidates, library, include_decoys=True)
+        
+        # Should have only decoys
+        assert unified.n_targets == 0
+        assert unified.n_decoys == 2
+        assert np.all(unified.is_decoy)
+    
+    def test_empty_candidates(self):
+        """Test with empty candidate list"""
+        candidates = []
+        library = {}
+        
+        unified = separate_library_candidates(candidates, library, include_decoys=True)
+        
+        assert unified.n_targets == 0
+        assert unified.n_decoys == 0
+        assert len(unified.candidates) == 0
+        assert len(unified.peaks) == 0
+    
+    def test_missing_decoy_flag(self):
+        """Test handling of library entries without explicit is_decoy flag"""
+        candidates = ['PEPTIDE/2', 'PEPTIDEK/3']
+        library = {
+            'PEPTIDE/2': {
+                'spectrum': np.array([[500.1, 100]]),
+                # No is_decoy flag - should default to False
+            },
+            'PEPTIDEK/3': {
+                'spectrum': np.array([[700.1, 200]]),
+                'is_decoy': False
+            }
+        }
+        
+        unified = separate_library_candidates(candidates, library, include_decoys=True)
+        
+        # Both should be treated as targets
+        assert unified.n_targets == 2
+        assert unified.n_decoys == 0
+        assert np.all(~unified.is_decoy)
+    
+    def test_peak_data_integrity(self):
+        """Test that peak data is correctly preserved and not modified"""
+        candidates = ['PEPTIDE/2']
+        original_peaks = np.array([[500.1, 100], [600.1, 50]])
+        library = {
+            'PEPTIDE/2': {
+                'spectrum': original_peaks.copy(),
+                'is_decoy': False
+            }
+        }
+        
+        unified = separate_library_candidates(candidates, library, include_decoys=True)
+        
+        # Peaks should be the same object (not a copy)
+        assert unified.peaks[0] is library['PEPTIDE/2']['spectrum']
+        # But should have same values as original
+        np.testing.assert_array_equal(unified.peaks[0], original_peaks)
 
 
 if __name__ == "__main__":

@@ -1061,6 +1061,69 @@ def filter_candidates_by_window(
     return window_idxs, mass_window_candidates
 
 
+def separate_library_candidates(
+    mass_window_candidates: List,
+    library: Dict,
+    include_decoys: bool = True
+) -> UnifiedCandidates:
+    """
+    Separate library candidates into targets and decoys and create a unified structure.
+    
+    This function takes filtered library candidates and separates them based on their
+    decoy status, then creates a UnifiedCandidates structure that can be processed
+    together while maintaining the distinction between targets and decoys.
+    
+    Args:
+        mass_window_candidates: List of library keys that passed window filtering
+        library: Spectral library dictionary
+        include_decoys: Whether to include decoys in the output (False for RT alignment)
+        
+    Returns:
+        UnifiedCandidates object containing all candidates with their peaks and metadata
+        
+    Example:
+        >>> candidates = ['PEPTIDE/2', 'Decoy_PEPTIDE/2', 'PEPTIDEK/3']
+        >>> library = {
+        ...     'PEPTIDE/2': {'spectrum': np.array([[500.1, 100]]), 'is_decoy': False},
+        ...     'Decoy_PEPTIDE/2': {'spectrum': np.array([[500.1, 100]]), 'is_decoy': True},
+        ...     'PEPTIDEK/3': {'spectrum': np.array([[600.1, 200]]), 'is_decoy': False}
+        ... }
+        >>> unified = separate_library_candidates(candidates, library)
+        >>> print(f"Targets: {unified.n_targets}, Decoys: {unified.n_decoys}")
+        Targets: 2, Decoys: 1
+    """
+    # Separate targets and decoys
+    target_candidates = [k for k in mass_window_candidates if not library[k].get("is_decoy", False)]
+    target_peaks = [library[k]["spectrum"] for k in target_candidates]
+    
+    if include_decoys:
+        decoy_candidates = [k for k in mass_window_candidates if library[k].get("is_decoy", False)]
+        decoy_peaks = [library[k]["spectrum"] for k in decoy_candidates]
+        
+        if len(decoy_candidates) > 0:
+            # Create unified structure with both targets and decoys
+            unified = create_unified_candidates(
+                target_candidates=target_candidates,
+                target_peaks=target_peaks,
+                decoy_candidates=decoy_candidates,
+                decoy_peaks=decoy_peaks
+            )
+        else:
+            # No decoys found, just use targets
+            unified = create_unified_candidates(
+                target_candidates=target_candidates,
+                target_peaks=target_peaks
+            )
+    else:
+        # RT alignment mode - only use targets
+        unified = create_unified_candidates(
+            target_candidates=target_candidates,
+            target_peaks=target_peaks
+        )
+    
+    return unified
+
+
 def preprocess_dia_spectrum(dia_spectrum: np.ndarray, mz_tol: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Preprocess DIA spectrum by merging peaks within tolerance and calculating centroid breaks.
@@ -1538,37 +1601,12 @@ def fit_to_lib2(dia_spec,
     
     # ===== PROCESSING STARTS HERE =====
     
-    # 4. Create unified candidates structure
-    if decoy:
-        # With unified library, separate targets and decoys
-        target_candidates = [k for k in mass_window_candidates if not library[k].get("is_decoy", False)]
-        target_peaks = [library[k]["spectrum"] for k in target_candidates]
-        
-        decoy_candidates = [k for k in mass_window_candidates if library[k].get("is_decoy", False)]
-        decoy_peaks = [library[k]["spectrum"] for k in decoy_candidates]
-        
-        if len(decoy_candidates) > 0:
-            unified = create_unified_candidates(
-                target_candidates=target_candidates,
-                target_peaks=target_peaks,
-                decoy_candidates=decoy_candidates,
-                decoy_peaks=decoy_peaks
-            )
-        else:
-            # No decoys found, just use targets
-            unified = create_unified_candidates(
-                target_candidates=target_candidates,
-                target_peaks=target_peaks
-            )
-    else:
-        # RT alignment mode - filter out decoys
-        target_candidates = [k for k in mass_window_candidates if not library[k].get("is_decoy", False)]
-        target_peaks = [library[k]["spectrum"] for k in target_candidates]
-        
-        unified = create_unified_candidates(
-            target_candidates=target_candidates,
-            target_peaks=target_peaks
-        )
+    # 4. Create unified candidates structure using extracted function
+    unified = separate_library_candidates(
+        mass_window_candidates=mass_window_candidates,
+        library=library,
+        include_decoys=decoy
+    )
     
     # 5. Process all candidates in ONE call
     updated_unified, matrix_data, additional_outputs = create_entries(
