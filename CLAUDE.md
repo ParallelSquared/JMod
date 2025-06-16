@@ -99,10 +99,26 @@ Key parameters to understand:
 - Coverage reporting integrated (currently ~27% coverage)
 - Focus on unit tests for utility functions
 
-## Unified Spectral Fitting Architecture
+## Unified Library and Spectral Fitting Architecture
 
 ### Overview
-JMod now uses a unified spectral fitting approach that processes target and decoy peptides together in single data structures. This architecture was implemented through a careful refactoring process (Phases 1-4) that consolidated duplicate code while maintaining identical functionality. Phase 4 is now complete, with Phase 5 planned for production deployment and optimization.
+JMod now uses a unified approach that combines target and decoy peptides from the point of library construction through spectral fitting. This architecture eliminates the need for separate decoy libraries and processes all peptides together in single data structures.
+
+### Library Unification Details
+
+#### Critical Implementation Order
+1. Load library WITHOUT decoys initially (`create_decoys=False`)
+2. Generate isotopes for TARGET library only
+3. Add decoys AFTER isotope generation using `add_decoys_to_library()`
+4. Update rt_mz and all_keys arrays to include decoys
+
+This order prevents parsing errors during isotope generation and ensures proper decoy inclusion in spectral matching.
+
+#### Library Entry Structure
+Each entry now includes:
+- `is_decoy`: Boolean flag indicating decoy status
+- `parent_key`: Link from decoys to their parent targets
+- All original fields (spectrum, fragments, RT, etc.)
 
 ### Key Components
 
@@ -170,7 +186,7 @@ JMod now uses a unified spectral fitting approach that processes target and deco
 - Backward compatibility maintained for RT alignment
 
 ### Project Status
-- **Phase 1-4**: ✅ Complete (unified implementation, testing, optimization)
-- **Phase 5**: 📋 Planned (production deployment, see `phase5_implementation_plan.md`)
+- **Unified Library Architecture**: ✅ Complete
 - **Test Coverage**: 49 tests all passing, 41% coverage on spectral_fitting.py
 - **Performance**: 96% memory reduction, <0.002s for 100 candidates
+- **Library Unification**: Targets and decoys now processed together from initial load
