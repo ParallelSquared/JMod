@@ -972,6 +972,64 @@ def process_matrix(
 
 # ===== UTILITY FUNCTIONS =====
 
+def preprocess_dia_spectrum(dia_spectrum: np.ndarray, mz_tol: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Preprocess DIA spectrum by merging peaks within tolerance and calculating centroid breaks.
+    
+    This function groups peaks that fall within the mass tolerance of each other,
+    sums their intensities, and creates tolerance windows for peak matching.
+    
+    Args:
+        dia_spectrum: 2D array with m/z values in column 0 and intensities in column 1
+        mz_tol: Mass tolerance as a fraction (e.g., 10 ppm = 10e-6)
+        
+    Returns:
+        Tuple containing:
+        - merged_spectrum: 2D array of merged peaks (m/z, intensity)
+        - centroid_breaks: Array of tolerance window boundaries
+        - bin_centers: Array of bin center m/z values
+        
+    Example:
+        >>> spectrum = np.array([[100.0, 50.0], [100.001, 30.0], [200.0, 100.0]])
+        >>> merged, breaks, centers = preprocess_dia_spectrum(spectrum, 10e-6)
+    """
+    # Find groups of peaks within tolerance
+    merged_coords_idxs = np.searchsorted(
+        dia_spectrum[:, 0] + mz_tol * dia_spectrum[:, 0], 
+        dia_spectrum[:, 0]
+    )
+    
+    # Get unique peak group indices
+    unique_idxs = np.unique(merged_coords_idxs)
+    
+    # Sum intensities for each peak group
+    merged_intensities = np.zeros(len(unique_idxs))
+    for i, unique_idx in enumerate(unique_idxs):
+        # Sum all intensities that belong to this group
+        group_mask = merged_coords_idxs == unique_idx
+        merged_intensities[i] = np.sum(dia_spectrum[group_mask, 1])
+    
+    # Filter out zero-intensity peaks
+    non_zero_mask = merged_intensities != 0
+    merged_coords = dia_spectrum[unique_idxs[non_zero_mask], 0]
+    merged_intensities = merged_intensities[non_zero_mask]
+    
+    # Create merged spectrum
+    merged_spectrum = np.array((merged_coords, merged_intensities)).transpose()
+    
+    # Calculate tolerance windows for each merged peak
+    centroid_breaks = np.concatenate((
+        merged_spectrum[:, 0] - mz_tol * merged_spectrum[:, 0],
+        merged_spectrum[:, 0] + mz_tol * merged_spectrum[:, 0]
+    ))
+    centroid_breaks = np.sort(centroid_breaks)
+    
+    # Calculate bin centers
+    bin_centers = np.mean(np.stack((centroid_breaks[::2], centroid_breaks[1::2]), 1), 1)
+    
+    return merged_spectrum, centroid_breaks, bin_centers
+
+
 def hyperscore2(frags,frag_names_matched):
     
     num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
@@ -1051,32 +1109,8 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
     
     
     
-    ###### Process dia spectrum 
-    
-    # what are the first indices of peaks grouped by tolerance
-    merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
-    
-    # what are the first mz of these peak groups
-    merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
-    # print(merged_coords)
-    
-    
-    # NB - should we not sum the intensities?????
-    # merged_intensities = [np.mean(dia_spectrum[np.where(merged_coords_idxs==i)[0],1]) for i in np.unique(merged_coords_idxs)]
-    merged_intensities = np.zeros(len((merged_coords_idxs)))
-    for j,val in zip(merged_coords_idxs,dia_spectrum[:,1]):
-        merged_intensities[j]+=val
-    #merged_intensities = [np.mean(dia_spectrum[merged_coords_idxs==i,1]) for i in np.unique(merged_coords_idxs)]
-    merged_intensities = merged_intensities[merged_intensities!=0]
-    
-    #update spectrum to new values (note mz remains first in group as this will eventually be rounded)
-    dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
-    # print(dia_spectrum)
-    
-    #get window edge positions each side of peaks in observed spectra (NB the tolerance is now about the first peak in the group not the middile)
-    centroid_breaks = np.concatenate((dia_spectrum[:,0]-mz_tol*dia_spectrum[:,0],dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0]))
-    centroid_breaks = np.sort(centroid_breaks)
-    bin_centers = np.mean(np.stack((centroid_breaks[::2],centroid_breaks[1::2]),1),1)
+    ###### Process dia spectrum using extracted function
+    dia_spectrum, centroid_breaks, bin_centers = preprocess_dia_spectrum(dia_spectrum, mz_tol)
     
     # if "spec_frags" in library[all_keys[0]].keys():
     #     spec_peaks = [library[i]['spec_frags'] for i in mass_window_candidates]
@@ -1422,25 +1456,8 @@ def fit_to_lib2(dia_spec,
         return [[0, spec_idx, ms1_spec.scan_num if ms1_spec else 0, 0, 0, 
                 prec_mz, prec_rt, *np.zeros(len(names) - 7)]]
     
-    # 3. Process DIA spectrum
-    # Merge peaks within tolerance
-    merged_coords_idxs = np.searchsorted(dia_spectrum[:, 0] + mz_tol * dia_spectrum[:, 0], dia_spectrum[:, 0])
-    merged_coords = dia_spectrum[np.unique(merged_coords_idxs), 0]
-    
-    # Sum intensities for merged peaks
-    merged_intensities = np.zeros(len(merged_coords_idxs))
-    for j, val in zip(merged_coords_idxs, dia_spectrum[:, 1]):
-        merged_intensities[j] += val
-    merged_intensities = merged_intensities[merged_intensities != 0]
-    
-    # Update spectrum
-    dia_spectrum = np.array((merged_coords, merged_intensities)).transpose()
-    
-    # Calculate centroid breaks and bin centers
-    centroid_breaks = np.concatenate((dia_spectrum[:, 0] - mz_tol * dia_spectrum[:, 0],
-                                    dia_spectrum[:, 0] + mz_tol * dia_spectrum[:, 0]))
-    centroid_breaks = np.sort(centroid_breaks)
-    bin_centers = np.mean(np.stack((centroid_breaks[::2], centroid_breaks[1::2]), 1), 1)
+    # 3. Process DIA spectrum using extracted function
+    dia_spectrum, centroid_breaks, bin_centers = preprocess_dia_spectrum(dia_spectrum, mz_tol)
     
     # ===== PROCESSING STARTS HERE =====
     

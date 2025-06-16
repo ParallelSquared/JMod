@@ -16,6 +16,7 @@ try:
         get_scribe, get_residuals, gof_stat, get_manhattan_distance,
         get_closest_ms1, max_matched_residual
     )
+    from src.spectral_fitting import preprocess_dia_spectrum
 except ImportError:
     # If direct import fails, we might need to adjust based on actual module structure
     pass
@@ -613,6 +614,144 @@ class TestIntegration:
         assert np.all(np.isfinite(gof_stats))
         assert np.all(np.isfinite(manhattan_distances))
         assert np.all(np.isfinite(spectral_contrasts))
+
+
+class TestPreprocessDiaSpectrum:
+    """Test cases for the preprocess_dia_spectrum function"""
+    
+    def test_basic_spectrum_preprocessing(self):
+        """Test basic spectrum preprocessing with simple peaks"""
+        # Create test spectrum with 3 distinct peaks
+        spectrum = np.array([
+            [100.0, 50.0],
+            [200.0, 100.0],
+            [300.0, 75.0]
+        ])
+        mz_tol = 10e-6  # 10 ppm as fraction
+        
+        merged, breaks, centers = preprocess_dia_spectrum(spectrum, mz_tol)
+        
+        # Should have same number of peaks (no merging needed)
+        assert merged.shape[0] == 3
+        assert len(breaks) == 6  # 2 boundaries per peak
+        assert len(centers) == 3  # One center per peak
+        
+        # Check intensities are preserved
+        np.testing.assert_array_equal(merged[:, 1], spectrum[:, 1])
+        
+    def test_peak_merging(self):
+        """Test that nearby peaks are properly merged"""
+        # Create spectrum with overlapping peaks
+        # At 100.0 m/z with 10 ppm tolerance, the window is 0.001 m/z
+        spectrum = np.array([
+            [100.0, 50.0],
+            [100.0005, 30.0],  # Should merge with first peak (within 10 ppm)
+            [100.002, 20.0],   # Should NOT merge (outside 10 ppm)
+            [200.0, 100.0]
+        ])
+        mz_tol = 10e-6  # 10 ppm as fraction
+        
+        merged, breaks, centers = preprocess_dia_spectrum(spectrum, mz_tol)
+        
+        # Should have 3 peaks after merging
+        assert merged.shape[0] == 3
+        
+        # First merged peak should have summed intensity
+        assert merged[0, 1] == 80.0  # 50 + 30
+        
+        # Check m/z values
+        assert merged[0, 0] == 100.0  # First m/z preserved
+        assert merged[1, 0] == 100.002
+        assert merged[2, 0] == 200.0
+        
+    def test_centroid_breaks_calculation(self):
+        """Test that centroid breaks are correctly calculated"""
+        spectrum = np.array([
+            [100.0, 50.0],
+            [200.0, 100.0]
+        ])
+        mz_tol = 10e-6  # 10 ppm as fraction
+        
+        merged, breaks, centers = preprocess_dia_spectrum(spectrum, mz_tol)
+        
+        # Check break calculations
+        # For 100 m/z at 10 ppm: tolerance = 100 * 10e-6 = 0.001
+        # For 200 m/z at 10 ppm: tolerance = 200 * 10e-6 = 0.002
+        expected_breaks = np.array([
+            100.0 - 100.0 * 10e-6,  # Lower bound of first peak
+            100.0 + 100.0 * 10e-6,  # Upper bound of first peak
+            200.0 - 200.0 * 10e-6,  # Lower bound of second peak
+            200.0 + 200.0 * 10e-6   # Upper bound of second peak
+        ])
+        np.testing.assert_allclose(breaks, expected_breaks, rtol=1e-6)
+        
+        # Check bin centers
+        expected_centers = np.array([100.0, 200.0])
+        np.testing.assert_allclose(centers, expected_centers, rtol=1e-6)
+        
+    def test_empty_spectrum(self):
+        """Test handling of empty spectrum"""
+        spectrum = np.array([]).reshape(0, 2)
+        mz_tol = 10e-6  # 10 ppm as fraction
+        
+        merged, breaks, centers = preprocess_dia_spectrum(spectrum, mz_tol)
+        
+        assert merged.shape[0] == 0
+        assert len(breaks) == 0
+        assert len(centers) == 0
+        
+    def test_single_peak(self):
+        """Test preprocessing with single peak"""
+        spectrum = np.array([[150.0, 75.0]])
+        mz_tol = 20e-6  # 20 ppm as fraction
+        
+        merged, breaks, centers = preprocess_dia_spectrum(spectrum, mz_tol)
+        
+        assert merged.shape == (1, 2)
+        assert len(breaks) == 2
+        assert len(centers) == 1
+        assert centers[0] == 150.0
+        
+    def test_complex_merging_scenario(self):
+        """Test complex scenario with multiple merge groups"""
+        # Create peaks that form distinct merge groups
+        spectrum = np.array([
+            # Group 1: These should merge
+            [100.0, 10.0],
+            [100.0001, 20.0],
+            [100.0002, 15.0],
+            # Group 2: Separate peak
+            [100.01, 30.0],
+            # Group 3: These should merge
+            [200.0, 40.0],
+            [200.0001, 25.0]
+        ])
+        mz_tol = 5e-6  # 5 ppm as fraction - tighter tolerance
+        
+        merged, breaks, centers = preprocess_dia_spectrum(spectrum, mz_tol)
+        
+        # Should have 3 merged peaks
+        assert merged.shape[0] == 3
+        
+        # Check merged intensities
+        assert merged[0, 1] == 45.0  # 10 + 20 + 15
+        assert merged[1, 1] == 30.0  # No merge
+        assert merged[2, 1] == 65.0  # 40 + 25
+        
+    def test_intensity_filtering(self):
+        """Test that zero-intensity peaks are filtered out"""
+        spectrum = np.array([
+            [100.0, 50.0],
+            [200.0, 0.0],  # Zero intensity
+            [300.0, 75.0]
+        ])
+        mz_tol = 10e-6  # 10 ppm as fraction
+        
+        merged, breaks, centers = preprocess_dia_spectrum(spectrum, mz_tol)
+        
+        # Should only have 2 peaks (zero intensity filtered)
+        assert merged.shape[0] == 2
+        assert 200.0 not in merged[:, 0]
 
 
 if __name__ == "__main__":
