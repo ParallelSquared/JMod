@@ -16,7 +16,7 @@ try:
         get_scribe, get_residuals, gof_stat, get_manhattan_distance,
         get_closest_ms1, max_matched_residual
     )
-    from src.spectral_fitting import preprocess_dia_spectrum
+    from src.spectral_fitting import preprocess_dia_spectrum, filter_candidates_by_window
 except ImportError:
     # If direct import fails, we might need to adjust based on actual module structure
     pass
@@ -752,6 +752,156 @@ class TestPreprocessDiaSpectrum:
         # Should only have 2 peaks (zero intensity filtered)
         assert merged.shape[0] == 2
         assert 200.0 not in merged[:, 0]
+
+
+class TestFilterCandidatesByWindow:
+    """Test cases for the filter_candidates_by_window function"""
+    
+    def test_basic_mass_window_filtering(self):
+        """Test basic mass window filtering without RT"""
+        # Create test data
+        rt_mz = np.array([
+            [10.0, 500.0],   # Within window
+            [10.0, 500.5],   # Within window
+            [10.0, 502.0],   # Outside window
+            [10.0, 498.0]    # Outside window (assuming windowWidth=2)
+        ])
+        all_keys = ['pep1', 'pep2', 'pep3', 'pep4']
+        prec_mz = 500.25
+        prec_rt = 10.0
+        windowWidth = 2.0  # +/- 1.0 m/z
+        
+        window_idxs, candidates = filter_candidates_by_window(
+            rt_mz, all_keys, prec_mz, prec_rt, windowWidth
+        )
+        
+        # Should include only peptides within mass window
+        assert len(window_idxs) == 2
+        assert list(window_idxs) == [0, 1]
+        assert candidates == ['pep1', 'pep2']
+    
+    def test_rt_filtering(self):
+        """Test filtering with retention time constraints"""
+        rt_mz = np.array([
+            [10.0, 500.0],   # Within mass and RT
+            [10.5, 500.0],   # Within mass and RT
+            [11.0, 500.0],   # Within mass, outside RT
+            [9.0, 500.0]     # Within mass, outside RT
+        ])
+        all_keys = ['pep1', 'pep2', 'pep3', 'pep4']
+        prec_mz = 500.0
+        prec_rt = 10.0
+        windowWidth = 2.0
+        rt_tol = 0.6
+        
+        window_idxs, candidates = filter_candidates_by_window(
+            rt_mz, all_keys, prec_mz, prec_rt, windowWidth,
+            rt_filter=True, rt_tol=rt_tol
+        )
+        
+        # Should include only peptides within both mass and RT windows
+        assert len(window_idxs) == 2
+        assert list(window_idxs) == [0, 1]
+        assert candidates == ['pep1', 'pep2']
+    
+    def test_ms1_mz_filtering(self):
+        """Test filtering with MS1 m/z instead of precursor m/z"""
+        rt_mz = np.array([
+            [10.0, 500.0],
+            [10.0, 500.005],  # Within 10 ppm of 500
+            [10.0, 500.01],   # Outside 10 ppm of 500
+            [10.0, 499.99]    # Outside 10 ppm of 500
+        ])
+        all_keys = ['pep1', 'pep2', 'pep3', 'pep4']
+        ms1_mz = 500.0
+        ms1_tol = 10e-6  # 10 ppm
+        
+        window_idxs, candidates = filter_candidates_by_window(
+            rt_mz, all_keys, 0, 0, 0,  # These are ignored when ms1_mz is provided
+            ms1_mz=ms1_mz, ms1_tol=ms1_tol
+        )
+        
+        # Should include only peptides within MS1 tolerance
+        assert len(window_idxs) == 2
+        assert list(window_idxs) == [0, 1]
+        assert candidates == ['pep1', 'pep2']
+    
+    def test_empty_results(self):
+        """Test when no candidates pass filtering"""
+        rt_mz = np.array([
+            [10.0, 600.0],
+            [10.0, 700.0]
+        ])
+        all_keys = ['pep1', 'pep2']
+        prec_mz = 500.0
+        windowWidth = 10.0  # Even with wide window, nothing matches
+        
+        window_idxs, candidates = filter_candidates_by_window(
+            rt_mz, all_keys, prec_mz, 10.0, windowWidth
+        )
+        
+        assert len(window_idxs) == 0
+        assert candidates == []
+    
+    def test_error_handling(self):
+        """Test that appropriate errors are raised for missing parameters"""
+        rt_mz = np.array([[10.0, 500.0]])
+        all_keys = ['pep1']
+        
+        # Test missing ms1_tol when ms1_mz is provided
+        with pytest.raises(ValueError, match="ms1_tol must be provided"):
+            filter_candidates_by_window(
+                rt_mz, all_keys, 500.0, 10.0, 1.0,
+                ms1_mz=500.0
+            )
+        
+        # Test missing rt_tol when rt_filter is True
+        with pytest.raises(ValueError, match="rt_tol must be provided"):
+            filter_candidates_by_window(
+                rt_mz, all_keys, 500.0, 10.0, 1.0,
+                rt_filter=True
+            )
+    
+    def test_all_candidates_pass(self):
+        """Test when all candidates pass filtering"""
+        rt_mz = np.array([
+            [10.0, 500.0],
+            [10.0, 500.1],
+            [10.0, 500.2]
+        ])
+        all_keys = ['pep1', 'pep2', 'pep3']
+        prec_mz = 500.1
+        windowWidth = 1.0  # Wide enough to include all
+        
+        window_idxs, candidates = filter_candidates_by_window(
+            rt_mz, all_keys, prec_mz, 10.0, windowWidth
+        )
+        
+        assert len(window_idxs) == 3
+        assert list(window_idxs) == [0, 1, 2]
+        assert candidates == ['pep1', 'pep2', 'pep3']
+    
+    def test_boundary_conditions(self):
+        """Test peptides exactly at window boundaries"""
+        rt_mz = np.array([
+            [10.0, 499.49],  # Outside (0.51 away)
+            [10.0, 499.51],  # Inside (0.49 away)
+            [10.0, 500.0],   # Center (0.0 away)
+            [10.0, 500.49],  # Inside (0.49 away)
+            [10.0, 500.51]   # Outside (0.51 away)
+        ])
+        all_keys = ['pep1', 'pep2', 'pep3', 'pep4', 'pep5']
+        prec_mz = 500.0
+        windowWidth = 1.0  # +/- 0.5
+        
+        window_idxs, candidates = filter_candidates_by_window(
+            rt_mz, all_keys, prec_mz, 10.0, windowWidth
+        )
+        
+        # Should include only those strictly within boundaries (< not <=)
+        assert len(window_idxs) == 3
+        assert list(window_idxs) == [1, 2, 3]
+        assert candidates == ['pep2', 'pep3', 'pep4']
 
 
 if __name__ == "__main__":

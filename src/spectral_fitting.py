@@ -972,6 +972,95 @@ def process_matrix(
 
 # ===== UTILITY FUNCTIONS =====
 
+def filter_candidates_by_window(
+    rt_mz: np.ndarray,
+    all_keys: List,
+    prec_mz: float,
+    prec_rt: float,
+    windowWidth: float,
+    ms1_mz: Optional[float] = None,
+    rt_filter: bool = False,
+    ms1_tol: Optional[float] = None,
+    rt_tol: Optional[float] = None,
+    dino_features: Optional[Any] = None
+) -> Tuple[np.ndarray, List]:
+    """
+    Filter spectral library candidates based on mass and retention time windows.
+    
+    This function filters library entries to find candidates that match the precursor
+    within specified mass and optionally retention time tolerances. It also supports
+    filtering based on MS1 features (dino features) if provided.
+    
+    Args:
+        rt_mz: 2D array with RT in column 0 and m/z in column 1 for all library entries
+        all_keys: List of all library keys corresponding to rt_mz rows
+        prec_mz: Precursor m/z value
+        prec_rt: Precursor retention time
+        windowWidth: Mass window width for filtering
+        ms1_mz: Optional MS1 m/z for more precise filtering
+        rt_filter: Whether to apply retention time filtering
+        ms1_tol: MS1 mass tolerance (required if ms1_mz is provided)
+        rt_tol: Retention time tolerance (required if rt_filter is True)
+        dino_features: Optional MS1 features for additional filtering
+        
+    Returns:
+        Tuple of:
+        - window_idxs: Array of indices into all_keys that pass filtering
+        - mass_window_candidates: List of library keys that pass filtering
+        
+    Example:
+        >>> rt_mz = np.array([[10.0, 500.0], [10.1, 500.1], [20.0, 600.0]])
+        >>> all_keys = ['pep1', 'pep2', 'pep3']
+        >>> idxs, candidates = filter_candidates_by_window(
+        ...     rt_mz, all_keys, 500.05, 10.0, 1.0
+        ... )
+    """
+    # Apply mass window filtering
+    if ms1_mz:
+        # Use MS1 m/z for filtering if provided
+        if ms1_tol is None:
+            raise ValueError("ms1_tol must be provided when ms1_mz is specified")
+        _bool = (np.abs(rt_mz[:, 1] - ms1_mz) / ms1_mz) < ms1_tol
+    else:
+        # Standard mass window filtering
+        if rt_filter:
+            if rt_tol is None:
+                raise ValueError("rt_tol must be provided when rt_filter is True")
+            _bool = np.logical_and(
+                np.abs(rt_mz[:, 1] - prec_mz) < (windowWidth / 2),
+                np.abs(rt_mz[:, 0] - prec_rt) < rt_tol
+            )
+        else:
+            _bool = np.abs(rt_mz[:, 1] - prec_mz) < (windowWidth / 2)
+    
+    window_idxs = np.where(_bool)[0]
+    
+    # Apply dino feature filtering if provided
+    if dino_features is not None:
+        if rt_tol is None:
+            raise ValueError("rt_tol must be provided when dino_features are specified")
+        if ms1_tol is None:
+            raise ValueError("ms1_tol must be provided when dino_features are specified")
+            
+        # Filter dino features by RT and m/z
+        filtered_dino = feature_list_mz(
+            feature_list_rt(dino_features, prec_rt, rt_tol=rt_tol),
+            prec_mz, 
+            windowWidth
+        )
+        
+        # Create tolerance windows and filter candidates
+        window_edges = createTolWindows(filtered_dino.mz, tolerance=ms1_tol)
+        window_idxs = window_idxs[
+            np.where((np.searchsorted(window_edges, rt_mz[window_idxs, 1]) % 2) == 1)[0]
+        ]
+    
+    # Get candidate keys
+    mass_window_candidates = [all_keys[i] for i in window_idxs]
+    
+    return window_idxs, mass_window_candidates
+
+
 def preprocess_dia_spectrum(dia_spectrum: np.ndarray, mz_tol: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Preprocess DIA spectrum by merging peaks within tolerance and calculating centroid breaks.
@@ -1075,29 +1164,22 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
     
     lib_coefficients = []
    
-    if ms1_mz:
-        _bool = (np.abs(rt_mz[:,1]-ms1_mz)/ms1_mz)<ms1_tol
-        
-    else:
-        if rt_filter:
-            _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
-        else:
-            _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
-            
-    window_idxs = np.where(_bool)[0]        
-        
-        
-        
-    ### match lib spec to features
-    if dino_features is not None:
-        filtered_dino = feature_list_mz(feature_list_rt(dino_features,prec_rt,rt_tol=rt_tol),
-                                        prec_mz,windowWidth)
-        window_edges = createTolWindows(filtered_dino.mz, tolerance=ms1_tol)
-        window_idxs = window_idxs[np.where((np.searchsorted(window_edges,rt_mz[window_idxs,1])%2)==1)[0]]
-        
+    # Use extracted function for filtering
+    window_idxs, mass_window_candidates_all = filter_candidates_by_window(
+        rt_mz=rt_mz,
+        all_keys=all_keys,
+        prec_mz=prec_mz,
+        prec_rt=prec_rt,
+        windowWidth=windowWidth,
+        ms1_mz=ms1_mz,
+        rt_filter=rt_filter,
+        ms1_tol=ms1_tol,
+        rt_tol=rt_tol,
+        dino_features=dino_features
+    )
     
     # Filter out decoys for RT alignment (fit_to_lib is only used for RT alignment)
-    mass_window_candidates = [all_keys[i] for i in window_idxs if not library[all_keys[i]].get('is_decoy', False)] 
+    mass_window_candidates = [key for key in mass_window_candidates_all if not library[key].get('is_decoy', False)] 
     candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
     
     # # filter possible lib entries for windows.. NB: DONT LIKE HOW I DO SAME LOOP TWICE
@@ -1237,6 +1319,9 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
         frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in ref_spec_row_indices_split]
         # mz tol
         if dino_features is not None:
+            # Recalculate filtered_dino for feature calculation
+            filtered_dino = feature_list_mz(feature_list_rt(dino_features, prec_rt, rt_tol=rt_tol),
+                                          prec_mz, windowWidth)
             rel_error = ms1_error(np.array(filtered_dino.mz), rt_mz[window_idxs[ref_peaks_in_dia],1], tol=ms1_tol)
         else:
             rel_error = np.zeros(len(ref_peaks_in_dia))
@@ -1427,28 +1512,20 @@ def fit_to_lib2(dia_spec,
     if ms1_spectra is not None:
         ms1_spec = get_closest_ms1(prec_rt, ms1_spectra)
     
-    # 2. Filter candidates by mass window (same as original)
-    if ms1_mz:
-        _bool = (np.abs(rt_mz[:, 1] - ms1_mz) / ms1_mz) < ms1_tol
-    else:
-        if rt_filter:
-            _bool = np.logical_and(
-                np.abs(rt_mz[:, 1] - prec_mz) < (windowWidth / 2),
-                np.abs(rt_mz[:, 0] - prec_rt) < rt_tol
-            )
-        else:
-            _bool = np.abs(rt_mz[:, 1] - prec_mz) < (windowWidth / 2)
+    # 2. Filter candidates by mass window using extracted function
+    window_idxs, mass_window_candidates = filter_candidates_by_window(
+        rt_mz=rt_mz,
+        all_keys=all_keys,
+        prec_mz=prec_mz,
+        prec_rt=prec_rt,
+        windowWidth=windowWidth,
+        ms1_mz=ms1_mz,
+        rt_filter=rt_filter,
+        ms1_tol=ms1_tol,
+        rt_tol=rt_tol,
+        dino_features=dino_features
+    )
     
-    window_idxs = np.where(_bool)[0]
-    
-    # Filter by dino features if provided
-    if dino_features is not None:
-        filtered_dino = feature_list_mz(feature_list_rt(dino_features, prec_rt, rt_tol=rt_tol),
-                                      prec_mz, windowWidth)
-        window_edges = createTolWindows(filtered_dino.mz, tolerance=ms1_tol)
-        window_idxs = window_idxs[np.where((np.searchsorted(window_edges, rt_mz[window_idxs, 1]) % 2) == 1)[0]]
-    
-    mass_window_candidates = [all_keys[i] for i in window_idxs]
     candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
     
     # Early exit if no candidates
