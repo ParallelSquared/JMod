@@ -18,7 +18,10 @@ try:
     )
     from src.spectral_fitting import (
         preprocess_dia_spectrum, filter_candidates_by_window, 
-        separate_library_candidates, create_unified_candidates
+        separate_library_candidates, create_unified_candidates,
+        create_empty_output_row, extract_non_zero_coefficients,
+        format_fragment_information, get_protein_info,
+        format_spectral_fitting_output, UnifiedCandidates, UnifiedFeatures
     )
 except ImportError:
     # If direct import fails, we might need to adjust based on actual module structure
@@ -1067,6 +1070,357 @@ class TestSeparateLibraryCandidates:
         assert unified.peaks[0] is library['PEPTIDE/2']['spectrum']
         # But should have same values as original
         np.testing.assert_array_equal(unified.peaks[0], original_peaks)
+
+
+class TestCreateEmptyOutputRow:
+    """Test cases for create_empty_output_row function"""
+    
+    def test_basic_empty_row(self):
+        """Test creation of basic empty output row"""
+        row = create_empty_output_row(100, 99, 500.5, 10.5, 49)
+        
+        # Check fixed values
+        assert row[0] == 0  # coeff
+        assert row[1] == 100  # spec_idx
+        assert row[2] == 99  # ms1_spec_id
+        assert row[3] == 0  # seq
+        assert row[4] == 0  # z
+        assert row[5] == 500.5  # prec_mz
+        assert row[6] == 10.5  # prec_rt
+        
+        # Check that remaining values are zeros
+        assert len(row) == 49
+        assert all(v == 0 for v in row[7:])
+    
+    def test_no_ms1_spec(self):
+        """Test with no MS1 spectrum"""
+        row = create_empty_output_row(50, 0, 300.0, 5.0, 49)
+        assert row[2] == 0  # ms1_spec_id should be 0
+    
+    def test_different_column_counts(self):
+        """Test with different total column counts"""
+        # Smaller output
+        row1 = create_empty_output_row(1, 1, 100.0, 1.0, 10)
+        assert len(row1) == 10
+        assert row1[:7] == [0, 1, 1, 0, 0, 100.0, 1.0]
+        assert all(v == 0 for v in row1[7:])
+        
+        # Larger output
+        row2 = create_empty_output_row(2, 2, 200.0, 2.0, 100)
+        assert len(row2) == 100
+        assert row2[:7] == [0, 2, 2, 0, 0, 200.0, 2.0]
+        assert all(v == 0 for v in row2[7:])
+
+
+class TestExtractNonZeroCoefficients:
+    """Test cases for extract_non_zero_coefficients function"""
+    
+    def test_mixed_coefficients(self):
+        """Test with mix of zero and non-zero coefficients"""
+        coeffs = np.array([0.0, 0.5, 0.0, 0.3, 0.0, 0.1])
+        values, indices = extract_non_zero_coefficients(coeffs)
+        
+        assert values == [0.5, 0.3, 0.1]
+        assert indices == [1, 3, 5]
+    
+    def test_all_zeros(self):
+        """Test with all zero coefficients"""
+        coeffs = np.array([0.0, 0.0, 0.0])
+        values, indices = extract_non_zero_coefficients(coeffs)
+        
+        assert values == []
+        assert indices == []
+    
+    def test_all_non_zero(self):
+        """Test with all non-zero coefficients"""
+        coeffs = np.array([0.1, 0.2, 0.3])
+        values, indices = extract_non_zero_coefficients(coeffs)
+        
+        assert values == [0.1, 0.2, 0.3]
+        assert indices == [0, 1, 2]
+    
+    def test_empty_array(self):
+        """Test with empty array"""
+        coeffs = np.array([])
+        values, indices = extract_non_zero_coefficients(coeffs)
+        
+        assert values == []
+        assert indices == []
+    
+    def test_single_value(self):
+        """Test with single value"""
+        # Zero
+        values1, indices1 = extract_non_zero_coefficients(np.array([0.0]))
+        assert values1 == []
+        assert indices1 == []
+        
+        # Non-zero
+        values2, indices2 = extract_non_zero_coefficients(np.array([0.5]))
+        assert values2 == [0.5]
+        assert indices2 == [0]
+
+
+class TestFormatFragmentInformation:
+    """Test cases for format_fragment_information function"""
+    
+    def test_complete_fragment_data(self):
+        """Test with complete fragment information"""
+        additional_outputs = {
+            'frag_names': [np.array(['b2', 'y3', 'b4'])],
+            'frag_errors': [np.array([0.001, 0.002, 0.003])],
+            'lib_frag_mz': [np.array([200.1, 300.2, 400.3])],
+            'lib_frag_int': [np.array([100.0, 200.0, 150.0])],
+            'obs_frag_int': [np.array([95.0, 205.0, 145.0])]
+        }
+        
+        frags = format_fragment_information(additional_outputs, 0)
+        
+        assert len(frags) == 7
+        assert frags[0] == "b2;y3;b4"  # names
+        assert frags[1] == "0.001;0.002;0.003"  # errors
+        assert frags[2] == "200.1;300.2;400.3"  # m/z
+        assert frags[3] == "100.0;200.0;150.0"  # lib intensities
+        assert frags[4] == "95.0;205.0;145.0"  # obs intensities
+        assert frags[5] == ""  # unique frags (empty for now)
+        assert frags[6] == ""  # unique frags int (empty for now)
+    
+    def test_missing_candidate_index(self):
+        """Test with candidate index out of range"""
+        additional_outputs = {
+            'frag_names': [np.array(['b2'])]  # Only one candidate
+        }
+        
+        frags = format_fragment_information(additional_outputs, 1)  # Ask for index 1
+        
+        assert frags == [""] * 7  # Should return all empty strings
+    
+    def test_empty_fragment_arrays(self):
+        """Test with empty fragment arrays"""
+        additional_outputs = {
+            'frag_names': [np.array([])],
+            'frag_errors': [np.array([])],
+            'lib_frag_mz': [np.array([])],
+            'lib_frag_int': [np.array([])],
+            'obs_frag_int': [np.array([])]
+        }
+        
+        frags = format_fragment_information(additional_outputs, 0)
+        
+        assert frags == [""] * 7  # All should be empty strings
+    
+    def test_missing_data_keys(self):
+        """Test with some missing data keys"""
+        additional_outputs = {
+            'frag_names': [np.array(['b2', 'y3'])]
+            # Other keys missing
+        }
+        
+        frags = format_fragment_information(additional_outputs, 0)
+        
+        assert frags[0] == "b2;y3"  # Names present
+        assert frags[1] == ""  # Others empty
+    
+    def test_numeric_formatting(self):
+        """Test that numeric values are properly formatted"""
+        additional_outputs = {
+            'frag_errors': [np.array([0.0001234567, 1.234567890])]
+        }
+        
+        frags = format_fragment_information(additional_outputs, 0)
+        
+        # Should preserve full precision
+        assert "0.0001234567" in frags[1]
+        assert "1.23456789" in frags[1]
+
+
+class TestGetProteinInfo:
+    """Test cases for get_protein_info function"""
+    
+    def test_basic_protein_lookup(self):
+        """Test basic protein information lookup"""
+        library = {
+            ('PEPTIDE', 2): {'protein': 'PROT1'},
+            ('PEPTIDEK', 3): {'protein': 'PROT2'}
+        }
+        
+        protein = get_protein_info(('PEPTIDE', 2), library, 'protein')
+        assert protein == 'PROT1'
+    
+    def test_decoy_prefix_removal(self):
+        """Test that decoy prefix is removed for lookup"""
+        library = {
+            ('PEPTIDE', 2): {'protein': 'PROT1'}  # Library has clean key
+        }
+        
+        # Query with decoy prefix
+        protein = get_protein_info(('Decoy_PEPTIDE', 2), library, 'protein')
+        assert protein == 'PROT1'
+    
+    def test_missing_protein_column(self):
+        """Test when protein column is not specified"""
+        library = {('PEPTIDE', 2): {'protein': 'PROT1'}}
+        
+        protein = get_protein_info(('PEPTIDE', 2), library, None)
+        assert protein == 'NA'
+    
+    def test_missing_library_entry(self):
+        """Test when candidate is not in library"""
+        library = {('OTHER', 2): {'protein': 'PROT1'}}
+        
+        protein = get_protein_info(('PEPTIDE', 2), library, 'protein')
+        assert protein == 'NA'
+    
+    def test_missing_protein_field(self):
+        """Test when library entry exists but protein field is missing"""
+        library = {('PEPTIDE', 2): {'other_field': 'value'}}
+        
+        protein = get_protein_info(('PEPTIDE', 2), library, 'protein')
+        assert protein == 'NA'
+    
+    def test_empty_library(self):
+        """Test with empty library"""
+        protein = get_protein_info(('PEPTIDE', 2), {}, 'protein')
+        assert protein == 'NA'
+    
+    def test_exception_handling(self):
+        """Test that exceptions are handled gracefully"""
+        # Invalid candidate format
+        library = {('PEPTIDE', 2): {'protein': 'PROT1'}}
+        
+        protein = get_protein_info('INVALID', library, 'protein')
+        assert protein == 'NA'
+
+
+class TestFormatSpectralFittingOutput:
+    """Test cases for format_spectral_fitting_output function"""
+    
+    def setup_method(self):
+        """Set up common test data"""
+        # Mock configuration
+        self.config = type('Config', (), {
+            'protein_column': 'protein',
+            'args': type('Args', (), {'mzml': 'test.mzML'})()
+        })()
+        
+        # Mock MS1 spectrum
+        self.ms1_spec = type('MS1Spec', (), {'scan_num': 99})()
+    
+    def test_no_matches(self):
+        """Test output when no matches found"""
+        lib_coefficients = np.array([0.0, 0.0, 0.0])
+        unified = UnifiedCandidates(
+            candidates=[('PEPTIDE', 2)],
+            is_decoy=np.array([False]),
+            peaks=[np.array([[500.1, 100]])],
+            peaks_in_dia=[0]
+        )
+        features = UnifiedFeatures(
+            features=np.zeros((1, 26)),
+            is_decoy=np.array([False])
+        )
+        
+        # Mock names length
+        import src.spectral_fitting
+        src.spectral_fitting.names = [''] * 49  # Mock 49 columns
+        
+        output = format_spectral_fitting_output(
+            lib_coefficients=lib_coefficients,
+            unified_candidates=unified,
+            unified_features=features,
+            additional_outputs={},
+            spec_idx=100,
+            ms1_spec=self.ms1_spec,
+            prec_mz=500.5,
+            prec_rt=10.5,
+            library={},
+            config=self.config
+        )
+        
+        assert len(output) == 1
+        assert output[0][0] == 0  # coeff
+        assert output[0][1] == 100  # spec_idx
+        assert output[0][2] == 99  # ms1_spec_id
+        assert output[0][5] == 500.5  # prec_mz
+        assert output[0][6] == 10.5  # prec_rt
+    
+    def test_single_match(self):
+        """Test output with single match"""
+        lib_coefficients = np.array([0.0, 0.5, 0.0])
+        unified = UnifiedCandidates(
+            candidates=[('PEPTIDE1', 2), ('PEPTIDE2', 2), ('PEPTIDE3', 2)],
+            is_decoy=np.array([False, False, False]),
+            peaks=[np.array([[500.1, 100]]) for _ in range(3)],
+            peaks_in_dia=[0, 1, 2]
+        )
+        features = UnifiedFeatures(
+            features=np.ones((3, 26)),  # Mock features
+            is_decoy=np.array([False, False, False])
+        )
+        additional_outputs = {
+            'frag_names': [np.array(['b2']), np.array(['y3']), np.array(['b4'])],
+            'frag_errors': [np.array([0.001]), np.array([0.002]), np.array([0.003])]
+        }
+        library = {
+            ('PEPTIDE2', 2): {'protein': 'PROT2'}
+        }
+        
+        output = format_spectral_fitting_output(
+            lib_coefficients=lib_coefficients,
+            unified_candidates=unified,
+            unified_features=features,
+            additional_outputs=additional_outputs,
+            spec_idx=100,
+            ms1_spec=self.ms1_spec,
+            prec_mz=500.5,
+            prec_rt=10.5,
+            library=library,
+            config=self.config
+        )
+        
+        assert len(output) == 1  # Only one non-zero coefficient
+        assert output[0][0] == 0.5  # coeff value
+        assert output[0][3] == 'PEPTIDE2'  # sequence
+        assert output[0][4] == 2  # charge
+        assert output[0][-1] == 'PROT2'  # protein
+        assert output[0][-2] == 'test.mzML'  # file name
+    
+    def test_multiple_matches(self):
+        """Test output with multiple matches"""
+        lib_coefficients = np.array([0.3, 0.0, 0.5])
+        unified = UnifiedCandidates(
+            candidates=[('PEPTIDE1', 2), ('PEPTIDE2', 2), ('PEPTIDE3', 3)],
+            is_decoy=np.array([False, False, False]),
+            peaks=[np.array([[500.1, 100]]) for _ in range(3)],
+            peaks_in_dia=[0, 1, 2]
+        )
+        features = UnifiedFeatures(
+            features=np.random.rand(3, 26),  # Random features
+            is_decoy=np.array([False, False, False])
+        )
+        
+        output = format_spectral_fitting_output(
+            lib_coefficients=lib_coefficients,
+            unified_candidates=unified,
+            unified_features=features,
+            additional_outputs={},
+            spec_idx=100,
+            ms1_spec=None,  # No MS1
+            prec_mz=500.5,
+            prec_rt=10.5,
+            library={},
+            config=self.config
+        )
+        
+        assert len(output) == 2  # Two non-zero coefficients
+        assert output[0][0] == 0.3  # First coeff
+        assert output[0][3] == 'PEPTIDE1'  # First peptide
+        assert output[1][0] == 0.5  # Second coeff
+        assert output[1][3] == 'PEPTIDE3'  # Third peptide
+        assert output[1][4] == 3  # Third peptide charge
+        
+        # Check MS1 spec ID is 0 when None
+        assert output[0][2] == 0
+        assert output[1][2] == 0
 
 
 if __name__ == "__main__":

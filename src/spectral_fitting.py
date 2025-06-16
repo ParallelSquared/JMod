@@ -1124,6 +1124,258 @@ def separate_library_candidates(
     return unified
 
 
+def create_empty_output_row(
+    spec_idx: int,
+    ms1_spec_id: int,
+    prec_mz: float,
+    prec_rt: float,
+    num_columns: int
+) -> List:
+    """
+    Create an empty output row for cases where no matches are found.
+    
+    This function creates a standardized empty row with zeros for all feature
+    and fragment columns, used when no library candidates match the spectrum.
+    
+    Args:
+        spec_idx: Spectrum index/scan number
+        ms1_spec_id: MS1 spectrum ID (0 if not available)
+        prec_mz: Precursor m/z value
+        prec_rt: Precursor retention time
+        num_columns: Total number of columns in output (len(names))
+        
+    Returns:
+        List representing one output row with appropriate default values
+        
+    Example:
+        >>> row = create_empty_output_row(100, 99, 500.5, 10.5, 49)
+        >>> print(f"Coeff: {row[0]}, Spec: {row[1]}, m/z: {row[5]}")
+        Coeff: 0, Spec: 100, m/z: 500.5
+    """
+    # First 7 columns have specific values
+    # [coeff, spec_id, Ms1_spec_id, seq, z, window_mz, rt]
+    row = [0, spec_idx, ms1_spec_id, 0, 0, prec_mz, prec_rt]
+    
+    # Remaining columns are zeros
+    row.extend(np.zeros(num_columns - 7))
+    
+    return row
+
+
+def extract_non_zero_coefficients(
+    lib_coefficients: np.ndarray
+) -> Tuple[List[float], List[int]]:
+    """
+    Extract non-zero coefficients and their indices from NNLS results.
+    
+    Args:
+        lib_coefficients: Array of coefficients from NNLS optimization
+        
+    Returns:
+        Tuple of:
+        - List of non-zero coefficient values
+        - List of indices where coefficients are non-zero
+        
+    Example:
+        >>> coeffs = np.array([0.0, 0.5, 0.0, 0.3, 0.0])
+        >>> values, indices = extract_non_zero_coefficients(coeffs)
+        >>> print(f"Values: {values}, Indices: {indices}")
+        Values: [0.5, 0.3], Indices: [1, 3]
+    """
+    non_zero_coeffs = []
+    non_zero_coeffs_idxs = []
+    
+    for i, c in enumerate(lib_coefficients):
+        if c != 0:
+            non_zero_coeffs.append(c)
+            non_zero_coeffs_idxs.append(i)
+    
+    return non_zero_coeffs, non_zero_coeffs_idxs
+
+
+def format_fragment_information(
+    additional_outputs: Dict,
+    candidate_idx: int
+) -> List[str]:
+    """
+    Format fragment information into semicolon-delimited strings.
+    
+    Args:
+        additional_outputs: Dictionary containing fragment data arrays
+        candidate_idx: Index of the candidate to format
+        
+    Returns:
+        List of 7 semicolon-delimited strings for fragment information:
+        [frag_names, frag_errors, lib_frag_mz, lib_frag_int, obs_frag_int,
+         unique_frags, unique_frags_int]
+         
+    Example:
+        >>> outputs = {
+        ...     'frag_names': [np.array(['b2', 'y3'])],
+        ...     'frag_errors': [np.array([0.001, 0.002])]
+        ... }
+        >>> frags = format_fragment_information(outputs, 0)
+        >>> print(frags[0])  # Fragment names
+        b2;y3
+    """
+    # Get fragment data arrays
+    frag_names_list = additional_outputs.get('frag_names', [])
+    frag_errors_list = additional_outputs.get('frag_errors', [])
+    lib_frag_mz_list = additional_outputs.get('lib_frag_mz', [])
+    lib_frag_int_list = additional_outputs.get('lib_frag_int', [])
+    obs_frag_int_list = additional_outputs.get('obs_frag_int', [])
+    
+    # Get data for this candidate if available (check each list independently)
+    frag_names = frag_names_list[candidate_idx] if candidate_idx < len(frag_names_list) else np.array([])
+    frag_errors = frag_errors_list[candidate_idx] if candidate_idx < len(frag_errors_list) else np.array([])
+    lib_frag_mz = lib_frag_mz_list[candidate_idx] if candidate_idx < len(lib_frag_mz_list) else np.array([])
+    lib_frag_int = lib_frag_int_list[candidate_idx] if candidate_idx < len(lib_frag_int_list) else np.array([])
+    obs_frag_int = obs_frag_int_list[candidate_idx] if candidate_idx < len(obs_frag_int_list) else np.array([])
+    
+    # TODO: Calculate unique fragments after matrix construction
+    # For now, use empty arrays for unique fragments
+    unique_frags = np.array([])
+    unique_frags_int = np.array([])
+    
+    # Format as semicolon-delimited strings
+    ms2_frags = [
+        ";".join(map(str, frag_names)) if len(frag_names) > 0 else "",
+        ";".join(map(str, frag_errors)) if len(frag_errors) > 0 else "",
+        ";".join(map(str, lib_frag_mz)) if len(lib_frag_mz) > 0 else "",
+        ";".join(map(str, lib_frag_int)) if len(lib_frag_int) > 0 else "",
+        ";".join(map(str, obs_frag_int)) if len(obs_frag_int) > 0 else "",
+        ";".join(map(str, unique_frags)) if len(unique_frags) > 0 else "",
+        ";".join(map(str, unique_frags_int)) if len(unique_frags_int) > 0 else ""
+    ]
+    
+    return ms2_frags
+
+
+def get_protein_info(
+    candidate: Tuple,
+    library: Dict,
+    protein_column: Optional[str] = None
+) -> str:
+    """
+    Extract protein information for a candidate from the library.
+    
+    Args:
+        candidate: Tuple of (sequence, charge) representing the candidate
+        library: Spectral library dictionary
+        protein_column: Name of the protein column in library (None to skip)
+        
+    Returns:
+        Protein identifier string or "NA" if not found
+        
+    Example:
+        >>> lib = {('PEPTIDE', 2): {'protein': 'PROT1'}}
+        >>> protein = get_protein_info(('PEPTIDE', 2), lib, 'protein')
+        >>> print(protein)
+        PROT1
+    """
+    if not protein_column or not library:
+        return "NA"
+    
+    try:
+        # Remove decoy prefix if present
+        clean_seq = candidate[0].replace("Decoy_", "")
+        clean_key = (clean_seq, candidate[1])
+        
+        # Look up protein info
+        return library.get(clean_key, {}).get(protein_column, "NA")
+    except:
+        return "NA"
+
+
+def format_spectral_fitting_output(
+    lib_coefficients: np.ndarray,
+    unified_candidates: UnifiedCandidates,
+    unified_features: UnifiedFeatures,
+    additional_outputs: Dict,
+    spec_idx: int,
+    ms1_spec: Optional[Any],
+    prec_mz: float,
+    prec_rt: float,
+    library: Dict,
+    config: Any
+) -> List[List]:
+    """
+    Format spectral fitting results into output rows.
+    
+    This function takes the results from spectral fitting and formats them into
+    the standardized output format expected by downstream processing.
+    
+    Args:
+        lib_coefficients: NNLS coefficients
+        unified_candidates: Candidates that were processed
+        unified_features: Calculated features for candidates
+        additional_outputs: Fragment and other additional data
+        spec_idx: Spectrum index
+        ms1_spec: MS1 spectrum object (optional)
+        prec_mz: Precursor m/z
+        prec_rt: Precursor retention time
+        library: Spectral library
+        config: Configuration object
+        
+    Returns:
+        List of output rows, each row is a list of values
+    """
+    # Extract non-zero coefficients
+    non_zero_coeffs, non_zero_coeffs_idxs = extract_non_zero_coefficients(lib_coefficients)
+    
+    # Default output if no matches
+    if len(non_zero_coeffs) == 0:
+        return [create_empty_output_row(
+            spec_idx, 
+            ms1_spec.scan_num if ms1_spec else 0,
+            prec_mz,
+            prec_rt,
+            len(names)
+        )]
+    
+    # Get matched candidates
+    matched_candidates = [unified_candidates.candidates[i] for i in unified_candidates.peaks_in_dia]
+    
+    # Build output rows
+    output = []
+    for i, j in zip(range(len(non_zero_coeffs)), non_zero_coeffs_idxs):
+        if j < len(matched_candidates):
+            candidate = matched_candidates[j]
+            features = unified_features.features[j]
+            
+            # Format fragment information
+            ms2_frags = format_fragment_information(additional_outputs, j)
+            
+            # Get protein info
+            protein = get_protein_info(
+                candidate, 
+                library, 
+                config.protein_column if hasattr(config, 'protein_column') else None
+            )
+            
+            # Get file name
+            file_name = config.args.mzml if hasattr(config, 'args') and hasattr(config.args, 'mzml') else ""
+            
+            # Build complete row
+            row = [
+                non_zero_coeffs[i],                          # coeff
+                spec_idx,                                    # spec_id
+                ms1_spec.scan_num if ms1_spec else 0,        # Ms1_spec_id
+                candidate[0],                                # seq
+                candidate[1],                                # z
+                prec_mz,                                     # window_mz
+                prec_rt,                                     # rt
+                *features,                                   # 26 feature values
+                *ms2_frags,                                  # 7 fragment strings
+                file_name,                                   # file_name
+                protein                                      # protein
+            ]
+            
+            output.append(row)
+    
+    return output
+
+
 def preprocess_dia_spectrum(dia_spectrum: np.ndarray, mz_tol: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Preprocess DIA spectrum by merging peaks within tolerance and calculating centroid breaks.
@@ -1593,8 +1845,13 @@ def fit_to_lib2(dia_spec,
     
     # Early exit if no candidates
     if len(mass_window_candidates) == 0:
-        return [[0, spec_idx, ms1_spec.scan_num if ms1_spec else 0, 0, 0, 
-                prec_mz, prec_rt, *np.zeros(len(names) - 7)]]
+        return [create_empty_output_row(
+            spec_idx, 
+            ms1_spec.scan_num if ms1_spec else 0,
+            prec_mz, 
+            prec_rt, 
+            len(names)
+        )]
     
     # 3. Process DIA spectrum using extracted function
     dia_spectrum, centroid_breaks, bin_centers = preprocess_dia_spectrum(dia_spectrum, mz_tol)
@@ -1624,8 +1881,13 @@ def fit_to_lib2(dia_spec,
     
     # Check if any candidates passed filtering
     if len(updated_unified.peaks_in_dia) == 0:
-        return [[0, spec_idx, ms1_spec.scan_num if ms1_spec else 0, 0, 0,
-                prec_mz, prec_rt, *np.zeros(len(names) - 7)]]
+        return [create_empty_output_row(
+            spec_idx,
+            ms1_spec.scan_num if ms1_spec else 0,
+            prec_mz,
+            prec_rt,
+            len(names)
+        )]
     
     # 6. Build matrix and solve NNLS
     matrix_results = process_matrix(
@@ -1652,85 +1914,19 @@ def fit_to_lib2(dia_spec,
         library=library
     )
     
-    # 8. Format output for compatibility
-    lib_coefficients = matrix_results['lib_coefficients']
-    non_zero_coeffs = [c for c in lib_coefficients if c != 0]
-    non_zero_coeffs_idxs = [i for i, c in enumerate(lib_coefficients) if c != 0]
-    
-    output = [[0, spec_idx, ms1_spec.scan_num if ms1_spec else 0, 0, 0,
-              prec_mz, prec_rt, *np.zeros(len(names) - 7)]]
-    
-    if len(non_zero_coeffs) > 0:
-        # Get matched candidates
-        matched_candidates = [updated_unified.candidates[i] for i in updated_unified.peaks_in_dia]
-        
-        # Build output rows
-        output = []
-        for i, j in zip(range(len(non_zero_coeffs)), non_zero_coeffs_idxs):
-            if j < len(matched_candidates):
-                candidate = matched_candidates[j]
-                features = unified_features.features[j]
-                
-                # Get fragment data and format it
-                if j < len(additional_outputs.get('frag_names', [])):
-                    # Get fragment data from additional_outputs
-                    frag_names = additional_outputs['frag_names'][j]
-                    frag_errors = additional_outputs['frag_errors'][j]
-                    lib_frag_mz = additional_outputs['lib_frag_mz'][j]
-                    lib_frag_int = additional_outputs['lib_frag_int'][j]
-                    obs_frag_int = additional_outputs['obs_frag_int'][j]
-                    
-                    # Calculate unique fragments after matrix construction
-                    # For now, use empty arrays for unique fragments
-                    unique_frags = np.array([])
-                    unique_frags_int = np.array([])
-                    
-                    # Format as semicolon-delimited strings
-                    ms2_frags = [
-                        ";".join(map(str, frag_names)) if len(frag_names) > 0 else "",
-                        ";".join(map(str, frag_errors)) if len(frag_errors) > 0 else "",
-                        ";".join(map(str, lib_frag_mz)) if len(lib_frag_mz) > 0 else "",
-                        ";".join(map(str, lib_frag_int)) if len(lib_frag_int) > 0 else "",
-                        ";".join(map(str, obs_frag_int)) if len(obs_frag_int) > 0 else "",
-                        ";".join(map(str, unique_frags)) if len(unique_frags) > 0 else "",
-                        ";".join(map(str, unique_frags_int)) if len(unique_frags_int) > 0 else ""
-                    ]
-                else:
-                    ms2_frags = [""] * 7
-                
-                # Get protein info if available
-                if config.protein_column and library:
-                    try:
-                        clean_key = (candidate[0].replace("Decoy_", ""), candidate[1])
-                        protein = library.get(clean_key, {}).get(config.protein_column, "NA")
-                    except:
-                        protein = "NA"
-                else:
-                    protein = "NA"
-                
-                row = [
-                    non_zero_coeffs[i],
-                    spec_idx,
-                    ms1_spec.scan_num if ms1_spec else 0,  # Ms1_spec_id
-                    candidate[0],  # sequence
-                    candidate[1],  # charge
-                    prec_mz,
-                    prec_rt,
-                    *features,
-                    *ms2_frags,
-                    config.args.mzml if hasattr(config, 'args') else "",
-                    protein
-                ]
-                # Debug: Print first row to check column alignment
-                # if len(output) == 0:
-                #     print(f"DEBUG: First output row columns:")
-                #     print(f"  [0] coeff: {row[0]}")
-                #     print(f"  [1] spec_id: {row[1]}")
-                #     print(f"  [2] Ms1_spec_id: {row[2]}")
-                #     print(f"  [3] seq: {row[3]}")
-                #     print(f"  [4] z: {row[4]}")
-                #     print(f"  Row length: {len(row)}")
-                output.append(row)
+    # 8. Format output using extracted function
+    output = format_spectral_fitting_output(
+        lib_coefficients=matrix_results['lib_coefficients'],
+        unified_candidates=updated_unified,
+        unified_features=unified_features,
+        additional_outputs=additional_outputs,
+        spec_idx=spec_idx,
+        ms1_spec=ms1_spec,
+        prec_mz=prec_mz,
+        prec_rt=prec_rt,
+        library=library,
+        config=config
+    )
     
     if return_frags:
         frag_errors = matrix_results.get('frag_errors', [])
