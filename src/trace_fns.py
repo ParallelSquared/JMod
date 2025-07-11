@@ -13,7 +13,7 @@ from .utils.misc_functions import  closest_ms1spec,np_pearson_cor
 from .utils import misc_functions as mf
 import src.config as config 
 import tqdm
-from . import iso_functions as iso
+from .utils import iso_functions as iso
 import warnings
 from scipy.interpolate import interp1d
 from scipy import optimize
@@ -1505,7 +1505,7 @@ if __name__ == '__main__':
     # with open("/Users/kevinmcdonnell/Programming/jmod_test_data/ms1_quant/all_spectra","rb") as read_file:
     #     all_spectra =  dill.load(read_file)
     print("Loading Spectra")
-    all_spectra = load_files.SpectrumFile('/Users/kevinmcdonnell/Programming/Data/Diethyl/2024-08-25_SS_DE-6plex_1000ng_3.mzML')
+    all_spectra = load_files.MzMLSpectrumFile('/Users/kevinmcdonnell/Programming/Data/Diethyl/2024-08-25_SS_DE-6plex_1000ng_3.mzML')
     print("Finished")
     # with open("/Users/kevinmcdonnell/Programming/jmod_test_data/ms1_quant/tag","rb") as read_file:
     #     tag = dill.load(read_file)

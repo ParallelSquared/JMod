@@ -183,6 +183,11 @@ def write_to_csv(data: list[list],filepath: str,colnames: list[str] = None):
                 writer.writerow(colnames)
             else:
                 println("WARNING: Column names do not match data columns. Skipping header row.")
+        # Debug: Check for any non-numeric values in first column
+        # if len(data) > 0 and len(data[0]) > 0:
+        #     first_val = data[0][0]
+        #     if isinstance(first_val, str) and not first_val.replace('.','').replace('-','').isdigit():
+        #         print(f"WARNING: First column contains non-numeric value: {first_val}")
         writer.writerows(data)
         
         
@@ -607,6 +612,8 @@ def frag_to_peak(frag_dict: dict[str, list[float]],return_frags: bool=False): #-
     a dict of tuples and not lists. 
     """
     peaks = np.array(list(frag_dict.values()))
+    if len(peaks) == 0:
+        return np.empty((0, 2)) if not return_frags else (np.empty((0, 2)), np.array([]))
     order = np.argsort(peaks[:,0])
     if return_frags:
         ordered_frags = np.array(list(frag_dict.keys()))[order]

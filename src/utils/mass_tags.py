@@ -12,7 +12,7 @@ import src.config as config
 import numpy as np
 import copy
 
-from .iso_functions import split_frag_name, fragment_seq
+from .utils.iso_functions import split_frag_name, fragment_seq
 
 from .utils.misc_functions import frag_to_peak, specific_frags
 from .utils import parse_peptide
@@ -241,8 +241,8 @@ ProtSci_heavy_plex = massTag(rules = "nK",
 
 SILAC = massTag(rules="R", 
                 base_mass=0, 
-                delta=[3.98814], 
-                channel_names=[4], 
+                delta=[10.008269], 
+                channel_names=[10], 
                 name="SILAC")
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge

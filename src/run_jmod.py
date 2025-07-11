@@ -16,10 +16,11 @@ import sys
 
 from .utils.io import load_files 
 from .models.spec_lib import spec_lib
+from .models.spec_lib.spec_lib import add_decoys_to_library
 from .spectral_fitting import fit_to_lib2
 from .rt_alignment import MZRTfit, MZRTfit_timeplex
 from .utils.misc_functions import write_to_csv
-from . import iso_functions as iso_f
+from .utils import iso_functions as iso_f
 from .mass_tags import tag_library, available_tags
 from .fdr_analysis import process_data
 
@@ -98,7 +99,6 @@ def main():
     
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_timeplex_051425_01"
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
         
@@ -112,7 +112,8 @@ def main():
     
     ######################################################
     #### Load the data
-    spectrumLibrary = spec_lib.loadSpecLib(lib_file)
+    # Load library WITHOUT decoys initially
+    spectrumLibrary = spec_lib.loadSpecLib(lib_file, create_decoys=False)
     DIAspectra=load_files.loadSpectra(mzml_file)
 
     if config.args.test_mode:
@@ -215,19 +216,34 @@ def main():
         
         
     if config.args.iso:
-        # spectrumLibrary = iso_f.iso_library(spectrumLibrary)
+        # Generate isotopes for TARGET library only
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary)
+    
+    # NOW add decoys to the isotope-enriched library
+    print("Adding decoys to library...")
+    spectrumLibrary = add_decoys_to_library(spectrumLibrary, rules="rev")
+    print("... Finished adding decoys")
+    
+    # CRITICAL: Update rt_mz and all_keys to include decoys
+    print("Updating RT/MZ mappings to include decoys...")
+    all_keys = list(spectrumLibrary)  # Now includes both targets and decoys
+    
+    # Regenerate rt_mz for the expanded library
+    if config.args.timeplex:
+        # For timeplex, rt_mz was already updated when plex_lib was created
+        # Just need to update all_keys which is already done above
+        pass
+    else:
+        # For non-timeplex, regenerate rt_mz with decoys included
+        rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
+    
+    print(f"Total library entries: {len(all_keys)}")
         
-    # with open(results_folder_path+"/slib","wb") as dill_file:
-    #     slib = dill.dump(spectrumLibrary,dill_file)   
-      
-    print("Creating Decoy Library")
-    decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev")
+    # Add top_n indices for all entries (targets and decoys)
+    print("Processing library entries...")
     for key in spectrumLibrary:
-        spectrumLibrary[key]["top_n"]=np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
-    for key in decoy_lib:
-        decoy_lib[key]["top_n"]=np.argsort(-decoy_lib[key]["spectrum"][:,1])[:config.top_n]
-    print("... Finished Decoy Library")
+        spectrumLibrary[key]["top_n"] = np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
+    print("... Finished processing library")
     
     
     ######################################################
@@ -255,6 +271,11 @@ def main():
     ms2_info_path = results_folder_path+"/ms2scans.csv"
     write_to_csv(ms2scans_info,ms2_info_path)
     
+    ## Clear output file before starting
+    decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
+    if os.path.exists(decoylib_search_path):
+        os.remove(decoylib_search_path)
+    
     ## process in batches
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
@@ -278,16 +299,22 @@ def main():
                             ms1_tol = config.opt_ms1_tol,
                             ms1_spectra=DIAspectra.ms1scans,
                             return_frags=False,
-                            decoy=True,
-                            decoy_library=decoy_lib))
+                            decoy=True))
             
         long_outputs = [j for i in outputs for j in i]
         print(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         
-        decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
+        # Use the already defined decoylib_search_path
         write_to_csv(long_outputs,decoylib_search_path)
         
     
+    # Debug: Print first few lines of the output file
+    # print("\nDEBUG: First 5 lines of output CSV:")
+    # with open(decoylib_search_path, 'r') as f:
+    #     for i, line in enumerate(f):
+    #         if i >= 5:
+    #             break
+    #         print(f"  Line {i}: {line.strip()[:100]}{'...' if len(line.strip()) > 100 else ''}")
     
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,

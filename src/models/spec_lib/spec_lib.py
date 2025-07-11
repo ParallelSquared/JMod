@@ -16,7 +16,7 @@ from ...utils.parse_peptides import change_seq, convert_frags
 import tqdm
 import copy
 import src.config as config
-from ...iso_functions import gen_isotopes_dict
+from ...utils.iso_functions import gen_isotopes_dict
 
 
 # load in spec library (tsv)
@@ -265,12 +265,27 @@ def load_blib(spec_lib_file):
 # lib = load_blib("/Volumes/One Touch/PTI/Specter/EcoliSpectralLibrary.blib")    
 
 
-def loadSpecLib(lib_file):
+def loadSpecLib(lib_file, create_decoys=True, decoy_rules="rev", skip_isotopes=False):
+    """
+    Load spectral library and optionally create decoys inline.
     
+    Args:
+        lib_file: Path to library file
+        create_decoys: Whether to create decoys (default True)
+        decoy_rules: Rules for decoy generation (default "rev")
+        skip_isotopes: Whether to skip isotope generation in decoys (default False)
+    
+    Returns:
+        Unified library with targets and decoys
+    """
     lib_ext = lib_file.rsplit(".")[-1]
     
     print("Loading Library",end=" ")
-    python_lib_file = lib_file+"_pythonlib"
+    
+    # Check for cached unified library
+    cache_suffix = "_unified" if create_decoys else "_pythonlib"
+    python_lib_file = lib_file + cache_suffix
+    
     if not os.path.exists(python_lib_file):
         print("... from file")
         if lib_ext=="blib":
@@ -278,6 +293,16 @@ def loadSpecLib(lib_file):
         else:
             # spec_lib = load_tsv_lib(lib_file)
             spec_lib = load_tsv_speclib(lib_file)
+        
+        # Add is_decoy flag to all target entries
+        for key in spec_lib:
+            spec_lib[key]["is_decoy"] = False
+            spec_lib[key]["parent_key"] = None
+        
+        # Create unified library with decoys if requested
+        if create_decoys:
+            spec_lib = add_decoys_to_library(spec_lib, decoy_rules, skip_isotopes=skip_isotopes)
+        
         with open(python_lib_file,"wb") as write_file:
             pickle.dump(spec_lib, write_file)
     else:
@@ -285,33 +310,116 @@ def loadSpecLib(lib_file):
         with open(python_lib_file,"rb") as read_file:
             spec_lib = pickle.load(read_file)
     
-    print(f"Loaded {len(spec_lib)} library precursors")
+    target_count = sum(1 for entry in spec_lib.values() if not entry.get("is_decoy", False))
+    decoy_count = len(spec_lib) - target_count
+    
+    print(f"Loaded {target_count} target precursors")
+    if create_decoys:
+        print(f"Generated {decoy_count} decoy precursors")
     print("finished")
     return spec_lib
 
 
-def create_decoy_lib(library,rules):
-    ## keep keys the same but change seq, mz and frags
+def add_decoys_to_library(library, rules="rev", skip_isotopes=False):
+    """
+    Add decoy entries to an existing library in place.
+    
+    Args:
+        library: Target library dictionary
+        rules: Decoy generation rules (default "rev")
+    
+    Returns:
+        Unified library with both targets and decoys
+    """
+    print("Adding decoys to library...")
+    
+    # Get list of target keys to iterate (avoid modifying dict during iteration)
+    target_keys = [key for key in library.keys() if not library[key].get("is_decoy", False)]
+    
+    for key in tqdm.tqdm(target_keys, desc="Creating decoys"):
+        # Create decoy key with Decoy_ prefix
+        decoy_key = (f"Decoy_{key[0]}", key[1])
+        
+        # Deep copy the target entry
+        decoy_entry = copy.deepcopy(library[key])
+        
+        # Mark as decoy and link to parent
+        decoy_entry["is_decoy"] = True
+        decoy_entry["parent_key"] = key
+        
+        # Modify sequence and fragments
+        decoy_entry["seq"] = change_seq(key[0], rules)
+        decoy_entry["mod_seq"] = f"Decoy_{key[0]}"
+        
+        # Adjust precursor m/z for decoys if using reverse
+        if rules == "rev" and hasattr(config, 'decoy_mz_offset'):
+            decoy_entry["prec_mz"] -= config.decoy_mz_offset
+        
+        # Convert fragments
+        decoy_entry["frags"] = convert_frags(key[0], decoy_entry["frags"], rules)
+        
+        # Generate spectrum
+        if skip_isotopes:
+            # When isotopes will be generated later, just create basic spectrum
+            decoy_entry["spectrum"], decoy_entry["ordered_frags"] = frag_to_peak(
+                decoy_entry["frags"], return_frags=True
+            )
+        else:
+            # Check if we should use isotope generation
+            use_iso = False
+            tag_val = None
+            if hasattr(config, 'args'):
+                if hasattr(config.args, 'iso'):
+                    use_iso = config.args.iso
+                if hasattr(config.args, 'tag'):
+                    tag_val = config.args.tag
+            
+            if use_iso:
+                decoy_entry["spectrum"], decoy_entry["ordered_frags"] = gen_isotopes_dict(
+                    decoy_entry["seq"], decoy_entry["frags"], tag=tag_val
+                )
+            else:
+                decoy_entry["spectrum"], decoy_entry["ordered_frags"] = frag_to_peak(
+                    decoy_entry["frags"], return_frags=True
+                )
+        
+        # Add top_n field if config is available
+        if hasattr(config, 'top_n'):
+            decoy_entry["top_n"] = np.argsort(-decoy_entry["spectrum"][:,1])[:config.top_n]
+        
+        # Add decoy to library
+        library[decoy_key] = decoy_entry
+    
+    return library
+
+
+def create_decoy_lib(library, rules):
+    """
+    Legacy function for backward compatibility.
+    Creates a separate decoy library (deprecated - use add_decoys_to_library instead).
+    """
+    # Add parent keys to original library
     for key in library:
         library[key]["parent_key"] = key
-
-    decoy_lib =copy.deepcopy(library) # create copy so we do not change the original
+    
+    # Create deep copy
+    decoy_lib = copy.deepcopy(library)
     
     for key in tqdm.tqdm(decoy_lib):
         entry = decoy_lib[key]
-        entry["seq"] = change_seq(key[0],rules)
-        #!!! To change;
-        # if config.args.decoy=="rev": ## this will have the same mz as many correct matches and therefore a really good ms1 isotope corr
-        #     entry["prec_mz"] -= config.decoy_mz_offset
-            
-        entry["frags"] = convert_frags(key[0], entry["frags"],rules)
+        entry["seq"] = change_seq(key[0], rules)
+        
+        entry["frags"] = convert_frags(key[0], entry["frags"], rules)
         
         if config.args.iso:
-            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(entry["seq"], entry["frags"], tag = config.tag)
+            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(
+                entry["seq"], entry["frags"], tag=config.args.tag
+            )
         else:
-            entry["spectrum"], entry["ordered_frags"] = frag_to_peak(entry["frags"],return_frags=True)
-            
-            
+            entry["spectrum"], entry["ordered_frags"] = frag_to_peak(
+                entry["frags"], return_frags=True
+            )
+    
     return decoy_lib
             
             
