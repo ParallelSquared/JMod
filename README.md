@@ -15,12 +15,23 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 
 ------ 
 
-
-
 ## Deployment  
 
-### Setting up environment
-#### Linux/MacOS Setup
+### Table of Contents
+- [Environment Setup](#environment-setup)
+  - [Linux/MacOS](#linuxmacos)
+  - [Windows](#windows)
+- [Outputs](#outputs)
+- [Running a Search](#running-a-search)
+  - [File Conversion](#file-conversion)
+  - [With Command Line Args](#with-command-line-args)
+  - [With JSON Configuration File](#with-json-configuration-file)
+- [Search Parameters](#search-parameters)
+- [Running Tests](#running-tests)
+
+
+### Environment Setup
+#### Linux/MacOS
 To set up a Conda environment to run JMod in, please download the `data/jmod_env.yml` file.
 
 In a dedicated terminal, type:  
@@ -30,11 +41,11 @@ In a dedicated terminal, type:
 
 If run successfully, the inputted configurations alongside `"Loading library..."` should be printed.
 
-#### Windows Setup
-If on a Windows machine, please use the `data/jmod_env_windows.yml` file to set up your environment. Set up will be the same steps as Linux/MacOS.
+#### Windows
+If on a Windows machine, please use the `data/jmod_env_windows.yml` file to set up your environment. Set up will follow the same steps as Linux/MacOS.
 
 
-### JMod Outputs
+### Outputs
 
 - `filtered_IDs.csv` – list of precursor identifications that are FDR filtered
 - `all_IDs.csv` – list of peptide identifications that are not FDR filtered
@@ -45,14 +56,14 @@ If on a Windows machine, please use the `data/jmod_env_windows.yml` file to set 
 
 ### Running a Search
 
-#### Converting Raw Data
+#### File Conversion
 JMod supports .mzML files. When converting files to .mzML, the data should be centroided. This can be done with MSconvert through the command `--filter peakPicking true 1-`
 
-#### With command line args
+#### With Command Line Args
 ```
 python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
 ```
-#### With json configuration file 
+#### With JSON Configuration File 
 Example `config.json` in ./data/default_config.json
 ```
 python path/to/run_jmod.py --config_json path/to/config.json
@@ -100,7 +111,7 @@ python path/to/run_jmod.py --config_json path/to/config.json
   User provided MS1 ppm error tolerance.
 ```
 
-### Run Tests
+### Running Tests
 ```
 python run_tests.py -c 
 ```
