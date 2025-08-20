@@ -1,0 +1,16 @@
+{
+    "rules": "nK",
+    "base_mass": 140.0949630177,
+    "delta": [
+        0.0,
+        4.0070994,
+        8.0141988132
+    ],
+    "channel_names": [
+        "0",
+        "4",
+        "8"
+    ],
+    "name": "mTRAQ",
+    "compositions": null
+}

@@ -1,0 +1,19 @@
+{
+    "rules": "nK",
+    "base_mass": 308.1160923903,
+    "delta": [
+        0.0
+    ],
+    "channel_names": [
+        "0"
+    ],
+    "name": "tag6",
+    "compositions": {
+        "0": {
+            "C": 18,
+            "H": 16,
+            "N": 2,
+            "O": 3
+        }
+    }
+}

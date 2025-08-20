@@ -9,7 +9,7 @@ import os
 import re
 from src.utils.io.load_files import loadSpectra
 from src.models.spec_lib.spec_lib import loadSpecLib
-from mass_tags import tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678, diethyl_6plex,available_tags
+from mass_tags import available_tags#, tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678, diethyl_6plex
 import src.config as config
 import iso_functions as iso_f
 import argparse

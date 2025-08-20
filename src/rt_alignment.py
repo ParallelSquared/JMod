@@ -28,7 +28,7 @@ from scipy.interpolate import interp1d
 import statsmodels.api as sm
 
 
-from src.mass_tags import tag_library, mTRAQ,mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
+#from src.mass_tags import tag_library, mTRAQ, mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
 
 from src.utils.misc_functions import within_tol,moving_average, \
     closest_ms1spec, closest_peak_diff, unstring_floats, fragment_cor

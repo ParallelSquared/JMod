@@ -1,0 +1,16 @@
+{
+    "rules": "nK",
+    "base_mass": 56.06260026,
+    "delta": [
+        0.0,
+        4.013419349,
+        8.05021396
+    ],
+    "channel_names": [
+        "0",
+        "4",
+        "8"
+    ],
+    "name": "diethyl_3plex",
+    "compositions": null
+}

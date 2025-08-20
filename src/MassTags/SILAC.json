@@ -1,0 +1,12 @@
+{
+    "rules": "R",
+    "base_mass": 0,
+    "delta": [
+        3.98814
+    ],
+    "channel_names": [
+        4
+    ],
+    "name": "SILAC",
+    "compositions": null
+}

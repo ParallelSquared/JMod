@@ -28,7 +28,7 @@ from .trace_fns import ms1_cor, ms1_cor_channels
 from .utils.io.load_files import loadSpectra
 from .models.spec_lib.spec_lib import loadSpecLib
 
-from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
+#from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 from .utils.misc_functions import unstring_floats
 
 from . import config 

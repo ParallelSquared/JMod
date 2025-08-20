@@ -5,12 +5,15 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
 import re
+from matplotlib.path import Path
 from pyteomics import mass
 import tqdm
 import os
 import src.config as config
 import numpy as np
 import copy
+import json
+from pathlib import Path
 
 from .iso_functions import split_frag_name, fragment_seq
 
@@ -88,158 +91,29 @@ class massTag():
     
     def __getitem__(self,item):
         return getattr(self,item)
-        
-mTRAQ = massTag(rules = "nK",
-            base_mass=140.0949630177,
-            # delta = 4.0070994,
-            # delta = [4.0070994],
-            delta = [0.0,4.0070994,8.0141988132],
-            channel_names = ["0","4","8"],
-            name = "mTRAQ")
-
-
-### 
-mTRAQ_678 = massTag(rules = "nK",
-                    base_mass=140.0949630177,
-                    # delta = 4.0070994,
-                    # delta = [4.0070994],
-                    delta = [6.0074891,7.0108440,8.0141988132],
-                    channel_names = ["6","7","8"],
-                    name = "mTRAQ_678")
-
- 
-mTRAQ_02468 =   massTag(rules = "nK",
-                        base_mass=140.0949630177,
-                        # delta = 4.0070994,
-                        # delta = [4.0070994],
-                        delta = [0.0,2.0003897,4.0070994,6.0074891,8.0141988132],
-                        channel_names = ["0","2","4","6","8"],
-                        name = "mTRAQ_02468")
-
-
-diethyl_6plex =       massTag(rules = "nK",
-                        base_mass=56.06260026,
-                        delta = [0.0,2.01255348,4.013419349,6.025972839,8.05021396,10.062767459],#,12.06363332,14.07618681],
-                        channel_names = ["0","2","4","6","8","10"],#,"12","14"],
-                        name = "diethyl_6plex")
-
-
-diethyl_3plex =       massTag(rules = "nK",
-                        base_mass=56.06260026,
-                        delta = [0.0,4.013419349,8.05021396],#,12.06363332,14.07618681],
-                        channel_names = ["0","4","8"],#,"12","14"],
-                        name = "diethyl_3plex")
-
-tag6_compositions = {"0":mass.Composition({"C":18,"H":16,"N":2,"O":3}),
-                    "2":mass.Composition({"C":16,"H":16,"N":2,"O":3,"C[13]":2,"O[18]":0}),
-                    "4":mass.Composition({"C":16,"H":16,"N":2,"O":2,"C[13]":2,"O[18]":1}),
-                    "6":mass.Composition({"C":12,"H":16,"N":2,"O":3,"C[13]":6,"O[18]":0}),
-                    "8":mass.Composition({"C":10,"H":16,"N":2,"O":3,"C[13]":8,"O[18]":0}),
-                    "10":mass.Composition({"C":10,"H":16,"N":2,"O":3,"C[13]":8,"O[18]":1}),
-                    "12":mass.Composition({"C":7,"H":16,"N":1,"O":3,"C[13]":11,"O[18]":0,"N[15]":1}),
-                    "14":mass.Composition({"C":5,"H":16,"N":1,"O":3,"C[13]":13,"O[18]":0,"N[15]":1}),
-                    "16":mass.Composition({"C":6,"H":16,"N":0,"O":3,"C[13]":13,"O[18]":0,"N[15]":2}),
-                                         }
     
-    
-     
-tag6 = massTag(rules = "nK",
-            base_mass=308.1160923903,
-            # delta = 4.0070994,
-            # delta = [4.0070994],
-            delta = [0.0],#,4.01095605604],#,8.02683870239997],
-            channel_names = ["0"],#["0","4"],#,"8"],
-            name = "tag6",
-            compositions=tag6_compositions)
 
-tag6_5plex = massTag(rules = "nK",
-            base_mass=308.1160923903,
-            # delta = 4.0070994,
-            # delta = [4.0070994],
-            delta = [0.0, 4.01095605604,8.0268387024,
-                     12.0339381092,16.03857422084],
-            channel_names = ["0","4","8","12","16"],
-            name = "tag6_5plex",
-            compositions=tag6_compositions)
-
-tag6_9plex = massTag(rules = "nK",
-            base_mass=308.1160923903,
-            # delta = 4.0070994,
-            # delta = [4.0070994],
-            delta = [0.0, 2.0067096756, 4.01095605604, 6.0201290268,8.0268387024,10.03108508284,
-                     12.0339381092,14.0406477848,16.03857422084],
-            channel_names = ["0","2","4","6","8","10","12","14","16"],
-            name = "tag6_9plex",
-            compositions=tag6_compositions) 
-
-tag6_d0d2 = massTag(rules = "nK",
-            base_mass=308.1160923903,
-            # delta = 4.0070994,
-            # delta = [4.0070994],
-            delta = [0.0, 2.0067096756],
-            channel_names = ["0","2"],
-            name = "tag6_d0d2",
-            compositions=tag6_compositions) 
-
-tag6_d0d4 = massTag(rules = "nK",
-            base_mass=308.1160923903,
-            # delta = 4.0070994,
-            # delta = [4.0070994],
-            delta = [0.0, 4.01095605604],
-            channel_names = ["0","4"],
-            name = "tag6_d0d4",
-            compositions=tag6_compositions) 
-     
-
-tag6_d0d2d4 = massTag(rules = "nK",
-                    base_mass=308.1160923903,
-                    # delta = 4.0070994,
-                    # delta = [4.0070994],
-                    delta = [0.0, 2.0067096756, 4.01095605604],
-                    channel_names = ["0","2","4"],
-                    name = "tag6_d0d2d4",
-                    compositions=tag6_compositions) 
-     
-
-tag6lys = massTag(rules = "nK",
-            base_mass=464.24235,
-            # delta = 4.0070994,
-            # delta = [4.0070994],
-            delta = [0.0],#,4.01095605604],#,8.02683870239997],
-            channel_names = ["0"],#["0","4"],#,"8"],
-            name = "tag6lys")
- 
-     
-tag6arg = massTag(rules = "nK",
-            base_mass=464.2172,
-            # delta = 4.0070994,
-            # delta = [4.0070994],
-            delta = [0.0],#,4.01095605604],#,8.02683870239997],
-            channel_names = ["0"],#["0","4"],#,"8"],
-            name = "tag6arg")
- 
-     
-tag6pip = massTag(rules = "nK",
-            base_mass=434.1954,
-            # delta = 4.0070994,
-            # delta = [4.0070994],
-            delta = [0.0],#,4.01095605604],#,8.02683870239997],
-            channel_names = ["0"],#["0","4"],#,"8"],
-            name = "tag6pip")
-
-ProtSci_light_plex = massTag(rules = "nK",
-            base_mass=0.0,
-            delta = [328.231941371, 332.232721371, 336.246141371, 340.246860336,344.260280336],
-            channel_names = ["4","8","12","16", "20"],
-            name = "ProtSci_light_plex") 
-
-ProtSci_heavy_plex = massTag(rules = "nK",
-            base_mass=0.0,
-            delta = [328.231941371, 332.232721371, 336.246141371, 340.246860336,344.260280336],
-            channel_names = ["4","8","12","16", "20"],
-            name = "ProtSci_light_plex") 
-
-
+def read_json_to_massTag(mass_tag_JSON):
+    if mass_tag_JSON:
+        with open(mass_tag_JSON, 'r') as f:
+            try:
+                mass_tag_data = json.load(f)
+            except json.JSONDecodeError:
+                return mass_tag_JSON
+        try:
+            mass_tag = massTag(rules=mass_tag_data['rules'],
+                        base_mass=mass_tag_data['base_mass'],
+                        delta=mass_tag_data['delta'],
+                        channel_names=mass_tag_data['channel_names'],
+                        name=mass_tag_data['name'],
+                        compositions=mass_tag_data['compositions'])
+            return mass_tag
+        except Exception as e:
+            print({e})
+            return mass_tag_data['name']
+    else:
+        return None
+                    
 
 ## split up the fragment name (b/y)(-loss)(frag index)_charge
 def split_frag_name(ion_type):
@@ -293,6 +167,14 @@ def get_tag_pos(AA_seq,rules):
 
     return all_tag_pos, additional_tag_masses
 
+mTRAQ = massTag(rules = "nK",
+                base_mass=140.0949630177,
+                # delta = 4.0070994,
+                # delta = [4.0070994],
+                delta = [0.0,4.0070994,8.0141988132], 
+                channel_names = ["0","4","8"],
+                name = "mTRAQ")
+##TODO what is going on with mTRAQ and tag_library here
 
 ## potentially add this as module to Tag class
 def tag_library(library,tag=mTRAQ):
@@ -392,21 +274,21 @@ def tag_library(library,tag=mTRAQ):
 
 # mTRAQ_lib = tag_library(library, tag=mTRAQ)
 
-available_tags = {"mTRAQ":mTRAQ,
-                  "mTRAQ678":mTRAQ_678,
-                  "mTRAQ02468":mTRAQ_02468,
-                  "diethyl_6plex":diethyl_6plex,
-                  "diethyl_3plex":diethyl_3plex,
-                  "tag6":tag6,
-                  "tag6_5plex":tag6_5plex,
-                  "tag6_9plex":tag6_9plex,
-                  "tag6_d0d2":tag6_d0d2,
-                  "tag6_d0d4":tag6_d0d4,
-                  "tag6_d0d2d4":tag6_d0d2d4,
-                  "tag6pip":tag6pip,
-                  "tag6lys":tag6lys,
-                  "tag6arg":tag6arg,
-                  "ProtSci_light_plex":ProtSci_light_plex}
+available_tags = {}
+def refresh_tags():
+    available_tags.clear()
+    mass_tags_dir = Path(__file__).parent / "MassTags"
+    for filename in os.listdir(mass_tags_dir):
+        if os.path.splitext(filename)[1].lower() == ".json":
+            mass_tag = read_json_to_massTag(os.path.join(mass_tags_dir,filename))
+            if type(mass_tag) == str:
+                print(f"Unable to load mass tag from {filename}")
+            elif mass_tag:
+                available_tags[mass_tag.name] = mass_tag
+
+refresh_tags()
+
+
 
 # if config.args.mTRAQ:
 #     config.tag = mTRAQ
@@ -416,7 +298,7 @@ available_tags = {"mTRAQ":mTRAQ,
 
 if config.args.tag in available_tags:
     config.tag = available_tags[config.args.tag]
-elif config.args.tag in "":
+elif config.args.tag == "None":
     config.tag = None
 else:
     raise Exception("Incompatible Tag")
