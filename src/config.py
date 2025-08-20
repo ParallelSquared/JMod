@@ -5,52 +5,19 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 import argparse
 import json
+from default_dict import default_dict
+
 
 parser = argparse.ArgumentParser(
                     prog='Jmod',
                     description='What the program does',
                     epilog='Text at the bottom of help')
 
-parser.add_argument('-i','--mzml')
-parser.add_argument('-d','--diaPASEF')
-parser.add_argument('-l','--speclib')      
-parser.add_argument('-r', '--use_rt', action='store_true')
-parser.add_argument('-f', '--use_features', action='store_false')
-parser.add_argument('-m', '--atleast_m', default=3, type=int)
-parser.add_argument('-t', '--threads', default=10, type=int)
-parser.add_argument('-p', '--ppm', default=10, type=float)
-parser.add_argument('-o','--output_folder', default=None)   
-parser.add_argument('--ms2_align', action='store_true')
-parser.add_argument('--timeplex', action='store_true')
-parser.add_argument('--num_timeplex', default=0, type=int)
-parser.add_argument('--iso', action='store_true')
-parser.add_argument('--unmatched', default="c", type=str)
-parser.add_argument('--decoy', default="rev", type=str)
-parser.add_argument('--mTRAQ', action='store_true')
-parser.add_argument('--tag', default="", type=str)
-parser.add_argument('--num_iso', default=2, type=float)
-parser.add_argument('--pp_file', default="", type=str)
-parser.add_argument('--timspeak_file', default="", type=str)
-parser.add_argument('--lib_frac', default=.5, type=float)
-parser.add_argument('-z','--dummy_value', type=str)
-parser.add_argument('--plexDIA', action='store_true')
-parser.add_argument('--use_emp_rt', action='store_true') #use original library RTs
-parser.add_argument('--unfiltered_quant', action='store_false') #by default it will only do MS1 quant on precursors with best channel qvalue < 0.01
-parser.add_argument('--score_lib_frac', default=.5, type=float) #minimum frac_lib_int that a precursor must have to score
-parser.add_argument('--user_rt_tol', action='store_true') 
-parser.add_argument('--rt_tol', default=.5, type=float)
-parser.add_argument('--initial_percentile', default=50, type=float)
-parser.add_argument('--user_percentile', action='store_true') 
-parser.add_argument('--no_ms1_req', action='store_false') 
-parser.add_argument("--ms1_ppm",default=0, type=float)
-
-#These options are for test mode. Limit spectra to process for speed
-parser.add_argument('--config_json', type=str, help='Path to JSON configuration file')
-parser.add_argument('--test_mode', action='store_true', help='Run in test mode with limited data')
-parser.add_argument('--test_rt_min', type=float, default=0, help='Minimum retention time for test mode')
-parser.add_argument('--test_rt_max', type=float, default=10, help='Maximum retention time for test mode')
-parser.add_argument('--test_mz_min', type=float, default=400, help='Minimum m/z for test mode')
-parser.add_argument('--test_mz_max', type=float, default=800, help='Maximum m/z for test mode')
+for key, value in default_dict.items():
+    if value['takes_value'] is False:
+        parser.add_argument(*value['flags'], action='store_true' if value['default'] is False else 'store_false')
+    else:
+        parser.add_argument(*value['flags'], default=value['default'], type=int if value['type'] == 'int' else float if value['type'] == 'float' else str)
 
 
 args = parser.parse_args()
