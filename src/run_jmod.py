@@ -13,6 +13,7 @@ import time
 import tqdm
 import pandas as pd
 import sys 
+import json
 
 from .utils.io import load_files 
 from .models.spec_lib import spec_lib
@@ -23,14 +24,18 @@ from . import iso_functions as iso_f
 from .mass_tags import tag_library, available_tags
 from .fdr_analysis import process_data
 
-def main():
+def main(GUI_config_json = None):
     """Main function to run JMod analysis."""
-    
+
     print(config.args)
     # Check if a single argument is provided and it's a JSON file
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
         # Treat this as the config_json argument
         config.args.config_json = sys.argv[1]
+        print(f"Using configuration file: {config.args.config_json}")
+
+    if GUI_config_json:
+        config.args.config_json = GUI_config_json
         print(f"Using configuration file: {config.args.config_json}")
 
     # Load JSON configuration if specified
@@ -81,7 +86,7 @@ def main():
         use_feat = "Dino"
         print("loading Dinosaur features")
         dino_features = pd.read_csv(feature_path,delimiter="\t")
-    
+
     ms2_align = "MS2align" if config.args.ms2_align else ""
     results_folder_name = "_".join([spec_file_name,
                                     lib_file_name+"Update130525",
@@ -96,14 +101,19 @@ def main():
     print(results_folder_name)
     # print(config.args.tag)
     
+    
     # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_timeplex_051425_01"
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
-        
+
     if not os.path.exists(results_folder_path):
         os.mkdir(results_folder_path)
+
+    args_dict = vars(config.args)
+    json_path = os.path.join(results_folder_path, "config.json")
+    with open(json_path, "w") as f:
+        json.dump(args_dict, f, indent=4)
     
     
     overall_start_time = time.time()
@@ -117,7 +127,6 @@ def main():
 
     if config.args.test_mode:
         print(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
-        
         # Filter MS2 scans based on retention time and precursor m/z
         filtered_ms2_scans = []
         for scan in DIAspectra.ms2scans:
@@ -152,7 +161,6 @@ def main():
     # rt_mz = np.array([[rtSpl(i["iRT"]), i["prec_mz"]] for i in spectrumLibrary.values()])
     # rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in spectrumLibrary.values()])
     
-
     if config.args.tag:
         # Find the tag object based on the tag name
         if config.args.tag in available_tags:
@@ -161,15 +169,16 @@ def main():
             spectrumLibrary = tag_library(spectrumLibrary, config.tag)
             mass_tag = config.tag
         else:
-            print(f"Error: Tag '{config.args.tag}' not found in available_tags.")
-            print(f"Available tags: {list(available_tags.keys())}")
-            # Either exit or continue without tagging
+            if config.args.tag != "None":
+                print(f"Error: Tag '{config.args.tag}' not found in available_tags.")
+                print(f"Available tags: {list(available_tags.keys())}")
+                # Either exit or continue without tagging
             mass_tag = None
             config.tag = None
     else:
         mass_tag = None
-        config.tag = None        
-        
+        config.tag = None
+
     if config.args.timeplex:
         ## now ooutputs library as we finetune RT
         # With this:
@@ -203,8 +212,8 @@ def main():
 
     all_keys = list(spectrumLibrary)
      
-    
-    
+
+
     if config.args.ms2_align:
         ms2_func = funcs[2]
         
@@ -212,8 +221,8 @@ def main():
             spectrumLibrary[key]["spectrum"][:,0] = ms2_func(spectrumLibrary[key]["spectrum"][:,0])
     else:
         ms2_func=None
-        
-        
+
+
     if config.args.iso:
         # spectrumLibrary = iso_f.iso_library(spectrumLibrary)
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary)
@@ -286,14 +295,12 @@ def main():
         
         decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
         write_to_csv(long_outputs,decoylib_search_path)
-        
     
-    
+
+
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
                  library=spectrumLibrary,
                  mass_tag=mass_tag,
                  timeplex=config.args.timeplex)
-    
     # """
-    
