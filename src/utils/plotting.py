@@ -10,6 +10,7 @@ import numpy as np
 from pyteomics import mzml, auxiliary
 import os
 import matplotlib.pyplot as plt
+from src.logger import logger
 
 
 plt.rcParams['figure.dpi'] = 500
@@ -18,7 +19,7 @@ plt.rcParams['axes.titlesize'] = 12
 
 # def plot_mz(mz=None,intensity=None,peak_list=None,show=False,col=None,alpha=None):
 #     if mz is None and peak_list is None:
-#         print("enter valid peaks")
+#         logger.warning("enter valid peaks")
 #         return None
 #     if peak_list is not None:
 #         if len(peak_list)==2:
@@ -38,7 +39,7 @@ plt.rcParams['axes.titlesize'] = 12
 def plot_mz(peak_list=None,show=False,col=None,alpha=None,axis=True,norm=False):
     
     if  peak_list is None:
-        print("enter valid peaks")
+        logger.warning("enter valid peaks")
         return None
     if peak_list is not None:
         if len(peak_list)==2:
@@ -65,7 +66,7 @@ def plot_mz(peak_list=None,show=False,col=None,alpha=None,axis=True,norm=False):
 def plot_mz_inv(peak_list=None,show=False,col=None,alpha=None,axis=True,norm=False):
     
     if  peak_list is None:
-        print("enter valid peaks")
+        logger.warning("enter valid peaks")
         return None
     if peak_list is not None:
         if len(peak_list)==2:
@@ -152,7 +153,7 @@ def plot_mz_rt_all(spectra,t=False):
             mz_list.append(_mz)
             rt_list.append(current_rt)
             int_list.append(i)
-    print(f"Plotting {len(mz_list)} points")   
+    logger.info(f"Plotting {len(mz_list)} points")   
     plot_mz_rt(mz_list,rt_list,int_list,t=t)
     
     

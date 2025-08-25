@@ -20,6 +20,7 @@ from scipy import optimize
 from scipy.signal import find_peaks
 import multiprocessing
 from functools import partial
+from src.logger import logger
 
 # def moving_average(x, w):
 #     return np.convolve(x, np.ones(w), 'same') / w
@@ -191,7 +192,7 @@ def get_ms1_peak(x,y,idx):
 # mz_ppm = 10
 
 def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeplex=False):
-    print("Fitting precursors individually")
+    logger.info("Fitting precursors individually")
     num_iso = config.num_iso_ms1
     window_half_width = 10
     
@@ -343,7 +344,7 @@ def ms1_cor(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,timeple
                             spec_pearsons.append(0.0)
                 except Exception as e:
                     # Fallback with debug info
-                    print(f"Error in Pearson calculation: {str(e)}")
+                    logger.warning(f"Error in Pearson calculation: {str(e)}")
                     spec_pearsons = [0]*num_iso
             # all_pearson.append(stats.pearsonr(list(all_ms2_vals.values()),list(all_ms1_vals.values())).statistic)
             all_pearson.append(spec_pearsons)
@@ -690,7 +691,7 @@ def get_other_channels(prec,mz,tag):
 
 # @profile
 def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=None,timeplex=False):
-    print("Fitting tagged channels together")
+    logger.info("Fitting tagged channels together")
     decoy_coeffs["untag_seq"] = [re.sub(f"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
     decoy_coeffs["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(decoy_coeffs["untag_seq"],decoy_coeffs["z"])]
     

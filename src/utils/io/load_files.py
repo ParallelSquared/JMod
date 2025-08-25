@@ -12,6 +12,7 @@ import os
 import matplotlib.pyplot as plt
 import re
 import pickle
+from src.logger import logger
 
 # NB this may not work for all mzml files!!!
 class Spectrum:
@@ -85,21 +86,21 @@ class SpectrumFile:
             return self.ms2scans[level_idx]
             
 def loadSpectra(mzml_file):
-    print("Loading Spectra",end=" ")
+    logger.info("Loading Spectra...")
     python_spec_file = mzml_file+"_pythonspec"
     if not os.path.exists(python_spec_file):
-        print("... from file")
+        logger.info("Loading Spectra... from file")
         spectra = SpectrumFile(mzml_file)
         with open(python_spec_file,"wb") as write_file:
             pickle.dump(spectra, write_file)
     else:
         with open(python_spec_file,"rb") as read_file:
-            print("... from pickle")
+            logger.info("Loading Spectra... from pickle")
             spectra = pickle.load(read_file)
             
-    print(f"Loaded {len(spectra.ms1scans)} MS1 spectra")
-    print(f"Loaded {len(spectra.ms2scans)} MS2 spectra")
-    print("finished")
+    logger.info(f"Loaded {len(spectra.ms1scans)} MS1 spectra")
+    logger.info(f"Loaded {len(spectra.ms2scans)} MS2 spectra")
+    logger.info("finished")
     
     return spectra
 

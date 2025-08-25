@@ -1465,7 +1465,7 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
                rt_tol = config.rt_tol,
                ms1_tol = config.ms1_tol,
                mz_tol = config.mz_tol):
-    print("AAAAAAAAA")
+    #print("AAAAAAAAA")
     spec_idx=dia_spec.scan_num
     
     # mz_tol = config.mz_tol
@@ -1826,7 +1826,7 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
                               
         hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(i,j) for i,j in zip([converted_frags[k] for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]))
         longest_y_ions = [longest_y(i,j) for i,j in zip([longest_y(converted_frags[k]) for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]
-        print("TEST")
+        #print("TEST")
         decoy_features = np.stack([num_decoy_peaks_matched,
                               frac_lib_intensity,
                               frac_dia_intensity,

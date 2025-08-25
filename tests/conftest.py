@@ -12,6 +12,7 @@ import pytest
 import sys
 import os
 from unittest.mock import Mock, patch
+from src.logger import logger
 
 # Save original argv
 original_argv = sys.argv.copy()
@@ -31,7 +32,7 @@ try:
         config.diann_mods = {}
 except Exception as e:
     # If config still fails, create a complete mock
-    print(f"Warning: Could not import config, using mock: {e}")
+    logger.warning(f"Warning: Could not import config, using mock: {e}")
     config = Mock()
     config.tag = None
     config.diann_mods = {}

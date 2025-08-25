@@ -8,6 +8,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import re
 from pyteomics import mass
 import src.config as config
+from src.logger import logger
 
 def parse_peptide(seq: str) -> list[str]:
     """Parse a peptide sequence into individual amino acids with their modifications.
@@ -316,6 +317,7 @@ def change_seq(seq: str, rules: str) -> str:
     elif rules=="rev":
         new_split_seq = seq[:-1][::-1]+seq[-1:]
     else:
+        logger.error("ValueError - Unavailable rules selected")
         raise ValueError("Unavailable rules selected")
     # elif rules==None:
     #     new_seq = "".join(seq)

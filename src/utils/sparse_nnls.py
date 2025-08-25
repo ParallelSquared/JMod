@@ -21,6 +21,7 @@ from cvxopt import solvers, matrix, spmatrix, mul
 import itertools
 from scipy import sparse
 from scipy.optimize import nnls
+from src.logger import logger
  
 def scipy_sparse_to_spmatrix(A):
     coo = A.tocoo()
@@ -150,7 +151,7 @@ def lsqlin(C, d, reg=0, A=None, b=None, Aeq=None, beq=None, \
             lb_A = -sparse.eye(nvars, nvars, format='coo')
             A = sparse_None_vstack(A, lb_A)
         else:
-            # print(nvars)
+            # logger.warning(nvars)
             lb_A = -np.eye(nvars)
             A = numpy_None_vstack(A, lb_A)
         b = numpy_None_concatenate(b, -lb)
@@ -230,12 +231,12 @@ if __name__ == '__main__':
                     for iub in [ub, mub, mmub]:
                         for ib in [b, mb]:
                             ret = lsqlin(iC, iD, 0, iA, ib, None, None, ilb, iub, None, opts)
-                            print (ret['x'].T)
-    print ('Should be [-1.00e-01 -1.00e-01  2.15e-01  3.50e-01]')
+                            logger.info (ret['x'].T)
+    logger.info ('Should be [-1.00e-01 -1.00e-01  2.15e-01  3.50e-01]')
      
     #test lsqnonneg
     C = np.array([[0.0372, 0.2869], [0.6861, 0.7071], [0.6233, 0.6245], [0.6344, 0.6170]]);
     d = np.array([0.8587, 0.1781, 0.0747, 0.8405]);
     ret = lsqnonneg(C, d, {'show_progress': False})
-    print (ret['x'].T)
-    print ('Should be [2.5e-07; 6.93e-01]')
+    logger.info (ret['x'].T)
+    logger.info ('Should be [2.5e-07; 6.93e-01]')
