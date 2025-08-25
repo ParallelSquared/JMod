@@ -112,13 +112,13 @@ def main(GUI_config_json = None):
     ##add statements to log once results folder has been created
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
         logger.info(f"Using configuration file: {config.args.config_json}")
-    if GUI_config_json:
-        config.args.config_json = GUI_config_json
-        logger.info(f"Using configuration file: {config.args.config_json}")
     if config.args.config_json:
         logger.info(f"Loading configuration from {config.args.config_json}")
         if not config.load_config_from_json(config.args.config_json):
             logger.warning("Failed to load JSON configuration. Using command-line arguments.")
+    if GUI_config_json:
+        config.args.config_json = GUI_config_json
+        logger.info(f"Loading configuration from {config.args.config_json}")
     if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
         logger.info("Running JMod in test mode...")
 
