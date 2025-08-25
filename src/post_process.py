@@ -13,6 +13,7 @@ from mass_tags import tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678, diethyl_6plex,
 import src.config as config
 import iso_functions as iso_f
 import argparse
+from src.logger import logger
 
 
 def run():
@@ -56,6 +57,7 @@ def run():
         if  params["TagName"] in available_tags:
             mass_tag = available_tags[params["TagName"]]
         else:
+            logger.error("ValueError - Unknown Tag")
             raise ValueError("Unknown Tag")
         config.tag = mass_tag
         

@@ -18,6 +18,11 @@ src_path = os.path.join(os.path.dirname(__file__), 'src')
 sys.path.insert(0, src_path)
 
 if __name__ == "__main__":
+    from src import logger
     # Import and run the main module
     from src.run_jmod import main
     main()
+
+
+# python "C:\Users\zcohe\Jmod\Jmod_logging\run_jmod.py" -r -l "L:\ZC\LF_data_2\HBthermo_PrositFrags.tsv" -i "L:\ZC\LF_data_2\2023_10_02_QC_LF_DIA_2_E240.mzML" -o "L:\ZC\LF_data_2"
+# python "C:\Users\zcohe\Jmod\Jmod_logging\run_jmod.py" -r -l "L:\ZC\PlexData\diann_tag6_Astral_MBR_anhy_May13_jmod.tsv" -i "L:\ZC\PlexData\2025-05-12_9plex_200pg_20win_24nce_1.mzML" -o "L:\ZC\PlexData" --tag "tag6_9plex" --plexDIA

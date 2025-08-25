@@ -23,26 +23,27 @@ from . import iso_functions as iso_f
 from .mass_tags import tag_library, available_tags
 from .fdr_analysis import process_data
 
+from src.logger import logger, set_log_filepath
+import logging
+
+
+
 def main():
     """Main function to run JMod analysis."""
     
-    print(config.args)
     # Check if a single argument is provided and it's a JSON file
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
         # Treat this as the config_json argument
         config.args.config_json = sys.argv[1]
-        print(f"Using configuration file: {config.args.config_json}")
 
     # Load JSON configuration if specified
     if config.args.config_json:
-        print(f"Loading configuration from {config.args.config_json}")
         if not config.load_config_from_json(config.args.config_json):
-            print("Failed to load JSON configuration. Using command-line arguments.")
+            pass
 
     # Check if running in test mode
     if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
         # Run tests instead of normal operation
-        print("Running JMod in test mode...")
         import subprocess
         
         # Remove the test argument and pass remaining args to test runner
@@ -51,10 +52,6 @@ def main():
         
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
-
-    # Print the configuration that will be used
-    print("Using configuration:")
-    print(config.args)
 
     ####  Load Libraries   ######################
     mzml_file = config.args.mzml.replace("\\","/")
@@ -79,7 +76,6 @@ def main():
     feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv"
     if config.args.use_features and os.path.exists(feature_path):
         use_feat = "Dino"
-        print("loading Dinosaur features")
         dino_features = pd.read_csv(feature_path,delimiter="\t")
     
     ms2_align = "MS2align" if config.args.ms2_align else ""
@@ -92,18 +88,46 @@ def main():
                                     f"libfrac{config.args.lib_frac}",
                                     *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,plexDIA,is_timeplex,dummy_val]))])
     
-    
-    print(results_folder_name)
-    # print(config.args.tag)
-    
-    # stop
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_timeplex_051425_01"
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
         
     if not os.path.exists(results_folder_path):
         os.mkdir(results_folder_path)
+
+    
+    logfile_path = os.path.join(results_folder_path, "Log.log")
+    set_log_filepath(logfile_path)
+
+
+
+
+    logger.info(config.args)
+    ##add statements to log once results folder has been created
+    if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
+        logger.info(f"Using configuration file: {config.args.config_json}")
+    if config.args.config_json:
+        logger.info(f"Loading configuration from {config.args.config_json}")
+        if not config.load_config_from_json(config.args.config_json):
+            logger.warning("Failed to load JSON configuration. Using command-line arguments.")
+    if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
+        logger.info("Running JMod in test mode...")
+
+    # Log the configuration that will be used
+    logger.info("Using configuration:")
+    logger.info(config.args)
+
+
+    if config.args.use_features and os.path.exists(feature_path):
+        logger.info("loading Dinosaur features")
+
+    logger.info(f"Results will be saved to {results_folder_name}")
+
+    
+    # logger.info(config.args.tag)
+    
+    # stop
+    
     
     
     overall_start_time = time.time()
@@ -116,7 +140,7 @@ def main():
     DIAspectra=load_files.loadSpectra(mzml_file)
 
     if config.args.test_mode:
-        print(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
+        logger.info(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
         
         # Filter MS2 scans based on retention time and precursor m/z
         filtered_ms2_scans = []
@@ -125,7 +149,7 @@ def main():
                 config.args.test_mz_min <= scan.prec_mz <= config.args.test_mz_max):
                 filtered_ms2_scans.append(scan)
         
-        print(f"Selected {len(filtered_ms2_scans)} out of {len(DIAspectra.ms2scans)} MS2 scans for test mode")
+        logger.info(f"Selected {len(filtered_ms2_scans)} out of {len(DIAspectra.ms2scans)} MS2 scans for test mode")
         DIAspectra.ms2scans = filtered_ms2_scans
         spectra_to_fit = DIAspectra.ms2scans
         
@@ -141,7 +165,7 @@ def main():
             if (config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
                 filtered_library[key] = entry
         
-        print(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
+        logger.info(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
         spectrumLibrary = filtered_library
     else:
         spectra_to_fit = DIAspectra.ms2scans
@@ -157,12 +181,12 @@ def main():
         # Find the tag object based on the tag name
         if config.args.tag in available_tags:
             config.tag = available_tags[config.args.tag]
-            print(f"Using tag: {config.tag.name}")
+            logger.info(f"Using tag: {config.tag.name}")
             spectrumLibrary = tag_library(spectrumLibrary, config.tag)
             mass_tag = config.tag
         else:
-            print(f"Error: Tag '{config.args.tag}' not found in available_tags.")
-            print(f"Available tags: {list(available_tags.keys())}")
+            logger.warning(f"Error: Tag '{config.args.tag}' not found in available_tags.")
+            logger.warning(f"Available tags: {list(available_tags.keys())}")
             # Either exit or continue without tagging
             mass_tag = None
             config.tag = None
@@ -174,12 +198,12 @@ def main():
         ## now ooutputs library as we finetune RT
         # With this:
         if config.args.use_features and os.path.exists(feature_path):
-            print("Loading Dinosaur features")
+            logger.info("Loading Dinosaur features")
             dino_features = pd.read_csv(feature_path, delimiter="\t")
             funcs, spectrumLibrary = MZRTfit_timeplex(DIAspectra, spectrumLibrary, dino_features, config.mz_tol, results_folder=results_folder_path,
                                             ms2=config.args.ms2_align)
         else:
-            print("Not using features")
+            logger.info("Not using features")
             funcs, spectrumLibrary = MZRTfit_timeplex(DIAspectra, spectrumLibrary, None, config.mz_tol, results_folder=results_folder_path,
                                             ms2=config.args.ms2_align)
 
@@ -221,13 +245,13 @@ def main():
     # with open(results_folder_path+"/slib","wb") as dill_file:
     #     slib = dill.dump(spectrumLibrary,dill_file)   
       
-    print("Creating Decoy Library")
+    logger.info("Creating Decoy Library")
     decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev")
     for key in spectrumLibrary:
         spectrumLibrary[key]["top_n"]=np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
     for key in decoy_lib:
         decoy_lib[key]["top_n"]=np.argsort(-decoy_lib[key]["spectrum"][:,1])[:config.top_n]
-    print("... Finished Decoy Library")
+    logger.info("... Finished Decoy Library")
     
     
     ######################################################
@@ -249,7 +273,7 @@ def main():
     
     ######################################################
     ### Start the search
-    print("Starting Search")
+    logger.info("Starting Search")
     # write dia spectra meta data
     ms2scans_info = [[i.prec_mz,i.RT,i.scan_num,*i.ms1window] for i in spectra_to_fit]
     ms2_info_path = results_folder_path+"/ms2scans.csv"
@@ -263,7 +287,7 @@ def main():
         start_time = time.time()
         batch_spectra = spectra_to_fit[batch_idx*num_per_batch:(batch_idx+1)*num_per_batch]
         
-        print(f"Fitting batch {batch_idx+1} of {num_batches}")
+        logger.info(f"Fitting batch {batch_idx+1} of {num_batches}")
         
         outputs= []
         for dia_spec in tqdm.tqdm(batch_spectra):
@@ -282,7 +306,7 @@ def main():
                             decoy_library=decoy_lib))
             
         long_outputs = [j for i in outputs for j in i]
-        print(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
+        logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         
         decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
         write_to_csv(long_outputs,decoylib_search_path)

@@ -13,6 +13,7 @@ import sys
 import os
 import subprocess
 import argparse
+from src.logger import logger
 
 
 def run_tests(test_path=None, verbose=False, coverage=False):
@@ -49,8 +50,8 @@ def run_tests(test_path=None, verbose=False, coverage=False):
     # Show print statements
     cmd.append("-s")
     
-    print(f"Running tests with command: {' '.join(cmd)}")
-    print("-" * 70)
+    logger.info(f"Running tests with command: {' '.join(cmd)}")
+    logger.info("-" * 70)
     
     # Run the tests
     result = subprocess.run(cmd)
@@ -99,19 +100,19 @@ def main():
     try:
         import pytest
     except ImportError:
-        print("Error: pytest is not installed!")
-        print("Please install it with: pip install pytest")
+        logger.error("Error: pytest is not installed!")
+        logger.error("Please install it with: pip install pytest")
         if args.coverage:
-            print("For coverage support, also install: pip install pytest-cov")
+            logger.warning("For coverage support, also install: pip install pytest-cov")
         return 1
     
     # Run the tests
     exit_code = run_tests(test_path, args.verbose, args.coverage)
     
     if exit_code == 0:
-        print("\n✅ All tests passed!")
+        logger.info("\n✅ All tests passed!")
     else:
-        print("\n❌ Some tests failed!")
+        logger.error("\n❌ Some tests failed!")
     
     return exit_code
 

@@ -7,6 +7,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import pandas as pd
 import numpy as np
 import os
+from src.logger import logger
 
 
 names = ["coeff","spec_id","Ms1_spec_id",
@@ -160,7 +161,7 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
             start_pos = max(0, pos_in_sorted - n_scans)
             end_pos = min(len(sorted_group) - 1, pos_in_sorted + n_scans)
             nearby_indices = sorted_group.index[start_pos:end_pos+1]
-            #print("nearby_indices ", nearby_indices ", \n")
+            #logger.info("nearby_indices ", nearby_indices ", \n")
             # Find the extreme value of the specified column in the nearby scans
             extreme_val = (
                 group.loc[nearby_indices, column_name].max() if find_max else 
@@ -309,7 +310,7 @@ def get_large_prec(file,
     if timeplex:
         col_names.insert(5,"time_channel")
         dtypes["time_channel"] = np.float32 ## !!! need to fix 
-    # print(col_names)
+    # logger.info(col_names)
     decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
     
     decoy_coeffs = find_extrema_in_nearby_scans(
@@ -365,7 +366,7 @@ def read_results(file,
     if timeplex:
         col_names.insert(5,"time_channel")
         dtypes["time_channel"] = np.float32 ## !!! need to fix 
-    # print(col_names)
+    # logger.info(col_names)
     decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
     
     results_folder = os.path.dirname(file)

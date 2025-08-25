@@ -5,6 +5,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 import argparse
 import json
+from src.logger import logger
 
 parser = argparse.ArgumentParser(
                     prog='Jmod',
@@ -76,7 +77,7 @@ args = parser.parse_args()
 # args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE39.msp.tsv"
 # args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE45.msp.tsv"
 # args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE51.msp.tsv"
-# print(args)
+# logger.info(args)
 
 
 mz_ppm = args.ppm
@@ -290,6 +291,6 @@ def load_config_from_json(json_path):
                 
         return True
     except Exception as e:
-        print(f"Error loading JSON configuration: {e}")
+        logger.warning(f"Error loading JSON configuration: {e}")
         return False
         
