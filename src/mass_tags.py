@@ -101,12 +101,13 @@ def read_json_to_massTag(mass_tag_JSON):
             except json.JSONDecodeError:
                 return mass_tag_JSON
         try:
+            compositions = {channel: mass.Composition(comp_dict) for channel, comp_dict in mass_tag_data['compositions'].items()}
             mass_tag = massTag(rules=mass_tag_data['rules'],
                         base_mass=mass_tag_data['base_mass'],
                         delta=mass_tag_data['delta'],
                         channel_names=mass_tag_data['channel_names'],
                         name=mass_tag_data['name'],
-                        compositions=mass_tag_data['compositions'])
+                        compositions=compositions)
             return mass_tag
         except Exception as e:
             print({e})
