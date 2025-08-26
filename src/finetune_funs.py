@@ -13,6 +13,8 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KernelDensity
 from sklearn.metrics import r2_score
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 load_model = tf.keras.models.load_model
 import statsmodels.api as sm
@@ -379,6 +381,7 @@ def fine_tune_rt(grouped_df,
         plt.ylabel("Base model predictions")
         if results_path:
             plt.savefig(results_path+"/RT_finetune_ObsvsOld.png",dpi=600,bbox_inches="tight")
+        plt.close()
             
         
         plt.subplots()
@@ -387,6 +390,7 @@ def fine_tune_rt(grouped_df,
         plt.ylabel("Aligned observed Values")
         if results_path:
             plt.savefig(results_path+"/RT_finetune_ObsvsOldAlign.png",dpi=600,bbox_inches="tight")
+        plt.close()
         
         if len(grouped_df)>config.FT_minimum and ('history' in locals() or 'history' in globals()):
             # Add the smoothed values to a new column
@@ -399,6 +403,7 @@ def fine_tune_rt(grouped_df,
             plt.ylabel("Old model predictions")
             if results_path:
                 plt.savefig(results_path+"/RT_finetune_AlignObsvsOld.png",dpi=600,bbox_inches="tight")
+            plt.close()
             
         
             plt.subplots()
@@ -407,6 +412,7 @@ def fine_tune_rt(grouped_df,
                 plt.plot(h.history["val_loss"],color="tab:orange",alpha=.5) 
             if results_path:
                 plt.savefig(results_path+"/RT_finetune_training.png",dpi=600,bbox_inches="tight")
+            plt.close()
                  
             
             # Modified to handle both model types, similar to above
@@ -441,6 +447,7 @@ def fine_tune_rt(grouped_df,
                 plt.ylabel("New model predictions")
                 if results_path:
                     plt.savefig(results_path+"/RT_finetune_AlignObsvsNew.png",dpi=600,bbox_inches="tight")
+                plt.close()
             except Exception as e:
                 logger.warning(f"Error creating fine-tuned model plot: {e}")
         

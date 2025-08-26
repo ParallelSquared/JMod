@@ -7,6 +7,8 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import numpy as np
 import pandas as pd
 import re
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import tqdm
 import src.config as config
@@ -694,6 +696,7 @@ def empirical_fit(output_df,results_folder=None):
         plt.title(str(feature_percentile))
         if results_folder is not None:
             plt.savefig(results_folder+f"/Percentile_{str(feature_percentile)}.png",dpi=600,bbox_inches="tight")
+        plt.close()
         
         # plt.subplots()
         # f = lowess_fit(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],.1)
@@ -701,6 +704,7 @@ def empirical_fit(output_df,results_folder=None):
         # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],
         #             f(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter]),s=1)
         # plt.title(str(feature_percentile))
+        #plt.close()
         
         # r_filter =np.logical_and(output_df.last_aa=="R",cor_filter)
         # fr = lowess_fit(output_rts[r_filter], output_df.rt[r_filter],.1)
@@ -709,6 +713,7 @@ def empirical_fit(output_df,results_folder=None):
         # x = np.linspace(min(output_rts[r_filter]),max(output_rts[r_filter]),100)
         # plt.scatter(x,fr(x),s=1)
         # plt.title(str(feature_percentile))
+        #plt.close()
         
         
         # k_filter =np.logical_and(output_df.last_aa=="K",cor_filter)
@@ -718,6 +723,7 @@ def empirical_fit(output_df,results_folder=None):
         # x = np.linspace(min(output_rts[k_filter]),max(output_rts[k_filter]),100)
         # plt.scatter(x,fk(x),s=1)
         # plt.title(str(feature_percentile))
+        #plt.close()
         
      
        
@@ -754,6 +760,7 @@ def empirical_fit(output_df,results_folder=None):
     # # plt.plot(x_d,density)
     # # plt.title(str(feature_percentile))
     # print(str(feature_percentile),min(density))
+    #plt.close()
     
     
     emp_rt_spl = lowess_fit(np.array(output_df.lib_rt)[cor_filter],np.array(output_df.rt)[cor_filter],.02)
@@ -2316,6 +2323,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.ylabel("Frequency")
         # plt.show()
         plt.savefig(results_folder+"/MZdiff.png",dpi=600,bbox_inches="tight")
+
+        plt.close("all")
     
     
     # if ms2:

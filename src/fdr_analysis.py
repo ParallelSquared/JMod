@@ -18,6 +18,8 @@ from scipy import stats
 import xgboost as xgb
 
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import tqdm
 import re
@@ -235,6 +237,7 @@ class score_model():
                         # Save plot
                         plt.savefig(self.folder + f"/RF{idx}_feature_importance.png", dpi=600, bbox_inches="tight")
                         # For RF models, log feature importance
+                        plt.close(fig)
                     return m
                 
             # self.model = fit_model(X,y)
@@ -295,6 +298,7 @@ class score_model():
                         plt.barh(X.columns,[fi[i] if i in fi else 0 for i in X.columns])
                         plt.title("Feature Importance")
                         plt.savefig(self.folder+f"/XGBoost{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
+                        plt.close()
                     
                     
                     return m
@@ -564,13 +568,18 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
         plt.legend()
         plt.savefig(folder+"/mz_error.png",dpi=600,bbox_inches="tight")
+
+        plt.close("all")
     
     return fdc
 
 
+def log_df(df):
+    for line in df.to_string(index=False).splitlines():
+        logger.info(line)
 
 def compute_protein_FDR(df,results_folder=None):
-    logger.info("Computing Protein FDR")
+    logger.info("Computing Protein FDR\n")
 
   
     df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)
@@ -601,10 +610,10 @@ def compute_protein_FDR(df,results_folder=None):
         .size()
         .reset_index(name="Precursor_IDs")
         .sort_values("channel")
-    )
+    )    
     logger.info("Number of precursors at 1% FDR:")
     logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
-    logger.info(df_counts_prec.to_string(index=False))
+    log_df(df_counts_prec)
     
 
     df_counts_prots = (
@@ -615,9 +624,9 @@ def compute_protein_FDR(df,results_folder=None):
         .reset_index(name="Protein_IDs")
         .sort_values("channel")
         )
-    logger.info("\nNumber of proteins at 1% FDR:")
+    logger.info("Number of proteins at 1% FDR:")
     logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
-    logger.info(df_counts_prots.to_string(index=False))
+    log_df(df_counts_prots)
 
     if results_folder is not None:
         with open(results_folder+'/Summary.txt', 'a') as f:
@@ -651,7 +660,7 @@ def compute_protein_FDR(df,results_folder=None):
         # Print precursor ID counts
         logger.info("Number of precursors at 1% FDR (best channel):")
         logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
-        logger.info(df_counts_prec.to_string(index=False))
+        log_df(df_counts_prec)
         
         # Compute number of protein IDs at 1% FDR
         df_counts_prots = (
@@ -664,9 +673,9 @@ def compute_protein_FDR(df,results_folder=None):
         )
         
         # Print protein ID counts
-        logger.info("\nNumber of proteins at 1% FDR (best channel):")
+        logger.info("Number of proteins at 1% FDR (best channel):")
         logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
-        logger.info(df_counts_prots.to_string(index=False))
+        log_df(df_counts_prots)
         
         if results_folder is not None:
             with open(results_folder+'/Summary.txt', 'a') as f:
