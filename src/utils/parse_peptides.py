@@ -234,7 +234,9 @@ def split_frag_name(ion_type: str) -> tuple[str, int, str, str]:
     fragment_seq : Uses split_frag_name to determine fragment sequences
     convert_frags : Processes fragment information for decoy generation
     """
-    frag_name,frag_z = ion_type.split("_")
+    frag_name, frag_z = ion_type.split("_")
+    if not frag_z:
+        raise ValueError(f"Missing charge in fragment ion '{ion_type}'")
     loss_check = frag_name.split("-")
     loss = ""
     if len(loss_check)>1:
@@ -302,10 +304,11 @@ def change_seq(seq: str, rules: str) -> str:
     #     seq = [re.sub("\(.*\)","",aa) for aa in seq]\
         
     if config.tag:   
-       tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
-       seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
+       tags = [re.findall(rf"(\({config.tag.name}.*?\))",i) for i in seq]
+       seq = [re.sub(rf"(\({config.tag.name}.*?\))","",i) for i in seq]
     else:
         tags = [[] for i in seq]
+        seq = [re.sub(r"\(.*?\)", "", aa) for aa in seq] # if the sequence has a modification on it
         
     #mods = [extract_mod(i) for i in seq]
     ## assume AA is the first 
@@ -354,8 +357,8 @@ def convert_prec_mz(seq: str, z: int = 1, mass_dict: dict[str, float] = {}) -> f
     """
         
     #Identifies modifications within the sequence 
-    split_seq = re.findall("([A-Z](?:\(.*?\))?)",seq)
-    mods = [re.findall("\((.*?)\)",i) for i in split_seq]
+    split_seq = re.findall(r"([A-Z](?:\(.*?\))?)",seq)
+    mods = [re.findall(r"\((.*?)\)",i) for i in split_seq]
     
     ## assume AA is the first. P(+79.97) or K(mTRAQ-0) for example 
     unmod_seq = [i[0] for i in split_seq]
@@ -438,8 +441,8 @@ def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rule
     if config.tag:   
        #tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
        #seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
-       tags = [[t.strip("()") for t in re.findall(f"(\({config.tag.name}.*?\))",i)] for i in split_seq]
-       split_seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in split_seq]
+       tags = [[t.strip("()") for t in re.findall(rf"(\({config.tag.name}.*?\))",i)] for i in split_seq]
+       split_seq = [re.sub(rf"(\({config.tag.name}.*?\))","",i) for i in split_seq]
 
     else:
         tags = [[] for i in seq]
@@ -451,9 +454,10 @@ def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rule
     unmod_seq = [i[0] for i in split_seq]
     
     if config.tag:
-    	tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in tags]
+        tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in tags]
+
     else:
-    	tag_masses = [0 for i in mods]
+        tag_masses = [0 for i in mods]
         
     new_frags = {}
     
