@@ -21,6 +21,7 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 - [Environment Setup](#environment-setup)
   - [Linux/MacOS](#linuxmacos)
   - [Windows](#windows)
+  - [Test Mode Sample Search](#windows)
 - [Outputs](#outputs)
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
@@ -37,13 +38,26 @@ To set up a Conda environment to run JMod in, please download the `data/jmod_env
 In a dedicated terminal, type:  
 1. ```conda env create -f jmod_env.yml -n $env_name```
 2. ```conda activate $env_name```
-3. ```python run_jmod.py <args> ```
 
-If run successfully, the inputted configurations alongside `"Loading library..."` should be printed.
 
 #### Windows
 If on a Windows machine, please use the `data/jmod_env_windows.yml` file to set up your environment. Set up will follow the same steps as Linux/MacOS.
 
+#### Test Mode Sample Search
+To ensure that all packages and the environment was set up correctly, JMod can be run in test mode with a small file and library that can be found in `data/`. Running JMod in test mode allows the full searching of a subset of a small file with a small spectral library.
+
+1. Please download the following five files that can be found in `data/`:
+- `test_mode_filtered_file.mzML` – mzML file that JMod will search
+- `test_mode_filtered_file.mzML_pythonspec` – pickle file of mzML file above, allows for faster read-in. JMod will automatically detect the presence of this file and choose to use it.
+- `test_mode_filtered_file.features.tsv` – features file for `test_mode_filtered_file.mzML`
+- `test_mode_speclib.tsv` – filtered spectral library to be used for the search
+- `test_mode_speclib.tsv_pythonlib` – pickle file of the spectral library above, allows for faster read-in. JMod will automatically detect the presence of this file and choose to use it.
+2. Make sure the conda environment is activated if not already.
+3. Run the following command in a dedicated terminal:
+```
+python run_jmod.py -l /path/to/data/test_mode_speclib.tsv -i /path/to/data/test_mode_filtered_file.mzML -r --test_mode
+```
+4. If the environment was downloaded properly, the JMod search should start by printing the run configurations and proceed to run to completion.
 
 ### Outputs
 
