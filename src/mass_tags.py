@@ -104,6 +104,18 @@ def read_json_to_massTag(mass_tag_JSON):
                 return mass_tag_JSON
         try:
             compositions = {channel: mass.Composition(comp_dict) for channel, comp_dict in mass_tag_data['compositions'].items()}
+            masses = [mass.calculate_mass(compositions[channel_name]) for channel_name in compositions]
+            delta_calcs = [current_mass - masses[0] for current_mass in masses]
+            if round(masses[0], 3) != round(mass_tag_data['base_mass'], 3):
+                logger.warning(f"Calculated Base Mass: {round(masses[0], 3)}")
+                logger.warning(f"JSON Base Mass: {round(mass_tag_data['base_mass'], 3)}")
+                logger.warning("First mass composition mass does not match base mass in tag JSON")
+                return mass_tag_data['name']
+            if [round(x, 3) for x in mass_tag_data['delta']] != [round(x, 3) for x in delta_calcs]:
+                logger.warning([round(x, 3) for x in mass_tag_data['delta']])
+                logger.warning([round(x, 3) for x in delta_calcs])
+                logger.warning("Deltas do not match mass compositions in tag JSON")
+                return mass_tag_data['name']
             mass_tag = massTag(rules=mass_tag_data['rules'],
                         base_mass=mass_tag_data['base_mass'],
                         delta=mass_tag_data['delta'],
@@ -111,8 +123,11 @@ def read_json_to_massTag(mass_tag_JSON):
                         name=mass_tag_data['name'],
                         compositions=compositions)
             return mass_tag
+        except AttributeError:
+            logger.warning("Compositions are not defined for tag")
+            return mass_tag_data['name']
         except Exception as e:
-            print({e})
+            logger.warning({e}) 
             return mass_tag_data['name']
     else:
         return None
@@ -285,7 +300,7 @@ def refresh_tags():
         if os.path.splitext(filename)[1].lower() == ".json":
             mass_tag = read_json_to_massTag(os.path.join(mass_tags_dir,filename))
             if type(mass_tag) == str:
-                print(f"Unable to load mass tag from {filename}")
+                logger.warning(f"Unable to load mass tag from {filename}\n")  
             elif mass_tag:
                 available_tags[mass_tag.name] = mass_tag
 
