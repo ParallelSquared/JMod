@@ -36,6 +36,7 @@ def main(GUI_config_json = None):
         config.args.config_json = sys.argv[1]
 
     if GUI_config_json:
+        config.ran_from_GUI = True
         config.args.config_json = GUI_config_json
 
     # Load JSON configuration if specified
@@ -108,7 +109,7 @@ def main(GUI_config_json = None):
 
 
 
-    logger.info(config.args)
+    logger.debug(config.args)
     ##add statements to log once results folder has been created
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
         logger.info(f"Using configuration file: {config.args.config_json}")

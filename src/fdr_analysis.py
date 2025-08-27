@@ -319,7 +319,8 @@ class score_model():
                     return m
                 
         else:
-            logger.error("ValueError - Unsupported Model Type")
+            from run_jmod_from_GUI import send_raise_to_TK
+            send_raise_to_TK("ValueError - Unsupported Model Type")
             raise ValueError("Unsupported model type")
         
         logger.info(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")

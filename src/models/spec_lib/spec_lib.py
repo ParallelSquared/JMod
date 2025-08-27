@@ -158,7 +158,8 @@ def load_tsv_speclib(spec_lib_file):
             elif "iRT" in row:
                 rt = row["iRT"]
             else:
-                logger.error("ValueError - Unknonw retention time column")
+                from run_jmod_from_GUI import send_raise_to_TK
+                send_raise_to_TK("ValueError - Unknown Retention Time Column")
                 raise ValueError("Unknown retention time column")
             python_lib[unique_id]["iRT"] = None if rt=="" else float(rt)
             python_lib[unique_id].setdefault("frags",{})

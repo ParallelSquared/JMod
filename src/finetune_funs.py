@@ -263,7 +263,8 @@ def fine_tune_rt(grouped_df,
 
         
     else:
-        logger.error("ValueError - Unknown Label")
+        from run_jmod_from_GUI import send_raise_to_TK
+        send_raise_to_TK("ValueError - Unknown Label")
         raise ValueError("Unknown label")
         
     

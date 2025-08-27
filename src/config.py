@@ -46,6 +46,7 @@ args = parser.parse_args()
 # args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE51.msp.tsv"
 # logger.info(args)
 
+ran_from_GUI = False
 
 mz_ppm = args.ppm
 mz_tol = mz_ppm*10**(-6)

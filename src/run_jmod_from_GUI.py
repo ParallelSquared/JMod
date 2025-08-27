@@ -847,7 +847,8 @@ def make_GUI():
         def run_process(self):
             if not self.mzml_and_lib_error_check():
                 return
-                
+            
+            #self.run_button.config(state="disabled")
             threading.Thread(target=self.run_main, daemon=True).start()
 
         def run_main(self):
@@ -873,6 +874,7 @@ def make_GUI():
                 main(filename)
                 logger.info(f"Finished File {i} of {len(mzml_files)}\n")
             logger.info("JMod Finished")
+            #self.run_button.config(state="normal")
 
         def mzml_and_lib_error_check(self):
             mzml_files = self.file_dropdown.files
@@ -1005,6 +1007,18 @@ def make_GUI():
     app = JModGUI()
     app.mainloop()
 
+
+def send_raise_to_TK(error_text):
+    import sys, importlib
+    if "src.config" in sys.modules:    ##was some weird issue with from . import config here. This seems to fix it and keep the file id the same
+        config = sys.modules["src.config"]
+    else:
+        config = importlib.import_module("src.config")
+
+    logger.error(error_text)
+    logger.error("JMod Exited\n")
+    if config.ran_from_GUI is True:
+        tk.messagebox.showerror("Error", error_text)
 
 ###### Custom Widgets
 

@@ -317,7 +317,8 @@ def change_seq(seq: str, rules: str) -> str:
     elif rules=="rev":
         new_split_seq = seq[:-1][::-1]+seq[-1:]
     else:
-        logger.error("ValueError - Unavailable rules selected")
+        from run_jmod_from_GUI import send_raise_to_TK
+        send_raise_to_TK("ValueError - Unavailable Rules Selected")
         raise ValueError("Unavailable rules selected")
     # elif rules==None:
     #     new_seq = "".join(seq)
@@ -453,9 +454,9 @@ def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rule
     unmod_seq = [i[0] for i in split_seq]
     
     if config.tag:
-    	tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in tags]
+        tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in tags]
     else:
-    	tag_masses = [0 for i in mods]
+        tag_masses = [0 for i in mods]
         
     new_frags = {}
     
