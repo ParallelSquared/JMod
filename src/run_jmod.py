@@ -27,7 +27,7 @@ from .fdr_analysis import process_data
 def main():
     """Main function to run JMod analysis."""
     
-    print(config.args)
+    # print(config.args)
     # Check if a single argument is provided and it's a JSON file
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
         # Treat this as the config_json argument
@@ -124,8 +124,37 @@ def main():
     DIAspectra=load_files.loadSpectra(mzml_file)
 
     if config.args.test_mode:
-        print(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
+    
+        # MS2 scans
+        all_rts = [scan.RT for scan in DIAspectra.ms2scans]
+        all_mzs = [scan.prec_mz for scan in DIAspectra.ms2scans]
         
+        # Features
+        feat_rts = dino_features['rtApex']
+        feat_mzs = dino_features['mz']
+        
+        # Combine ranges to get overall min/max
+        min_rt = min(min(all_rts), feat_rts.min())
+        max_rt = max(max(all_rts), feat_rts.max())
+        
+        min_mz = min(min(all_mzs), feat_mzs.min())
+        max_mz = max(max(all_mzs), feat_mzs.max())
+        print(min_mz)
+        print(max_mz)
+
+        # Compute means
+        mid_rt = np.mean(all_rts)
+        mid_mz = np.mean(all_mzs)
+        
+        # Set test ranges around midpoint
+        config.args.test_rt_min = max(0, mid_rt - 1.5)  # ±5 min
+        config.args.test_rt_max = mid_rt + 1.5
+        config.args.test_mz_min = max(0, mid_mz - 100)  # ±250 m/z
+        config.args.test_mz_max = mid_mz + 100
+        
+        print(f"Auto-set test mode ranges: RT {config.args.test_rt_min}-{config.args.test_rt_max}, "rf"m/z {config.args.test_mz_min}-{config.args.test_mz_max}")
+        print(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
+
         # Filter MS2 scans based on retention time and precursor m/z
         filtered_ms2_scans = []
         for scan in DIAspectra.ms2scans:
@@ -146,11 +175,24 @@ def main():
         for key, entry in spectrumLibrary.items():
             #if (config.args.test_rt_min - rt_tolerance <= entry["iRT"] <= config.args.test_rt_max + rt_tolerance and
             #    config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
+            #    filtered_library[key] = entry
             if (config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
                 filtered_library[key] = entry
         
         print(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
         spectrumLibrary = filtered_library
+
+        # Filtering features file 
+        filtered_features = dino_features[
+            (dino_features["mz"] >= config.args.test_mz_min - mz_tolerance * dino_features["mz"]) &
+            (dino_features["mz"] <= config.args.test_mz_max + mz_tolerance * dino_features["mz"]) &
+            (dino_features["rtApex"] >= config.args.test_rt_min - rt_tolerance) &
+            (dino_features["rtApex"] <= config.args.test_rt_max + rt_tolerance)
+        ]
+
+        print(f"Selected {len(filtered_features)} out of {len(dino_features)} features for test mode")
+        dino_features = filtered_features
+
     else:
         spectra_to_fit = DIAspectra.ms2scans
     ######################################################
