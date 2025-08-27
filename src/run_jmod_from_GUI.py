@@ -19,11 +19,13 @@ from idlelib.tooltip import Hovertip
 import os
 from config import parser
 from default_dict import default_dict
-from src.mass_tags import available_tags, refresh_tags
 import shlex
 from pathlib import Path
 from pyteomics import mass
 import re
+from src.logger import logger, ElapsedFormatter
+import logging
+import threading
 
 
 
@@ -46,8 +48,38 @@ def make_GUI():
             #style.configure("Accent.TButton")
             #style.configure("Red.TButton", foreground="black", background="#cc0202")
 
-            #frames:  1) input frame,  2) MS frame  3)multiplex frame  4)additional frame   5) Output frame  6) command frame
-            #functions 1)input funcs,  2) MS funcs  3) multiplex funcs 4) additional funcs  5) output funcs  6) command funcs
+            #frames:  1) Logging Frame 2) input frame,  3) MS frame  4)multiplex frame  5)additional frame   6) Output frame
+            #functions 1) Logging Funcs 2) input funcs,  3) MS funcs  4) multiplex funcs 5) additional funcs  6) output funcs
+
+
+            ####         Logging Frame      #######
+
+            self.logging_frame = ttk.LabelFrame(self, text="Logging")
+            self.logging_frame.grid(row=0, column=11, columnspan=10, rowspan=5, padx=10, pady=10, sticky="ew")
+
+            self.text_widget = tk.Text(self.logging_frame, height=52, width=100)
+            self.text_widget.pack(fill="both", expand=True)
+
+            class TkinterHandler(logging.Handler):
+                def __init__(self, text_widget):
+                    super().__init__()
+                    self.text_widget = text_widget
+
+                def emit(self, record):
+                    msg = self.format(record)
+                    self.text_widget.after(0, self.append, msg)
+
+                def append(self, msg):
+                    self.text_widget.insert(tk.END, msg + "\n")
+                    self.text_widget.see(tk.END)
+
+            tk_handler = TkinterHandler(self.text_widget)
+            tk_handler.setFormatter(ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s"))
+            tk_handler.setLevel(logging.INFO)
+
+            logger.addHandler(tk_handler)
+
+            logger.info("GUI logger started.\n")
 
 
             #######     input frame      #######
@@ -211,12 +243,22 @@ def make_GUI():
             self.inner_frame.grid_columnconfigure(0, weight=1)
             self.inner_frame.grid_columnconfigure(1, weight=1)
 
-            self.massTag_font = ("Arial", 14)
+            self.massTag_font = ("Arial", 12)
 
             self.channel_Label = tk.Label(self.inner_frame, text="   Channel   ", borderwidth=1, relief="solid", font=self.massTag_font)
             self.channel_Label.grid(row=1, column=0, sticky='nsew')
             self.mass_Label = tk.Label(self.inner_frame, text="  Mass Shift  ", borderwidth=1, relief="solid", font=self.massTag_font)
             self.mass_Label.grid(row=1, column=1, sticky='nsew')
+            self.rules_Label = tk.Label(self.inner_frame, text="Rules: " + "N/A")
+            self.rules_Label.grid(row=0, column=0, sticky='nsew')
+            self.base_mass_Label = tk.Label(self.inner_frame, text='  Base Mass: ' + "N/A")
+            self.base_mass_Label.grid(row=0, column=1, sticky='nsew')
+            channel_L = tk.Label(self.inner_frame, text=f"\u0394 N/A", borderwidth=1, relief="solid", font=self.massTag_font)
+            channel_L.grid(row=2, column=0, sticky='nsew')
+            mass_L = tk.Label(self.inner_frame, text="N/A", borderwidth=1, relief="solid", font=self.massTag_font)
+            mass_L.grid(row=2, column=1, sticky='nsew')
+            self.channel_labels.append(channel_L)
+            self.mass_labels.append(mass_L)
 
 
             ####         Additional Frame      #######
@@ -260,9 +302,7 @@ def make_GUI():
             self.run_button.grid(row=1, column=2, padx=10, pady=10)
 
 
-
-            ####         Command Frame      #######
-
+        ####         Logging Funcs      #######
 
         
         #######     input funcs      #######
@@ -362,6 +402,7 @@ def make_GUI():
         ####         Multiplex Funcs      #######
 
         def get_tag_list(self):
+            from src.mass_tags import available_tags
             tag_list = list(available_tags.keys())
             tag_list = ['None'] + tag_list
             default_dict["tag"]["values"] = tag_list
@@ -372,7 +413,7 @@ def make_GUI():
                 self.new_tag_window.destroy()
             self.new_tag_window = tk.Toplevel(self)
             self.new_tag_window.title("Create New Mass Tag")
-            self.new_tag_window.geometry("225x220")
+            self.new_tag_window.geometry("260x220")
 
             #Num Channels
             tk.Label(self.new_tag_window, text="Number of Channels:").grid(row=0, column=0, padx=5, pady=5)
@@ -385,29 +426,29 @@ def make_GUI():
             self.go_button.grid(row=0, column=2, padx=5, pady=5)
 
             #Atomic Composition Label
-            tk.Label(self.new_tag_window, text="Atomic Composition:").grid(row=1, column=0, padx=5, pady=5)
+            tk.Label(self.new_tag_window, text="Base Atomic Composition:").grid(row=1, column=0, padx=5, pady=5)
 
             #C
             tk.Label(self.new_tag_window, text="C:").grid(row=2, column=0, padx=5, pady=5)
-            self.atomic_composition_c = tk.StringVar(value="12")
+            self.atomic_composition_c = tk.StringVar(value="")
             self.atomic_composition_c_entry = tk.Entry(self.new_tag_window, textvariable=self.atomic_composition_c, width=5)
             self.atomic_composition_c_entry.grid(row=2, column=1, padx=5, pady=5)
 
             #H
             tk.Label(self.new_tag_window, text="H:").grid(row=3, column=0, padx=5, pady=5)
-            self.atomic_composition_h = tk.StringVar(value="13")
+            self.atomic_composition_h = tk.StringVar(value="")
             self.atomic_composition_h_entry = tk.Entry(self.new_tag_window, textvariable=self.atomic_composition_h, width=5)
             self.atomic_composition_h_entry.grid(row=3, column=1, padx=5, pady=5)
 
             #N
             tk.Label(self.new_tag_window, text="N:").grid(row=4, column=0, padx=5, pady=5)
-            self.atomic_composition_n = tk.StringVar(value="2")
+            self.atomic_composition_n = tk.StringVar(value="")
             self.atomic_composition_n_entry = tk.Entry(self.new_tag_window, textvariable=self.atomic_composition_n, width=5)
             self.atomic_composition_n_entry.grid(row=4, column=1, padx=5, pady=5)
 
             #O
             tk.Label(self.new_tag_window, text="O:").grid(row=5, column=0, padx=5, pady=5)
-            self.atomic_composition_o = tk.StringVar(value="1")
+            self.atomic_composition_o = tk.StringVar(value="")
             self.atomic_composition_o_entry = tk.Entry(self.new_tag_window, textvariable=self.atomic_composition_o, width=5)
             self.atomic_composition_o_entry.grid(row=5, column=1, padx=5, pady=5)
 
@@ -453,8 +494,6 @@ def make_GUI():
                     for name, sv in entry_vars.items():
                         if str(sv) == varname:
                             if sv.get() == "":
-                                return
-                            if sv.get()[0] == "-" or sv.get().strip() == "-":
                                 return
 
                             if name in self.iso_pairs.keys():  #atom
@@ -528,6 +567,7 @@ def make_GUI():
             massTag_save_button.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
 
         def save_masstag(self):
+            from src.mass_tags import refresh_tags
             base_composition = {}
             for element in list(self.iso_pairs.keys()) + list(self.rev_iso_pairs.keys()):
                 base_composition[element] = int(self.frame_dict_entryvars[1][element].get())
@@ -548,10 +588,6 @@ def make_GUI():
                 compositions[channel_name] = {}
                 for element in list(self.iso_pairs.keys()) + list(self.rev_iso_pairs.keys()):
                     compositions[channel_name][element] = int(self.frame_dict_entryvars[i][element].get())
-                    if compositions[channel_name][element] < 0:
-                        tk.messagebox.showerror("Negative Number Error", f"Negative Number Error: In tab {i}, the value of {element} is negative. Please fix and try again.")
-                        self.second_window.focus()
-                        return
 
             name = self.tag_saveas_entry.get().strip()
             name = re.sub(r'[<>:"/\\|?*\n\r\t]', '_', name)
@@ -702,6 +738,19 @@ def make_GUI():
                 self.base_mass_Label.grid(row=0, column=1, sticky='nsew')
                 Hovertip(self.base_mass_Label, base_mass)
 
+            if default_dict['tag']['tk_handle'].get() == "None":
+                self.rules_Label = tk.Label(self.inner_frame, text="Rules: " + "N/A")
+                self.rules_Label.grid(row=0, column=0, sticky='nsew')
+                self.base_mass_Label = tk.Label(self.inner_frame, text='  Base Mass: ' + "N/A")
+                self.base_mass_Label.grid(row=0, column=1, sticky='nsew')
+                channel_L = tk.Label(self.inner_frame, text=f"\u0394 N/A", borderwidth=1, relief="solid", font=self.massTag_font)
+                channel_L.grid(row=2, column=0, sticky='nsew')
+                mass_L = tk.Label(self.inner_frame, text="N/A", borderwidth=1, relief="solid", font=self.massTag_font)
+                mass_L.grid(row=2, column=1, sticky='nsew')
+                self.channel_labels.append(channel_L)
+                self.mass_labels.append(mass_L)
+            
+
             if len(channels) > 5:
                 self.massTag_scrollbar = tk.Scrollbar(self.tagInfo_frame, orient="vertical", command=self.tagInfo_canvas.yview)
                 self.massTag_scrollbar.grid(row=0, column=2, sticky="ns")
@@ -779,7 +828,7 @@ def make_GUI():
             config_args_dict = self.make_config_dict(None)
             if config_args_dict is None:
                 return
-            print("Saving Configuration")
+            logger.info("Saving Configuration")
             filename = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")], title="Save Configuration As")
             if filename:
                 try:
@@ -798,9 +847,16 @@ def make_GUI():
         def run_process(self):
             if not self.mzml_and_lib_error_check():
                 return
+                
+            threading.Thread(target=self.run_main, daemon=True).start()
+
+        def run_main(self):
+            for handler in logger.handlers:
+                if isinstance(handler.formatter, ElapsedFormatter):
+                    handler.formatter.reset_start_time()
+
             mzml_files = self.file_dropdown.files
-            print("Running JMOD")
-            for mzml_path in mzml_files:
+            for i, mzml_path in enumerate(mzml_files, start=1):
                 config_args_dict = self.make_config_dict(mzml_path=mzml_path)
                 if config_args_dict is None:
                     return
@@ -811,9 +867,12 @@ def make_GUI():
 
                 except Exception as e:
                     tk.messagebox.showerror("JSON Error", f"Failed to write JSON file: {e}")
-                
-                from src.run_jmod import main  ## Run main() with the JSON file
+
+                logger.info(f"\n\nRunning JMod: File {i} of {len(mzml_files)}\n")
+                from src.run_jmod import main
                 main(filename)
+                logger.info(f"Finished File {i} of {len(mzml_files)}\n")
+            logger.info("JMod Finished")
 
         def mzml_and_lib_error_check(self):
             mzml_files = self.file_dropdown.files
@@ -938,9 +997,7 @@ def make_GUI():
                         return None
 
             return config_args_dict
-
-
-        ####         Command Funcs      #######
+        
 
             
 

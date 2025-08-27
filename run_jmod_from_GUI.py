@@ -18,6 +18,7 @@ src_path = os.path.join(os.path.dirname(__file__), 'src')
 sys.path.insert(0, src_path)
 
 if __name__ == "__main__":
+    from src import logger
     # Import and run the main module
     from src.run_jmod_from_GUI import make_GUI
     make_GUI()

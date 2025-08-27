@@ -14,6 +14,9 @@ class ElapsedFormatter(logging.Formatter):
         minutes, seconds = divmod(rem, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     
+    def reset_start_time(self):
+        self.start_time = time.time()
+    
 def set_log_filepath(logfile_path):
     with open (logfile_path, "w"):
         pass
@@ -23,7 +26,7 @@ def set_log_filepath(logfile_path):
             logger.removeHandler(h)
             h.close()
     file_handler = logging.FileHandler(logfile_path, mode="a")
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
         ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s")
     )
