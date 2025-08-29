@@ -14,6 +14,7 @@ import tqdm
 import pandas as pd
 import sys 
 import biosaur2
+from pathlib import Path
 
 from .utils.io import load_files 
 from .models.spec_lib import spec_lib
@@ -58,14 +59,24 @@ def main():
     print(config.args)
 
     ####  Load Libraries   ######################
-    mzml_file = config.args.mzml.replace("\\","/")
-    lib_file = config.args.speclib.replace("\\","/")
+    if config.args.test_mode:
+        base_dir = Path(__file__).resolve().parent
+        parent_base_dir = base_dir.parent
+        print("base directory:", parent_base_dir)
+        
 
+        mzml_file = str(parent_base_dir / "data" / Path(config.args.mzml).name)
+        lib_file  = str(parent_base_dir / "data" / Path(config.args.speclib).name)
+
+        print("Resolved mzML:", mzml_file)
+        print("Resolved speclib:", lib_file)
     
-    
+    else:
+        mzml_file = config.args.mzml.replace("\\","/")
+        lib_file = config.args.speclib.replace("\\","/")
+
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
     lib_file_name = lib_file.split("/")[-1].rsplit(".",1)[0]
-
 
     use_rt = "RT" if config.args.use_rt else ""
     iso = f"iso{config.num_iso_peaks}" if config.args.iso else ""
