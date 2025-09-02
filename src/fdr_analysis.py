@@ -838,7 +838,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
     fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder)
 
-    
+    logger.info("Saving Results to Folder")
     ## save to results folder
     fdx_quant.to_csv(results_folder+"/all_IDs.csv",index=False)
     fdx_quant[np.logical_and(~fdx_quant["decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)

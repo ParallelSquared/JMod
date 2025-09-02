@@ -96,7 +96,25 @@ def main(GUI_config_json = None):
         results_folder_path = config.args.output_folder +"/" +results_folder_name
 
     if not os.path.exists(results_folder_path):
-        os.mkdir(results_folder_path)
+        try:
+            os.mkdir(results_folder_path)
+        except:
+            from run_jmod_from_GUI import send_raise_to_TK
+            send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+            raise ValueError("Path Length Limit Exceeded")
+        
+    if len(results_folder_path) >= 225:  ##if results path is long, check to make sure putting things in it wont break (i.e. windows with long paths enabled or different OS)
+        try:
+            test_path = os.path.join(results_folder_path, "a" * 250 + ".txt")
+            with open(test_path, "w") as f:
+                f.write("test")
+            os.remove(test_path)
+        except:
+            from run_jmod_from_GUI import send_raise_to_TK
+            send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+            raise ValueError("Path Length Limit Exceeded")
+
+    
 
     args_dict = vars(config.args)
     json_path = os.path.join(results_folder_path, "config.json")
@@ -131,7 +149,7 @@ def main(GUI_config_json = None):
     if config.args.use_features and os.path.exists(feature_path):
         logger.info("loading Dinosaur features")
 
-    logger.info(f"Results will be saved to {results_folder_name}")
+    logger.info(f"Results will be saved to {results_folder_path}")
 
     
     # logger.info(config.args.tag)
@@ -195,9 +213,10 @@ def main(GUI_config_json = None):
             mass_tag = config.tag
         else:
             if config.args.tag != "None":
-                logger.warning(f"Error: Tag '{config.args.tag}' not found in available_tags.")
-                logger.warning(f"Available tags: {list(available_tags.keys())}")
-                # Either exit or continue without tagging
+                from run_jmod_from_GUI import send_raise_to_TK
+                send_raise_to_TK(f"Error: Tag '{config.args.tag}' not found in available_tags.")
+                logger.error(f"Available tags: {list(available_tags.keys())}")
+                raise ValueError("Tag Not Found")
             mass_tag = None
             config.tag = None
     else:
