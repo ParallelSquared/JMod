@@ -26,6 +26,7 @@ import re
 from src.logger import logger, ElapsedFormatter
 import logging
 import threading
+import tempfile
 
 
 
@@ -110,7 +111,7 @@ def make_GUI():
             # Not saving this in default dict because once we have loaded in the JSON we don't care about it anymore
             self.json_label = ttk.Label(self.input_frame, text="Config JSON:")
             self.json_label.grid(row=2, column=0, padx=10, pady=10, sticky="e")
-            Hovertip(self.json_label, "OPTIONAL: Add a JSON configuration file to automatically load parameters\n\n This file can be generated from 'Save Configuration' or found in the output folder \n of a previous run as 'JSON_Config.json'")
+            Hovertip(self.json_label, "OPTIONAL: Add a JSON configuration file to automatically load parameters\n\n This file can be generated from 'Save Configuration' or found in the output folder \n of a previous run as 'config.json'")
             self.json_entry = ttk.Entry(self.input_frame, width=50)
             self.json_entry.grid(row=2, column=1, padx=10, pady=10)
             self.json_button = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=lambda: self.select_json())
@@ -207,6 +208,8 @@ def make_GUI():
             self.tag_dropdown.bind("<<ComboboxSelected>>", combined_handler)
             self.channel_labels = []
             self.mass_labels = []
+            self.tag_checkboxes = []
+            self.tag_checkbox_list = []
 
             # Create New Tag button
             self.create_tag_button = ttk.Button(self.multiplex_frame, text="Create New Tag", style="Accent.TButton", command=self.create_new_tag, width=15)
@@ -229,7 +232,8 @@ def make_GUI():
 
 
             self.update_idletasks()
-            self.tagInfo_canvas = tk.Canvas(self.tagInfo_frame, width=self.ms_frame.winfo_width()*0.35, height=self.ms_frame.winfo_height()*1.64)
+            self.tagInfo_canvas_width_coE = 0.5
+            self.tagInfo_canvas = tk.Canvas(self.tagInfo_frame, width=self.ms_frame.winfo_width()*self.tagInfo_canvas_width_coE, height=self.ms_frame.winfo_height()*1.64)
             self.tagInfo_canvas.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
 
             self.inner_frame = tk.Frame(self.tagInfo_canvas)
@@ -403,8 +407,8 @@ def make_GUI():
 
         def get_tag_list(self):
             from src.mass_tags import available_tags
-            tag_list = list(available_tags.keys())
-            tag_list = ['None'] + tag_list
+            tag_list = ['None'] + [tag for tag in available_tags.keys() if "#" not in tag]  ##filter out subsetted tags from dropdown might be cleaner?
+            #tag_list = ['None'] + list(available_tags.keys())
             default_dict["tag"]["values"] = tag_list
             return tag_list
 
@@ -639,12 +643,25 @@ def make_GUI():
         def update_masstag(self):
             filename = default_dict['tag']['tk_handle'].get()
             if filename == "None" or filename == "":
-                self.update_mass_tag_viewer([], [], None, None)
+                self.update_mass_tag_viewer([], [], None, None, None)
                 return
             if not filename.endswith(".json"):
                 filename += ".json"
             mass_tags_dir = Path(__file__).parent / "MassTags"
-            if filename in os.listdir(mass_tags_dir):
+            mass_tag_files = set(os.listdir(mass_tags_dir))
+            if filename in mass_tag_files or filename.split("#")[0] + ".json" in mass_tag_files:
+                mass_tag_subset = False
+                if filename not in mass_tag_files:
+                    mass_tag_subset = True
+                    subset = os.path.splitext((filename.split("#")[1]))[0]
+                    filename = filename.split("#")[0] + ".json"
+                    #default_dict['tag']['tk_handle'].set(os.path.splitext(filename)[0])
+                    if filename not in mass_tag_files:
+                        tk.messagebox.showerror("Mass tag Error", f"Mass Tag {filename}/{filename}#{subset}.json not in mass tag dir")
+                        default_dict['tag']['tk_handle'].set("None")
+                        self.update_mass_tag_viewer([], [], None, None, None)
+                        return
+                
                 mass_tag_json = (os.path.join(mass_tags_dir,filename))
                 if mass_tag_json:
                     with open(mass_tag_json, 'r') as f:
@@ -652,14 +669,14 @@ def make_GUI():
                     if mass_tag_data['rules'] not in ["nK", "R"]:
                         tk.messagebox.showerror("Mass Tag Error", f"Invalid mass tag rules in file '{filename}'.\n\n {mass_tag_data['rules']} not in {['nK', 'R']}")
                         default_dict['tag']['tk_handle'].set("None")
-                        self.update_mass_tag_viewer([], [], None, None)
+                        self.update_mass_tag_viewer([], [], None, None, None)
                         return
                     try:
                         float(mass_tag_data["base_mass"])
                     except Exception as e:
                         tk.messagebox.showerror("Mass Tag Error", f"Invalid base mass in file '{filename}'.\n\n {mass_tag_data['base_mass']} could not be converted to float")
                         default_dict['tag']['tk_handle'].set("None")
-                        self.update_mass_tag_viewer([], [], None, None)
+                        self.update_mass_tag_viewer([], [], None, None, None)
                         return
                     try:
                         for delta in mass_tag_data["delta"]:
@@ -667,29 +684,36 @@ def make_GUI():
                     except Exception as e:
                         tk.messagebox.showerror("Mass Tag Error", f"Invalid mass shift in file '{filename}'.\n\n {delta} could not be converted to float")
                         default_dict['tag']['tk_handle'].set("None")
-                        self.update_mass_tag_viewer([], [], None, None)
+                        self.update_mass_tag_viewer([], [], None, None, None)
                         return
                     if len(mass_tag_data["channel_names"]) != len(mass_tag_data["delta"]):
                         tk.messagebox.showerror("Mass Tag Error", f"Channel names and delta values length mismatch in file '{filename}'.\n\n {len(mass_tag_data['channel_names'])} != {len(mass_tag_data['delta'])}")
                         default_dict['tag']['tk_handle'].set("None")
-                        self.update_mass_tag_viewer([], [], None, None)
+                        self.update_mass_tag_viewer([], [], None, None, None)
                         return
-                    self.update_mass_tag_viewer(mass_tag_data["channel_names"], mass_tag_data["delta"], mass_tag_data["base_mass"], mass_tag_data["rules"])
+                    if mass_tag_subset is False:
+                        self.update_mass_tag_viewer(mass_tag_data["channel_names"], mass_tag_data["delta"], mass_tag_data["base_mass"], mass_tag_data["rules"], None)
+                    else:
+                        default_dict['tag']['tk_handle'].set(mass_tag_data['name'])
+                        self.update_mass_tag_viewer(mass_tag_data["channel_names"], mass_tag_data["delta"], mass_tag_data["base_mass"], mass_tag_data["rules"], subset)
                 else:
                     tk.messagebox.showerror("Mass Tag Error", f"Mass tag file '{filename}' is empty or not found.")
                     default_dict['tag']['tk_handle'].set("None")
-                    self.update_mass_tag_viewer([], [], None, None)
+                    self.update_mass_tag_viewer([], [], None, None, None)
             else:
                 tk.messagebox.showerror("Mass Tag Error", f"Mass tag file '{filename}' not found in MassTags directory.")
                 default_dict['tag']['tk_handle'].set("None")
-                self.update_mass_tag_viewer([], [], None, None)
+                self.update_mass_tag_viewer([], [], None, None, None)
 
 
-        def update_mass_tag_viewer(self, channels, deltas, base_mass, rules):
+        def update_mass_tag_viewer(self, channels, deltas, base_mass, rules, subset):
             for label in self.channel_labels:
                 label.destroy()
             for label in self.mass_labels:
                 label.destroy()
+            for cbutton in self.tag_checkboxes:
+                cbutton.destroy()
+            self.tag_checkbox_list.clear()
             self.channel_labels.clear()
             self.mass_labels.clear()
             if hasattr(self, "tagInfo_canvas"):
@@ -704,7 +728,7 @@ def make_GUI():
                 self.base_mass_Label.destroy()
 
             self.update_idletasks()
-            self.tagInfo_canvas = tk.Canvas(self.tagInfo_frame, width=self.ms_frame.winfo_width()*0.35, height=self.ms_frame.winfo_height()*1.64)
+            self.tagInfo_canvas = tk.Canvas(self.tagInfo_frame, width=self.ms_frame.winfo_width()*self.tagInfo_canvas_width_coE, height=self.ms_frame.winfo_height()*1.64)
             self.tagInfo_canvas.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
 
             self.inner_frame = tk.Frame(self.tagInfo_canvas)
@@ -734,7 +758,7 @@ def make_GUI():
                         rule_tip = "Unknown Tagging Rule"
                 Hovertip(self.rules_Label, rule_tip)
             if base_mass:
-                self.base_mass_Label = tk.Label(self.inner_frame, text='  Base Mass: ' + format(round(base_mass, 2), ".2f") if base_mass else '')
+                self.base_mass_Label = tk.Label(self.inner_frame, text='  Base Mass: ' + format(round(base_mass, 8), ".8f") if base_mass else '')
                 self.base_mass_Label.grid(row=0, column=1, sticky='nsew')
                 Hovertip(self.base_mass_Label, base_mass)
 
@@ -759,13 +783,59 @@ def make_GUI():
             for i, (channel, delta) in enumerate(zip(channels, deltas), start=2):
                 channel_L = tk.Label(self.inner_frame, text=f"\u0394{channel}", borderwidth=1, relief="solid", font=self.massTag_font)
                 channel_L.grid(row=i, column=0, sticky='nsew')
-                mass_L = tk.Label(self.inner_frame, text=format(round(float(delta), 2), ".2f"), borderwidth=1, relief="solid", font=self.massTag_font)
+                mass_L = tk.Label(self.inner_frame, text=format(round(float(delta), 8), ".8f"), borderwidth=1, relief="solid", font=self.massTag_font)
                 mass_L.grid(row=i, column=1, sticky='nsew')
+                checkbutton_var = tk.BooleanVar(value=True)
+                channel_checkbox = ttk.Checkbutton(self.inner_frame, variable=checkbutton_var, padding=(5, 0,), takefocus=0)
+                channel_checkbox.grid(row=i, column=2, sticky='nsew')
+                if subset:
+                    channel_subsets = [x for x in subset.split("d") if x]
+                    if str(channel) not in channel_subsets:
+                        checkbutton_var.set(False)
                 self.channel_labels.append(channel_L)
                 self.mass_labels.append(mass_L)
+                self.tag_checkboxes.append(channel_checkbox)
+                self.tag_checkbox_list.append(checkbutton_var)
                 Hovertip(mass_L, delta)
+                
         
+        def generate_tag_subset(self, base_tag_name):
+            from src.mass_tags import available_tags, refresh_tags
+            base_tag_instance = available_tags[base_tag_name]
+            channels = base_tag_instance.channel_names
+            using_channels_idxs = []
+            channel_string = ''
+            for i, channel in enumerate(channels):
+                if self.tag_checkbox_list[i].get():
+                    using_channels_idxs.append(i)
+                    channel_string += f"d{channel}"
 
+            new_tag_name = f"{base_tag_name}#{channel_string}"
+
+            base_mass_tag_JSON = os.path.join("src", "MassTags", base_tag_name + ".json")
+            with open(base_mass_tag_JSON, 'r') as f:
+                mass_tag_data = json.load(f)
+
+            new_deltas = [delta for i, delta in enumerate(mass_tag_data['delta']) if i in using_channels_idxs]
+            new_channels = [channel for i, channel in enumerate(mass_tag_data['channel_names']) if i in using_channels_idxs]
+            new_composition_list = [comp for i, comp in enumerate(list(mass_tag_data['compositions'].values())) if i in using_channels_idxs]
+            new_compositions = dict(zip(new_channels, new_composition_list))
+
+            new_tag_dict = {
+                'rules': mass_tag_data['rules'],
+                'base_mass': mass_tag_data['base_mass'],
+                'delta': new_deltas,
+                'channel_names': new_channels,
+                'name': new_tag_name,
+                'compositions': new_compositions
+            }
+
+            file_path = os.path.join("src", "MassTags", "Subsets", new_tag_name + ".json")
+            with open (file_path, 'w') as f:
+                json.dump(new_tag_dict, f, indent=4)
+            refresh_tags()
+
+            return new_tag_name
 
         ####         Additional Funcs      #######
 
@@ -860,18 +930,19 @@ def make_GUI():
             for i, mzml_path in enumerate(mzml_files, start=1):
                 config_args_dict = self.make_config_dict(mzml_path=mzml_path)
                 if config_args_dict is None:
-                    return
-                filename = 'JSON_Config.json'
+                    return 
                 try:
-                    with open(filename, 'w') as json_file:
-                        json.dump(config_args_dict, json_file)
+                    with tempfile.NamedTemporaryFile(mode='w', suffix=".json", delete=False) as tmp_file:
+                        json.dump(config_args_dict, tmp_file)
+                        tmp_filename = tmp_file.name
 
                 except Exception as e:
                     tk.messagebox.showerror("JSON Error", f"Failed to write JSON file: {e}")
 
                 logger.info(f"\n\nRunning JMod: File {i} of {len(mzml_files)}\n")
                 from src.run_jmod import main
-                main(filename)
+                main(tmp_filename)
+                os.remove(tmp_filename)
                 logger.info(f"Finished File {i} of {len(mzml_files)}\n")
             logger.info("JMod Finished")
             #self.run_button.config(state="normal")
@@ -997,7 +1068,11 @@ def make_GUI():
                     if config_args_dict[key] < 0:
                         tk.messagebox.showerror("Invalid Value", f"Value for {key} must be positive: \n\nValue: {config_args_dict[key]}")
                         return None
-
+            base_tag_name = config_args_dict['tag']
+            if base_tag_name != "None":  
+                if not all([x.get() for x in self.tag_checkbox_list]): ##if the user has specified only specific tag channels
+                    new_tag_name = self.generate_tag_subset(base_tag_name)
+                    config_args_dict['tag'] = new_tag_name
             return config_args_dict
         
 

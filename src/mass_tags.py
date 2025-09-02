@@ -95,7 +95,8 @@ class massTag():
         return getattr(self,item)
     
 
-def read_json_to_massTag(mass_tag_JSON):
+def read_json_to_massTag(mass_tags_dir,filename):
+    mass_tag_JSON = os.path.join(mass_tags_dir,filename)
     if mass_tag_JSON:
         with open(mass_tag_JSON, 'r') as f:
             try:
@@ -116,6 +117,11 @@ def read_json_to_massTag(mass_tag_JSON):
                 logger.warning([round(x, 3) for x in delta_calcs])
                 logger.warning("Deltas do not match mass compositions in tag JSON")
                 return mass_tag_data['name']
+            if mass_tag_data['name'] != os.path.splitext(filename)[0]:
+                logger.warning(f"Tag name:  {mass_tag_data['name']}")
+                logger.warning(f"File name: {os.path.splitext(filename)[0]}")
+                logger.warning("Tag name does not match filename")
+                return(mass_tag_data['name'])
             mass_tag = massTag(rules=mass_tag_data['rules'],
                         base_mass=mass_tag_data['base_mass'],
                         delta=mass_tag_data['delta'],
@@ -300,13 +306,15 @@ available_tags = {}
 def refresh_tags():
     available_tags.clear()
     mass_tags_dir = Path(__file__).parent / "MassTags"
-    for filename in os.listdir(mass_tags_dir):
-        if os.path.splitext(filename)[1].lower() == ".json":
-            mass_tag = read_json_to_massTag(os.path.join(mass_tags_dir,filename))
-            if type(mass_tag) == str:
-                logger.warning(f"Unable to load mass tag from {filename}\n")  
-            elif mass_tag:
-                available_tags[mass_tag.name] = mass_tag
+    subset_dir = mass_tags_dir / "Subsets"
+    for directory in (mass_tags_dir, subset_dir):
+        for filename in os.listdir(directory):
+            if os.path.splitext(filename)[1].lower() == ".json":
+                mass_tag = read_json_to_massTag(directory, filename)
+                if type(mass_tag) == str:
+                    logger.warning(f"Unable to load mass tag from {filename}\n")  
+                elif mass_tag:
+                    available_tags[mass_tag.name] = mass_tag
 
 refresh_tags()
 
