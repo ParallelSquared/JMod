@@ -918,6 +918,20 @@ def make_GUI():
             if not self.mzml_and_lib_error_check():
                 return
             
+            try: ##test if long paths break system
+                long_name = "a" * 240 + ".txt"
+                test_path = os.path.join(tempfile.gettempdir(), long_name)
+                with open(test_path, "w") as f:
+                    f.write("test")
+                os.remove(test_path)
+            except:
+                ask_exit = tk.messagebox.askyesno("Path Limit Warning.", "Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
+                if ask_exit:
+                    logger.info("JMod Exited")
+                    return
+                else:
+                    logger.warning("Long Paths Enabled. Downstream processes may break")
+                
             #self.run_button.config(state="disabled")
             threading.Thread(target=self.run_main, daemon=True).start()
 
