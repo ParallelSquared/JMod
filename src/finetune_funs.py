@@ -216,7 +216,12 @@ def train_models(models,train_data,results_folder=None):
         history = model.fit(np.array(X_train), Y_train, epochs=50, batch_size=24, validation_split=0.1, callbacks=[early_stopping],verbose=1)
         all_history.append(history)
         if results_folder:        
-            model.save(results_folder+f'/iRT_updated_model{i}')
+            try:
+                model.save(results_folder+f'/iRT_updated_model{i}')
+            except:
+                from run_jmod_from_GUI import send_raise_to_TK
+                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+                raise ValueError("Path Length Limit Exceeded")
     logger.info(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
     return models, all_history
 
@@ -255,7 +260,7 @@ def fine_tune_rt(grouped_df,
         # model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk3plex/iRT_updated_model"
         model_path = "/Volumes/Lab/KMD/FineTuning/DE_bulk_thenFDX016/iRT_updated_model"
         
-    elif "tag6" in tag.name:
+    elif "PSMtag" in tag.name:
         # model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
         #model_path = "/Volumes/Lab/KMD/FineTuning/tag6/iRT_CNN_model_tag6_05052025_"
         #model_path = "/Users/nathanwamsley/Data/JMOD_TESTS/iRT_CNN_model_tag6_05052025_"
