@@ -240,9 +240,9 @@ default_dict = {
         'flags': ('--lib_frac',),
         'default': 0.5,
         'takes_value': True,
-        'in_GUI': False,
+        'in_GUI': True,
         'type': 'float',
-        'widget': '',
+        'widget': 'entry',
         'tk_handle': None,
         'special_upload': False,
         'values': '+<1'
@@ -295,9 +295,9 @@ default_dict = {
         'flags': ('--score_lib_frac',),
         'default': 0.5,
         'takes_value': True,
-        'in_GUI': False,
+        'in_GUI': True,
         'type': 'float',
-        'widget': '',
+        'widget': 'entry',
         'tk_handle': None,
         'special_upload': False,
         'values': '+<1'

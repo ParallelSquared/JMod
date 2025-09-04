@@ -155,12 +155,30 @@ def make_GUI():
 
             # Empirical RT (label + checkbox)
             self.empirical_rt_lab = ttk.Label(self.ms_frame, text="Force lib RT:")
-            self.empirical_rt_lab.grid(row=1, column=2, padx=20, pady=5, sticky="e")
+            self.empirical_rt_lab.grid(row=2, column=5, padx=20, pady=5, sticky="e")
             Hovertip(self.empirical_rt_lab, "Force use of library retention time for alignment ")
             self.empirical_rt_var = tk.BooleanVar(value=False)
             default_dict["use_emp_rt"]["tk_handle"] = self.empirical_rt_var
             self.empirical_rt_cb = ttk.Checkbutton(self.ms_frame, variable=self.empirical_rt_var)
-            self.empirical_rt_cb.grid(row=1, column=3, padx=5, pady=5, sticky="w")
+            self.empirical_rt_cb.grid(row=2, column=6, padx=5, pady=5, sticky="w")
+
+            # Min Lib Intensity (label + entry)
+            self.min_lib_int_lab = ttk.Label(self.ms_frame, text="Min Lib Match:")
+            self.min_lib_int_lab.grid(row=1, column=2, padx=20, pady=5, sticky="e")
+            Hovertip(self.min_lib_int_lab, "Minimum fraction library intensity matched")
+            self.min_lib_int_entry = ttk.Entry(self.ms_frame, width=6)
+            self.min_lib_int_entry.grid(row=1, column=3, padx=5, pady=5, sticky="w")
+            default_dict["lib_frac"]["tk_handle"] = self.min_lib_int_entry
+            self.min_lib_int_entry.insert(0, "0.5")
+
+            self.min_lib_int_score_lab = ttk.Label(self.ms_frame, text="Lib Match Score:")
+            self.min_lib_int_score_lab.grid(row=2, column=2, padx=20, pady=5, sticky="e")
+            Hovertip(self.min_lib_int_score_lab, "Minimum fraction library intensity matched to score")
+            self.min_lib_int_score_entry = ttk.Entry(self.ms_frame, width=6)
+            self.min_lib_int_score_entry.grid(row=2, column=3, padx=5, pady=5, sticky="w")
+            default_dict["score_lib_frac"]["tk_handle"] = self.min_lib_int_score_entry
+            self.min_lib_int_score_entry.insert(0, "0.5")
+
 
             # RT Tolerance (label + checkbox + entry)
             self.rt_tolerance_lab = ttk.Label(self.ms_frame, text="RT Tolerance:")
@@ -233,7 +251,8 @@ def make_GUI():
 
             self.update_idletasks()
             self.tagInfo_canvas_width_coE = 0.5
-            self.tagInfo_canvas = tk.Canvas(self.tagInfo_frame, width=self.ms_frame.winfo_width()*self.tagInfo_canvas_width_coE, height=self.ms_frame.winfo_height()*1.64)
+            self.tagInfo_canvas_height_coE = 1.15
+            self.tagInfo_canvas = tk.Canvas(self.tagInfo_frame, width=self.ms_frame.winfo_width()*self.tagInfo_canvas_width_coE, height=self.ms_frame.winfo_height()*self.tagInfo_canvas_height_coE)
             self.tagInfo_canvas.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
 
             self.inner_frame = tk.Frame(self.tagInfo_canvas)
@@ -728,7 +747,7 @@ def make_GUI():
                 self.base_mass_Label.destroy()
 
             self.update_idletasks()
-            self.tagInfo_canvas = tk.Canvas(self.tagInfo_frame, width=self.ms_frame.winfo_width()*self.tagInfo_canvas_width_coE, height=self.ms_frame.winfo_height()*1.64)
+            self.tagInfo_canvas = tk.Canvas(self.tagInfo_frame, width=self.ms_frame.winfo_width()*self.tagInfo_canvas_width_coE, height=self.ms_frame.winfo_height()*self.tagInfo_canvas_height_coE)
             self.tagInfo_canvas.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
 
             self.inner_frame = tk.Frame(self.tagInfo_canvas)
@@ -895,7 +914,7 @@ def make_GUI():
         def save_configuration(self):
             if not self.mzml_and_lib_error_check():
                 return
-            config_args_dict = self.make_config_dict(None)
+            config_args_dict = self.make_config_dict(None, run=False)
             if config_args_dict is None:
                 return
             logger.info("Saving Configuration")
@@ -913,6 +932,13 @@ def make_GUI():
             if folder_selected:
                 self.output_folder_var.set(folder_selected)
 
+        def check_thread(self, thread):
+            if thread.is_alive():
+                self.after(1_000, lambda: self.check_thread(thread))
+            else:
+                self.run_button.config(state="normal")
+                if self.exited_properly is False:
+                    logger.error("Error running Jmod. Jmod exited")
 
         def run_process(self):
             if not self.mzml_and_lib_error_check():
@@ -932,8 +958,11 @@ def make_GUI():
                 else:
                     logger.warning("Long Paths Enabled. Downstream processes may break")
                 
-            #self.run_button.config(state="disabled")
-            threading.Thread(target=self.run_main, daemon=True).start()
+            self.run_button.config(state="disabled")
+            self.exited_properly = False
+            t = threading.Thread(target=self.run_main, daemon=True)
+            t.start()
+            self.check_thread(t)
 
         def run_main(self):
             for handler in logger.handlers:
@@ -942,7 +971,7 @@ def make_GUI():
 
             mzml_files = self.file_dropdown.files
             for i, mzml_path in enumerate(mzml_files, start=1):
-                config_args_dict = self.make_config_dict(mzml_path=mzml_path)
+                config_args_dict = self.make_config_dict(mzml_path=mzml_path, run=True)
                 if config_args_dict is None:
                     return 
                 try:
@@ -958,8 +987,9 @@ def make_GUI():
                 main(tmp_filename)
                 os.remove(tmp_filename)
                 logger.info(f"Finished File {i} of {len(mzml_files)}\n")
+            self.exited_properly = True
             logger.info("JMod Finished")
-            #self.run_button.config(state="normal")
+            self.run_button.config(state="normal")
 
         def mzml_and_lib_error_check(self):
             mzml_files = self.file_dropdown.files
@@ -992,7 +1022,7 @@ def make_GUI():
                 return False
             return True
             
-        def make_config_dict(self, mzml_path=None):
+        def make_config_dict(self, mzml_path=None, run=True):
             handles_map = {k: v['tk_handle'] for k, v in default_dict.items()}
             filtered_args = self.read_additional_funcs()  ##get additional args from text box
             if filtered_args is False:
@@ -1000,9 +1030,15 @@ def make_GUI():
             config_args_dict = {}
             for key, data in default_dict.items():
                 if key == 'mzml':  #hardcoded mzml
-                    config_args_dict[key] = str(mzml_path)
+                    if run is True:
+                        config_args_dict[key] = str(mzml_path)
+                    else:
+                        config_args_dict[key] = None
                 elif key == 'diaPASEF':  ##Hardcoded diaPASEF because it relies on mzml_path
-                    config_args_dict[key] = True if os.path.splitext(mzml_path)[1].lower() == ".d" else False
+                    if mzml_path:
+                        config_args_dict[key] = True if os.path.splitext(mzml_path)[1].lower() == ".d" else False
+                    else:
+                        config_args_dict[key] = False
                 elif callable(data['special_upload']):  ##if special upload function is defined
                     try:
                         config_args_dict[key] = data['special_upload'](data['tk_handle'], handles_map)
