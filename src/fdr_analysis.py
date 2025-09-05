@@ -576,7 +576,12 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
 
 def log_df(df):
-    for line in df.to_string(index=False).splitlines():
+    filenames = df.iloc[:, 0].unique()
+    for fn in filenames:
+        logger.info(f"File: {fn}")
+
+    df_no_first = df.iloc[:, 1:]
+    for line in df_no_first.to_string(index=False).splitlines():
         logger.info(line)
 
 def compute_protein_FDR(df,results_folder=None):
