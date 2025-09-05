@@ -2,6 +2,8 @@
 ## Defines the defaults and other parameters for JMod. These are used to initialize JMod both when running from the command line 
 ## and when running from GUI
 
+#when changing default values, also think about changing Preset JSONS
+
 """
 'name': {                         # Long flag without dashes
     'flags': ('-n', '--name'),    # Command line flags

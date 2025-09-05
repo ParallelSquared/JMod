@@ -109,13 +109,14 @@ def make_GUI():
 
             #JSON Config input
             # Not saving this in default dict because once we have loaded in the JSON we don't care about it anymore
-            self.json_label = ttk.Label(self.input_frame, text="Config JSON:")
+            self.json_label = ttk.Label(self.input_frame, text="Presets:")
             self.json_label.grid(row=2, column=0, padx=10, pady=10, sticky="e")
-            Hovertip(self.json_label, "OPTIONAL: Add a JSON configuration file to automatically load parameters\n\n This file can be generated from 'Save Configuration' or found in the output folder \n of a previous run as 'config.json'")
-            self.json_entry = ttk.Entry(self.input_frame, width=50)
-            self.json_entry.grid(row=2, column=1, padx=10, pady=10)
-            self.json_button = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=lambda: self.select_json())
-            self.json_button.grid(row=2, column=2, padx=10, pady=10)
+            Hovertip(self.json_label, "Select Presets to load into GUI")
+            self.presets_label = ttk.Label(self.input_frame, text='')
+            self.presets_label.grid(row=2, column=1, padx=10, pady=10)
+            self.json_button_in = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=lambda: self.select_json_internal())
+            self.json_button_in.grid(row=2, column=2, padx=10, pady=10)
+            self.presets_label.config(text="Label_Free_DIA_Defaults")
 
             ####         MS Frame      #######
             self.ms_frame = ttk.LabelFrame(self, text="MS Settings")
@@ -130,7 +131,7 @@ def make_GUI():
             self.ms1_lab.grid(row=0, column=0, padx=5, pady=5, sticky="e")
             Hovertip(self.ms1_lab, "MS1 ppm error tolerance ")
             self.ms1_ppm_entry = ttk.Entry(self.ms_frame, width=4)
-            self.ms1_ppm_entry.insert(0, "0")
+            self.ms1_ppm_entry.insert(0, "0.0")
             self.ms1_ppm_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
             default_dict["ms1_ppm"]["tk_handle"] = self.ms1_ppm_entry
 
@@ -139,7 +140,7 @@ def make_GUI():
             self.ms2_ppm_lab.grid(row=1, column=0, padx=5, pady=5, sticky="e")
             Hovertip(self.ms2_ppm_lab, "MS2 ppm error tolerance ")
             self.ms2_ppm_entry = ttk.Entry(self.ms_frame, width=4)
-            self.ms2_ppm_entry.insert(0, "10")
+            self.ms2_ppm_entry.insert(0, "10.0")
             self.ms2_ppm_entry.grid(row=1, column=1, padx=5, pady=5, sticky="w")
             default_dict["ppm"]["tk_handle"] = self.ms2_ppm_entry
 
@@ -191,6 +192,7 @@ def make_GUI():
             self.rt_tolerance_entry = ttk.Entry(self.ms_frame, width=7)
             self.rt_tolerance_entry.grid(row=0, column=7, padx=5, pady=5, sticky="w")
             default_dict["rt_tol"]["tk_handle"] = self.rt_tolerance_entry
+            self.rt_tolerance_entry.insert(0, "0.5")
 
             # Isotopes (label + checkbox + combobox)
             self.isotopes_lab = ttk.Label(self.ms_frame, text="MS2 Isotopes:")
@@ -316,7 +318,7 @@ def make_GUI():
             self.select_output_button.grid(row=0, column=6, padx=10, pady=10)
 
             # Save Configuration Label + Save Button
-            self.save_config_button = ttk.Button(self.output_frame, text="Save Configuration", style="Accent.TButton", width=20, command=self.save_configuration)
+            self.save_config_button = ttk.Button(self.output_frame, text="Save Presets", style="Accent.TButton", width=20, command=self.save_configuration)
             self.save_config_button.grid(row=1, column=1, padx=20, pady=10, sticky="e")
             Hovertip(self.save_config_button, "Save a configuration JSON file for the current settings ")
 
@@ -345,16 +347,23 @@ def make_GUI():
                 self.tsv_entry.delete(0, tk.END)
                 self.tsv_entry.insert(0, file_path)
 
-        def select_json(self):
+
+
+        def select_json_internal(self):
+            initial_dir = os.path.join(os.path.dirname(__file__), "Presets")
             file_path = filedialog.askopenfilename(
-                title="Select JSON Config File", filetypes=[("JSON files", "*.json")]
-            )
+                title="Select JSON Config File", filetypes=[("JSON files", "*.json")], initialdir=initial_dir)
             if file_path:
-                self.json_entry.delete(0, tk.END)
-                self.json_entry.insert(0, file_path)
+                basename = os.path.basename(file_path)
+                if len(basename) > 50:
+                    display_name = f"...{basename[-50:]}"
+                else:
+                    display_name = basename
+                self.presets_label.config(text=display_name)
                 self.import_json(file_path)
+                logger.info(f"Loaded Presets from {file_path}")
             else:
-                tk.messagebox.showerror("No File Selected", "No JSON file was selected")
+                pass
 
 
         def import_json(self, file_path): 
@@ -912,13 +921,14 @@ def make_GUI():
         ####         Output Funcs      #######
 
         def save_configuration(self):
-            if not self.mzml_and_lib_error_check():
-                return
+            # if not self.mzml_and_lib_error_check():
+            #     return
             config_args_dict = self.make_config_dict(None, run=False)
             if config_args_dict is None:
                 return
             logger.info("Saving Configuration")
-            filename = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")], title="Save Configuration As")
+            initial_dir = os.path.join(os.path.dirname(__file__), "Presets")
+            filename = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")], title="Save Configuration As", initialdir = initial_dir)
             if filename:
                 try:
                     with open(filename, 'w') as json_file:
