@@ -14,7 +14,6 @@ import tqdm
 import pandas as pd
 import sys 
 import biosaur2
-from pathlib import Path
 
 from .utils.io import load_files 
 from .models.spec_lib import spec_lib
