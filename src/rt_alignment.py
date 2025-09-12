@@ -244,7 +244,10 @@ def lowess_fit(x,y,frac=.2, it=3):
 
     """
     # plt.scatter(x,y,s=1)
-    
+    num_points = len(x)
+    min_points = 3
+    frac = max(frac, min_points / num_points)
+
     lowess = sm.nonparametric.lowess(y, x, frac=frac,it=it)
     
     # unpack the lowess smoothed points to their values
@@ -684,8 +687,10 @@ def empirical_fit(output_df,results_folder=None):
                                                                                                               "med_frag_error"]]
                                                                                                             )
         
-        
-        f = lowess_fit(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.1)
+        #num_points = len(output_df[cor_filter])
+        #frac = max(0.1, 3 / num_points)
+
+        #f = lowess_fit(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],frac)
         plt.subplots()
         plt.scatter(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],s=1)
         plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)
@@ -721,6 +726,10 @@ def empirical_fit(output_df,results_folder=None):
        
         
         first_rt_diffs = (f(output_df.lib_rt)-output_df.rt)
+        #print('----------------------------------------------------------------')
+        #print('first rt diffs: ', first_rt_diffs)
+        #print('first rt diffs with cor filter: ', first_rt_diffs[cor_filter])
+        #print('----------------------------------------------------------------')
         rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
         first_rt_tolerance = 4*np.abs(rt_stddev)
         # rt_mean, rt_stddev = stats.norm.fit(first_rt_diffs[cor_filter])

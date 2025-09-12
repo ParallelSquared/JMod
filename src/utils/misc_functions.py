@@ -186,7 +186,7 @@ def write_to_csv(data: list[list],filepath: str,colnames: list[str] = None):
         writer.writerows(data)
         
         
-        
+
 def within_tol(x: list[float], y: list[float], atol: float, rtol: float) -> npt.NDArray[np.float64]:
     """
     Compare two lists of floats element-wise to determine if each pair of values 
@@ -259,13 +259,13 @@ def get_diff(mz,peaks,tol):
     log_diff = within_tol(mz, peaks, atol=0, rtol=tol) 
     idxs = np.where(log_diff[...,0])[0]
     
-    
     # if a match
     if idxs.size > 0:
         
         # in case of multiple matches
         # select idx with smallest error
-        closest_idx = idxs[np.argmin(log_diff[idxs,1])]
+        #closest_idx = idxs[np.argmin(log_diff[idxs,1])]
+        closest_idx = idxs[np.argmin(np.abs(log_diff[idxs,1]))]
         
         return (peaks[closest_idx]-mz)/mz
     

@@ -13,8 +13,185 @@ import numpy as np
 
 # Import the functions we want to test
 from src.utils.misc_functions import (
-    closest_peak_diff, frag_to_peak, within_tol
+    window_width, createTolWindows, within_tol, get_diff, closest_peak_diff, frag_to_peak
 )
+
+class TestWindowWidth:
+    """Test cases for the window_width function"""
+
+    def test_basic_width(self):
+        """Test basic positive window width"""
+        spec = Mock()
+        spec.ms1window = (400.0, 420.0)
+        result = window_width(spec)
+        assert result == 20.0
+
+    def test_zero_width(self):
+        """Test when w1 == w2"""
+        spec = Mock()
+        spec.ms1window = (500.0, 500.0)
+        result = window_width(spec)
+        assert result == 0.0
+
+    def test_negative_window(self):
+        """Test when w2 < w1 (unusual case)"""
+        spec = Mock()
+        spec.ms1window = (600.0, 590.0)
+        result = window_width(spec)
+        # Function just subtracts, no check for ordering
+        assert result == -10.0
+
+    def test_integer_inputs(self):
+        """Test with integer values"""
+        spec = Mock()
+        spec.ms1window = (100, 120)
+        result = window_width(spec)
+        assert result == 20
+
+    def test_large_range(self):
+        """Test with a very large range"""
+        spec = Mock()
+        spec.ms1window = (1.0, 1e6)
+        result = window_width(spec)
+        assert result == 1e6 - 1.0
+
+class TestCreateTolWindows:
+    """Test cases for the createTolWindows function"""
+
+    def test_empty_positions(self):
+        """Empty input should return empty array"""
+        positions = np.array([])
+        tolerance = 0.1
+        result = createTolWindows(positions, tolerance)
+        assert result.size == 0
+
+    def test_single_position(self):
+        """Test with a single position"""
+        positions = np.array([100.0])
+        tolerance = 0.01  # 1%
+        result = createTolWindows(positions, tolerance)
+        expected = np.array([99.0, 101.0])
+        np.testing.assert_allclose(result, expected)
+
+    def test_two_non_overlapping_positions(self):
+        """Test with two well-separated positions"""
+        positions = np.array([100.0, 200.0])
+        tolerance = 0.01
+        result = createTolWindows(positions, tolerance)
+        # First window: 99–101, second window: 198–202
+        expected = np.array([99.0, 101.0, 198.0, 202.0])
+        np.testing.assert_allclose(result, expected)
+
+    def test_two_overlapping_positions(self):
+        """Test with two close positions that should merge"""
+        positions = np.array([100.0, 101.0])
+        tolerance = 0.05  # 5%
+        result = createTolWindows(positions, tolerance)
+        # Position 100 → window [95,105]
+        # Position 101 → window [95.95,106.05]
+        # These overlap, so should merge into [95,106.05]
+        expected = np.array([95.0, 106.05])
+        np.testing.assert_allclose(result, expected)
+
+    def test_unsorted_input(self):
+        """Test that input order does not matter (function sorts internally)"""
+        positions = np.array([300.0, 100.0])
+        tolerance = 0.01
+        result = createTolWindows(positions, tolerance)
+        expected = np.array([99.0, 101.0, 297.0, 303.0])
+        np.testing.assert_allclose(result, expected)
+
+    def test_integer_positions(self):
+        """Test with integer inputs"""
+        positions = [10, 20]
+        tolerance = 0.1  # 10%
+        result = createTolWindows(positions, tolerance)
+        expected = np.array([9.0, 11.0, 18.0, 22.0])
+        np.testing.assert_allclose(result, expected)
+
+    def test_large_array(self):
+        """Sanity check with many positions"""
+        positions = np.arange(100, 110, 1)  # 100, 101, ..., 109
+        tolerance = 0.01
+        result = createTolWindows(positions, tolerance)
+        # Should return alternating lower/upper edges, same length as 2 * positions.size
+        assert result.shape[0] % 2 == 0
+        assert np.all(result[::2] < result[1::2])
+
+class TestWithinTol:
+    """Test cases for the within_tol function"""
+    
+    def test_within_tol_exact_match(self):
+        """Test exact matches"""
+        result = within_tol(100.0, 100.0, atol=0, rtol=0.01)
+        assert result[0] == True
+        assert result[1] == 0.0
+    
+    def test_within_tol_relative_tolerance(self):
+        """Test relative tolerance"""
+        result = within_tol(100.0, 101.0, atol=0, rtol=0.01)
+        assert result[0] == True  # Within 1% tolerance
+        assert result[1] == -1.0  # Difference
+        
+        result = within_tol(100.0, 102.0, atol=0, rtol=0.01)
+        assert result[0] == False  # Outside 1% tolerance
+    
+    def test_within_tol_absolute_tolerance(self):
+        """Test absolute tolerance"""
+        result = within_tol(100.0, 100.5, atol=1.0, rtol=0)
+        assert result[0] == True  # Within 1.0 absolute tolerance
+        
+        result = within_tol(100.0, 102.0, atol=1.0, rtol=0)
+        assert result[0] == False  # Outside 1.0 absolute tolerance
+    
+    def test_within_tol_arrays(self):
+        """Test with numpy arrays"""
+        x = np.array([100.0, 200.0, 300.0])
+        y = np.array([101.0, 202.0, 306.0])
+        result = within_tol(x, y, atol=0, rtol=0.01)
+        
+        assert result[0, 0] == 1.  # 101/100 = 1.01, within 2%
+        assert result[1, 0] == 1.   # 202/200 = 1.01, within 2%
+        assert result[2, 0] == 0.  # 306/300 = 1.02, outside 2%
+
+class TestGetDiff:
+    """Test cases for get_diff function"""
+
+    def test_exact_match(self):
+        """mz matches one peak exactly"""
+        mz = 100.0
+        peaks = np.array([95.0, 100.0, 105.0])
+        tol = 0.01  # 1%
+        result = get_diff(mz, peaks, tol)
+        # exact match → relative diff = 0
+        assert result == 0.0
+
+    def test_within_tolerance(self):
+        """mz matches a peak within tolerance"""
+        mz = 100.0
+        peaks = np.array([101.0])  # 1% higher
+        tol = 0.02  # 2% tolerance
+        result = get_diff(mz, peaks, tol)
+        expected = (101.0 - 100.0) / 100.0  # 0.01
+        assert np.isclose(result, expected)
+
+    def test_outside_tolerance(self):
+        """mz has no match within tolerance"""
+        mz = 100.0
+        peaks = np.array([105.0])  # 5% higher
+        tol = 0.01  # 1% tolerance
+        result = get_diff(mz, peaks, tol)
+        assert np.isnan(result)
+
+    def test_multiple_matches(self):
+        """Choose closest peak when multiple are within tolerance"""
+        mz = 100.0
+        peaks = np.array([101.0, 99.5, 105.0])
+        tol = 0.02  # 2% tolerance, so 101.0 and 99.5 are both valid
+        result = get_diff(mz, peaks, tol)
+        expected = (99.5 - 100.0) / 100.0
+        print(result, expected)
+        assert np.isclose(result, expected)
 
 class TestClosestPeakDiff:
     """Test cases for the closest_peak_diff function"""
@@ -178,7 +355,6 @@ class TestClosestPeakDiff:
         else:
             assert abs(result - expected) < 1e-4
 
-
 class TestFragToPeak:
     """Test cases for the frag_to_peak function"""
     
@@ -211,40 +387,3 @@ class TestFragToPeak:
         
         assert ordered_frags[0] == "y2_1"  # Lower m/z first
         assert ordered_frags[1] == "b2_1"
-
-
-class TestWithinTol:
-    """Test cases for the within_tol function"""
-    
-    def test_within_tol_exact_match(self):
-        """Test exact matches"""
-        result = within_tol(100.0, 100.0, atol=0, rtol=0.01)
-        assert result[0] == True
-        assert result[1] == 0.0
-    
-    def test_within_tol_relative_tolerance(self):
-        """Test relative tolerance"""
-        result = within_tol(100.0, 101.0, atol=0, rtol=0.01)
-        assert result[0] == True  # Within 1% tolerance
-        assert result[1] == -1.0  # Difference
-        
-        result = within_tol(100.0, 102.0, atol=0, rtol=0.01)
-        assert result[0] == False  # Outside 1% tolerance
-    
-    def test_within_tol_absolute_tolerance(self):
-        """Test absolute tolerance"""
-        result = within_tol(100.0, 100.5, atol=1.0, rtol=0)
-        assert result[0] == True  # Within 1.0 absolute tolerance
-        
-        result = within_tol(100.0, 102.0, atol=1.0, rtol=0)
-        assert result[0] == False  # Outside 1.0 absolute tolerance
-    
-    def test_within_tol_arrays(self):
-        """Test with numpy arrays"""
-        x = np.array([100.0, 200.0, 300.0])
-        y = np.array([101.0, 202.0, 306.0])
-        result = within_tol(x, y, atol=0, rtol=0.01)
-        
-        assert result[0, 0] == 1.  # 101/100 = 1.01, within 2%
-        assert result[1, 0] == 1.   # 202/200 = 1.01, within 2%
-        assert result[2, 0] == 0.  # 306/300 = 1.02, outside 2%

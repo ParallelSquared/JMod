@@ -143,11 +143,11 @@ def main():
         mid_rt = np.mean(all_rts)
         mid_mz = np.mean(all_mzs)
         
-        # Set test ranges around midpoint
-        config.args.test_rt_min = max(0, mid_rt - 1.5)  # ±5 min
-        config.args.test_rt_max = mid_rt + 1.5
-        config.args.test_mz_min = max(0, mid_mz - 100)  # ±250 m/z
-        config.args.test_mz_max = mid_mz + 100
+        # Set test ranges around midpoint, might want to get better hard coded in parameters. maybe percentile based?
+        config.args.test_rt_min = max(0, mid_rt - 1)
+        config.args.test_rt_max = mid_rt + 1
+        config.args.test_mz_min = max(0, mid_mz - 50) 
+        config.args.test_mz_max = mid_mz + 50
         
         print(f"Auto-set test mode ranges: RT {config.args.test_rt_min}-{config.args.test_rt_max}, "rf"m/z {config.args.test_mz_min}-{config.args.test_mz_max}")
         print(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
