@@ -531,7 +531,8 @@ def longest_y(frag_list: dict[str, list[float]],matches: npt.NDArray[np.bool_]) 
     
     max_y = 0
     for frag_name, match_value in zip(frag_list, matches):
-        if match_value and frag_name.startswith('y'):
+        #if match_value and frag_name.startswith('y'):
+        if match_value and isinstance(frag_name, str) and frag_name.startswith('y'):
             # Extract the fragment number from the fragment name
             frag_number = extract_fragment_number(frag_name)
             if frag_number > max_y:

@@ -14,7 +14,7 @@ import math
 
 # Import the functions we want to test
 from src.utils.misc_functions import (
-    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_feature, closest_ms1spec, closest_peak_diff, hyperscore_b_y, frag_to_peak
+    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_feature, closest_ms1spec, closest_peak_diff, hyperscore_b_y, longest_y, frag_to_peak
 )
 
 class TestWindowWidth:
@@ -689,6 +689,86 @@ class TestHyperscoreBY:
         assert y_count == 0
         assert hs == 0
 
+class TestLongestY:
+    """Test cases for the longest_y function"""
+
+    def setup_method(self):
+        # Example fragment list
+        self.frag_list = {
+            'b3_1': [244.09, 0.25],
+            'b4_1': [372.15, 0.45],
+            'b5_1': [485.23, 0.27],
+            'b6_1': [542.25, 0.08],
+            'y4_1': [472.25, 0.31],
+            'y5_1': [529.27, 1.0],
+            'y6_1': [642.35, 0.50],
+            'y7_1': [770.41, 0.15],
+            'y8_1': [827.43, 0.33],
+            'y9_1': [956.47, 0.05]
+        }
+
+    def test_some_matches(self):
+        """Test with some y ions matched"""
+        matches = np.array([True, True, True, True, True, False, True, True, True, False])
+        result = longest_y(self.frag_list, matches)
+        # Matched y ions are y4_1, y6_1, y7_1, y8_1 -> longest is y8_1
+        assert result == 8
+
+    def test_all_matches(self):
+        """Test with all fragments matched"""
+        matches = np.ones(len(self.frag_list), dtype=bool)
+        result = longest_y(self.frag_list, matches)
+        # All y ions matched -> longest is y9_1
+        assert result == 9
+
+    def test_no_y_matches(self):
+        """Test when no y ions matched"""
+        matches = np.array([True, True, True, True, False, False, False, False, False, False])
+        result = longest_y(self.frag_list, matches)
+        # No y ions matched
+        assert result == 0
+
+    def test_empty_frag_list(self):
+        """Test with empty fragment list"""
+        result = longest_y({}, np.array([], dtype=bool))
+        assert result == 0
+
+    def test_unordered_frag_names(self):
+        """Test when fragment names are out of order"""
+        frag_list_unordered = {
+            'y7_1': [770.41, 0.15],
+            'b4_1': [372.15, 0.45],
+            'y5_1': [529.27, 1.0],
+            'y9_1': [956.47, 0.05]
+        }
+        matches = np.array([True, True, True, True])
+        result = longest_y(frag_list_unordered, matches)
+        # longest y ion is y9_1
+        assert result == 9
+
+    def test_nonstandard_names(self):
+        """Test with non-standard fragment names"""
+        frag_list_nonstandard = {
+            'y4_extra': [472.25, 0.31],
+            'y5-something': [529.27, 1.0],
+            'b3': [244.09, 0.25]
+        }
+        matches = np.array([True, True, True])
+        result = longest_y(frag_list_nonstandard, matches)
+        # longest y ion is y5-something
+        assert result == 5
+
+    def test_nonstring_keys(self):
+        """Test fragment keys that are not strings"""
+        frag_list_invalid = {
+            101: [472.25, 0.31],
+            None: [529.27, 1.0],
+            'y3_1': [244.09, 0.25]
+        }
+        matches = np.array([True, True, True])
+        result = longest_y(frag_list_invalid, matches)
+        # Only 'y3_1' is valid -> longest y ion is 3
+        assert result == 3
 class TestFragToPeak:
     """Test cases for the frag_to_peak function"""
     
