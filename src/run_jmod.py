@@ -58,21 +58,8 @@ def main():
     print(config.args)
 
     ####  Load Libraries   ######################
-    if config.args.test_mode:
-        base_dir = Path(__file__).resolve().parent
-        parent_base_dir = base_dir.parent
-        print("base directory:", parent_base_dir)
-        
-
-        mzml_file = str(parent_base_dir / "data" / Path(config.args.mzml).name)
-        lib_file  = str(parent_base_dir / "data" / Path(config.args.speclib).name)
-
-        print("Resolved mzML:", mzml_file)
-        print("Resolved speclib:", lib_file)
-    
-    else:
-        mzml_file = config.args.mzml.replace("\\","/")
-        lib_file = config.args.speclib.replace("\\","/")
+    mzml_file = config.args.mzml.replace("\\","/")
+    lib_file = config.args.speclib.replace("\\","/")
 
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
     lib_file_name = lib_file.split("/")[-1].rsplit(".",1)[0]
