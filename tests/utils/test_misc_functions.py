@@ -10,11 +10,12 @@ Tests for functions in misc_functions.py
 import pytest
 from unittest.mock import Mock, patch
 import numpy as np
+import pandas as pd
 import math
 
 # Import the functions we want to test
 from src.utils.misc_functions import (
-    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_feature, closest_ms1spec, closest_peak_diff, hyperscore_b_y, longest_y, cosim, frag_to_peak, specific_frags
+    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_feature, closest_ms1spec, closest_peak_diff, hyperscore_b_y, longest_y, cosim, frag_to_peak, specific_frags, ordered_frags, fragment_cor
 )
 
 class TestWindowWidth:
@@ -917,3 +918,107 @@ class TestSpecificFrags:
         result = specific_frags(frag_dict, non_spec=[])
         expected = np.array([[200.0, 0.2], [250.0, 0.5], [300.0, 0.3]])
         assert np.allclose(result, expected)
+
+class TestOrderedFrags:
+    """Test cases for ordered_frags function."""
+
+    def test_multiple_elements(self):
+        """Check sorting of a multi-element dictionary by m/z."""
+        frag_dict = {
+            'b4_1': [458.20341007402, 0.12788501],
+            'b4_1_iso1': [459.20636583855736, 0.033455156427240874],
+            'b3_1': [329.16081698605, 0.25633228],
+            'b3_1_iso1': [330.1637526155811, 0.05175954048391056],
+        }
+        result = ordered_frags(frag_dict)
+        expected_keys = ['b3_1', 'b3_1_iso1', 'b4_1', 'b4_1_iso1']
+        assert list(result.keys()) == expected_keys
+
+    def test_single_element(self):
+        """Check that a single-element dict is returned unchanged."""
+        frag_dict = {'b3_1': [329.16081698605, 0.25633228]}
+        result = ordered_frags(frag_dict)
+        assert list(result.keys()) == ['b3_1']
+        assert np.allclose(result['b3_1'], [329.16081698605, 0.25633228])
+
+    def test_empty_input(self):
+        """Empty dictionary should return empty dictionary."""
+        frag_dict = {}
+        result = ordered_frags(frag_dict)
+        assert result == {}
+
+    def test_already_sorted(self):
+        """Already sorted dict should remain the same."""
+        frag_dict = {
+            'b3_1': [329.16, 0.25],
+            'b3_1_iso1': [330.16, 0.05],
+            'b4_1': [458.20, 0.12],
+            'b4_1_iso1': [459.20, 0.03],
+        }
+        result = ordered_frags(frag_dict)
+        expected_keys = ['b3_1', 'b3_1_iso1', 'b4_1', 'b4_1_iso1']
+        assert list(result.keys()) == expected_keys
+        """Fragments with the same m/z should preserve relative order"""
+        frag_dict = {
+            'b1_1': [100.0, 0.5],
+            'b2_1': [100.0, 0.2],
+            'b3_1': [150.0, 0.1]
+        }
+        result = ordered_frags(frag_dict)
+        assert list(result.keys())[:2] == ['b1_1', 'b2_1']
+        assert list(result.keys())[2] == 'b3_1'
+
+class TestFragmentCor:
+    """Tests for fragment_cor function."""
+
+    def test_cosine_similarity(self):
+        """Test using cosine similarity"""
+        data = {
+            "frag_names": ["b3_1;b4_1;y4_1;b5_1;y5_1;y6_1;y7_1;y8_1"],
+            "obs_int": ["5595.63;1993.73;15022.67;6543.21;23123.45;12345.67;5432.10;9876.54"],
+            "frag_int": ["0.252;0.456;0.310;0.274;1.0;0.505;0.145;0.330"]
+        }
+        df = pd.DataFrame(data)
+        result = fragment_cor(df, 0, fn="cos")
+        assert isinstance(result, float)
+        assert 0 <= result <= 1
+
+    def test_pearson_correlation(self):
+        """Test using Pearson correlation"""
+        data = {
+            "frag_names": ["b3_1;b4_1;y4_1;b5_1;y5_1;y6_1;y7_1;y8_1"],
+            "obs_int": ["5595.63;1993.73;15022.67;6543.21;23123.45;12345.67;5432.10;9876.54"],
+            "frag_int": ["0.252;0.456;0.310;0.274;1.0;0.505;0.145;0.330"]
+        }
+        df = pd.DataFrame(data)
+        result = fragment_cor(df, 0, fn="pearson")
+        assert isinstance(result, float)
+        assert -1 <= result <= 1
+
+    def test_missing_columns(self):
+        """Test DataFrame missing required columns"""
+        df = pd.DataFrame({"a": [1], "b": [2]})
+        result = fragment_cor(df, 0, fn="cos")
+        assert result == 0
+
+    def test_empty_shared_fragments(self):
+        """Test when no shared fragments exist"""
+        data = {
+            "frag_names": ["b3_1;b4_1"],
+            "obs_int": ["1.0;2.0"],
+            "frag_int": ["3.0;4.0"]
+        }
+        df = pd.DataFrame(data)
+        result = fragment_cor(df, 0, fn="cos")
+        assert isinstance(result, float)
+
+    def test_invalid_didx(self):
+        """Test index out of bounds raises IndexError"""
+        data = {
+            "frag_names": ["b3_1;b4_1;y4_1"],
+            "obs_int": ["1.0;2.0;3.0"],
+            "frag_int": ["0.1;0.2;0.3"]
+        }
+        df = pd.DataFrame(data)
+        with pytest.raises(IndexError):
+            fragment_cor(df, 5, fn="cos")

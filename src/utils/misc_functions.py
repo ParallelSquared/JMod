@@ -16,6 +16,7 @@ import warnings
 from scipy import stats
 from scipy.interpolate import interp1d
 import statsmodels.api as sm
+from scipy.special import betainc
 from sklearn.ensemble import RandomForestClassifier
 
 from .parse_peptides import split_frag_name
@@ -684,6 +685,10 @@ def specific_frags(frag_dict: dict[str, list[float]],non_spec: list[str] =["b1",
         frag_type,frag_idx,loss,frag_z = split_frag_name(frag)
         if frag_type+str(frag_idx) not in non_spec:
             peaks.append(frag_dict[frag])
+
+    # handling empty peaks
+    if not peaks:
+        return np.empty((0, 2), dtype=float)
     
     peaks = np.array(peaks)
     order = np.argsort(peaks[:,0])
@@ -722,12 +727,16 @@ def ordered_frags(frag_dict):
         'b4_1_iso1': [459.20636583855736, 0.033455156427240874],
     }
     """
+    if not frag_dict:
+        return {}
+    
     peaks = np.array(list(frag_dict.values()))
+    if peaks.ndim == 1:
+        peaks = peaks.reshape(1, -1)
     order = np.argsort(peaks[:,0])
     frags = list(frag_dict.keys())
     return {frags[i]:peaks[i] for i in order}
 ### source: https://stackoverflow.com/questions/62817623/improve-speed-of-scipy-pearson-correlation-for-many-pairwise-calculations
-from scipy.special import betainc
 
 # import cupy as xp
 # from cupyx.scipy.special import betainc
