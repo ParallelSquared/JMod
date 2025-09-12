@@ -11,6 +11,8 @@ import re
 from pyteomics import mass
 import src.config as config
 import pandas as pd 
+import math
+
 def feature_list_rt(DinoDF,rt,rt_tol): 
     """
     Description:
@@ -454,6 +456,11 @@ def hyperscore_b_y(frag_list: dict[str, list[float]],matches: npt.NDArray[np.boo
     #num_y = sum(["y" in i for i,j in zip(frag_list,matches) if j])
     #dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
     #return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
+
+    # handling empty edge cases
+    if not frag_list or len(matches) == 0:
+        return 0, 0, 0
+    
     num_b, num_y = 0, 0
     for (i, j) in zip(frag_list, matches):
         if j:
@@ -464,7 +471,11 @@ def hyperscore_b_y(frag_list: dict[str, list[float]],matches: npt.NDArray[np.boo
 
     #Not efficient to have to allocate and sort every time. 
     dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
-    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
+    val = dp * math.factorial(num_b) * math.factorial(num_y)
+    hyperscore = np.log(val) if val > 0 else 0 # checks for dividing by zero
+
+    return hyperscore, num_b, num_y
+
 
 def longest_y(frag_list: dict[str, list[float]],matches: npt.NDArray[np.bool_]) -> int:
     """

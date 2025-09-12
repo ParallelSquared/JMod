@@ -10,10 +10,11 @@ Tests for functions in misc_functions.py
 import pytest
 from unittest.mock import Mock, patch
 import numpy as np
+import math
 
 # Import the functions we want to test
 from src.utils.misc_functions import (
-    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_peak_diff, frag_to_peak
+    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_feature, closest_ms1spec, closest_peak_diff, hyperscore_b_y, frag_to_peak
 )
 
 class TestWindowWidth:
@@ -233,7 +234,6 @@ class TestMS1Error:
         expected = (100.0 - 100.0) / 100.0
         np.testing.assert_allclose(result, [expected])
 
-
 class TestMovingAverage:
     """Tests for moving_average function"""
 
@@ -269,7 +269,6 @@ class TestMovingAverage:
         result = moving_average(x, w)
         expected = np.convolve(x, np.ones(w), 'same') / w
         np.testing.assert_allclose(result, expected)
-
 
 class TestMovingAUC:
     """Tests for moving_auc function"""
@@ -310,6 +309,154 @@ class TestMovingAUC:
         result = moving_auc(x, w, dx)
         expected = np.convolve(x, np.ones(w), 'same') * dx
         np.testing.assert_allclose(result, expected)
+
+class TestClosestFeature:
+    """Test cases for closest_feature using mocks"""
+
+    def test_exact_match(self):
+        """mz matches exactly within RT window"""
+        dino_features = Mock()
+        dino_features.rtStart = np.array([10, 20])
+        dino_features.rtEnd = np.array([15, 25])
+        dino_features.mz = np.array([100.0, 101.0])
+
+        mz = 100.0
+        rt = 12.0
+        rt_tol = 2.0
+        mz_tol = 0.01
+
+        result = closest_feature(mz, rt, dino_features, rt_tol, mz_tol)
+        expected = (100.0 - mz) / mz
+        assert np.isclose(result, expected)
+
+    def test_within_mz_tolerance(self):
+        """mz within relative tolerance"""
+        dino_features = Mock()
+        dino_features.rtStart = np.array([10, 20])
+        dino_features.rtEnd = np.array([15, 25])
+        dino_features.mz = np.array([100.0, 101.0])
+
+        mz = 100.5
+        rt = 12.0
+        rt_tol = 3.0
+        mz_tol = 0.01
+
+        result = closest_feature(mz, rt, dino_features, rt_tol, mz_tol)
+        expected = (100.0 - mz) / mz
+        assert np.isclose(result, expected)
+
+    def test_multiple_mz_matches_choose_closest(self):
+        """Pick closest peak when multiple mzs within tolerance"""
+        dino_features = Mock()
+        dino_features.rtStart = np.array([10, 20, 30])
+        dino_features.rtEnd = np.array([15, 25, 35])
+        dino_features.mz = np.array([100.0, 101.0, 102.0])
+
+        mz = 101.2
+        rt = 22.0
+        rt_tol = 5.0
+        mz_tol = 0.02
+
+        result = closest_feature(mz, rt, dino_features, rt_tol, mz_tol)
+        expected = (101.0 - mz) / mz
+        assert np.isclose(result, expected)
+
+    def test_no_mz_matches(self):
+        """mz outside tolerance"""
+        dino_features = Mock()
+        dino_features.rtStart = np.array([10, 20])
+        dino_features.rtEnd = np.array([15, 25])
+        dino_features.mz = np.array([100.0, 101.0])
+
+        mz = 110.0
+        rt = 12.0
+        rt_tol = 2.0
+        mz_tol = 0.01
+
+        result = closest_feature(mz, rt, dino_features, rt_tol, mz_tol)
+        assert np.isnan(result)
+
+    def test_no_rt_matches(self):
+        """rt outside RT window"""
+        dino_features = Mock()
+        dino_features.rtStart = np.array([10, 20])
+        dino_features.rtEnd = np.array([15, 25])
+        dino_features.mz = np.array([100.0, 101.0])
+
+        mz = 100.0
+        rt = 50.0
+        rt_tol = 2.0
+        mz_tol = 0.01
+
+        result = closest_feature(mz, rt, dino_features, rt_tol, mz_tol)
+        assert np.isnan(result)
+
+    def test_empty_features(self):
+        """Empty dino_features"""
+        dino_features = Mock()
+        dino_features.rtStart = np.array([])
+        dino_features.rtEnd = np.array([])
+        dino_features.mz = np.array([])
+
+        mz = 100.0
+        rt = 10.0
+        rt_tol = 2.0
+        mz_tol = 0.01
+
+        result = closest_feature(mz, rt, dino_features, rt_tol, mz_tol)
+        assert np.isnan(result)
+
+class TestClosestMS1Spec:
+    """Test cases for closest_ms1spec function"""
+
+    def test_single_value_exact_match(self):
+        """Exact match in array"""
+        ms1rt = np.array([10.0, 20.0, 30.0])
+        ms2rt = 20.0
+        result = closest_ms1spec(ms2rt, ms1rt)
+        assert result == 1  # index of exact match
+
+    def test_single_value_closest(self):
+        """Pick closest if no exact match"""
+        ms1rt = np.array([10.0, 20.0, 30.0])
+        ms2rt = 22.0
+        result = closest_ms1spec(ms2rt, ms1rt)
+        assert result == 1  # 20 is closer than 30
+
+    def test_first_closest(self):
+        """ms2rt closer to first element"""
+        ms1rt = np.array([10.0, 20.0, 30.0])
+        ms2rt = 9.0
+        result = closest_ms1spec(ms2rt, ms1rt)
+        assert result == 0
+
+    def test_last_closest(self):
+        """ms2rt closer to last element"""
+        ms1rt = np.array([10.0, 20.0, 30.0])
+        ms2rt = 35.0
+        result = closest_ms1spec(ms2rt, ms1rt)
+        assert result == 2
+
+    def test_tie_pick_first(self):
+        """If tie, np.argmin picks first occurrence"""
+        ms1rt = np.array([10.0, 20.0])
+        ms2rt = 15.0
+        result = closest_ms1spec(ms2rt, ms1rt)
+        assert result == 0  # 10 and 20 are equidistant, first picked
+
+    def test_empty_array(self):
+        """Empty ms1rt should raise an error"""
+        ms1rt = np.array([])
+        ms2rt = 10.0
+        with pytest.raises(ValueError):
+            closest_ms1spec(ms2rt, ms1rt)
+
+    def test_single_element_array(self):
+        """Array with single element always returns index 0"""
+        ms1rt = np.array([42.0])
+        ms2rt = 10.0
+        result = closest_ms1spec(ms2rt, ms1rt)
+        assert result == 0
 
 class TestClosestPeakDiff:
     """Test cases for the closest_peak_diff function"""
@@ -472,6 +619,75 @@ class TestClosestPeakDiff:
             assert np.isnan(result)
         else:
             assert abs(result - expected) < 1e-4
+
+class TestHyperscoreBY:
+    """Test cases for hyperscore_b_y without using patch"""
+
+    def setup_method(self):
+        # example fragment list
+        self.frag_list = {
+            'b3_1': [244.09, 0.25],
+            'b4_1': [372.15, 0.45],
+            'b5_1': [485.23, 0.27],
+            'b6_1': [542.25, 0.08],
+            'y4_1': [472.25, 0.31],
+            'y5_1': [529.27, 1.0],
+            'y6_1': [642.35, 0.50],
+            'y7_1': [770.41, 0.15],
+            'y8_1': [827.43, 0.33],
+            'y9_1': [956.47, 0.05]
+        }
+
+        # simulate frag_to_peak output
+        self.frag_to_peak_arr = np.array([v for v in self.frag_list.values()])
+
+    def test_some_matches(self):
+        """Some fragments matched"""
+        matches = np.array([True, True, True, True, True, False, True, True, True, False])
+        hs, b_count, y_count = hyperscore_b_y(self.frag_list, matches)
+        assert b_count == 4
+        assert y_count == 4
+        assert hs > 0
+
+    def test_all_matches(self):
+        """All fragments matched"""
+        matches = np.ones(len(self.frag_list), dtype=bool)
+        hs, b_count, y_count = hyperscore_b_y(self.frag_list, matches)
+        assert b_count == 4
+        assert y_count == 6
+        assert hs > 0
+
+    def test_no_matches(self):
+        """No fragments matched"""
+        matches = np.zeros(len(self.frag_list), dtype=bool)
+        hs, b_count, y_count = hyperscore_b_y(self.frag_list, matches)
+        assert b_count == 0
+        assert y_count == 0
+        assert hs == 0
+
+    def test_only_b_matches(self):
+        """Only b ions matched"""
+        matches = np.array([True, True, True, True, False, False, False, False, False, False])
+        hs, b_count, y_count = hyperscore_b_y(self.frag_list, matches)
+        assert b_count == 4
+        assert y_count == 0
+        assert hs > 0
+
+    def test_only_y_matches(self):
+        """Only y ions matched"""
+        matches = np.array([False, False, False, False, True, True, True, True, True, True])
+        hs, b_count, y_count = hyperscore_b_y(self.frag_list, matches)
+        assert b_count == 0
+        assert y_count == 6
+        assert hs > 0
+
+    def test_empty_frag_list(self):
+        """Empty fragment list"""
+        matches = np.array([], dtype=bool)
+        hs, b_count, y_count = hyperscore_b_y({}, matches)
+        assert b_count == 0
+        assert y_count == 0
+        assert hs == 0
 
 class TestFragToPeak:
     """Test cases for the frag_to_peak function"""
