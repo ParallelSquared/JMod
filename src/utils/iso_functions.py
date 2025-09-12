@@ -17,21 +17,21 @@ import numpy as np
 
 from . import config 
 
-from .utils.misc_functions import frag_to_peak
-
+from .misc_functions import frag_to_peak
+from .parse_peptides import split_frag_name
 
 
 ## split up the fragment name (b/y)(frag index)(-loss)_charge
-def split_frag_name(ion_type):
-    frag_name,frag_z = ion_type.split("_")
-    loss_check = frag_name.split("-")
-    loss = ""
-    if len(loss_check)>1:
-        frag_name,loss = loss_check
-    frag_type = frag_name[0]
-    frag_idx = int(frag_name[1:])
+# def split_frag_name(ion_type):
+#     frag_name,frag_z = ion_type.split("_")
+#     loss_check = frag_name.split("-")
+#     loss = ""
+#     if len(loss_check)>1:
+#         frag_name,loss = loss_check
+#     frag_type = frag_name[0]
+#     frag_idx = int(frag_name[1:])
     
-    return frag_type,frag_idx,loss,frag_z
+#     return frag_type,frag_idx,loss,frag_z
 
 def parse_peptide(seq):
     close_d = {"[": "]", "(": ")"}

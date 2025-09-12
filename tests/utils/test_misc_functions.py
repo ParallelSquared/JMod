@@ -14,7 +14,7 @@ import math
 
 # Import the functions we want to test
 from src.utils.misc_functions import (
-    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_feature, closest_ms1spec, closest_peak_diff, hyperscore_b_y, longest_y, frag_to_peak
+    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_feature, closest_ms1spec, closest_peak_diff, hyperscore_b_y, longest_y, cosim, frag_to_peak, specific_frags
 )
 
 class TestWindowWidth:
@@ -769,6 +769,70 @@ class TestLongestY:
         result = longest_y(frag_list_invalid, matches)
         # Only 'y3_1' is valid -> longest y ion is 3
         assert result == 3
+
+class TestCosim:
+    """Test cases for the cosim function"""
+
+    def test_basic_vectors(self):
+        """Test with simple 2D vectors"""
+        x = np.array([1, 0])
+        y = np.array([0, 1])
+        result = cosim(x, y)
+        assert np.isclose(result, 0.0)
+
+        x = np.array([1, 0])
+        y = np.array([1, 0])
+        result = cosim(x, y)
+        assert np.isclose(result, 1.0)
+
+        x = np.array([1, 0])
+        y = np.array([-1, 0])
+        result = cosim(x, y)
+        assert np.isclose(result, -1.0)
+
+    def test_nonbinary_vectors(self):
+        """Test with non-binary values"""
+        x = np.array([1, 2, 3])
+        y = np.array([4, 5, 6])
+        result = cosim(x, y)
+        expected = np.dot(x, y) / (np.linalg.norm(x) * np.linalg.norm(y))
+        assert np.isclose(result, expected)
+
+    def test_higher_dimensions(self):
+        """Test with higher dimensional vectors"""
+        x = np.array([1, 2, 3, 4, 5])
+        y = np.array([5, 4, 3, 2, 1])
+        result = cosim(x, y)
+        expected = np.dot(x, y) / (np.linalg.norm(x) * np.linalg.norm(y))
+        assert np.isclose(result, expected)
+
+    def test_identical_vectors(self):
+        """Cosine similarity of a vector with itself should be 1"""
+        x = np.array([2, -3, 1])
+        result = cosim(x, x)
+        assert np.isclose(result, 1.0)
+
+    def test_squeezing(self):
+        """Ensure squeezed arrays behave the same"""
+        x = np.array([[1, 2, 3]])
+        y = np.array([[1, 2, 3]])
+        result = cosim(x, y)
+        assert np.isclose(result, 1.0)
+
+    def test_zero_vector(self):
+        """Cosine similarity with zero vector raises a warning / inf"""
+        x = np.array([0, 0, 0])
+        y = np.array([1, 2, 3])
+        with pytest.raises(ZeroDivisionError):
+            cosim(x, y)
+
+    def test_mismatched_lengths(self):
+        """Vectors of different lengths should raise assertion"""
+        x = np.array([1, 2])
+        y = np.array([1, 2, 3])
+        with pytest.raises(AssertionError):
+            cosim(x, y)
+    
 class TestFragToPeak:
     """Test cases for the frag_to_peak function"""
     
@@ -801,3 +865,55 @@ class TestFragToPeak:
         
         assert ordered_frags[0] == "y2_1"  # Lower m/z first
         assert ordered_frags[1] == "b2_1"
+
+class TestSpecificFrags:
+    """Test cases for the specific_frags function"""
+
+    def test_basic_filtering(self):
+        """Removes non-specific fragments and sorts by m/z"""
+        frag_dict = {
+            'b1_1': [100.0, 0.5],
+            'b3_1': [200.0, 0.3],
+            'y1_1': [150.0, 0.2],
+            'y4_1': [250.0, 0.4]
+        }
+        result = specific_frags(frag_dict)
+        expected = np.array([[200.0, 0.3], [250.0, 0.4]])
+        assert np.allclose(result, expected)
+
+    def test_custom_non_spec(self):
+        """Use a custom non-specific list"""
+        frag_dict = {
+            'b1_1': [100.0, 0.5],
+            'b2_1': [120.0, 0.6],
+            'b3_1': [200.0, 0.3]
+        }
+        result = specific_frags(frag_dict, non_spec=["b1"])
+        expected = np.array([[120.0, 0.6], [200.0, 0.3]])
+        assert np.allclose(result, expected)
+
+    def test_all_filtered(self):
+        """All fragments are non-specific, should return empty array"""
+        frag_dict = {
+            'b1_1': [100.0, 0.5],
+            'y2_1': [150.0, 0.2]
+        }
+        result = specific_frags(frag_dict)
+        assert result.shape[0] == 0
+
+    def test_empty_input(self):
+        """Empty frag_dict should return empty array"""
+        frag_dict = {}
+        result = specific_frags(frag_dict)
+        assert result.shape[0] == 0
+
+    def test_sorting_by_mz(self):
+        """Output should be sorted by m/z"""
+        frag_dict = {
+            'b3_1': [300.0, 0.3],
+            'b4_1': [200.0, 0.2],
+            'b5_1': [250.0, 0.5]
+        }
+        result = specific_frags(frag_dict, non_spec=[])
+        expected = np.array([[200.0, 0.2], [250.0, 0.5], [300.0, 0.3]])
+        assert np.allclose(result, expected)

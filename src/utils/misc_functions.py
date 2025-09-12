@@ -12,6 +12,10 @@ from pyteomics import mass
 import src.config as config
 import pandas as pd 
 import math
+import warnings
+from scipy import stats
+
+from .parse_peptides import split_frag_name
 
 def feature_list_rt(DinoDF,rt,rt_tol): 
     """
@@ -561,16 +565,18 @@ def cosim(x: npt.NDArray[np.float64],y: npt.NDArray[np.float64]) -> np.float64:
     assert len(x)==len(y)
     x = np.squeeze(x)
     y = np.squeeze(y)
-    return np.dot(x,y)/(np.sqrt(np.sum(np.power(x,2)))*np.sqrt(np.sum(np.power(y,2))))
 
+    norm_x = np.sqrt(np.sum(np.power(x, 2)))
+    norm_y = np.sqrt(np.sum(np.power(y, 2)))
 
+    # handle zero vectors
+    if norm_x == 0 or norm_y == 0:
+        raise ZeroDivisionError("Cosine similarity is undefined for zero vectors")
 
+    # compute cosine similarity
+    return np.dot(x, y) / (norm_x * norm_y)
 
-
-import warnings
-
-from scipy import stats
-
+    #return np.dot(x,y)/(np.sqrt(np.sum(np.power(x,2)))*np.sqrt(np.sum(np.power(y,2))))
 
 
 def frag_to_peak(frag_dict: dict[str, list[float]],return_frags: bool=False): #->npt.NDArray[np.float64]

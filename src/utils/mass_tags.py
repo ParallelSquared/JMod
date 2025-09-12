@@ -16,6 +16,7 @@ from .iso_functions import split_frag_name, fragment_seq
 
 from .utils.misc_functions import frag_to_peak, specific_frags
 from .utils import parse_peptide
+from .parse_peptides import split_frag_name
 """
 ## Load in the library
 from SpecLib import loadSpecLib, write_speclib_tsv
@@ -245,17 +246,17 @@ SILAC = massTag(rules="R",
                 channel_names=[4], 
                 name="SILAC")
 
-## split up the fragment name (b/y)(-loss)(frag index)_charge
-def split_frag_name(ion_type):
-    frag_name,frag_z = ion_type.split("_")
-    loss_check = frag_name.split("-")
-    loss = ""
-    if len(loss_check)>1:
-        frag_name,loss = loss_check
-    frag_type = frag_name[0]
-    frag_idx = int(frag_name[1:])
+# ## split up the fragment name (b/y)(-loss)(frag index)_charge
+# def split_frag_name(ion_type):
+#     frag_name,frag_z = ion_type.split("_")
+#     loss_check = frag_name.split("-")
+#     loss = ""
+#     if len(loss_check)>1:
+#         frag_name,loss = loss_check
+#     frag_type = frag_name[0]
+#     frag_idx = int(frag_name[1:])
     
-    return frag_type,frag_idx,loss,frag_z 
+#     return frag_type,frag_idx,loss,frag_z 
 
 
 
