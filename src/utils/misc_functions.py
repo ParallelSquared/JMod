@@ -14,6 +14,9 @@ import pandas as pd
 import math
 import warnings
 from scipy import stats
+from scipy.interpolate import interp1d
+import statsmodels.api as sm
+from sklearn.ensemble import RandomForestClassifier
 
 from .parse_peptides import split_frag_name
 
@@ -777,17 +780,11 @@ def unstring_floats(string,delim=";"):
     return np.array([*map(float,string.split(delim))])
 
 
-
-from sklearn.ensemble import RandomForestClassifier
 def fit_model(data):
     rf = RandomForestClassifier(n_estimators = 100, max_depth=10)
     rf.fit(*data)
     return rf
 
-
-
-from scipy.interpolate import interp1d
-import statsmodels.api as sm
 
 
 def fragment_cor(df: pd.core.frame.DataFrame,didx: int,fn: str="cos") -> np.float64:
