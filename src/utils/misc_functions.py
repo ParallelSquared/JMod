@@ -282,7 +282,13 @@ def ms1_error(dia_ms1,lib_mzs,tol):
 
 
 
+# def moving_average(x, w):
+#     return np.convolve(x, np.ones(w), 'same') / w
+
 def moving_average(x, w):
+    x = np.asarray(x)
+    if x.size == 0:
+        return np.array([])  # return empty array
     return np.convolve(x, np.ones(w), 'same') / w
 
 # def moving_average(a, n=3):
@@ -292,7 +298,13 @@ def moving_average(x, w):
 #     return ret[n - 1:] / n
 
 
+# def moving_auc(x, w, dx):
+#     return np.convolve(x, np.ones(w), 'same') * dx
+
 def moving_auc(x, w, dx):
+    x = np.asarray(x)
+    if x.size == 0:
+        return np.array([])  # return empty array
     return np.convolve(x, np.ones(w), 'same') * dx
 
 def closest_feature(mz,rt,dino_features,rt_tol,mz_tol):

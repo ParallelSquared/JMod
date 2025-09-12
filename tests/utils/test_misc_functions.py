@@ -13,7 +13,7 @@ import numpy as np
 
 # Import the functions we want to test
 from src.utils.misc_functions import (
-    window_width, createTolWindows, within_tol, get_diff, closest_peak_diff, frag_to_peak
+    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_peak_diff, frag_to_peak
 )
 
 class TestWindowWidth:
@@ -192,6 +192,124 @@ class TestGetDiff:
         expected = (99.5 - 100.0) / 100.0
         print(result, expected)
         assert np.isclose(result, expected)
+
+class TestMS1Error:
+    """Tests for ms1_error function"""
+
+    def test_empty_inputs(self):
+        dia_ms1 = np.array([])
+        lib_mzs = np.array([])
+        tol = 0.01
+        result = ms1_error(dia_ms1, lib_mzs, tol)
+        assert result.size == 0
+
+    def test_no_matches(self):
+        dia_ms1 = np.array([100.0, 200.0])
+        lib_mzs = np.array([300.0])
+        tol = 0.01
+        result = ms1_error(dia_ms1, lib_mzs, tol)
+        assert np.isnan(result[0])
+
+    def test_exact_matches(self):
+        dia_ms1 = np.array([100.0, 200.0])
+        lib_mzs = np.array([100.0, 200.0])
+        tol = 0.01
+        result = ms1_error(dia_ms1, lib_mzs, tol)
+        np.testing.assert_allclose(result, [0.0, 0.0])
+
+    def test_multiple_matches_choose_closest(self):
+        dia_ms1 = np.array([99.5, 101.0, 105.0])
+        lib_mzs = np.array([100.0])
+        tol = 0.02
+        result = ms1_error(dia_ms1, lib_mzs, tol)
+        expected = (99.5 - 100.0) / 100.0  # closest match
+        np.testing.assert_allclose(result, [expected])
+
+    def test_zero_tolerance(self):
+        dia_ms1 = np.array([100.0, 101.0])
+        lib_mzs = np.array([100.0])
+        tol = 0.0
+        result = ms1_error(dia_ms1, lib_mzs, tol)
+        expected = (100.0 - 100.0) / 100.0
+        np.testing.assert_allclose(result, [expected])
+
+
+class TestMovingAverage:
+    """Tests for moving_average function"""
+
+    def test_empty_input(self):
+        x = np.array([])
+        w = 3
+        result = moving_average(x, w)
+        assert result.size == 0
+
+    def test_window_size_1(self):
+        x = np.array([1, 2, 3])
+        w = 1
+        result = moving_average(x, w)
+        np.testing.assert_allclose(result, x)
+
+    def test_basic_average(self):
+        x = np.array([1, 2, 3, 4, 5])
+        w = 3
+        result = moving_average(x, w)
+        expected = np.convolve(x, np.ones(w), 'same') / w
+        np.testing.assert_allclose(result, expected)
+
+    def test_window_larger_than_array(self):
+        x = np.array([1, 2])
+        w = 5
+        result = moving_average(x, w)
+        expected = np.convolve(x, np.ones(w), 'same') / w
+        np.testing.assert_allclose(result, expected)
+
+    def test_negative_numbers(self):
+        x = np.array([-1, 0, 1])
+        w = 2
+        result = moving_average(x, w)
+        expected = np.convolve(x, np.ones(w), 'same') / w
+        np.testing.assert_allclose(result, expected)
+
+
+class TestMovingAUC:
+    """Tests for moving_auc function"""
+
+    def test_empty_input(self):
+        x = np.array([])
+        w = 3
+        dx = 1.0
+        result = moving_auc(x, w, dx)
+        assert result.size == 0
+
+    def test_window_size_1(self):
+        x = np.array([1, 2, 3])
+        w = 1
+        dx = 0.5
+        result = moving_auc(x, w, dx)
+        np.testing.assert_allclose(result, x * dx)
+
+    def test_basic_auc(self):
+        x = np.array([1, 2, 3, 4, 5])
+        w = 3
+        dx = 0.1
+        result = moving_auc(x, w, dx)
+        expected = np.convolve(x, np.ones(w), 'same') * dx
+        np.testing.assert_allclose(result, expected)
+
+    def test_dx_zero(self):
+        x = np.array([1, 2, 3])
+        w = 2
+        dx = 0.0
+        result = moving_auc(x, w, dx)
+        np.testing.assert_allclose(result, np.zeros_like(x))
+
+    def test_window_larger_than_array(self):
+        x = np.array([1, 2])
+        w = 5
+        dx = 1.0
+        result = moving_auc(x, w, dx)
+        expected = np.convolve(x, np.ones(w), 'same') * dx
+        np.testing.assert_allclose(result, expected)
 
 class TestClosestPeakDiff:
     """Test cases for the closest_peak_diff function"""
