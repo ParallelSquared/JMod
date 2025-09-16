@@ -250,6 +250,16 @@ def load_config_from_json(json_path):
         for key, value in config_data.items():
             if hasattr(args, key):
                 setattr(args, key, value)
+
+        globals()['mz_ppm'] = args.ppm
+        globals()['mz_tol'] = args.ppm * 10**(-6)
+        globals()['num_timeplex'] = args.num_timeplex
+        globals()['numProc'] = args.threads
+        globals()['num_iso_peaks'] = args.num_iso
+        globals()['frac_lib_matched'] = args.lib_frac
+        globals()['match_ms1'] = args.no_ms1_req
+        globals()['atleast_m'] = args.atleast_m
+        globals()['unmatched_fit_type'] = args.unmatched
         
         # Set additional config variables if present
         if 'additional_config' in config_data:
