@@ -14,6 +14,7 @@ import tqdm
 import pandas as pd
 import sys 
 import json
+import biosaur2
 
 from .utils.io import load_files 
 from .models.spec_lib import spec_lib
@@ -81,6 +82,13 @@ def main(GUI_config_json = None):
         use_feat = "Dino"
         dino_features = pd.read_csv(feature_path,delimiter="\t")
 
+    if config.args.use_features and not os.path.exists(feature_path):
+        import subprocess
+        subprocess.run(["biosaur2", mzml_file], check=True)
+        use_feat = "Dino"
+        dino_features = pd.read_csv(feature_path,delimiter="\t")
+
+    
     ms2_align = "MS2align" if config.args.ms2_align else ""
     results_folder_name = "_".join([spec_file_name,
                                     lib_file_name+"Update130525",
@@ -91,7 +99,9 @@ def main(GUI_config_json = None):
                                     f"libfrac{config.args.lib_frac}",
                                     *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,plexDIA,is_timeplex,dummy_val]))])
     
+
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
+    # results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_timeplex_051425_01"
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
 
@@ -148,6 +158,8 @@ def main(GUI_config_json = None):
 
     if config.args.use_features and os.path.exists(feature_path):
         logger.info("loading Dinosaur features")
+    if config.args.use_features and not os.path.exists(feature_path):
+        logger.info("Dinosaur feature file not found, running biosaur2")
 
     logger.info(f"Results will be saved to {results_folder_path}")
 
@@ -159,7 +171,7 @@ def main(GUI_config_json = None):
     
     
     overall_start_time = time.time()
-    #python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
+    # python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
 
     
     ######################################################
