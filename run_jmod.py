@@ -13,9 +13,75 @@ This allows you to keep the main script in src/ while still running from root.
 import sys
 import os
 
+from pyinstrument import Profiler
+from pyinstrument.renderers import JSONRenderer, SpeedscopeRenderer, ConsoleRenderer
+
 # Add src directory to Python path
 src_path = os.path.join(os.path.dirname(__file__), 'src')
 sys.path.insert(0, src_path)
+
+
+
+
+# if __name__ == "__main__":
+#     from src import logger
+#     from src.run_jmod import main
+#     jsons = [
+#         r"C:\Users\zcohe\Jmod\JMod_Profiling\Output\Changed_merging\Faster_fit_mtraq\config.json"
+#     ]
+
+
+#     for json in jsons:
+#         if not os.path.exists(json):
+#             raise FileNotFoundError(f"Config file not found: {json}")
+
+#     for i, jfile in enumerate(jsons, start=1):
+#         profiler = Profiler()
+#         profiler.start()
+
+#         main(jfile)
+
+#         profiler.stop()
+
+#         run_dir = os.path.dirname(jfile)
+#         os.makedirs(run_dir, exist_ok=True)
+
+#         renderer = JSONRenderer(show_all=False)
+#         renderer.min_percentage = 0.01
+#         with open(os.path.join(run_dir, "profile.json"), "w") as f:
+#             f.write(renderer.render(profiler.last_session))
+
+#         renderer = SpeedscopeRenderer(show_all=False)
+#         renderer.min_percentage = 0.01
+#         with open(os.path.join(run_dir, "profile.speedscope.json"), "w") as f:
+#             f.write(renderer.render(profiler.last_session))
+
+
+
+# if __name__ == "__main__":
+#     # profiler = Profiler()
+#     # profiler.start()
+
+#     from src import logger
+#     # Import and run the main module
+#     from src.run_jmod import main
+#     main()
+
+    # profiler.stop()
+
+    # base_path = r"C:\Users\zcohe\Jmod\JMod_Profiling\Output\mess around 2"
+
+#     # Text
+#     # with open(os.path.join(base_path, "profile.txt"), "w") as f:
+#     #     f.write(ConsoleRenderer().render(profiler.last_session))
+
+    # # JSON
+    # with open(os.path.join(base_path, "profile.json"), "w") as f:
+    #     f.write(JSONRenderer(show_all=True).render(profiler.last_session))
+
+    # # Speedscope
+    # with open(os.path.join(base_path, "profile.speedscope.json"), "w") as f:
+    #     f.write(SpeedscopeRenderer(show_all=True).render(profiler.last_session))
 
 if __name__ == "__main__":
     from src import logger
@@ -23,6 +89,3 @@ if __name__ == "__main__":
     from src.run_jmod import main
     main()
 
-
-# python "C:\Users\zcohe\Jmod\Jmod_logging\run_jmod.py" -r -l "L:\ZC\LF_data_2\HBthermo_PrositFrags.tsv" -i "L:\ZC\LF_data_2\2023_10_02_QC_LF_DIA_2_E240.mzML" -o "L:\ZC\LF_data_2"
-# python "C:\Users\zcohe\Jmod\Jmod_logging\run_jmod.py" -r -l "L:\ZC\PlexData\diann_tag6_Astral_MBR_anhy_May13_jmod.tsv" -i "L:\ZC\PlexData\2025-05-12_9plex_200pg_20win_24nce_1.mzML" -o "L:\ZC\PlexData" --tag "tag6_9plex" --plexDIA

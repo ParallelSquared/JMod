@@ -17,7 +17,7 @@ import json
 
 from .utils.io import load_files 
 from .models.spec_lib import spec_lib
-from .spectral_fitting import fit_to_lib2
+from .spectral_fitting import fit_to_lib2, merge_spectrum_peaks
 from .rt_alignment import MZRTfit, MZRTfit_timeplex
 from .utils.misc_functions import write_to_csv
 from . import iso_functions as iso_f
@@ -252,6 +252,18 @@ def main(GUI_config_json = None):
         rt_spl,mz_func = funcs[:2]
         # rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
+
+
+    ## Merge peaks in spectra
+    for spec in DIAspectra.ms1scans:
+        merge_spectrum_peaks(spec, config.opt_ms1_tol)
+
+    for spec in DIAspectra.ms2scans:
+        merge_spectrum_peaks(spec, config.mz_tol)
+
+    spectra_to_fit = DIAspectra.ms2scans
+    
+
 
 
     all_keys = list(spectrumLibrary)

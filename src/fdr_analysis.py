@@ -90,6 +90,16 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
         all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
 
     if mass_tag:
+        import pickle 
+        import inspect
+        pickle_dic = {}
+        pickle_dic["DIAspectra"] = DIAspectra
+        pickle_dic["fdc"] = fdc
+        pickle_dic["dc"] = dc
+        pickle_dic["mz_ppm"] = mz_ppm
+        pickle_dic["rt_tol"] = rt_tol
+        pickle_dic["mass_tag"] = mass_tag
+        pickle_dic["timeplex"] = timeplex
         #fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
         group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted = ms1_cor_channels(DIAspectra, 
                                                                                                                         fdc, 
@@ -100,6 +110,16 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
                                                                                                                         timeplex=timeplex
                                                                                                                         )
         
+        pickle_dic["group_p_corrs"] = group_p_corrs
+        pickle_dic["group_ms1_traces"] = group_ms1_traces
+        pickle_dic["group_ms2_traces"] = group_ms2_traces
+        pickle_dic["group_iso_ratios"] = group_iso_ratios
+        pickle_dic["group_keys"] = group_keys
+        pickle_dic["group_fitted"] = group_fitted
+
+        with open(os.path.join(r"C:\Users\zcohe\Jmod\JMod_Profiling\Output\Line_Profiler_MS1_Cor_Channels", "MS1_cor_inouts2.pkl"), "wb") as f:
+            pickle.dump(pickle_dic, f)
+
         ## create dictionary  that links keys to data so we can match the order of "fdc"
         
         linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}

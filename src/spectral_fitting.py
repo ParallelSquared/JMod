@@ -646,25 +646,27 @@ def fit_to_lib2(dia_spec,
     
     ###### Process dia spectrum 
     
-    # what are the first indices of peaks grouped by tolerance
-    merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
+    # # what are the first indices of peaks grouped by tolerance
+    # merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
     
-    # what are the first mz of these peak groups
-    merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
-    # print(merged_coords)
+    # # what are the first mz of these peak groups
+    # merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
+    # # print(merged_coords)
     
     
-    # NB - should we not sum the intensities?????
-    # merged_intensities = [np.mean(dia_spectrum[np.where(merged_coords_idxs==i)[0],1]) for i in np.unique(merged_coords_idxs)]
-    merged_intensities = np.zeros(len((merged_coords_idxs)))
-    for j,val in zip(merged_coords_idxs,dia_spectrum[:,1]):
-        merged_intensities[j]+=val
-    #merged_intensities = [np.mean(dia_spectrum[merged_coords_idxs==i,1]) for i in np.unique(merged_coords_idxs)]
-    merged_intensities = merged_intensities[merged_intensities!=0]
+    # # NB - should we not sum the intensities?????
+    # # merged_intensities = [np.mean(dia_spectrum[np.where(merged_coords_idxs==i)[0],1]) for i in np.unique(merged_coords_idxs)]
+    # merged_intensities = np.zeros(len((merged_coords_idxs)))
+    # for j,val in zip(merged_coords_idxs,dia_spectrum[:,1]):
+    #     merged_intensities[j]+=val
+    # #merged_intensities = [np.mean(dia_spectrum[merged_coords_idxs==i,1]) for i in np.unique(merged_coords_idxs)]
+    # merged_intensities = merged_intensities[merged_intensities!=0]
     
-    #update spectrum to new values (note mz remains first in group as this will eventually be rounded)
-    dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
-    # print(dia_spectrum)
+    # #update spectrum to new values (note mz remains first in group as this will eventually be rounded)
+    # if dia_spectrum.shape != np.array((merged_coords,merged_intensities)).transpose().shape:
+    #     print("Warning: Shapes dont match in fit_to_lib2")
+    # dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
+    # # print(dia_spectrum)
     
     #get window edge positions each side of peaks in observed spectra (NB the tolerance is now about the first peak in the group not the middile)
     centroid_breaks = np.concatenate((dia_spectrum[:,0]-mz_tol*dia_spectrum[:,0],dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0]))
@@ -1874,3 +1876,82 @@ def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filte
     return output
 
 
+def merge_spectrum_peaks(spec, mz_ppm):
+    dia_spectrum = np.array(spec.peak_list(), dtype=np.float64).T
+    merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_ppm*dia_spectrum[:,0],dia_spectrum[:,0])
+    merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
+    merged_intensities = np.zeros(len((merged_coords_idxs)))
+    for j,val in zip(merged_coords_idxs,dia_spectrum[:,1]):
+        merged_intensities[j]+=val
+    merged_intensities = merged_intensities[merged_intensities!=0]
+    spec.mz = merged_coords
+    spec.intens = merged_intensities
+
+class DummySpec:
+    def __init__(self, mz, intens):
+        self.mz=mz
+        self.intens=intens
+
+    def peak_list(self):
+        return(np.array([self.mz,self.intens]))
+    
+
+def test_merge_spectrum_peaks():
+    dia_spec = DummySpec(
+        mz=np.array([100.0, 100.01]), 
+        intens=np.array([10.0, 20.0])
+        )
+    mz_ppm = 1e-6
+    merge_spectrum_peaks(dia_spec, mz_ppm)
+    expected = np.array([
+        [100.0, 10.0],
+        [100.01, 20.0]
+        ])
+    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
+    assert np.all(output == expected), f"Expected {expected}, got {output}"
+
+    dia_spec = DummySpec(
+        mz=np.array([100.000, 100.0001]),
+        intens=np.array([10.0, 20.0])
+        )
+    mz_ppm = 1e-6
+    merge_spectrum_peaks(dia_spec, mz_ppm)
+    expected = np.array([
+        [100.0, 30.0]
+        ])
+    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
+    assert np.all(output == expected), f"Expected {expected}, got {output}"
+
+
+    dia_spec = DummySpec(
+        mz=np.array([100.000, 100.0001, 100.0002]),
+        intens=np.array([10.0, 20.0, 60.0])
+        )
+    mz_ppm = 1e-6
+    merge_spectrum_peaks(dia_spec, mz_ppm)
+    expected = np.array([[100.0, 30.0], [100.0001, 60.0]])
+    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
+    assert np.all(output == expected), f"Expected {expected}, got {output}"
+
+    dia_spec = DummySpec(
+        mz=np.array([]),
+        intens=np.array([])
+        )
+    mz_ppm = 1e-6
+    merge_spectrum_peaks(dia_spec, mz_ppm)
+    expected = np.array([]).reshape(0, 2)
+    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
+    assert np.all(output == expected), f"Expected {expected}, got {output}"
+
+    dia_spec = DummySpec(
+        mz=np.array([50.0, 60.0, 100.000, 100.0001, 200.0]),
+        intens=np.array([50, 60, 10.0, 20.0, 200])
+    )
+    mz_ppm = 1e-6
+    merge_spectrum_peaks(dia_spec, mz_ppm)
+    expected = np.array([[50.0, 50],[60.0, 60],[100.0, 30.0],[200.0, 200]])
+    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
+    assert np.all(output == expected), f"Expected {expected}, got {output}"
+
+    print("Merge_Spectrum_Peaks Tests Passing")
+        
