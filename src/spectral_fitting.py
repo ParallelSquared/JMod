@@ -1158,11 +1158,9 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=Fals
     
     # NB - should we not sum the intensities?????
     # merged_intensities = [np.mean(dia_spectrum[np.where(merged_coords_idxs==i)[0],1]) for i in np.unique(merged_coords_idxs)]
-    merged_intensities = np.zeros(len((merged_coords_idxs)))
-    for j,val in zip(merged_coords_idxs,dia_spectrum[:,1]):
-        merged_intensities[j]+=val
+    merged_intensities = np.bincount(merged_coords_idxs, weights=dia_spectrum[:, 1])
+    merged_intensities = merged_intensities[merged_intensities != 0]
     #merged_intensities = [np.mean(dia_spectrum[merged_coords_idxs==i,1]) for i in np.unique(merged_coords_idxs)]
-    merged_intensities = merged_intensities[merged_intensities!=0]
     
     #update spectrum to new values (note mz remains first in group as this will eventually be rounded)
     dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
