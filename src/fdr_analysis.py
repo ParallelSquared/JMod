@@ -36,6 +36,8 @@ from .utils.misc_functions import unstring_floats
 from . import config 
 from src.logger import logger
 
+np.random.seed(42)
+
 
 def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
 
@@ -220,7 +222,7 @@ class score_model():
             ### Random Forest
             def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=-1)
+                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=-1, random_state=config.RANDOM_SEED)
                     m.model.fit(X,y,sample_weight=sample_weight)
                     m.__predict_fn__ = m.model.predict_proba
 
@@ -325,7 +327,7 @@ class score_model():
         
         logger.info(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
         
-        kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = 42)
+        kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = config.RANDOM_SEED)
         k_orders = [i for i in kf.split(X,y)]
         rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
 
@@ -333,9 +335,9 @@ class score_model():
             unique_groups = np.unique(groups)
             if len(unique_groups) < 5:
                 logger.warning(f"Warning: Only {len(unique_groups)} unique groups for 5-fold CV. Using KFold instead.")
-                gfk = KFold(n_splits=5, shuffle=True, random_state=42)
+                gfk = KFold(n_splits=5, shuffle=True, random_state=config.RANDOM_SEED)
             else:
-                gfk = GroupKFold(n_splits=5)
+                gfk = GroupKFold(n_splits=5, random_state=config.RANDOM_SEED)
         
             #k_orders = [i for i in kf.split(X,y)] old way
             k_orders = [i for i in gfk.split(X, y, groups=groups)]

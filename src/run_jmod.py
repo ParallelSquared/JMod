@@ -16,7 +16,8 @@ import sys
 import json
 import biosaur2
 
-from .utils.io import load_files 
+from .utils.io import load_files
+from .utils.set_seeds import set_seeds
 from .models.spec_lib import spec_lib
 from .spectral_fitting import fit_to_lib2
 from .rt_alignment import MZRTfit, MZRTfit_timeplex
