@@ -59,6 +59,7 @@ def main(GUI_config_json = None):
         sys.exit(result.returncode)
 
     ####  Load Libraries   ######################
+    set_seeds(config.RANDOM_SEED)
     mzml_file = config.args.mzml.replace("\\","/")
     lib_file = config.args.speclib.replace("\\","/")
 

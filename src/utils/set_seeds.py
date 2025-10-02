@@ -5,6 +5,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
 import numpy as np
+import random
 
 def set_seeds(seed):
     """
@@ -25,3 +26,4 @@ def set_seeds(seed):
     """
 
     np.random.seed(seed)
+    random.seed(seed)
