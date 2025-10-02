@@ -36,8 +36,6 @@ from .utils.misc_functions import unstring_floats
 from . import config 
 from src.logger import logger
 
-np.random.seed(42)
-
 
 def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
 
@@ -281,7 +279,7 @@ class score_model():
                          'colsample_bytree': 0.8,   
                          'tree_method': 'hist',         
                          'nthread': -1,                   
-                         'seed': 42  ,
+                         'seed': config.RANDOM_SEED,
                          'min_child_weight': .5
                         }
 
@@ -337,7 +335,7 @@ class score_model():
                 logger.warning(f"Warning: Only {len(unique_groups)} unique groups for 5-fold CV. Using KFold instead.")
                 gfk = KFold(n_splits=5, shuffle=True, random_state=config.RANDOM_SEED)
             else:
-                gfk = GroupKFold(n_splits=5, random_state=config.RANDOM_SEED)
+                gfk = GroupKFold(n_splits=5)
         
             #k_orders = [i for i in kf.split(X,y)] old way
             k_orders = [i for i in gfk.split(X, y, groups=groups)]
