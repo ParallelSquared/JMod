@@ -274,8 +274,8 @@ def get_diff(mz,peaks,tol):
         
         # in case of multiple matches
         # select idx with smallest error
-        #closest_idx = idxs[np.argmin(log_diff[idxs,1])]
-        closest_idx = idxs[np.argmin(np.abs(log_diff[idxs,1]))]
+        closest_idx = idxs[np.argmin(log_diff[idxs,1])]
+        #closest_idx = idxs[np.argmin(np.abs(log_diff[idxs,1]))]
         
         return (peaks[closest_idx]-mz)/mz
     

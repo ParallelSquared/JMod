@@ -166,8 +166,8 @@ def main():
         # Pre-filter the library to speed up processing
         # Note: This is a rough filter that will be refined after RT alignment
         filtered_library = {}
-        rt_tolerance = config.rt_tol * 2  # Use a wider tolerance initially
-        mz_tolerance = config.mz_tol * 2
+        rt_tolerance = config.rt_tol * 25  # Use a wider tolerance initially
+        mz_tolerance = config.mz_tol * 25
         
         for key, entry in spectrumLibrary.items():
             #if (config.args.test_rt_min - rt_tolerance <= entry["iRT"] <= config.args.test_rt_max + rt_tolerance and

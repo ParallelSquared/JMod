@@ -169,9 +169,7 @@ class TestConvertFrags:
             for i in (0, 1)
             )
         
-        # assert convert_frags(seq, frags, "rev") == expected_new_frags
-
-    
+        # assert convert_frags(seq, frags, "rev") == expected_new_frags   
 
 class TestParsePeptide:
     """Test cases for the parse_peptide function"""

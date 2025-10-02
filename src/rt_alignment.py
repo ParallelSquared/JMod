@@ -350,6 +350,8 @@ def fit_gaussian(data,init_std=None,bin_n=50):
     # Find peaks in the histogram
     # peaks, _ = signal.find_peaks(hist, height=0.01, distance=10)
     peaks, _ = signal.find_peaks(hist, height=max(hist)*0.5, distance=10)
+   # print('peaks')
+   # print(peaks)
     
     # Find the highest peak
     highest_peak_index = np.argmax(hist[peaks])
@@ -360,6 +362,9 @@ def fit_gaussian(data,init_std=None,bin_n=50):
     # split bins in 2 to get x values
     x_data = (bin_edges[:-1] + bin_edges[1:]) / 2
     y_data = hist
+
+  #  print(x_data)
+  #  print(y_data)
     
     if init_std is None:
         init_std = 2*np.subtract(*bin_edges[1::-1])
@@ -687,10 +692,15 @@ def empirical_fit(output_df,results_folder=None):
                                                                                                               "med_frag_error"]]
                                                                                                             )
         
-        #num_points = len(output_df[cor_filter])
-        #frac = max(0.1, 3 / num_points)
+        num_points = len(set(output_df.lib_rt[cor_filter]))
+        frac = max(0.1, 3 / num_points)
+        print('len output df: ', len(output_df))
+      #  print(output_df)
+       # print(output_df[cor_filter])
 
-        #f = lowess_fit(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],frac)
+        print('num points and frac used', num_points, frac)
+
+        f = lowess_fit(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],frac)
         plt.subplots()
         plt.scatter(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],s=1)
         plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)
@@ -726,10 +736,10 @@ def empirical_fit(output_df,results_folder=None):
        
         
         first_rt_diffs = (f(output_df.lib_rt)-output_df.rt)
-        #print('----------------------------------------------------------------')
-        #print('first rt diffs: ', first_rt_diffs)
-        #print('first rt diffs with cor filter: ', first_rt_diffs[cor_filter])
-        #print('----------------------------------------------------------------')
+        print('----------------------------------------------------------------')
+        print('first rt diffs: ', first_rt_diffs)
+        print('first rt diffs with cor filter: ', first_rt_diffs[cor_filter])
+        print('----------------------------------------------------------------')
         rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
         first_rt_tolerance = 4*np.abs(rt_stddev)
         # rt_mean, rt_stddev = stats.norm.fit(first_rt_diffs[cor_filter])
