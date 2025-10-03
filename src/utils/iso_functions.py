@@ -222,6 +222,17 @@ def iso_library(library):
         
     return new_library
 
+
+import random
+def init_worker(seed):
+    """Initializes the random number generator for a worker process."""
+    # Seed the NumPy RNG based on the worker's unique ID and the base seed
+    # The current process's PID provides a unique element
+    worker_seed = seed + multiprocessing.current_process().pid
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 import multiprocessing
 def iso_library_multi(library):
     ## add n isotpic peaks to the "spectrum" portio of each library entry
@@ -232,7 +243,7 @@ def iso_library_multi(library):
     all_keys = list(new_library)
     all_seqs = [i[0] for i in all_keys]
     all_frags = [new_library[i]["frags"] for i in new_library]
-    with multiprocessing.Pool(8) as p:
+    with multiprocessing.Pool(8, initializer=init_worker, initargs=(config.RANDOM_SEED,)) as p:
         iso_out = p.starmap(gen_isotopes_dict,tqdm.tqdm(zip(all_seqs,all_frags),total=len(all_seqs)))
     for key,out in zip(all_keys,iso_out):
         new_library[key]["spectrum"],new_library[key]["ordered_frags"] = out

@@ -220,13 +220,13 @@ class score_model():
             ### Random Forest
             def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=-1, random_state=config.RANDOM_SEED)
+                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=1, random_state=config.RANDOM_SEED)
                     m.model.fit(X,y,sample_weight=sample_weight)
                     m.__predict_fn__ = m.model.predict_proba
 
                     if self.folder:
                         feature_importance = m.model.feature_importances_
-                        sorted_indices = np.argsort(feature_importance)  
+                        sorted_indices = np.argsort(feature_importance, kind='stable')
                         sorted_features = np.array(X.columns)[sorted_indices]  
                         sorted_importance = feature_importance[sorted_indices]  
                     
@@ -327,7 +327,7 @@ class score_model():
         
         kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = config.RANDOM_SEED)
         k_orders = [i for i in kf.split(X,y)]
-        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
+        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders], ), kind='stable') # collapse test sets and get order
 
         if groups is not None:
             unique_groups = np.unique(groups)
@@ -339,7 +339,7 @@ class score_model():
         
             #k_orders = [i for i in kf.split(X,y)] old way
             k_orders = [i for i in gfk.split(X, y, groups=groups)]
-            rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
+            rev_order = np.argsort(np.concatenate([i[1] for i in k_orders]), kind='stable') # collapse test sets and get order
             
             # permutation = np.random.permutation(len(X))
             # X_shuffled = X.iloc[permutation]
@@ -517,8 +517,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     
     
     ## FASTER VERSION OF ABOVE
-    score_order = np.argsort(-output)
-    orig_order = np.argsort(score_order)
+    score_order = np.argsort(-output, kind='stable')
+    orig_order = np.argsort(score_order, kind='stable')
     decoy_order = fdc["decoy"][score_order]
     frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
     # plt.plot(frac_decoy)
