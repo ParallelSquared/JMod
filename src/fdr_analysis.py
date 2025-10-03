@@ -157,7 +157,7 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     fdc["iso_cor"] = [i[0].statistic for i in iso_ratios]
     
     fdc["MS1_Int"] = [i[2][0] for i in iso_ratios]
-    fdc["MS1_Int"] = [np.linalg.lstsq(np.array(i[1])[:,np.newaxis], i[2], rcond=1)[0][0] for i in iso_ratios]
+    fdc["MS1_Int"] = [np.linalg.lstsq(np.array(i[1])[:,np.newaxis], i[2], rcond=-1)[0][0] for i in iso_ratios]
     
     # X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
     fdc["all_ms1_specs"] = [";".join(map(str,trace[0].keys())) for trace in ms1_traces]
