@@ -159,7 +159,7 @@ def createTolWindows(positions,tolerance):
     
 
 
-def write_to_csv(data: list[list],filepath: str,colnames: list[str] = None):
+def write_to_csv(data: list[list],filepath: str, write_mode: str = "a",colnames: list[str] = None):
     """
     Description:
 
@@ -177,7 +177,7 @@ def write_to_csv(data: list[list],filepath: str,colnames: list[str] = None):
     None. Writes the data to a CSV at filepath with 'colnames' as the header if not None
 
     """
-    with open(filepath,"a", newline='') as write_file:
+    with open(filepath,write_mode, newline='') as write_file:
         writer = csv.writer(write_file)
         if colnames is not None:
             if len(colnames)==len(data[0]):
