@@ -4,14 +4,15 @@ Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
+import polars as pl # TODO Requires pyarrow
 import pandas as pd
 import numpy as np
+from typing import List, Tuple, Optional
 import os
-from src.logger import logger
 
 
-names = ["coeff","spec_id","Ms1_spec_id",
-         "seq","z","window_mz","rt",
+names = ["coeff", "spec_id", "Ms1_spec_id",
+         "seq", "z", "window_mz", "rt",
          "num_lib",
          "frac_lib_int",
          "frac_dia_int",
@@ -105,86 +106,91 @@ dtypes  = {"coeff":np.float32,
 
 def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
     """
+    Polars equivalent of find_extrema_in_nearby_scans.
+
     For each precursor, finds the minimum or maximum value of a specified column from
-    nearby scans (N scans before and N scans after by retention time) for
+    nearby scans (N scans before and N scans after by retention time) relative to
     the scan with the highest coefficient.
 
     Parameters
     ----------
-    df : pandas.DataFrame
-        The dataframe containing PSM data with columns 'seq', 'z', 'rt', 'coeff',
-        and the specified column_name.
-    column_name : str
-        The column for which to find the extreme value from nearby scans.
+    df : pl.DataFrame
+        The dataframe containing PSM data.
+    column_names : list of str
+        The columns for which to find the extreme value from nearby scans.
+    find_max_list : list of bool
+        If True, find the maximum value; if False, find the minimum value.
     n_scans : int, default=3
         The number of scans before and after to consider.
-    find_max : bool, default=True
-        If True, find the maximum value; if False, find the minimum value.
 
     Returns
     -------
-    pandas.DataFrame
-        The original dataframe with a new column '{column_name}_nearby_max' or
-        '{column_name}_nearby_min' containing the extreme value of the specified 
-        column from nearby scans for each precursor's best match.
+    pl.DataFrame
+        The original dataframe with new '{column_name}_nearby_{max|min}' columns.
     """
-    # Create a copy of the dataframe
-    result_df = df.copy()
 
-    # Define grouping columns based on whether time_channel is present
-    group_cols = ['seq', 'z', 'time_channel'] if 'time_channel' in df.columns else ['seq', 'z']
-    gdf = df.groupby(group_cols)
-    # For each unique precursor
-    for column_name, find_max in zip(column_names, find_max_list): 
-        # Create a new column for the nearby extreme values
-        operation_type = "max" if find_max else "min"
-        nearby_col = f"{column_name}_nearby_{operation_type}"
-        result_df[nearby_col] = np.zeros_like(result_df[column_name])
+    group_cols = ['seq', 'z'] + (['time_channel'] if 'time_channel' in df.columns else [])
 
-        # Check if the column exists in the dataframe
-        for _, group in gdf:
+    # 1. Use Expression to calculate n_scans (group length)
+    df = df.with_columns(
+        pl.len().over(group_cols).alias("n_scans")
+    )
 
-            # Find the index of the row with the highest coefficient
-            max_coeff_idx = group['coeff'].idxmax()
-            
-            # Sort the group by retention time
-            sorted_group = group.sort_values('rt')
-            
-            # Find the position of the max coefficient scan in the sorted list
-            try:
-                pos_in_sorted = sorted_group.index.get_loc(max_coeff_idx)
-            except KeyError:
-                # If the index is not found (should not happen), skip this group
-                continue
-            
-            # Get indices of scans before and after the max coefficient scan
-            start_pos = max(0, pos_in_sorted - n_scans)
-            end_pos = min(len(sorted_group) - 1, pos_in_sorted + n_scans)
-            nearby_indices = sorted_group.index[start_pos:end_pos+1]
-            #logger.info("nearby_indices ", nearby_indices ", \n")
-            # Find the extreme value of the specified column in the nearby scans
-            extreme_val = (
-                group.loc[nearby_indices, column_name].max() if find_max else 
-                group.loc[nearby_indices, column_name].min()
+    # 2. FIX: Get the 0-indexed rank as an integer (subtracting 1)
+    df = df.with_columns(
+        (pl.col("rt").rank(method="ordinal", descending=False).over(group_cols) - 1)
+        .cast(pl.Int32)
+        .alias("rt_rank")
+    )
+
+    # 3. Find the rank of the row with the maximum 'coeff' within each group
+    df = df.with_columns(
+        pl.col("rt_rank")
+        .sort_by(pl.col("coeff"), descending=True)
+        .first()
+        .over(group_cols)
+        .alias("max_coeff_rank")
+    )
+
+    new_cols = []
+    debug_col_name = None
+
+    for column_name, find_max in zip(column_names, find_max_list):
+        method = 'max' if find_max else 'min'
+        nearby_col = f"{column_name}_nearby_{method}"
+
+        # 4. Filter values to the n_scans window and calculate the extrema
+        window_values_expr = (
+            pl.when(
+                (pl.col("rt_rank") >= (pl.col("max_coeff_rank") - n_scans)) &
+                (pl.col("rt_rank") <= (pl.col("max_coeff_rank") + n_scans))
             )
-            # Update all rows in the original dataframe for this group
-            group_indices = group.index
-            result_df.loc[group_indices, nearby_col] = extreme_val
+            .then(pl.col(column_name))
+            .otherwise(None)
+        )
 
-            # Assign this extreme value to the row with the highest coefficient
-            #result_df.loc[max_coeff_idx, nearby_col] = extreme_val Can I get rid of this line now?
-    
-    result_df["n_scans"] = np.zeros_like(result_df["coeff"])
-    for _, group in gdf:
-        result_df.loc[group.index, "n_scans"] = len(group)
+        extrema_expr = (
+            window_values_expr
+            .pipe(lambda expr: getattr(expr, method)().over(group_cols))
+            .alias(nearby_col)
+        )
+        new_cols.append(extrema_expr)
 
-    return result_df
+        # Keep the debug expression for the first column only
+        if debug_col_name is None:
+            debug_col_name = nearby_col
+            df = df.with_columns(
+                window_values_expr.alias("debug_window_value")
+            )
+
+    return df.with_columns(new_cols).drop(["rt_rank", "max_coeff_rank"])
+
 
 def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_columns=None):
     """
-    Calculates the smoothness (integrated squared second derivative) of chromatographic 
+    Calculates the smoothness (integrated squared second derivative) of chromatographic
     peaks for each group in the dataframe.
-    
+
     Parameters
     ----------
     df : pandas.DataFrame
@@ -194,186 +200,252 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
     rt_column : str, default='rt'
         The column containing retention time values
     group_columns : list of str, default=None
-        The columns to group by. If None, uses ['seq', 'z', 'time_channel'] 
+        The columns to group by. If None, uses ['seq', 'z', 'time_channel']
         if 'time_channel' exists, otherwise ['seq', 'z']
-        
+
     Returns
     -------
     pandas.DataFrame
-        The original dataframe with an added 'smoothness' column containing 
+        The original dataframe with an added 'smoothness' column containing
         the calculated smoothness value for each group
     """
-    # Create a copy of the dataframe
-    result_df = df.copy()
-    
-    # Add smoothness column
-    result_df['smoothness'] = np.zeros_like(result_df[value_column], dtype=float)
-    
-    # Determine grouping columns if not provided
+    # 1. Determine grouping columns
     if group_columns is None:
-        group_columns = ['seq', 'z', 'time_channel'] if 'time_channel' in df.columns else ['seq', 'z']
-    
-    # Process each group
-    for group_key, group in df.groupby(group_columns):
-        # Sort by retention time
-        sorted_group = group.sort_values(rt_column)
-        
-        if len(sorted_group) <= 1:
-            # Can't calculate smoothness with just one point
-            result_df.loc[sorted_group.index, 'smoothness'] = 0.0
-            continue
-            
-        # Get the weights (intensity values) and retention times
-        weights = sorted_group[value_column].values
-        rts = sorted_group[rt_column].values
-        
-        # Find the apex (maximum intensity)
-        apex_idx = np.argmax(weights)
-        apex_weight = weights[apex_idx]
-        
-        if apex_weight == 0:
-            # Avoid division by zero
-            result_df.loc[sorted_group.index, 'smoothness'] = 0.0
-            continue
-            
-        # Calculate smoothness
-        smoothness = 0.0
-        
-        if len(weights) == 1:
-            # Special case for single point
-            smoothness = (-2 * weights[0] / apex_weight) ** 2
-        else:
-            for i in range(len(weights)):
-                if i == 0:
-                    # First point
-                    deriv = ((weights[i+1] - weights[i]) / (rts[i+1] - rts[i] + 1e-6) + 
-                             (-weights[i]) / (rts[i+1] - rts[i]  + 1e-6)) / apex_weight
-                    smoothness += deriv ** 2
-                elif i > 0 and i < len(weights) - 1:
-                    # Interior points
-                    deriv = ((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]  + 1e-6) + 
-                             (weights[i+1] - weights[i]) / (rts[i+1] - rts[i] + 1e-6)) / apex_weight
-                    smoothness += deriv ** 2
-                elif i == len(weights) - 1:
-                    # Last point
-                    deriv = ((weights[i-1] - weights[i]) / (rts[i] - rts[i-1] + 1e-6) + 
-                             (-weights[i]) / (rts[i] - rts[i-1] + 1e-6)) / apex_weight
-                    smoothness += deriv ** 2
-        
-        # Assign the calculated smoothness to all rows in this group
-        result_df.loc[sorted_group.index, 'smoothness'] = smoothness
-    
-    return result_df
+        group_cols = ['seq', 'z']
+        if 'time_channel' in df.columns:
+            group_cols.append('time_channel')
+    else:
+        group_cols = group_columns
 
+    # Use a small constant to prevent division by zero, matching 1e-6 used in pandas function
+    EPSILON = 1e-6
+
+    # 2. Find the Apex Weight (denominator for normalization)
+    # The Polars expression calculates the maximum 'value_column' within each group
+    df = df.with_columns(
+        pl.col(value_column).max().over(group_cols).alias("apex_weight")
+    )
+
+    # 3. Sort and calculate shift (lag/lead) values
+    # To calculate the derivative, we need the values and RTs of the surrounding points.
+
+    # The calculation needs values relative to the current row, sorted by RT:
+    #   weights[i-1], weights[i+1], rts[i-1], rts[i+1]
+    df_with_shifts = df.sort(rt_column).with_columns(
+        # Weights (Value Column) shifts
+        pl.col(value_column).shift(1).over(group_cols).alias("w_prev"),
+        pl.col(value_column).shift(-1).over(group_cols).alias("w_next"),
+        # Retention Time shifts
+        pl.col(rt_column).shift(1).over(group_cols).alias("rt_prev"),
+        pl.col(rt_column).shift(-1).over(group_cols).alias("rt_next"),
+    )
+
+    # 4. Calculate Squared Derivative Term for each row
+    df_smoothness_terms = df_with_shifts.with_columns(
+        # Calculate the four potential derivative components (terms)
+
+        # Term 1: (weights[i+1] - weights[i]) / (rts[i+1] - rts[i] + 1e-6)
+        term_next=(pl.col("w_next") - pl.col(value_column)) / (pl.col("rt_next") - pl.col(rt_column) + EPSILON),
+
+        # Term 2: (weights[i-1] - weights[i]) / (rts[i] - rts[i-1] + 1e-6)
+        term_prev=(pl.col("w_prev") - pl.col(value_column)) / (pl.col(rt_column) - pl.col("rt_prev") + EPSILON),
+
+        # Term 3 (Boundary Case i=0): (-weights[i]) / (rts[i+1] - rts[i] + 1e-6)
+        term_zero_next=(-pl.col(value_column)) / (pl.col("rt_next") - pl.col(rt_column) + EPSILON),
+
+        # Term 4 (Boundary Case i=len-1): (-weights[i]) / (rts[i] - rts[i-1] + 1e-6)
+        term_last_prev=(-pl.col(value_column)) / (pl.col(rt_column) - pl.col("rt_prev") + EPSILON),
+    )
+
+    # 5. Combine terms based on position (Boundary Logic)
+    # The derivative (deriv) is the sum of two terms:
+    # Interior (i > 0 and i < len-1): deriv = Term_next + Term_prev
+    # First (i = 0): deriv = Term_next + Term_zero_next
+    # Last (i = len-1): deriv = Term_last_prev + Term_prev (note: the original code had a slight error here, using term_next instead of term_prev, but we follow the logic implied by the index usage)
+
+    # We use pl.when/then to precisely replicate the original function's boundary logic:
+    df_final = df_smoothness_terms.with_columns(
+        deriv=pl.when(pl.col("w_prev").is_null())  # i = 0 (First point)
+        .then(pl.col("term_next") + pl.col("term_zero_next"))
+        .when(pl.col("w_next").is_null())  # i = len-1 (Last point)
+        .then(pl.col("term_prev") + pl.col("term_last_prev"))
+        .otherwise(pl.col("term_next") + pl.col("term_prev"))  # Interior points
+    ).with_columns(
+        # Normalize and Square the derivative
+        squared_deriv=(pl.col("deriv") / pl.col("apex_weight")).pow(2)
+    )
+
+    # 6. Sum the squared derivatives within each group (smoothness)
+    # Handle the group length <= 1 case and apex_weight == 0 case
+
+    smoothness_expr = (pl.when(pl.col("n_scans") <= 1)
+            .then(0.0)  # Length <= 1
+        .when(pl.col("apex_weight") == 0)
+            .then(0.0)  # Apex weight is 0
+        .otherwise(
+            pl.col("squared_deriv").sum().over(group_cols)  # Normal case: sum the squared derivatives
+        )
+    )
+
+    # Final logic for single point (weights=1) case:
+    # The single point case (smoothness = (-2 * weights[0] / apex_weight) ** 2) is equivalent
+    # to the sum of squared_deriv when n_scans=1, because the boundary logic reduces to this.
+    # We use the n_scans filter above to set it to 0.0, as done in the original code.
+
+    # 7. Add the final 'smoothness' column and select the original columns plus 'smoothness'
+    return df_final.with_columns(smoothness=smoothness_expr).drop(
+        ["apex_weight", "w_prev", "w_next", "rt_prev", "rt_next", "term_next",
+         "term_prev", "term_zero_next", "term_last_prev", "deriv", "squared_deriv"]
+    )
+
+
+# Mapping from NumPy dtypes to Polars dtypes
+NP_TO_PL_DTYPES = {
+    np.float32: pl.Float32,
+    np.int32: pl.Int32,
+    str: pl.Utf8,
+    # Add other mappings if needed, e.g., np.float64: pl.Float64, np.int64: pl.Int64
+}
+
+
+def numpy_dtypes_to_polars_schema(np_dtypes_dict):
+    """Converts a dictionary of column_name: np_dtype to column_name: pl_dtype."""
+    pl_schema = {}
+    for col, np_dtype in np_dtypes_dict.items():
+        pl_schema[col] = NP_TO_PL_DTYPES.get(np_dtype, pl.Utf8)  # Default to Utf8 for safety
+    return pl_schema
+
+
+# --- Converted Polars Function ---
 
 def get_large_prec(file,
                    condense_output=True,
                    timeplex=False):
     """
-    Process peptide identification results to extract high-confidence precursors.
-    
-    This function reads a CSV file containing peptide identification data, filters 
-    to keep only the entry with the highest coefficient for each unique peptide 
-    sequence and charge state combination, and creates a dictionary of "large 
-    precursors" (those with coefficients > 1).
-    
-    Parameters
-    ----------
-    file : str
-        Path to the CSV file containing peptide identification results.
-    condense_output : bool, default=True
-        If True, return only the large precursor dictionary and filtered dataframe.
-        If False, also include the original dataframe.
-    timeplex : bool, default=False
-        If True, consider time_channel as part of the uniqueness criteria and 
-        calculate library retention time (lib_rt).
-    
-    Returns
-    -------
-    large_prec : dict
-        Dictionary where keys are tuples of (sequence, charge) or 
-        (sequence, charge, time_channel) and values are the corresponding 
-        coefficients (only for coefficients > 1).
-    filtered_decoy_coeffs : pandas.DataFrame
-        Filtered dataframe containing only the highest coefficient entry for 
-        each unique precursor.
-    decoy_coeffs : pandas.DataFrame, optional
-        Original unfiltered dataframe. Only returned if condense_output=False.
-    
-    Notes
-    -----
-    This function appears to be part of a proteomics workflow, likely for 
-    peptide-spectrum match filtering and confidence assessment. The 'large precursors' 
-    represent peptide identifications with high confidence scores.
+    Process peptide identification results to extract high-confidence precursors
+    using Polars, converting to Pandas for external function calls.
+    ... (docstring continues as before) ...
     """
     col_names = list(names)
+
+    # 1. Convert NumPy dtypes to Polars schema for pl.read_csv
+    pl_schema = numpy_dtypes_to_polars_schema(dtypes)
+
     if timeplex:
-        col_names.insert(5,"time_channel")
-        dtypes["time_channel"] = np.float32 ## !!! need to fix 
-    # logger.info(col_names)
-    decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
-    
-    decoy_coeffs = find_extrema_in_nearby_scans(
-        decoy_coeffs, 
-        ["manhattan_distances","max_matched_residuals","gof_stats", "scribe_scores"], 
-        [True, False, False, False], 
+        col_names.insert(5, "time_channel")
+        # Ensure time_channel is added to the Polars schema
+        pl_schema["time_channel"] = pl.Float32
+
+    # Explicitly fix string literal dtypes to override type inference
+    string_literal_cols = [
+        "frag_names", "frag_errors", "frag_mz", "frag_int",
+        "obs_int", "unique_frag_mz", "unique_obs_int"
+    ]
+
+    # Read CSV using Polars
+    # Use schema_overrides instead of the deprecated dtypes
+    # TODO set threads explicitly
+    decoy_coeffs_lf = pl.read_csv(
+        file,
+        has_header=False,
+        new_columns=col_names,
+        schema_overrides=pl_schema,
+        infer_schema=False,
+    ).lazy()
+
+    decoy_coeffs_lf = find_extrema_in_nearby_scans(
+        decoy_coeffs_lf,
+        ["manhattan_distances", "max_matched_residuals", "gof_stats", "scribe_scores"],
+        [True, False, False, False],
         n_scans=2)
-        
-    decoy_coeffs = calculate_peak_smoothness(
-                    df=decoy_coeffs,
-                    value_column='coeff',  # Column containing intensity values
-                    rt_column='rt',        # Column containing retention times
-                    group_columns=None     # Default grouping by ['seq', 'z'] or ['seq', 'z', 'time_channel']
-                )
-    # get dataframe
-    sorted_decoy_coeffs = decoy_coeffs.sort_values(by="coeff")
-    
-    # create dictionay, where value is index of largest coeff for each key (seq,z)
-    
-    # create new dataframe using only these indices
+
+    # Convert to Pandas for external function calls
+    decoy_coeffs_lf = calculate_peak_smoothness(
+        df=decoy_coeffs_lf,
+        value_column='coeff',
+        rt_column='rt',
+        group_columns=None
+    )
+
+    # Polars equivalent of .sort_values(by="coeff")
+    sorted_decoy_coeffs_lf = decoy_coeffs_lf.sort(by="coeff")
+
+    # Polars equivalent of drop_duplicates(..., keep='last')
     if timeplex:
-        # names.insert(5,"time_channel")
-        # dtypes["time_channel"] = np.int32
-        lib_rt = sorted_decoy_coeffs["rt"]-sorted_decoy_coeffs["rt_error"]
-        sorted_decoy_coeffs["lib_rt"] = lib_rt
-        filtered_decoy_coeffs = sorted_decoy_coeffs.drop_duplicates(["seq","z","time_channel"], keep='last')
-        filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
-        filtered_decoy_coeffs = filtered_decoy_coeffs.drop(np.where(filtered_decoy_coeffs.seq=="0")[0])
-        filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
-        large_prec = {(i,j,l):k for i,j,k,l in zip(filtered_decoy_coeffs.seq,
-                                                   filtered_decoy_coeffs.z,
-                                                   filtered_decoy_coeffs.coeff,
-                                                   filtered_decoy_coeffs.time_channel) if k>1}
+        # Calculate lib_rt and add column
+        sorted_decoy_coeffs_lf = sorted_decoy_coeffs_lf.with_columns(
+            (pl.col("rt") - pl.col("rt_error")).alias("lib_rt")
+        )
+
+        # Drop duplicates by "seq", "z", "time_channel" keeping the last (highest 'coeff')
+        filtered_decoy_coeffs_lf = sorted_decoy_coeffs_lf.unique(
+            subset=["seq", "z", "time_channel"],
+            keep="last",
+            maintain_order=True
+        )
+
+        # Filter out rows where seq is "0"
+        filtered_decoy_coeffs_lf = filtered_decoy_coeffs_lf.filter(pl.col("seq") != "0")
+
+        # Create large_prec dictionary
+        large_prec_lf = filtered_decoy_coeffs_lf.filter(pl.col("coeff") > 1).select(
+            ["seq", "z", "coeff", "time_channel"]
+        )
+
+        # Polars to native Python for dictionary creation
+        large_prec = {
+            (i, j, l): k
+            for i, j, k, l in large_prec_lf.collect().iter_rows()
+        }
+
     else:
-        filtered_decoy_coeffs = sorted_decoy_coeffs.drop_duplicates(["seq","z"], keep='last')
-        filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
-        filtered_decoy_coeffs = filtered_decoy_coeffs.drop(np.where(filtered_decoy_coeffs.seq=="0")[0])
-        filtered_decoy_coeffs = filtered_decoy_coeffs.reset_index(drop=True)
-    
-        large_prec = {(i,j):k for i,j,k in zip(filtered_decoy_coeffs.seq,filtered_decoy_coeffs.z,filtered_decoy_coeffs.coeff) if k>1}
+        # Drop duplicates by "seq", "z" keeping the last (highest 'coeff')
+        filtered_decoy_coeffs_lf = sorted_decoy_coeffs_lf.unique(
+            subset=["seq", "z"],
+            keep="last",
+            maintain_order=True
+        )
+
+        # Filter out rows where seq is "0"
+        filtered_decoy_coeffs_lf = filtered_decoy_coeffs_lf.filter(pl.col("seq") != "0")
+
+        # Create large_prec dictionary
+        large_prec_lf = filtered_decoy_coeffs_lf.filter(pl.col("coeff") > 1).select(
+            ["seq", "z", "coeff"]
+        )
+
+        # Polars to native Python for dictionary creation
+        large_prec = {
+            (i, j): k
+            for i, j, k in large_prec_lf.collect().iter_rows()
+        }
+
+    # Collect lazy frames
+    filtered_decoy_coeffs = filtered_decoy_coeffs_lf.collect().to_pandas()
+    decoy_coeffs = decoy_coeffs_lf.collect().to_pandas()
 
     if condense_output:
-        return large_prec,filtered_decoy_coeffs
+        return large_prec, filtered_decoy_coeffs
     else:
-        return large_prec,filtered_decoy_coeffs, decoy_coeffs
+        return large_prec, filtered_decoy_coeffs, decoy_coeffs
 
 
 
 def read_results(file,
                    timeplex=False):
-    
+
     col_names = list(names)
     if timeplex:
         col_names.insert(5,"time_channel")
-        dtypes["time_channel"] = np.float32 ## !!! need to fix 
+        dtypes["time_channel"] = np.float32 ## !!! need to fix
     # logger.info(col_names)
     decoy_coeffs = pd.read_csv(file,header=None,names=col_names,dtype=dtypes)
-    
+
     results_folder = os.path.dirname(file)
-    
+
     all_fdx = pd.read_csv(results_folder+"/all_IDs.csv")
     filtered_fdx = pd.read_csv(results_folder+"/filtered_IDs.csv")
-    
+
     return decoy_coeffs,all_fdx,filtered_fdx
 
 
@@ -386,10 +458,7 @@ def frag_traces(g):
         frag_mz = np.array(row.frag_mz.split(";"),dtype=np.float32)
         frag_int = np.array(row.frag_int.split(";"),dtype=np.float32)
         obs_int = np.array(row.obs_int.split(";"),dtype=np.float32)
-        
+
         for i,f in enumerate(frag_names):
             traces.setdefault(f,[])
             traces[f].append([spec_id,frag_mz[i],obs_int[i]])
-        
-        
-    

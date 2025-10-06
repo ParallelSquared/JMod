@@ -61,6 +61,7 @@ dependencies:
       - pandas==2.0.2
       - patsy==1.0.1
       - pillow==11.3.0
+      - polars==1.34.0
       - protobuf==4.25.8
       - ptinnls==0.1.0
       - pyarrow==18.0.0
