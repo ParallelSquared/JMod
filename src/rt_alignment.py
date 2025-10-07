@@ -1207,12 +1207,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     if config.args.user_rt_tol:
         logger.info("Using user specified RT tolerance")
         new_rt_tol = config.args.rt_tol
-    logger.info(f"Optimsed RT tolerance: {new_rt_tol}")
+    logger.info(f"Optimized RT tolerance: {new_rt_tol}")
     config.opt_rt_tol = np.abs(new_rt_tol)
     
     
     new_ms1_tol = np.abs(4*mz_stddev)
-    logger.info(f"Optimsed ms1 tolerance: {new_ms1_tol}")
+    logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
     
     
     if config.args.ms1_ppm!=0:
@@ -2096,7 +2096,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     if config.args.user_rt_tol:
         logger.info("Using user specified RT tolerance")
         new_rt_tol = np.abs(config.args.rt_tol)
-    logger.info(f"Optimsed RT tolerance: {new_rt_tol}")
+    logger.info(f"Optimized RT tolerance: {new_rt_tol}")
     
     # ## ensure there is no overlap
     # obs_rt_range = [min(output_df.rt),max(output_df.rt)]
@@ -2142,7 +2142,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
 
 
     new_ms1_tol = np.abs(4*mz_stddev)
-    logger.info(f"Optimsed ms1 tolerance: {new_ms1_tol}")
+    logger.info(f"Optimized ms1 tolerance: {new_ms1_tol}")
     
     config.opt_ms1_tol  = new_ms1_tol
     

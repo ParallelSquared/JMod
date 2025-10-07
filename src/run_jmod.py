@@ -16,7 +16,8 @@ import sys
 import json
 import biosaur2
 
-from .utils.io import load_files 
+from .utils.io import load_files
+from .utils.set_seeds import set_seeds
 from .models.spec_lib import spec_lib
 from .spectral_fitting import fit_to_lib2
 from .rt_alignment import MZRTfit, MZRTfit_timeplex
@@ -27,6 +28,7 @@ from .fdr_analysis import process_data
 
 from src.logger import logger, set_log_filepath
 import logging
+
 
 def main(GUI_config_json = None):
     """Main function to run JMod analysis."""
@@ -58,6 +60,7 @@ def main(GUI_config_json = None):
         sys.exit(result.returncode)
 
     ####  Load Libraries   ######################
+    set_seeds(config.RANDOM_SEED)
     mzml_file = config.args.mzml.replace("\\","/")
     lib_file = config.args.speclib.replace("\\","/")
 
@@ -350,7 +353,8 @@ def main(GUI_config_json = None):
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         
         decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
-        write_to_csv(long_outputs,decoylib_search_path)
+        write_mode = "w" if batch_idx==0 else "a"
+        write_to_csv(long_outputs, decoylib_search_path, write_mode)
     
 
 
