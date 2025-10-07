@@ -33,7 +33,7 @@ from .models.spec_lib.spec_lib import loadSpecLib
 #from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 from .utils.misc_functions import unstring_floats
 
-from . import config 
+from src import config
 from src.logger import logger
 
 

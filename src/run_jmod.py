@@ -6,7 +6,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
 # Update imports to relative imports
-from . import config
+from src import config
 import numpy as np
 import os
 import time 
@@ -22,7 +22,7 @@ from .models.spec_lib import spec_lib
 from .spectral_fitting import fit_to_lib2
 from .rt_alignment import MZRTfit, MZRTfit_timeplex
 from .utils.misc_functions import write_to_csv
-from . import iso_functions as iso_f
+from src import iso_functions as iso_f
 from .mass_tags import tag_library, available_tags
 from .fdr_analysis import process_data
 

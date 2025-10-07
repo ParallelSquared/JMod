@@ -15,7 +15,7 @@ from functools import reduce
 import copy
 import numpy as np
 
-from . import config 
+from src import config
 
 from .utils.misc_functions import frag_to_peak
 from src.logger import logger
