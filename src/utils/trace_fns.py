@@ -4,22 +4,24 @@ Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
-
+'''
 
 import numpy as np
 import re
 from scipy import stats
-from .utils.misc_functions import  closest_ms1spec,np_pearson_cor
-from .utils import misc_functions as mf
+from src.utils.misc_functions import  closest_ms1spec,np_pearson_cor
+from src.utils import misc_functions as mf
 import src.config as config 
 import tqdm
-from . import iso_functions as iso
+from src import iso_functions as iso
 import warnings
 from scipy.interpolate import interp1d
 from scipy import optimize
 from scipy.signal import find_peaks
 import multiprocessing
 from functools import partial
+from pyteomics import mass
+from iso_functions import get_seq_comp, parse_peptide
 
 # def moving_average(x, w):
 #     return np.convolve(x, np.ones(w), 'same') / w
@@ -505,7 +507,7 @@ def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
     #### all_iso is a list of the mTRAQ isotopes 
     
     
-    ms1_iso_patterns = np.array([[[i.mz,i.intensity] for i in isotope] for isotope in all_iso])
+    ms1_iso_patterns = [np.array([[i.mz,i.intensity] for i in isotope]) for isotope in all_iso]
     
     dia_spectrum = np.stack(spec.peak_list(),1)
     
@@ -562,7 +564,10 @@ def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
         #### Type B
         not_dia_col_indices = np.arange(len(ref_coords))
         not_dia_row_indices = [last_row+1]*len(not_dia_col_indices)+not_dia_col_indices
-        not_dia_values = np.array([np.sum([ms1_iso_patterns[:,:,1][idx][peak_idx] for peak_idx in range(len(ms1_iso_patterns[:,:,1][idx])) if ref_coords[idx][peak_idx]%2==0])
+        # not_dia_values = np.array([np.sum([ms1_iso_patterns[:,:,1][idx][peak_idx] for peak_idx in range(len(ms1_iso_patterns[:,:,1][idx])) if ref_coords[idx][peak_idx]%2==0])
+        #                           for idx in range(len(ref_coords))])
+        
+        not_dia_values = np.array([np.sum([ms1_iso_patterns[idx][peak_idx][1] for peak_idx in range(len(ms1_iso_patterns[idx])) if ref_coords[idx][peak_idx]%2==0])
                                   for idx in range(len(ref_coords))])
         
         
@@ -896,11 +901,16 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec in spectra_subset}
             
             
-            isotopes = iso.precursor_isotopes(prec_seq,prec_z,num_iso)
-            
+            isotopes = iso.precursor_isotopes(prec_seq,prec_z,num_iso,tag)
+
+            split_seq = parse_peptide(re.sub("Decoy_","",prec_seq))
+            seq_comp = get_seq_comp(split_seq, "M")
+            tags = re.findall(f"\(({config.tag.name}.*?)\)",prec_seq)
+            tag_channel = tags[0]
+            base_mz = mass.calculate_mass(seq_comp,"M",charge=prec_z)+(len(tags)*config.tag.mass_dict[tag_channel])/prec_z
             delta_mz = 0
             if tag.name in prec_seq:
-                delta_mz = prec_mz-isotopes[0].mz
+                delta_mz = prec_mz-base_mz#isotopes[0].mz
             for i  in isotopes:
                 i.mz+=delta_mz
                 
@@ -1741,3 +1751,6 @@ print()
 
 
 # """
+
+
+'''

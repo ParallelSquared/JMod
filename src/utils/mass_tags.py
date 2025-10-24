@@ -3,7 +3,7 @@ This Source Code Form is subject to the terms of the Oxford Nanopore
 Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
-
+'''
 import re
 from pyteomics import mass
 import tqdm
@@ -11,6 +11,7 @@ import os
 import src.config as config
 import numpy as np
 import copy
+import pandas as pd
 
 from .iso_functions import split_frag_name, fragment_seq
 
@@ -46,10 +47,109 @@ library[all_keys[4]]
 # rules = "nK"
  
 # tag_masses = (np.arange(n_channels)*channel_delta)+base_mass
+class tag_isotope:
+    
+    def __init__(self,idxs,ints,mzs=None,min_intensity=0):
+        assert len(idxs)==len(ints)
+        
+        # self.mzs = mzs
+        # self.idxs = idxs
+        # self.ints = ints
+        # self.int_dict = {i:j for i,j in zip(idxs,ints)}
+        # self.len = len(idxs)
+        self.int_dict = {}
+        self.idxs = []
+        self.ints = []
+        
+        for idx,i in zip(idxs,ints):
+            if i>min_intensity:
+                self.int_dict[idx]=i
+                self.idxs.append(idx)
+                self.ints.append(i)
+        
+        
+        
+        
+        
+    # @property
+    # def mz(self):
+    #     return self.mzs
+    def __repr__(self):
+        return "\n".join(["idxs: "+",\t".join(map(str,self.idxs)),
+                          "ints: "+",\t".join(map(str,self.ints)),
+                          ])
+        # print
+    def __len__(self):
+        return self.len
+    
+    # def plot(self,**kwargs):
+    #     plt.vlines(self.idxs,0,self.ints,**kwargs)
+        
+        
+class emp_tag_isotopes:
 
+    def __init__(self,channel_names,file,sep=",",max_num_tags=4,min_intensity=0):
+        
+        ### read in data
+        data = pd.read_csv(file,sep=sep,  index_col=0)
+        ## convert tcols to integers (these are isotope indices)
+        data.columns = data.columns.map(int)
+        ### create dictionary to call data from
+        data_dict = {str(i):tag_isotope(list(j.index), list(j),min_intensity=min_intensity)
+                         for i,j in data.iterrows()}
+        
+        self.data = data_dict
+        
+        ##########################################
+        ## get emp values for relevant channels
+        ##########################################
+        
+        ### create the holder for the isotopes
+        self.channel_dict = {i:{j:None for j in range(1,max_num_tags+1)} for i in channel_names}
+        
+        ### loop throught the channels, adding one tag each time
+        for channel in channel_names:
+            for num_tags in range(1,max_num_tags+1):
+                if num_tags==1:
+                    self.channel_dict[channel][num_tags] = data_dict[channel]
+                else:
+                    ## add 1 tag to previous tag isotope
+                    self.channel_dict[channel][num_tags] = self.comb_iso(self.channel_dict[channel][num_tags-1], 
+                                                                         self.channel_dict[channel][1],
+                                                                         min_intensity=min_intensity)
+        
+        
+        
+    ### combine tag_isotope classes
+    def comb_iso(self, a_iso,b_iso,min_intensity=0):
+        idx_array = np.array(a_iso.idxs)[:,np.newaxis]+np.array([b_iso.idxs])
+        min_idx = np.min(idx_array)
+        max_idx = np.max(idx_array)
+        
+        new_ints = [0]*(max_idx-min_idx+1)
+        new_idxs = [0]*(max_idx-min_idx+1)
+        new_iso_dict = {}
+        
+        for i in a_iso.idxs:
+            a_int = a_iso.int_dict[i]
+            for j in b_iso.idxs:
+                idx = i+j-min_idx
+                new_iso_dict.setdefault(i+j,0)
+                # if idx>=new_len:
+                #     break
+                new_iso_dict[i+j]+=a_int*b_iso.int_dict[j]
+        sorted_idxs = sorted(new_iso_dict.keys())
+        return tag_isotope(idxs=sorted_idxs, 
+                           ints=[new_iso_dict[i] for i in sorted_idxs],
+                           min_intensity=min_intensity)
+
+    def __getitem__(self, item):
+         return self.channel_dict[item]
+     
+        
 class massTag():
     
-    def __init__(self,rules,base_mass,delta,channel_names, name, compositions=None):
+    def __init__(self,rules,base_mass,delta,channel_names, name, compositions=None, emp_isotope_file = None):
         
         self.rules = rules
         
@@ -75,6 +175,14 @@ class massTag():
             self.channel_comp = {i:compositions[i] for i in self.channel_names}
         else: 
             self.channel_comp=None
+            
+        if emp_isotope_file is not None:
+            self.emp_vals = emp_tag_isotopes(channel_names=self.channel_names,
+                                             file=emp_isotope_file,
+                                             sep=",",
+                                             min_intensity=0.01)
+        else: 
+            self.emp_vals=None
             
     def __repr__(self):
         return("\n".join([
@@ -131,17 +239,19 @@ diethyl_3plex =       massTag(rules = "nK",
                         name = "diethyl_3plex")
 
 tag6_compositions = {"0":mass.Composition({"C":18,"H":16,"N":2,"O":3}),
+                     "1":mass.Composition({"C":17,"H":16,"N":2,"O":3,"C[13]":1,"O[18]":0}),
                     "2":mass.Composition({"C":16,"H":16,"N":2,"O":3,"C[13]":2,"O[18]":0}),
+                    "3":mass.Composition({"C":17,"H":16,"N":2,"O":2,"C[13]":1,"O[18]":1}),
                     "4":mass.Composition({"C":16,"H":16,"N":2,"O":2,"C[13]":2,"O[18]":1}),
                     "6":mass.Composition({"C":12,"H":16,"N":2,"O":3,"C[13]":6,"O[18]":0}),
                     "8":mass.Composition({"C":10,"H":16,"N":2,"O":3,"C[13]":8,"O[18]":0}),
-                    "10":mass.Composition({"C":10,"H":16,"N":2,"O":3,"C[13]":8,"O[18]":1}),
+                    "10":mass.Composition({"C":10,"H":16,"N":2,"O":2,"C[13]":8,"O[18]":1}),
                     "12":mass.Composition({"C":7,"H":16,"N":1,"O":3,"C[13]":11,"O[18]":0,"N[15]":1}),
                     "14":mass.Composition({"C":5,"H":16,"N":1,"O":3,"C[13]":13,"O[18]":0,"N[15]":1}),
-                    "16":mass.Composition({"C":6,"H":16,"N":0,"O":3,"C[13]":13,"O[18]":0,"N[15]":2}),
+                    "16":mass.Composition({"C":6,"H":16,"N":0,"O":2,"C[13]":12,"O[18]":1,"N[15]":2}),
                                          }
-    
-    
+
+     
      
 tag6 = massTag(rules = "nK",
             base_mass=308.1160923903,
@@ -150,7 +260,9 @@ tag6 = massTag(rules = "nK",
             delta = [0.0],#,4.01095605604],#,8.02683870239997],
             channel_names = ["0"],#["0","4"],#,"8"],
             name = "tag6",
-            compositions=tag6_compositions)
+            compositions=tag6_compositions,
+            emp_isotope_file="/Volumes/Lab/KMD/tag6_emp_isotopes.csv"
+            )
 
 tag6_5plex = massTag(rules = "nK",
             base_mass=308.1160923903,
@@ -160,7 +272,8 @@ tag6_5plex = massTag(rules = "nK",
                      12.0339381092,16.03857422084],
             channel_names = ["0","4","8","12","16"],
             name = "tag6_5plex",
-            compositions=tag6_compositions)
+            compositions=tag6_compositions,
+            emp_isotope_file="/Volumes/Lab/KMD/tag6_emp_isotopes.csv")
 
 tag6_9plex = massTag(rules = "nK",
             base_mass=308.1160923903,
@@ -170,7 +283,8 @@ tag6_9plex = massTag(rules = "nK",
                      12.0339381092,14.0406477848,16.03857422084],
             channel_names = ["0","2","4","6","8","10","12","14","16"],
             name = "tag6_9plex",
-            compositions=tag6_compositions) 
+            compositions=tag6_compositions,
+            emp_isotope_file="/Volumes/Lab/KMD/tag6_emp_isotopes.csv") 
 
 tag6_d0d2 = massTag(rules = "nK",
             base_mass=308.1160923903,
@@ -425,3 +539,6 @@ elif config.args.tag in "":
     config.tag = None
 else:
     raise Exception("Incompatible Tag")
+    
+    
+'''
