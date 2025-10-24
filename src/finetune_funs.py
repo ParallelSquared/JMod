@@ -247,15 +247,10 @@ def fine_tune_rt(grouped_df,
     
     
     if tag is None:
-        tag=config.tag
-    
+       tag=config.tag
+   
     if tag is None:
-<<<<<<< HEAD
         model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_LF_09182024_")
-=======
-        #model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_CNN_model_LF_09182024_"
-        model_path = "rt_models/iRT_CNN_model_LF_09182024_"
->>>>>>> origin/Jmod_logging
         
     elif tag.name=="mTRAQ":
         model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_mTRAQ_09182024_")
@@ -264,15 +259,9 @@ def fine_tune_rt(grouped_df,
         model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_DiEthyl_11052024_")
         
     elif "tag6" in tag.name:
-<<<<<<< HEAD
         model_path = os.path.join(current_dir,"../RT_models","iRT_TransferLearning_Tag6_updated_05072025_")
-=======
-        # model_path = "/Volumes/Lab/JD/Predictions/CNN/iRT_TransferLearning_Tag6_updated_"
-        #model_path = "/Volumes/Lab/KMD/FineTuning/tag6/iRT_CNN_model_tag6_05052025_"
-        #model_path = "/Users/nathanwamsley/Data/JMOD_TESTS/iRT_CNN_model_tag6_05052025_"
-        model_path = "rt_models/iRT_TransferLearning_Tag6_updated_05072025_"
->>>>>>> origin/Jmod_logging
-
+     
+        
         
     else:
         logger.error("ValueError - Unknown Label")
