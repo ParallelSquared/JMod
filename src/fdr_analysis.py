@@ -32,6 +32,7 @@ from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 from .utils.misc_functions import unstring_floats
 
 from . import config 
+from src.logger import logger
 
 
 def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
@@ -73,7 +74,7 @@ def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];
 def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     # X = fdc.iloc[:,6:-5]
    
-    print("Performing MS1 Quantitation") 
+    logger.info("Performing MS1 Quantitation") 
     
     fdc = dat[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
     
@@ -211,7 +212,7 @@ class score_model():
         self.folder = folder
                 
     def run_model(self,X,y,sample_weight=None,groups=None):
-        # print(f"{config.tree_max_depth}")
+        # logger.info(f"{config.tree_max_depth}")
         if self.model_type=="rf":
             
             ### Random Forest
@@ -233,7 +234,7 @@ class score_model():
                     
                         # Save plot
                         plt.savefig(self.folder + f"/RF{idx}_feature_importance.png", dpi=600, bbox_inches="tight")
-                        # For RF models, print feature importance
+                        # For RF models, log feature importance
                     return m
                 
             # self.model = fit_model(X,y)
@@ -314,9 +315,10 @@ class score_model():
                     return m
                 
         else:
+            logger.error("ValueError - Unsupported Model Type")
             raise ValueError("Unsupported model type")
         
-        print(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
+        logger.info(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
         
         kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = 42)
         k_orders = [i for i in kf.split(X,y)]
@@ -325,7 +327,7 @@ class score_model():
         if groups is not None:
             unique_groups = np.unique(groups)
             if len(unique_groups) < 5:
-                print(f"Warning: Only {len(unique_groups)} unique groups for 5-fold CV. Using KFold instead.")
+                logger.warning(f"Warning: Only {len(unique_groups)} unique groups for 5-fold CV. Using KFold instead.")
                 gfk = KFold(n_splits=5, shuffle=True, random_state=42)
             else:
                 gfk = GroupKFold(n_splits=5)
@@ -383,7 +385,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
     assert model_type in ["lda", "rf", "xg"], 'model_type must be one of ["lda", "rf", "xg"]'
     
-    print("Scoring IDs")
+    logger.info("Scoring IDs")
     
     
     ## We consider decoys and targets with v small coeffs to be from the null distributiom
@@ -568,7 +570,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
 
 def compute_protein_FDR(df,results_folder=None):
-    print("Computing Protein FDR")
+    logger.info("Computing Protein FDR")
 
   
     df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)
@@ -600,9 +602,9 @@ def compute_protein_FDR(df,results_folder=None):
         .reset_index(name="Precursor_IDs")
         .sort_values("channel")
     )
-    print("Number of precursors at 1% FDR:")
-    print("All Channels:",np.sum(df_counts_prec.Precursor_IDs))
-    print(df_counts_prec.to_string(index=False))
+    logger.info("Number of precursors at 1% FDR:")
+    logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
+    logger.info(df_counts_prec.to_string(index=False))
     
 
     df_counts_prots = (
@@ -613,9 +615,9 @@ def compute_protein_FDR(df,results_folder=None):
         .reset_index(name="Protein_IDs")
         .sort_values("channel")
         )
-    print("\nNumber of proteins at 1% FDR:")
-    print("All Channels:",np.sum(df_counts_prots.Protein_IDs))
-    print(df_counts_prots.to_string(index=False))
+    logger.info("\nNumber of proteins at 1% FDR:")
+    logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
+    logger.info(df_counts_prots.to_string(index=False))
 
     if results_folder is not None:
         with open(results_folder+'/Summary.txt', 'a') as f:
@@ -634,7 +636,7 @@ def compute_protein_FDR(df,results_folder=None):
     #         df["BestChannel_Protein_Qvalue"] = df.groupby(["file_name", "protein", "decoy"])["Protein_Qvalue"].transform("min")
 
     if config.args.plexDIA:
-        print("\nAfter plexDIA identification propagation based on best channel Q-value:")
+        logger.info("\nAfter plexDIA identification propagation based on best channel Q-value:")
         
         # Compute number of precursor IDs at 1% FDR
         df_counts_prec = (
@@ -647,9 +649,9 @@ def compute_protein_FDR(df,results_folder=None):
         )
         
         # Print precursor ID counts
-        print("Number of precursors at 1% FDR (best channel):")
-        print("All Channels:",np.sum(df_counts_prec.Precursor_IDs))
-        print(df_counts_prec.to_string(index=False))
+        logger.info("Number of precursors at 1% FDR (best channel):")
+        logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
+        logger.info(df_counts_prec.to_string(index=False))
         
         # Compute number of protein IDs at 1% FDR
         df_counts_prots = (
@@ -662,9 +664,9 @@ def compute_protein_FDR(df,results_folder=None):
         )
         
         # Print protein ID counts
-        print("\nNumber of proteins at 1% FDR (best channel):")
-        print("All Channels:",np.sum(df_counts_prots.Protein_IDs))
-        print(df_counts_prots.to_string(index=False))
+        logger.info("\nNumber of proteins at 1% FDR (best channel):")
+        logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
+        logger.info(df_counts_prots.to_string(index=False))
         
         if results_folder is not None:
             with open(results_folder+'/Summary.txt', 'a') as f:
@@ -705,7 +707,7 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     result_df = df.copy()
     
     if verbose:
-        print(f"Adding median-based features for {len(metric_columns)} metrics...")
+        logger.info(f"Adding median-based features for {len(metric_columns)} metrics...")
     
     for metric_col in metric_columns:
         # Calculate median for each group
@@ -724,8 +726,8 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
         result_df[diff_col] = result_df[diff_col].fillna(mean_val)
         
         if verbose:
-            print(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
-            print(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
+            logger.info(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
+            logger.info(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
     
     return result_df
 

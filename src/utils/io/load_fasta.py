@@ -7,6 +7,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 from pyteomics import fasta, parser
 import tqdm
 import re
+from src.logger import logger
 
 fasta_files = [
     "/Volumes/One Touch/PhD/Vostro/Python/Human/humanSwissProt.fasta", ## human
@@ -58,7 +59,7 @@ for i in range(len(all_fasta_seqs)):
     for j in range(len(all_fasta_seqs)):
         if i!=j:
             shared = all_fasta_seqs[i].intersection(all_fasta_seqs[j])
-            print(len(shared))
+            logger.info(len(shared))
             all_fasta_seqs[i] = all_fasta_seqs[i] - shared
             all_fasta_seqs[j] = all_fasta_seqs[j] - shared
             

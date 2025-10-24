@@ -8,6 +8,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 Dummy tests to verify the test suite is working correctly
 """
 import pytest
+from src.logger import logger
 
 
 def test_dummy_always_passes():
@@ -56,6 +57,7 @@ class TestDummyClass:
 def test_dummy_exception():
     """Test that exceptions are raised correctly"""
     with pytest.raises(ValueError):
+        logger.error("ValueError - This is a test exception")
         raise ValueError("This is a test exception")
 
 

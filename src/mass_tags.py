@@ -16,6 +16,8 @@ from .iso_functions import split_frag_name, fragment_seq
 
 from .utils.misc_functions import frag_to_peak, specific_frags
 from .utils.parse_peptides import parse_peptide
+
+from src.logger import logger
 """
 ## Load in the library
 from SpecLib import loadSpecLib, write_speclib_tsv
@@ -299,7 +301,7 @@ def get_tag_pos(AA_seq,rules):
     all_tag_pos = []
     for rule in rules:
         # break
-        # print(rule)
+        # logger.info(rule)
         if re.match("[A-Z]",rule):
             tag_pos = list(np.where([rule==i[0] for i in AA_seq])[0])
             
@@ -331,7 +333,7 @@ def tag_library(library,tag=mTRAQ):
     New dictionary with copy of each precursor for each channel.
 
     """
-    print(f"Generating tagged library with tag: {tag.name}")
+    logger.info(f"Generating tagged library with tag: {tag.name}")
     
     new_lib = {}
     
@@ -385,7 +387,7 @@ def tag_library(library,tag=mTRAQ):
             else:
                 raise(ValueError("Invalid ion type"))
                     
-            # print(library[key]["frags"][frag],seq,num_tags)
+            # logger.info(library[key]["frags"][frag],seq,num_tags)
             blank_tags.append([frag,library[key]["frags"][frag],num_tags,frag_z])
             
         
@@ -441,4 +443,5 @@ if config.args.tag in available_tags:
 elif config.args.tag in "":
     config.tag = None
 else:
+    logger.error("Exception - Incompatible Tag")
     raise Exception("Incompatible Tag")

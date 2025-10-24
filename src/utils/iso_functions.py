@@ -18,6 +18,7 @@ import numpy as np
 from . import config 
 
 from .utils.misc_functions import frag_to_peak
+from src.logger import logger
 
 
 
@@ -209,10 +210,10 @@ def gen_isotopes_dict(seq,frags, tag = None):
 
 def iso_library(library):
     ## add n isotpic peaks to the "spectrum" portio of each library entry
-    print("Creating Copy of Library...")
+    logger.info("Creating Copy of Library...")
     new_library = copy.deepcopy(library)
     
-    print("Generating isotopes for library:")
+    logger.info("Generating isotopes for library:")
     for key in tqdm.tqdm(new_library):
         frags = new_library[key]["frags"]
         
@@ -224,10 +225,10 @@ def iso_library(library):
 import multiprocessing
 def iso_library_multi(library):
     ## add n isotpic peaks to the "spectrum" portio of each library entry
-    print("Creating Copy of Library...")
+    logger.info("Creating Copy of Library...")
     new_library = copy.deepcopy(library)
     
-    print("Generating isotopes for library:")
+    logger.info("Generating isotopes for library:")
     all_keys = list(new_library)
     all_seqs = [i[0] for i in all_keys]
     all_frags = [new_library[i]["frags"] for i in new_library]

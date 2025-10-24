@@ -17,6 +17,7 @@ import tqdm
 import copy
 import src.config as config
 from ...iso_functions import gen_isotopes_dict
+from src.logger import logger
 
 
 # load in spec library (tsv)
@@ -129,7 +130,7 @@ jmod_to_diann = {j:i for i,j in diann_to_jmod.items()}
 
 def load_tsv_speclib(spec_lib_file):
     # load speclib files from DIA-NN
-    print("using: load_tsv_speclib")
+    logger.info("using: load_tsv_speclib")
     with open(spec_lib_file,newline="") as tsv_file:
         csv_reader = csv.DictReader(tsv_file,delimiter="\t")
         all_columns  = csv_reader.fieldnames
@@ -157,6 +158,7 @@ def load_tsv_speclib(spec_lib_file):
             elif "iRT" in row:
                 rt = row["iRT"]
             else:
+                logger.error("ValueError - Unknonw retention time column")
                 raise ValueError("Unknown retention time column")
             python_lib[unique_id]["iRT"] = None if rt=="" else float(rt)
             python_lib[unique_id].setdefault("frags",{})
@@ -269,10 +271,10 @@ def loadSpecLib(lib_file):
     
     lib_ext = lib_file.rsplit(".")[-1]
     
-    print("Loading Library",end=" ")
+    logger.info("Loading Library...")
     python_lib_file = lib_file+"_pythonlib"
     if not os.path.exists(python_lib_file):
-        print("... from file")
+        logger.info("Loading Library... from file")
         if lib_ext=="blib":
             spec_lib = load_blib(lib_file)
         else:
@@ -281,12 +283,12 @@ def loadSpecLib(lib_file):
         with open(python_lib_file,"wb") as write_file:
             pickle.dump(spec_lib, write_file)
     else:
-        print("... from pickle")
+        logger.info("Loading Library... from pickle")
         with open(python_lib_file,"rb") as read_file:
             spec_lib = pickle.load(read_file)
     
-    print(f"Loaded {len(spec_lib)} library precursors")
-    print("finished")
+    logger.info(f"Loaded {len(spec_lib)} library precursors")
+    logger.info("finished")
     return spec_lib
 
 
@@ -336,7 +338,7 @@ def write_speclib_tsv(library,filename):
         for key in lib_keys:
             precursor={i:library[key][j] for i,j in diann_to_jmod.items() if j in col_names}
             for frag in library[key]["frags"]:
-                # print(frag)
+                # logger.info(frag)
                 frag_name,frag_z = frag.split("_")
                 loss_check = frag_name.split("-")
                 loss = "noloss"
@@ -351,7 +353,7 @@ def write_speclib_tsv(library,filename):
                 precursor["FragmentSeriesNumber"]=frag_idx
                 precursor["FragmentLossType"]=loss
                 
-                # print(list(precursor.values()))
+                # logger.info(list(precursor.values()))
                 writer.writerow([precursor[i] if i in precursor else "" for i in diann_names])
                 
                 
@@ -414,10 +416,10 @@ class SpectrumLibrary():
         
         lib_ext = lib_file.rsplit(".")[-1]
         
-        print("Loading Library",end=" ")
+        logger.info("Loading Library...")
         python_lib_file = lib_file+"_pythonlib"
         if not os.path.exists(python_lib_file):
-            print("... from file")
+            logger.info("Loading Library... from file")
             if lib_ext=="blib":
                 spec_lib = load_blib(lib_file)
             else:
@@ -426,12 +428,12 @@ class SpectrumLibrary():
             with open(python_lib_file,"wb") as write_file:
                 pickle.dump(spec_lib, write_file)
         else:
-            print("... from pickle")
+            logger.info("Loading Library... from pickle")
             with open(python_lib_file,"rb") as read_file:
                 spec_lib = pickle.load(read_file)
         
-        print(f"Loaded {len(spec_lib)} library spectra")
-        print("finished")
+        logger.info(f"Loaded {len(spec_lib)} library spectra")
+        logger.info("finished")
         return spec_lib
         
     

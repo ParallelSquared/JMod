@@ -11,6 +11,7 @@ import re
 from pyteomics import mass
 import src.config as config
 import pandas as pd 
+from src.logger import logger
 def feature_list_rt(DinoDF,rt,rt_tol): 
     """
     Description:
@@ -182,7 +183,7 @@ def write_to_csv(data: list[list],filepath: str,colnames: list[str] = None):
             if len(colnames)==len(data[0]):
                 writer.writerow(colnames)
             else:
-                println("WARNING: Column names do not match data columns. Skipping header row.")
+                logger.warning("WARNING: Column names do not match data columns. Skipping header row.")
         writer.writerows(data)
         
         

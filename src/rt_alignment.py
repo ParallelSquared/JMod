@@ -37,6 +37,8 @@ from src.utils.misc_functions import within_tol,moving_average, \
 from src.finetune_funs import fine_tune_rt, one_hot_encode_sequence
 from src.utils.io.read_output import names, dtypes
 
+from src.logger import logger
+
 colours = ["tab:blue","tab:orange","tab:green","tab:red",
 'tab:purple',
 'tab:brown',
@@ -325,7 +327,7 @@ def fit_gaussian(data,init_std=None,bin_n=50):
     data : array
         Distribution of points that aproximate a gaussian distribution.
     init_std : float, optional
-        Intitial guess at the standard deviation of the gaussian. The default is None.
+        Initial guess at the standard deviation of the gaussian. The default is None.
     bin_n : int, optional
         Number of bins used to fit the distribution. The default is 50.
 
@@ -408,13 +410,13 @@ def fit_errors(errors,limit=10,percentile=.999):
     if e_cdf_sq_err<g_cdf_sq_err:
         scale_param = mad/np.log(2)
         boundary = stats.expon.ppf(percentile,loc=0,scale=scale_param)
-        print("Fitted Exponential to RT errors")
+        logger.info("Fitted Exponential to RT errors")
     else:
         scale_param = mad*1.4826
         boundary = stats.halfnorm.ppf(percentile,loc=0,scale=scale_param)
-        print("Fitted Gaussian to RT errors")
+        logger.info("Fitted Gaussian to RT errors")
         
-    # print(boundary)
+    # logger.info(boundary)
     return boundary
 
     
@@ -524,7 +526,7 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
     
     lf_rt = np.array(dino_features.rtApex[large_feature_indices])
     lf_mz = np.array(dino_features.mz[large_feature_indices])
-    # print("Finding correct spectra")
+    # logger.info("Finding correct spectra")
     # lf_spectra = [np.argmin(np.abs(np.array(all_dia_rt)-i)) for i in lf_rt]
     dia_rt_mzwin = np.array([[i.RT,*i.ms1window] for i in dia_spectra.ms2scans])
     lf_spectra = [closest_spec(dia_rt_mzwin,i,j) for i,j in zip(lf_mz,lf_rt)] 
@@ -663,7 +665,7 @@ def empirical_fit(output_df,results_folder=None):
     
     
     
-    print("Filtering IDs from initial search")
+    logger.info("Filtering IDs from initial search")
     for feature_percentile in  range(20,80,5):
     
     ## empirically derived cutoffs
@@ -733,11 +735,11 @@ def empirical_fit(output_df,results_folder=None):
         
         bad_IDs  = (np.abs(first_rt_diffs)>np.min([first_rt_tolerance,np.ptp(output_df.rt)/5]))[cor_filter]
         outside_ratio = sum(bad_IDs)/len(bad_IDs)
-        print(f"Testing Percentile: {feature_percentile}, Ratio: {np.round(outside_ratio,4)}, #IDs: {sum(cor_filter)}")
+        logger.info(f"Testing Percentile: {feature_percentile}, Ratio: {np.round(outside_ratio,4)}, #IDs: {sum(cor_filter)}")
         if outside_ratio<.05 or (sum(cor_filter)-sum(bad_IDs)<800):
             break
     
-    print(feature_percentile,np.round(outside_ratio,4),sum(cor_filter))
+    logger.info(f"{feature_percentile} {np.round(outside_ratio,4)} {sum(cor_filter)}")
             
     
     cor_filter = np.logical_and(cor_filter,np.abs(first_rt_diffs)<first_rt_tolerance)
@@ -991,7 +993,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     else:
         scans_per_cycle = 1
 
-    print("Intitial search")
+    logger.info("Initial search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
     ms1spectra = dia_spectra.ms1scans
@@ -1054,7 +1056,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     if not config.args.use_emp_rt:
         ## filter for only a single channel for each
-        print("Trying RT Prediction")
+        logger.info("Trying RT Prediction")
         seq_rt = {}
         for s,rt in zip(np.array(id_keys)[cor_filter],np.array(output_df.rt)[cor_filter]):
             key=librarySpectra[(s[0],float(s[1]))]["seq"]
@@ -1097,7 +1099,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
             # boundary = elbow_pred_x
-            print("Fine Tuned Library Chosen")
+            logger.info("Fine Tuned Library Chosen")
             boundary = fit_errors(all_pred_diffs,limit,percentile)
             rt_spl = pred_rt_spl
             all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
@@ -1108,7 +1110,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                 
         else: ### empirical are better
             # boundary = elbow_emp_x
-            print("Empirical Library Chosen")
+            logger.info("Empirical Library Chosen")
             boundary = fit_errors(all_emp_diffs,limit,percentile)
             ## keep the library RTs and splines the same
             rt_spl = emp_rt_spl
@@ -1121,7 +1123,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     else:
 
-        print("Using Empirical w/o Fine Tuning")
+        logger.info("Using Empirical w/o Fine Tuning")
         updatedLibrary = copy.deepcopy(librarySpectra)
         all_lib_keys = list(librarySpectra)
         rt_spl = emp_rt_spl
@@ -1196,22 +1198,22 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     new_rt_tol = boundary#4*np.abs(rt_stddev) 
     if config.args.user_rt_tol:
-        print("Using user specified RT tolerance")
+        logger.info("Using user specified RT tolerance")
         new_rt_tol = config.args.rt_tol
-    print(f"Optimsed RT tolerance: {new_rt_tol}")
+    logger.info(f"Optimsed RT tolerance: {new_rt_tol}")
     config.opt_rt_tol = np.abs(new_rt_tol)
     
     
     new_ms1_tol = np.abs(4*mz_stddev)
-    print(f"Optimsed ms1 tolerance: {new_ms1_tol}")
+    logger.info(f"Optimsed ms1 tolerance: {new_ms1_tol}")
     
     
     if config.args.ms1_ppm!=0:
-        print(f"Using MS1 Tolerance provided: {config.args.ms1_ppm}ppm")
+        logger.info(f"Using MS1 Tolerance provided: {config.args.ms1_ppm}ppm")
         new_ms1_tol=np.abs(config.args.ms1_ppm*1e-6)
     elif config.min_ms1_tol!=0 and config.min_ms1_tol>new_ms1_tol:
-        print(f"Exceeded minimum MS1 tolerance: {np.abs(config.min_ms1_tol)}")
-        print(f"Setting new MS1 tolerance: {np.abs(config.min_ms1_tol)}")
+        logger.info(f"Exceeded minimum MS1 tolerance: {np.abs(config.min_ms1_tol)}")
+        logger.info(f"Setting new MS1 tolerance: {np.abs(config.min_ms1_tol)}")
         new_ms1_tol=np.abs(config.min_ms1_tol)
         
     config.opt_ms1_tol  = new_ms1_tol
@@ -1725,7 +1727,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     config.n_most_intense_features = int(1e8) # larger than possible, essentually all
     
     scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
-    print("Intitial search")
+    logger.info("Initial search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
     ms1spectra = dia_spectra.ms1scans
@@ -1937,7 +1939,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         ### compare original empirical RTs to fintuned RTs
         
         if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
-            print("Fine Tuned Library Chosen")
+            logger.info("Fine Tuned Library Chosen")
     
             boundary = fit_errors(all_pred_diffs,limit,percentile)
     
@@ -1950,7 +1952,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         else: ### empirical are better
             ## keep the library RTs the same
     
-            print("Empirical Library Chosen")
+            logger.info("Empirical Library Chosen")
             
             boundary = fit_errors(all_emp_diffs,limit,percentile)
     
@@ -1965,7 +1967,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
      
     else:
     # """
-        print("Using Empirical w/o Fine Tuning")
+        logger.info("Using Empirical w/o Fine Tuning")
         updatedLibrary = copy.deepcopy(librarySpectra)
         all_lib_keys = list(librarySpectra)
         
@@ -2085,9 +2087,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     new_rt_tol =np.abs(boundary)# 4*np.abs(rt_stddev)
     if config.args.user_rt_tol:
-        print("Using user specified RT tolerance")
+        logger.info("Using user specified RT tolerance")
         new_rt_tol = np.abs(config.args.rt_tol)
-    print(f"Optimsed RT tolerance: {new_rt_tol}")
+    logger.info(f"Optimsed RT tolerance: {new_rt_tol}")
     
     # ## ensure there is no overlap
     # obs_rt_range = [min(output_df.rt),max(output_df.rt)]
@@ -2113,9 +2115,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     min_prediction_diff = np.min([np.min(i) for i in prediction_diffs])
     
     if new_rt_tol>np.abs(min_prediction_diff/2):
-        print("Warning; Library RTs overlapping")
+        logger.warning("Warning; Library RTs overlapping")
         new_rt_tol = np.abs(min_prediction_diff/2)*.99 # ensure no overlap
-        print(f"Reseting tolerance to {new_rt_tol}")
+        logger.warning(f"Reseting tolerance to {new_rt_tol}")
     
 
     
@@ -2133,7 +2135,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
 
 
     new_ms1_tol = np.abs(4*mz_stddev)
-    print(f"Optimsed ms1 tolerance: {new_ms1_tol}")
+    logger.info(f"Optimsed ms1 tolerance: {new_ms1_tol}")
     
     config.opt_ms1_tol  = new_ms1_tol
     
