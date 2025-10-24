@@ -3,10 +3,15 @@ This Source Code Form is subject to the terms of the Oxford Nanopore
 Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
-
-from src.fdr_analysis import process_data
 import os
 import re
+import sys
+
+src_path = os.path.join(os.path.dirname("/Users/kevinmcdonnell/Programming/Python/PTI/jmod/run_jmod.py"), 'src')
+sys.path.insert(0, src_path)
+
+from fdr_analysis import process_data
+
 from src.utils.io.load_files import loadSpectra
 from src.models.spec_lib.spec_lib import loadSpecLib
 from mass_tags import tag_library, mTRAQ, mTRAQ_02468, mTRAQ_678, diethyl_6plex,available_tags
