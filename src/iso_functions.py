@@ -6,6 +6,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 
 
 from brainpy import isotopic_variants
+from brainpy._c.isotopic_distribution import TheoreticalPeak
 import re
 from pyteomics import mass
 import src.config as config
@@ -15,11 +16,11 @@ from functools import reduce
 import copy
 import numpy as np
 
-from . import config 
+from src import config 
 
-from .utils.misc_functions import frag_to_peak
+from src.utils.misc_functions import frag_to_peak
 
-
+        
 
 ## split up the fragment name (b/y)(frag index)(-loss)_charge
 def split_frag_name(ion_type):
@@ -249,17 +250,81 @@ def calculate_mz(sequence,charge):
     seq_comp = get_seq_comp(split_seq, "M")
     return mass.calculate_mass(seq_comp,charge=charge)
 
-def precursor_isotopes(sequence,charge,n_isotopes=2):
+# def precursor_isotopes(sequence,charge,n_isotopes=2):
+#     sequence = re.sub("Decoy_","",sequence)
+#     #split_seq = split_peptide(sequence)
+#     split_seq = parse_peptide(sequence)
+    
+#     seq_comp = get_seq_comp(split_seq, "M")
+    
+#     if config.tag:
+#         tags = [t for aa in split_seq for t in re.findall(f"\(({config.tag.name}.*?)\)",aa)]
+        
+#         if config.tag.channel_comp is not None and len(tags)>0:
+#                 tag_comp = reduce(lambda x, y: x + y, [config.tag.channel_comp[re.findall(f"{config.tag.name}-(\d+)",t)[0]] for t in tags])
+#                 seq_comp+=tag_comp
+            
+    
+#     isotopes = isotopic_variants(seq_comp,
+#                                   npeaks=n_isotopes,
+#                                   charge = int(charge))
+    
+#     return isotopes
+
+
+def add_tag_isotopes(isotopes,tag_mz, tag_iso,offset = 1.0033548):
+    
+    min_idx = min(tag_iso.idxs)
+    max_idx = max(tag_iso.idxs)
+    
+    r = range(len(isotopes))
+    r_tag = range(min_idx,max_idx)
+    
+    
+    z = isotopes[0].charge
+    new_len = len(isotopes)-min_idx
+    min_mz = isotopes[0].mz
+
+    iso_int = [i.intensity for i in isotopes]
+    iso_mz = [i.mz for i in isotopes]
+    low_mz = [min_mz+((i*offset)/z) for i in range(min_idx,0)]
+    new_iso = [TheoreticalPeak(mz+tag_mz,0,z) for mz in low_mz+iso_mz]
+
+
+    
+    for i in r:
+        a_int = iso_int[i]
+        for j in r_tag:
+            idx = i+j-min_idx
+            if idx>=new_len:
+                break
+            new_iso[idx].intensity+=a_int*tag_iso.int_dict[j]
+            # new_ints[i+j-min_idx]+=a_int*imp.int_dict[j]
+            
+    return new_iso
+
+
+def precursor_isotopes(sequence,charge,n_isotopes=2,tag=None,use_impurities=True):
     sequence = re.sub("Decoy_","",sequence)
     #split_seq = split_peptide(sequence)
     split_seq = parse_peptide(sequence)
     
     seq_comp = get_seq_comp(split_seq, "M")
     
-    if config.tag:
-        tags = [t for aa in split_seq for t in re.findall(f"\(({config.tag.name}.*?)\)",aa)]
-        if config.tag.channel_comp is not None and len(tags)>0:
-                tag_comp = reduce(lambda x, y: x + y, [config.tag.channel_comp[re.findall(f"{config.tag.name}-(\d+)",t)[0]] for t in tags])
+    if tag:
+        tags = [t for aa in split_seq for t in re.findall(f"\(({tag.name}.*?)\)",aa)]
+        if tag.emp_vals is not None and len(tags)>0 and use_impurities:
+            num_tags = len(tags)
+            tag_channels = [re.findall(f"{tag.name}-(\d+)",t)[0] for t in tags]
+            isotopes = isotopic_variants(seq_comp,
+                                         npeaks=n_isotopes,
+                                         charge = int(charge))
+            return add_tag_isotopes(isotopes, 
+                                    tag_mz = (num_tags*tag.mass_dict[tags[0]])/charge,
+                                    tag_iso = tag.emp_vals.channel_dict[tag_channels[0]][num_tags])
+        
+        elif tag.channel_comp is not None and len(tags)>0:
+                tag_comp = reduce(lambda x, y: x + y, [tag.channel_comp[re.findall(f"{tag.name}-(\d+)",t)[0]] for t in tags])
                 seq_comp+=tag_comp
             
     
@@ -268,6 +333,8 @@ def precursor_isotopes(sequence,charge,n_isotopes=2):
                                  charge = int(charge))
     
     return isotopes
+
+
 
 ####################################################################################
 ##################   PLexDIA  code    ##########################################

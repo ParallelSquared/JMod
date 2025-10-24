@@ -9,17 +9,18 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import numpy as np
 import re
 from scipy import stats
-from .utils.misc_functions import  closest_ms1spec,np_pearson_cor
-from .utils import misc_functions as mf
+from src.utils.misc_functions import  closest_ms1spec,np_pearson_cor
+from src.utils import misc_functions as mf
 import src.config as config 
 import tqdm
-from . import iso_functions as iso
+from src import iso_functions as iso
 import warnings
 from scipy.interpolate import interp1d
 from scipy import optimize
 from scipy.signal import find_peaks
 import multiprocessing
 from functools import partial
+from pyteomics import mass
 
 # def moving_average(x, w):
 #     return np.convolve(x, np.ones(w), 'same') / w
@@ -41,6 +42,7 @@ min_int = 1e-3
 
 def moving_average(x, w=4):
     return np.convolve(x, np.ones(w), 'same') / w
+    # return np.convolve(x, np.ones(w), 'same') /np.convolve(np.ones_like(x), np.ones(4), 'same') ### !!! This is the expected behaviour: requires tessting
 
 def most_dense_idx(x):
     arr = np.array(list(x))
@@ -162,6 +164,37 @@ def get_trace_int(spec,mz,atol=0,rtol=0,base=min_int):
 
     return base
 
+def get_trace_peak(spec,mz,atol=0,rtol=0,base=min_int):
+    ## speed up of above
+    order_idx = np.searchsorted(spec.mz, mz)
+    
+    # Handle edge cases for indices at the bounds
+    if order_idx == 0:
+        closest_idx = 0
+        mz_diff = spec.mz[0]-mz
+    elif order_idx == len(spec.mz):
+        closest_idx = len(spec.mz) - 1
+        mz_diff = mz-spec.mz[-1]
+    else:
+        # Compare the closest values on both sides of the searchsorted index
+        left_idx = order_idx - 1
+        right_idx = order_idx
+        
+        # Find the closest value between the two neighboring indices
+        left_diff = abs(spec.mz[left_idx] - mz)
+        right_diff = abs(spec.mz[right_idx] - mz)
+        if left_diff < right_diff:
+            closest_idx = left_idx
+            mz_diff = left_diff
+        else:
+            closest_idx = right_idx
+            mz_diff = right_diff
+    
+#    mz_diff = abs(spec.mz[closest_idx] - mz)
+    if mz_diff <= mz * rtol:  # Use the relative tolerance condition
+        return [spec.mz[closest_idx],spec.intens[closest_idx]]
+
+    return [mz, base]
 
 def get_ms1_peak(x,y,idx):
     x = np.array(x)
@@ -505,7 +538,7 @@ def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
     #### all_iso is a list of the mTRAQ isotopes 
     
     
-    ms1_iso_patterns = np.array([[[i.mz,i.intensity] for i in isotope] for isotope in all_iso])
+    ms1_iso_patterns = [np.array([[i.mz,i.intensity] for i in isotope]) for isotope in all_iso]
     
     dia_spectrum = np.stack(spec.peak_list(),1)
     
@@ -544,6 +577,7 @@ def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
     
     lib_coefficients = np.zeros(len(ref_coords))
     dia_spec_int = []
+    dia_spec_mz = []
     matrix = []
     if any([i.size>0 for i in ref_spec_row_indices_split]):
         
@@ -555,6 +589,7 @@ def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
         unique_row_idxs.sort()
         
         dia_spec_int = dia_spectrum[unique_row_idxs,1]
+        dia_spec_mz = dia_spectrum[unique_row_idxs,0]
         
         lower_limit=1e-10
         last_row = max(unique_row_idxs)
@@ -562,7 +597,10 @@ def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
         #### Type B
         not_dia_col_indices = np.arange(len(ref_coords))
         not_dia_row_indices = [last_row+1]*len(not_dia_col_indices)+not_dia_col_indices
-        not_dia_values = np.array([np.sum([ms1_iso_patterns[:,:,1][idx][peak_idx] for peak_idx in range(len(ms1_iso_patterns[:,:,1][idx])) if ref_coords[idx][peak_idx]%2==0])
+        # not_dia_values = np.array([np.sum([ms1_iso_patterns[:,:,1][idx][peak_idx] for peak_idx in range(len(ms1_iso_patterns[:,:,1][idx])) if ref_coords[idx][peak_idx]%2==0])
+        #                           for idx in range(len(ref_coords))])
+        
+        not_dia_values = np.array([np.sum([ms1_iso_patterns[idx][peak_idx][1] for peak_idx in range(len(ms1_iso_patterns[idx])) if ref_coords[idx][peak_idx]%2==0])
                                   for idx in range(len(ref_coords))])
         
         
@@ -581,6 +619,7 @@ def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
         matrix[sparse_row_indices,sparse_col_indices] = sparse_values
         
         dia_spec_int = np.append(dia_spec_int,[0]*(matrix.shape[0]-dia_spec_int.shape[0])) 
+        dia_spec_mz = np.append(dia_spec_mz,[0]*(matrix.shape[0]-dia_spec_mz.shape[0])) 
         
         # Generate sparse matrix from data
         # sparse_lib_matrix = sparse.coo_matrix((sparse_values,(sparse_row_indices,sparse_col_indices)))
@@ -595,7 +634,7 @@ def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
         # lib_coefficients = np.linalg.lstsq(matrix, dia_spec_int)[0]
         lib_coefficients, residuals = optimize.nnls(matrix, dia_spec_int)
         
-    return lib_coefficients, dia_spec_int,  matrix
+    return lib_coefficients, dia_spec_int,  matrix, dia_spec_mz
 
     # func=np.array
     # plt.vlines(np.arange(len(dia_spec_int)),0,func(dia_spec_int),linewidths=15)
@@ -886,46 +925,55 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             #     ms2_vals = {}
                 
             # if config.args.dummy_value=="orig":
-            f = interp1d(list(ms2_vals.keys()), np.array(list(ms2_vals.values())), bounds_error=False)
+            f = interp1d(list(ms2_vals.keys()), np.array(list(ms2_vals.values())), bounds_error=False) ## !!! maybe this should have "fill_value"
             # else:
             #     f = interp1d(list(ms2_vals.keys()), remove_non_consecutive(np.array(list(ms2_vals.values()))), bounds_error=False)
                 
             fs.append(f)
             
-            # ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec,use in zip(ms1_spectra,rt_bool) if use}
-            ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec in spectra_subset}
             
+            isotopes = iso.precursor_isotopes(prec_seq,prec_z,num_iso,tag)
+            mono_idx = np.argmin(np.abs([i.mz-prec_mz for i in isotopes]))
             
-            isotopes = iso.precursor_isotopes(prec_seq,prec_z,num_iso)
-            
+            split_seq = iso.parse_peptide(re.sub("Decoy_","",prec_seq))
+            seq_comp = iso.get_seq_comp(split_seq, "M")
+            tags = re.findall(f"\(({config.tag.name}.*?)\)",prec_seq)
+            tag_channel = tags[0]
+            base_mz = mass.calculate_mass(seq_comp,"M",charge=prec_z)+(len(tags)*config.tag.mass_dict[tag_channel])/prec_z
             delta_mz = 0
             if tag.name in prec_seq:
-                delta_mz = prec_mz-isotopes[0].mz
+                delta_mz = prec_mz-base_mz#isotopes[0].mz
             for i  in isotopes:
                 i.mz+=delta_mz
                 
             group_iso.append(isotopes)
             
+            
+            # # ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec,use in zip(ms1_spectra,rt_bool) if use}
+            # ms1_vals = {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec in spectra_subset}##edit Sep 25 - remove
+            
+            
             prec_isotope_traces=[]
             # iso_ratios.append([i.intensity for i in isotopes])
             ## note: we have collected similar values for previous channel if the isotopic envelopes are overlapping. 
             ### However, in cases like diethlyation, isoptopes can differ by > 10 ppm #!!!Maybe investigate wider ppm tol for these cases?
-            for isotope in isotopes[1:]:# we already have the monoisotopic trace
+            # for isotope in isotopes[1:]:# we already have the monoisotopic trace##edit Sep 25 - remove
+            for isotope in isotopes: ##edit Sep 25 - add
                 # iso_trace = {spec.scan_num:get_trace_int(spec, isotope.mz,rtol=mz_ppm) for spec,use in zip(ms1_spectra,rt_bool) if use}
-                iso_trace = {spec.scan_num:get_trace_int(spec, isotope.mz,rtol=mz_ppm) for spec in spectra_subset}
+                # iso_trace = {spec.scan_num:get_trace_int(spec, isotope.mz,rtol=mz_ppm) for spec in spectra_subset}##edit Sep 25 - remove
+                iso_trace = {spec.scan_num:get_trace_peak(spec, isotope.mz,rtol=mz_ppm) for spec in spectra_subset}##edit Sep 25 - add
                 prec_isotope_traces.append(iso_trace)
              
             
-            all_ms1_vals = {i:min_int for i in all_scans}
+            # all_ms1_vals = {i:min_int for i in all_scans}##edit Sep 25 - remove
             all_ms2_vals = {i:min_int for i in all_scans}
             all_iso_vals = [{i:min_int for i in all_scans} for _ in range(len(prec_isotope_traces))]
             
+            spectra_id_set = {i.scan_num for i in spectra_subset}
             for scan,c in zip(all_scans,f(all_scans)):
-                if scan in ms1_vals:
-                    all_ms1_vals[scan] = ms1_vals[scan]
+                if scan in spectra_id_set:
+                    # all_ms1_vals[scan] = ms1_vals[scan]##edit Sep 25 - remove
                     all_ms2_vals[scan] = c#f(scan)
-                # if scan in ms2_vals:
-                    # all_ms2_vals[scan] = ms2_vals[scan]
                 for iso_idx in range(len(prec_isotope_traces)):
                     if scan in prec_isotope_traces[iso_idx]:
                         all_iso_vals[iso_idx][scan] = prec_isotope_traces[iso_idx][scan]
@@ -952,20 +1000,23 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
                     
                 ms1_index_of_max = highest_ranked_spec
                 
-            ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), moving_average(list(all_ms1_vals.values())), ms1_index_of_max)
+            # ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), moving_average(list(all_ms1_vals.values())), ms1_index_of_max)
+            ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_iso_vals[mono_idx].keys()), moving_average([all_iso_vals[mono_idx][i][1] for i in list(all_iso_vals[mono_idx].keys())]), ms1_index_of_max) ##edit Sep 25 - add
             
-            ## redefine all_scans to keep only thoe from the above peak
+            ## redefine all_scans to keep only those from the above peak
             channel_scans = all_scans[all_scans.index(ms1_peak_edge_idxs[0]):all_scans.index(ms1_peak_edge_idxs[1])+1]
-            all_ms1_vals = {i:all_ms1_vals[i] for i in channel_scans}
-            all_iso_vals = [{i:iso_vals[i] for i in channel_scans} for iso_vals in all_iso_vals]
+            # all_ms1_vals = {i:all_ms1_vals[i] for i in channel_scans}##edit Sep 25 - remove
+            all_iso_vals = [{i:iso_vals[i][0] for i in channel_scans} for iso_vals in all_iso_vals]
             all_ms2_vals = {i:all_ms2_vals[i] for i in channel_scans}
             
             all_channel_scans.append(channel_scans)
-            ms1_traces.append([all_ms1_vals,*all_iso_vals])
+            # ms1_traces.append([all_ms1_vals,*all_iso_vals])##edit Sep 25 - remove
+            ms1_traces.append(all_iso_vals)##edit Sep 25 - add
             coeff_traces.append(all_ms2_vals)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                spec_pearsons = [np_pearson_cor(list(all_ms2_vals.values()),list(i.values())).statistic for i in [all_ms1_vals,*all_iso_vals[:config.num_iso_r]]]
+                # spec_pearsons = [np_pearson_cor(list(all_ms2_vals.values()),list(i.values())).statistic for i in [all_ms1_vals,*all_iso_vals[:config.num_iso_r]]]##edit Sep 25 - remove
+                spec_pearsons = [np_pearson_cor(list(all_ms2_vals.values()),[j for j in i.values()]).statistic for i in all_iso_vals[:config.num_iso_r+1]]##edit Sep 25 - add
                 # all_pearson.append(stats.pearsonr(list(all_ms2_vals.values()),list(all_ms1_vals.values())).statistic)
                 all_pearson.append(spec_pearsons)
                 
@@ -973,7 +1024,8 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
                 ms1_spec_idx = channel_scans[np.argmax(list(all_ms2_vals.values()))]
                 
                 theoretical_pattern = [i.intensity for i in isotopes]
-                obs_pattern = [all_ms1_vals[ms1_spec_idx],*[iso_trace[ms1_spec_idx] for iso_trace in all_iso_vals]]
+                # obs_pattern = [all_ms1_vals[ms1_spec_idx],*[iso_trace[ms1_spec_idx] for iso_trace in all_iso_vals]]##edit Sep 25 - remove
+                obs_pattern = [*[iso_trace[ms1_spec_idx] for iso_trace in all_iso_vals]]##edit Sep 25 - add
                 # obs_ratios.append(obs_pattern)
                 iso_ratios.append([np_pearson_cor(theoretical_pattern,obs_pattern),theoretical_pattern,obs_pattern])
         
@@ -992,13 +1044,14 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
         vals = []
         group_pred = []
         group_obs_peaks=[]
+        group_obs_mzs = []
         group_matrices =[]
         group_fit_cor =[]
         ### for ms1_spec_idx in all_scans:
         for ms1_spec_idx in scans_to_search:
             spec = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
             
-            pred_coeff, obs_peaks, fit_matrix = fit_mTRAQ_isotopes(spec,group_iso,mz_ppm)
+            pred_coeff, obs_peaks, fit_matrix, obs_mz = fit_mTRAQ_isotopes(spec,group_iso,mz_ppm)
             if len(obs_peaks)==0:
                 fit_cor = np.nan
             else:
@@ -1009,9 +1062,71 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
             
             group_pred.append(pred_coeff)
             group_obs_peaks.append(obs_peaks)
+            group_obs_mzs.append(obs_mz)
             group_matrices.append(fit_matrix)
             group_fit_cor.append(fit_cor)
             
+        
+        
+        # base_mz_vals = {}
+        # for channel in range(len(ms1_traces)):
+        #     for iso_idx in range(len(ms1_traces[channel])):
+        #         peak = ms1_traces[channel][iso_idx][max_scan]
+        #         mz = np.round(peak[0],1)
+        #         if mz!=-1:
+        #             if mz in base_mz_vals and base_mz_vals[mz]>peak[1]:
+        #                 continue
+        #             else:
+        #                 base_mz_vals[mz]=peak[1]
+                    
+        # max_scan_idx = list(ms1_traces[channel][iso_idx]).index(max_scan)                     
+        # ms1_coeffs = group_pred[max_scan_idx]
+
+        
+        # plt.vlines(base_mz_vals.keys(),0,[base_mz_vals[i] for i in base_mz_vals.keys()],
+        #            linewidth=5,
+        #            alpha=.3)
+        # fit_type = "New" if with_imp else "Orig"
+        # ms1_val_dict = {i:0 for i in base_mz_vals}
+        # mz_val_dict = {i:0 for i in base_mz_vals}
+        # linewidth=2
+        # for channel_idx,isotopes in enumerate(group_iso):
+        #     # break
+        #     # isotopes = isotopic_variants(get_seq_comp(key[0],"M")+tag.channel_comp[str(int(channel_idx*4))],npeaks=len(isotopes),charge=key[1]);fit_type="Old"
+        #     fitted_isotopes = np.stack([[closest_mz(i.mz,np.array(list(base_mz_vals))) for i in isotopes],[i.intensity*ms1_coeffs[channel_idx] for i in isotopes]],1)
+        #     sign = 1
+        #     if sign==-1:
+        #         plt.vlines(fitted_isotopes[:,0],
+        #                        [mz_val_dict[i]+(sign*j) for i,j in fitted_isotopes],
+        #                        [mz_val_dict[i] for i in fitted_isotopes[:,0]],
+        #                        # colors=colours[offset],
+        #                         # colors=colours[int(fdx.channel.iloc[channel_idx]/4)],
+        #                          colors=colours[int(channel_idx)+1],
+        #                        # linestyles="--",
+        #                        zorder=100,
+        #                        # label=f"$\Delta${fdx.channel.iloc[fdx_idx]}",
+        #                        linewidths=linewidth,
+        #                        alpha=.7)
+        #     else:
+        #         plt.vlines(fitted_isotopes[:,0],
+        #                        [mz_val_dict[i] for i in fitted_isotopes[:,0]],
+        #                        [mz_val_dict[i]+(sign*j) for i,j in fitted_isotopes],
+        #                        # colors=colours[offset],
+        #                         # colors=colours[int(fdx.channel.iloc[channel_idx]/4)],
+        #                          colors=colours[int(channel_idx*2)+1],
+        #                        # linestyles="--",
+        #                        zorder=100,
+        #                        # label=f"$\Delta${fdx.channel.iloc[fdx_idx]}",
+        #                        linewidths=linewidth,
+        #                        alpha=.5)                
+        #     for i,j in fitted_isotopes:
+        #         mz_val_dict[i]+=sign*j
+                
+        # plt.title([fit_type,key])
+        
+        # with_imp =True
+        # with_imp =False
+        
         # all_fitted.append(vals)
         all_fitted.append([np.array(group_pred),group_obs_peaks,group_matrices,group_fit_cor,scans_to_search])
         all_ms1.append(ms1_traces)
@@ -1026,9 +1141,37 @@ def ms1_cor_channels(all_spectra,filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_to
 
 
 
+#        group_p_corrs, group_ms1_traces, group_ms2_traces, group_iso_ratios, group_keys, group_fitted
+
+
+# max_idx = 11
+# group_pred[max_idx]
+# group_obs_peaks[max_idx]
+# group_obs_mzs[max_idx]
+# _where = np.where(group_obs_mzs[max_idx]!=0)
+# plt.vlines(group_obs_mzs[max_idx][_where],0,group_obs_peaks[max_idx][_where])
+
+
+# scan = scans_to_search[max_idx]
+# plt.vlines(range(len(ms1_traces)),0,[ms1_traces[channel][0][scan] for channel in range(len(ms1_traces))])
+# plt.vlines(np.arange(len(ms1_traces))+.5,0,[ms1_traces[channel][1][scan] for channel in range(len(ms1_traces))])
+
+# for channel in range(len(ms1_traces)):
+#     iso_peak_n = 0
+#     plt.plot(ms1_traces[channel][iso_peak_n].keys(),func(ms1_traces[channel][iso_peak_n].values()),label="MS1")
 
 
 
+# def func(x): return(np.array(list(x)))
+# for channel in range(len(ms1_traces)):
+#     iso_peak_n = 0
+#     plt.plot(ms1_traces[channel][iso_peak_n].keys(),func(ms1_traces[channel][iso_peak_n].values()),label="MS1")
+# plt.plot(all_ms1_vals.keys(),func(all_ms1_vals.values()),label="Monoiso")
+# plt.plot(all_iso_vals[0].keys(),func(all_iso_vals[0].values()),label="1st Iso")
+# plt.plot(all_iso_vals[1].keys(),func(all_iso_vals[1].values()),label="2nd Iso") 
+# plt.plot(all_iso_vals[2].keys(),func(all_iso_vals[2].values()),label="3rd Iso") 
+# plt.plot(ms2_vals.keys(),func(ms2_vals.values()),label="Coeffs")
+# plt.plot(list(ms2_vals.keys()),func(f(list(ms2_vals.keys()))))
 
 ###########################################################################
 ###########################################################################

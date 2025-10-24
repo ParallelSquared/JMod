@@ -6,7 +6,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 
 
 
-from .utils.io.read_output import get_large_prec
+from src.utils.io.read_output import get_large_prec
 
 from sklearn.model_selection import KFold,GroupKFold
 from sklearn.ensemble import RandomForestClassifier
@@ -24,14 +24,14 @@ import re
 import os
 import pandas as pd
 
-from .trace_fns import ms1_cor, ms1_cor_channels
-from .utils.io.load_files import loadSpectra
-from .models.spec_lib.spec_lib import loadSpecLib
+from src.trace_fns import ms1_cor, ms1_cor_channels
+from src.utils.io.load_files import loadSpectra
+from src.models.spec_lib.spec_lib import loadSpecLib
 
-from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
-from .utils.misc_functions import unstring_floats
+from src.mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
+from src.utils.misc_functions import unstring_floats
 
-from . import config 
+from src import config 
 
 
 def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
@@ -146,7 +146,7 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     # fdc["iso1_cor"] = [i[1] for i in p_corrs]
     # fdc["iso2_cor"] = [i[2] for i in p_corrs]
     
-    fdc["traceproduct"] = np.log10(fdc["ms1_cor"]*fdc["iso1_cor"]*fdc["iso2_cor"]+1e-6)
+    fdc["traceproduct"] = np.log10(np.product([fdc["ms1_cor"],*[fdc[f"iso{i+1}_cor"] for i in range(config.num_iso_r)]],0)+1e-6)
     
     # fdc["MS1_is1cor"] = [stats.pearsonr(list(i[0].values())[:10], list(i[1].values())[:10]).statistic for i in ms1_traces]
     
