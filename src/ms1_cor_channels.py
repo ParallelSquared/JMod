@@ -1373,8 +1373,3 @@ def get_seq_comp(split_seq,ion_type):
         seq_comp += unimods.by_id(unimod_idx)["composition"]
     return seq_comp
 
-
-if __name__ == "__main__":
-    # import cProfile
-    # cProfile.run("main()", r"C:\Users\zcohe\Jmod\JMod_Profiling\Output\Line_Profiler_MS1_Cor_Channels\Cleaned_Up_profiling\output_after_iso.prof")
-    main()
