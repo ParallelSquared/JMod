@@ -5,7 +5,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 import argparse
 import json
-from default_dict import default_dict
+from src.default_dict import default_dict
 import sys
 
 from src.logger import logger
@@ -21,8 +21,8 @@ for key, value in default_dict.items():
     else:
         parser.add_argument(*value['flags'], default=value['default'], type=int if value['type'] == 'int' else float if value['type'] == 'float' else str)
 
-if any("ipykernel_launcher" in arg or "jupyter" in arg for arg in sys.argv):
-    # running inside Jupyter → don’t parse CLI args
+if any("ipykernel_launcher" in arg or "jupyter" in arg or "pytest" in arg for arg in sys.argv):
+    # running inside Jupyter → pass empty list
     args = parser.parse_args([])
 else:
     args = parser.parse_args()
