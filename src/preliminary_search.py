@@ -41,6 +41,8 @@ def fit_with_features(dia_spectra, library_spectra):
     scorer = ps.Scorer(
         precursor_tol_da=(-1,1), # TODO placeholder
         fragment_tol_ppm=(-10,10),
+        min_isotope_err=0,
+        max_isotope_err=0,
         wide_window=True,
         chimera=False,
         annotate_matches=True,
@@ -69,6 +71,7 @@ def fit_with_features(dia_spectra, library_spectra):
         hits.extend(batch_hits)
 
 
+    """
     for prelim_hits in hits:
         for rank_k in prelim_hits:
             print(rank_k)
@@ -76,6 +79,7 @@ def fit_with_features(dia_spectra, library_spectra):
             print()
             #print(rank_k.to_dict())
         print("****")
+    """
 
     #rows = [feat.to_dict() for group in hits[16000:17000] for feat in group]
     rows = [feat.to_dict() for group in hits for feat in group]
