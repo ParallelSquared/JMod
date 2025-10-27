@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import re
 import pickle
 from src.logger import logger
+import peppy_sage as ps
 
 # NB this may not work for all mzml files!!!
 class Spectrum:
@@ -25,6 +26,7 @@ class Spectrum:
         self.intens=None
         self.collision_energy = None
         self.TIC=None
+        self.isolation_window = None
 
         if scan:
             self.get_vals(scan)
@@ -41,14 +43,31 @@ class Spectrum:
         self.scanwindow = [scan["scanList"]["scan"][0]["scanWindowList"]["scanWindow"][0][i] for i in ["scan window lower limit","scan window upper limit"]]
         if self.level==2:
             self.collision_energy = scan["precursorList"]["precursor"][0]["activation"]["collision energy"]
-            isolationWindow = scan["precursorList"]["precursor"][0]["isolationWindow"]
-            self.prec_mz = isolationWindow["isolation window target m/z"]
-            self.ms1window = isolationWindow["isolation window target m/z"]+np.array([-1,1])*[isolationWindow['isolation window lower offset'],isolationWindow['isolation window upper offset']]
+            self.isolation_window = scan["precursorList"]["precursor"][0]["isolationWindow"]
+            self.prec_mz = self.isolation_window["isolation window target m/z"]
+            self.ms1window = self.isolation_window["isolation window target m/z"]+np.array([-1,1])*[self.isolation_window['isolation window lower offset'],self.isolation_window['isolation window upper offset']]
         self.TIC = scan["total ion current"]
 
     def peak_list(self):
         return(np.array([self.mz,self.intens]))
-    
+
+    def to_rust_spectrum(self):
+        rs = ps.core.Spectrum(id=self.id,
+                              file_id=0, # placeholder
+                              scan_start_time=self.RT,
+                              mz_array=self.mz,
+                              intensity_array=self.intens,
+                              precursors=[
+                                  ps.core.Precursor(self.prec_mz,
+                                                    0, # will sweep whole window in WWA mode
+                                                    (-1*self.isolation_window['isolation window lower offset'],
+                                                    self.isolation_window['isolation window upper offset']) # will
+                                                    )
+                                  ],
+                              total_ion_current=self.TIC
+                              )
+        return rs
+
     
 class SpectrumFile:
 

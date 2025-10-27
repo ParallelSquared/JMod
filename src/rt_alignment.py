@@ -3,6 +3,7 @@ This Source Code Form is subject to the terms of the Oxford Nanopore
 Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
+import sys
 
 import numpy as np
 import pandas as pd
@@ -483,7 +484,7 @@ def fit_without_features(dia_spectra, librarySpectra):
 
 
     ### redefine "top_n_spectra" to evenly span Rt and m/z
-    np.random.seed(0)
+    np.random.seed(0) #TODO check if global seed setting propogates to here by removing this line
     #top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
     
     
@@ -505,8 +506,17 @@ def fit_without_features(dia_spectra, librarySpectra):
     
     return fit_outputs                                    
 
+
 def fit_with_features(dia_spectra, librarySpectra, dino_features):
-    
+    # TODO just search all of them, make sure the output is appropriate and has like MS1 intensities, etc
+    # biosaur gets used in
+    #   1. finding apex
+    #       do we have to know the apex? can we just sort by intensity and then only take the first instance of each pep?
+    #   2. selecting most intense peaks
+    #       do we need this for later processing? Or are intensities recalculated later?
+    #
+
+
     all_keys = list(librarySpectra)
     rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
     
@@ -547,11 +557,90 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
                                     frac_matched=.8,## NB: this may be selcting for smaller peptides
                                     ms1_tol=config.ms1_tol
                                     )
+        print(fit_output)
         fit_outputs.append(fit_output)
         
     top_n_spectra = [dia_spectra.ms2scans[i] for i in lf_spectra]
     
     return fit_outputs, top_n_spectra, large_feature_indices, lf_mz
+
+
+def fit_with_features(dia_spectra, library_spectra):
+    all_keys = list(library_spectra)
+    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in library_spectra.values()])
+
+    all_dia_rt = [i.RT for i in dia_spectra.ms2scans]
+    all_dia_windows = np.array([i.ms1window for i in dia_spectra.ms2scans])
+    lowest_mz = np.min(all_dia_windows, 0)[0]  # assume window span is constant over time
+    largest_mz = np.max(all_dia_windows, 0)[1]
+    mz_bins = np.linspace(lowest_mz, largest_mz, 6)
+
+    fit_outputs = []
+    frags = []
+
+    pep_seqs = [v['seq'] for v in library_spectra.values()] #TODO implement modifications
+
+    import peppy_sage as ps
+    peps = [ps.Peptide(seq) for seq in pep_seqs] #TODO implement modifications
+
+    # Create indexed database
+    db = ps.IndexedDatabase.from_peptides( # TODO pass parameters as parameters
+        peptides=peps,
+        bucket_size=128,
+        ion_kinds=["b", "y"],
+        min_ion_index=0,
+        generate_decoys=True,
+        decoy_tag="rev_",
+        peptide_min_mass=0.0,
+        peptide_max_mass=5000.0,
+    )
+
+    # Create scorer
+    scorer = ps.Scorer(
+        precursor_tol_da=(-1,1), # TODO placeholder
+        fragment_tol_ppm=(-10,10),
+        wide_window=True,
+        chimera=False,
+        annotate_matches=True,
+        report_psms=2
+    )
+
+    # Process ids
+    hits = []
+    rust_specs = []
+    from tqdm.auto import tqdm
+    for i, spec in enumerate(tqdm(dia_spectra.ms2scans)):
+        rust_specs += [spec.to_rust_spectrum()]
+
+    chunk_size = 1000
+    hits = []
+    for i in tqdm(range(0, len(rust_specs), chunk_size)):
+        chunk = rust_specs[i:i + chunk_size]
+        batch_hits = scorer.score_many(db, chunk)
+        hits.extend(batch_hits)
+
+        """
+        fit_output = fit_to_lib(dia_spectra.ms2scans[int(lf_spectra[idx])],
+                                library=librarySpectra,
+                                rt_mz=rt_mz,
+                                all_keys=all_keys,
+                                dino_features=None,
+                                rt_filter=False,
+                                ms1_mz=lf_mz[idx],
+                                ms1_spectra=dia_spectra.ms1scans,
+                                frac_matched=.8,  ## NB: this may be selcting for smaller peptides
+                                ms1_tol=config.ms1_tol
+                                )
+        fit_outputs.append(fit_output)
+    """
+
+    for prelim_hits in hits[16000:17000]:
+        for rank_k in prelim_hits:
+            print(rank_k)
+            print(rank_k.fragments.to_dict())
+        print("****")
+
+    sys.exit(0)
 
 
 def process_prelim_search(fit_outputs,
@@ -1012,11 +1101,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
     
 
+    import preliminary_search
+    preliminary_search.fit_with_features(dia_spectra, librarySpectra)
+
     if dino_features is None:
         fit_outputs = fit_without_features(dia_spectra, librarySpectra)
 
     else:
-        fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
+        #fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
+        fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra)
         
     
     #################################################################################
@@ -1753,7 +1846,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     
     #################################################################################
-    
+
     fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
     
     output_df, all_output_df, id_keys, feature_mzs =  process_prelim_search(fit_outputs,
