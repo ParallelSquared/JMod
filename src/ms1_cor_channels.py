@@ -11,7 +11,7 @@ import tqdm
 from src.utils.misc_functions import  closest_ms1spec,np_pearson_cor
 from scipy.interpolate import interp1d
 from src.utils import misc_functions as mf
-# from src import iso_functions as iso
+from src import iso_functions as iso
 
 import warnings
 from scipy.signal import find_peaks
@@ -358,23 +358,7 @@ def minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spec
 
 
 def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_decoy_coeffs, ms2_rt, rt_tol, prec_mz, bottom_of_window, top_of_window, ms2_spec_idxs):
-    # print(prec_seq)
-    # print(prec_z)
-    # print(prec_rt)
-    # print(time_channel)
-    # print(timeplex)
-    # print(grouped_decoy_coeffs)
-    # print(ms2_rt)
-    # print(rt_tol)
-    # print(prec_mz)
-    # print(bottom_of_window)
-    # print(top_of_window)
-    # print(ms2_spec_idxs)
-    # print("\n")
 
-    
-    ## keep decoys mathching to the correct MS1
-    # offset = config.decoy_mz_offset if "Decoy" in prec_seq else 0
     offset = 0
     
     if timeplex:
@@ -409,19 +393,8 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
     else:
         highest_ranked_spec = None
 
-    # print(ms2_vals)
-    # print(highest_ranked_spec)
-    # print(channel_key)
-
     return ms2_vals, highest_ranked_spec, channel_key
 
-# def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tag, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func):
-#     ms1_vals = get_precursor_trace(prec_mz, mz_ppm, spectra_subset)
-#     isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
-#     prec_isotope_traces = get_isotope_traces(isotopes, mz_ppm, spectra_subset)
-#     all_ms1_vals, all_ms2_vals, all_iso_vals = unnamed_function(all_scans, prec_isotope_traces, interp_func, ms1_vals)
-
-#     return all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func
 
 def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tag, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func):
     isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
@@ -433,18 +406,6 @@ def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tag, all_scans, prec_mz, mz
 def build_ms2_interpolator(ms2_vals):
     return interp1d(list(ms2_vals.keys()), np.array(list(ms2_vals.values())), bounds_error=False)   
 
-# def get_precursor_trace(prec_mz, mz_ppm, spectra_subset):
-#     return {spec.scan_num:get_trace_int(spec, prec_mz,rtol=mz_ppm) for spec in spectra_subset}
-
-# def get_isotope_traces(isotopes, mz_ppm, spectra_subset):
-#     prec_isotope_traces=[]
-#     ## note: we have collected similar values for previous channel if the isotopic envelopes are overlapping. 
-#     ### However, in cases like diethlyation, isoptopes can differ by > 10 ppm #!!!Maybe investigate wider ppm tol for these cases?
-#     for isotope in isotopes[1:]:# we already have the monoisotopic trace
-#         iso_trace = {spec.scan_num:get_trace_int(spec, isotope.mz,rtol=mz_ppm) for spec in spectra_subset}
-#         prec_isotope_traces.append(iso_trace)
-    
-#     return prec_isotope_traces
 
 def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset):
     ## note: we have collected similar values for previous channel if the isotopic envelopes are overlapping. 
@@ -486,8 +447,7 @@ def get_trace_int_numba(spec_mz, spec_intens, mz_array, atol, rtol, base):
 
 
 def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag):
-    # isotopes = iso.precursor_isotopes(prec_seq,prec_z,num_iso)
-    isotopes = precursor_isotopes(prec_seq,prec_z,num_iso)
+    isotopes = iso.precursor_isotopes(prec_seq,prec_z,tag,num_iso, decoys=False)
 
     delta_mz = 0
     if tag.name in prec_seq:
@@ -496,21 +456,6 @@ def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag):
         i.mz+=delta_mz
 
     return isotopes
-
-# def unnamed_function(all_scans, prec_isotope_traces, interp_func, ms1_vals):
-#     all_ms1_vals = {i:min_int for i in all_scans}
-#     all_ms2_vals = {i:min_int for i in all_scans}
-#     all_iso_vals = [{i:min_int for i in all_scans} for _ in range(len(prec_isotope_traces))]
-    
-#     for scan,c in zip(all_scans,interp_func(all_scans)):
-#         if scan in ms1_vals:
-#             all_ms1_vals[scan] = ms1_vals[scan]
-#             all_ms2_vals[scan] = c#f(scan)
-#         for iso_idx in range(len(prec_isotope_traces)):
-#             if scan in prec_isotope_traces[iso_idx]:
-#                 all_iso_vals[iso_idx][scan] = prec_isotope_traces[iso_idx][scan]
-
-#     return all_ms1_vals, all_ms2_vals, all_iso_vals
 
 def fill_scan_values(all_scans, prec_isotope_traces, interp_func, ms1_vals):
     all_ms1_vals = {i: min_int for i in all_scans}
@@ -726,129 +671,19 @@ def fit_whole_MS1_spectrum(dicts, mz_ppm, ms1_spec_idx):
     matrix_sparse = matrix_csr[mask].tocoo()
     dia_spec_int = dia_spec_int[mask]
 
-    # count = np.sum(matrix_sparse.data > 0.999)
-    # print(f"Number of entries > 0.999: {count}")
-
-
-    # plt.hist(np.log10(dia_spec_int[dia_spec_int != 0]))
-    # plt.title(f"Spectra {ms1_spec_idx}")
-    # plt.ylabel("Counts")
-    # plt.xlabel("log10 Intensity")
-    # plt.show()
-
-    # dia_spec_int_vars = np.append(dia_spec_int_vars, [median_var]*(matrix_sparse.shape[0]-dia_spec_int_vars.shape[0]))
-    # weights = 1/dia_spec_int_vars
-
-    # sqrt_w = np.sqrt(weights)
-    # W_sqrt = diags(sqrt_w)
-    # X_w = W_sqrt @ matrix_sparse
-    # y_w = sqrt_w * dia_spec_int 
 
     res = lsq_linear(matrix_sparse, dia_spec_int, bounds=(0, np.inf), method="trf", lsmr_tol="auto")
-    # res = lsq_linear(X_w, y_w, bounds=(0, np.inf), method="trf", lsmr_tol="auto")
     lib_coefficients = res.x
     lib_coefficients = lib_coefficients.flatten()
     mapped_lib_coefficients = {k: v for k, v in list(zip(unique_fdcs, lib_coefficients))}
 
-    # if ms1_spec_idx in [11949, 12104, 12019, 11960]:
-    #     matrix_dense = matrix_sparse.toarray()   
-    #     fitted = matrix_sparse @ res.x
-    #     residuals = dia_spec_int - fitted
-
-    #     n, p = matrix_dense.shape
-    #     mse = np.sum(residuals**2) / (n - p)
-
-    #     XtX_inv = np.linalg.pinv(matrix_dense.T @ matrix_dense)
-    #     H_diag = np.einsum("ij,jk,ik->i", matrix_dense, XtX_inv, matrix_dense)
-    #     H_diag = np.clip(H_diag, None, 0.999999)
-
-
-    #     # Cook's distance
-    #     cooks_d = (residuals**2 / (p * mse)) * (H_diag / (1 - H_diag)**2)
-
-    #     plt.figure(figsize=(8,4))
-    #     plt.stem(cooks_d, markerfmt=",", basefmt=" ")
-    #     plt.xlabel("Observation index")
-    #     plt.ylabel("Cook’s Distance")
-    #     plt.title(f"Cook’s Distance for MS1 Spectrum Fit for Spec {ms1_spec_idx}")
-    #     # Common rule of thumb:
-    #     threshold = 4 / (n - p)
-    #     plt.axhline(threshold, color="red", linestyle="--", label="4/(n-p) threshold")
-    #     plt.legend()
-    #     plt.show()
-
-    #     cooks_d_clipped = np.clip(cooks_d, 1e-10, None)
-    #     plt.figure(figsize=(8,4))
-    #     plt.stem(cooks_d_clipped, markerfmt=",", basefmt=" ")
-    #     plt.xlabel("Observation index")
-    #     plt.ylabel("Cook’s Distance")
-    #     plt.title(f"Cook’s Distance for MS1 Spectrum Fit for Spec {ms1_spec_idx}")
-    #     # Common rule of thumb:
-    #     threshold = 4 / (n - p)
-    #     plt.axhline(threshold, color="red", linestyle="--", label="4/(n-p) threshold")
-    #     plt.yscale("log")
-    #     plt.legend()
-    #     plt.show()
-        
-
-
-
-    # fitted = matrix_sparse @ res.x
-    # residuals = dia_spec_int - fitted
-
-    # hb = plt.hexbin(
-    #     fitted,
-    #     residuals,
-    #     gridsize=80,
-    #     cmap="viridis",
-    #     norm=mpl.colors.LogNorm()
-    # )
-
-    # plt.xlabel("Fitted values")
-    # plt.ylabel("Residuals (Observed - Fitted)")
-    # plt.title(f"Residuals vs Fitted Values Spec {ms1_spec_idx}")
-    # plt.axhline(0, color='black', linestyle='--', linewidth=1)
-    # plt.colorbar(hb, label="Counts")
-    # plt.show()
-    # plt.close()
-
-    # fitted_clipped = np.clip(fitted, 10**-2.5, None)
-    # log_x = np.log10(fitted_clipped)
-    # hb = plt.hexbin(
-    #     log_x,
-    #     residuals,
-    #     gridsize=80,
-    #     cmap="viridis",
-    #     norm=mpl.colors.LogNorm()
-    # )
-
-    # plt.xlabel("Log10 Fitted values")
-    # plt.ylabel("Residuals (Observed - Fitted)")
-    # plt.title(f"Residuals vs Fitted Values Spec {ms1_spec_idx}")
-    # plt.axhline(0, color='black', linestyle='--', linewidth=1)
-    # plt.colorbar(hb, label="Counts")
-    # plt.show()
-    # plt.close()
-
-
-
-
-
-    # except:
-    #     logger.info(f"LSQ Linear Failed for spec: {ms1_spec_idx}")
-    #     logger.info(f"Matrix.shape: {matrix_sparse.shape}")
-    #     logger.info(f"Obs_Spectra.shape: {dia_spec_int.shape}")
-    #     mapped_lib_coefficients = {k: np.nan for k in unique_fdcs}
-
-
-
-    #return lib_coefficients, dia_spec_int, new_matrix, matrix
+    
     return mapped_lib_coefficients, dia_spec_int, matrix_sparse
 
 
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
-import matplotlib.ticker as ticker
+# import matplotlib.pyplot as plt
+# from matplotlib.colors import ListedColormap
+# import matplotlib.ticker as ticker
 nanmeans = []
 var_ints = []
 def calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, monoiso_groups):
@@ -877,35 +712,14 @@ def calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, monoiso_gro
         nanmeans.append(nanmean)
         var_ints.append(var_int)
 
-    # log10var = np.log10(var_ints)
-    # log10mean = np.log10(nanmeans)
-    # model = LinearRegression()
-    # model.fit(log10mean.reshape(-1, 1), log10var)
-    # intercept = model.intercept_
-    # coefficient = model.coef_[0]
+    log10var = np.log10(var_ints)
+    log10mean = np.log10(nanmeans)
+    model = LinearRegression()
+    model.fit(log10mean.reshape(-1, 1), log10var)
+    intercept = model.intercept_
+    coefficient = model.coef_[0]
 
-    # print(f"Intercept: {intercept}")
-    # print(f"Slope: {coefficient}")
-
-    # plt.scatter(nanmeans, var_ints,  c=monoisos_matched, cmap=ListedColormap(plt.cm.tab10.colors[:5]), alpha=0.4)
-    # plt.title("Mean Variance Relationship")
-    # plt.xlabel("Log10 Mean Intensity")
-    # plt.ylabel("Log10 Intensity Variance")
-    # plt.xscale("log")
-    # plt.yscale("log")
-    # cbar = plt.colorbar()
-    # cbar.set_label("Monoisos Matched")
-    # cbar.locator = ticker.MaxNLocator(integer=True)
-    # cbar.update_ticks()
-    # lims = [np.nanmin([nanmeans, var_ints]), np.nanmax([nanmeans, var_ints])]
-    # lims[0] = lims[0] - lims[0]*0.1
-    # lims[1] = lims[1] + lims[1]*0.5
-    # plt.xlim(lims)
-    # plt.ylim(lims)
-    # plt.axis("square")
-    # plt.show()
-
-    # return intercept, coefficient
+    return intercept, coefficient
 
 
 
@@ -950,38 +764,6 @@ def get_other_channels(prec,mz,tag):
             channel_dict[c] = [c_seq,c_mz]
     return channel_dict
 
-# # @profile
-# def get_trace_int(spec,mz,atol=0,rtol=0,base=min_int):
-#     ## speed up of above
-#     order_idx = np.searchsorted(spec.mz, mz)
-    
-#     # Handle edge cases for indices at the bounds
-#     if order_idx == 0:
-#         closest_idx = 0
-#         mz_diff = spec.mz[0]-mz
-#     elif order_idx == len(spec.mz):
-#         closest_idx = len(spec.mz) - 1
-#         mz_diff = mz-spec.mz[-1]
-#     else:
-#         # Compare the closest values on both sides of the searchsorted index
-#         left_idx = order_idx - 1
-#         right_idx = order_idx
-        
-#         # Find the closest value between the two neighboring indices
-#         left_diff = abs(spec.mz[left_idx] - mz)
-#         right_diff = abs(spec.mz[right_idx] - mz)
-#         if left_diff < right_diff:
-#             closest_idx = left_idx
-#             mz_diff = left_diff
-#         else:
-#             closest_idx = right_idx
-#             mz_diff = right_diff
-    
-# #    mz_diff = abs(spec.mz[closest_idx] - mz)
-#     if mz_diff <= mz * rtol:  # Use the relative tolerance condition
-#         return spec.intens[closest_idx]
-
-#     return base
 
 def get_ms1_peak(x,y,idx):
     x = np.array(x)
@@ -1087,289 +869,4 @@ def get_matrix_to_fit_numba(ms1_iso_patterns, group_lengths, dia_spectrum, all_i
     # dia_spec_int = np.append(dia_spec_int,[0]*(dense_matrix.shape[0]-dia_spec_int.shape[0])) 
 
     return dense_matrix, dia_spec_int
-
-def fit_mTRAQ_isotopes(spec,all_iso,mz_ppm):
-    """
-    
-    ### spec is an ms1 spectrum
-    #### all_iso is a list of the mTRAQ isotopes 
-    e.g.
-    [[Peak(mz=661.011960, intensity=0.352935, charge=3),
-      Peak(mz=661.346233, intensity=0.335236, charge=3),
-      Peak(mz=661.680188, intensity=0.192931, charge=3)]
-     ...]
-    
-    mz_ppm is the relative mz tolerance e.g. 5.6e-6
-    
-    """
-    ### spec is an ms1 spectrum
-    #### all_iso is a list of the mTRAQ isotopes 
-    
-    
-
-    flat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso], dtype=np.float64)
-    ms1_iso_patterns = flat.reshape(len(all_iso), len(all_iso[0]), 2)
-
-    
-    dia_spectrum = np.array(spec.peak_list(), dtype=np.float64).T
-    # dia_spectrum = np.array(np.array([spec.mz,spec.intens]), dtype=np.float64).T
-    
-    
-    
-    ### we only need to conseider the part of the spectrum that falls within the isotopic envelopes of the channels
-
-    min_isotope = ms1_iso_patterns[:, :, 0].min() - 1
-    max_isotope = ms1_iso_patterns[:, :, 0].max() + 1
-
-
-    # dia_spectrum2 = dia_spectrum[np.logical_and(dia_spectrum[:,0]>min_isotope,dia_spectrum[:,0]<max_isotope)]
-
-    mz = dia_spectrum[:, 0]
-    lo = np.searchsorted(mz, min_isotope, side="right")
-    hi = np.searchsorted(mz, max_isotope, side="left")
-    dia_spectrum = dia_spectrum[lo:hi]
-
-    
-    #get window edge positions each side of peaks in observed spectra (NB the tolerance is now about the first peak in the group not the middile)
-
-    mz = dia_spectrum[:, 0]
-    offsets = mz_ppm * mz
-    centroid_breaks = np.empty(mz.size * 2, dtype=mz.dtype)
-    centroid_breaks[:mz.size] = mz - offsets
-    centroid_breaks[mz.size:] = mz + offsets
-    centroid_breaks.sort()
-
- 
-
-    all_mz = ms1_iso_patterns[:,:,0].ravel()   # flatten all m/z values
-    ref_coords_flat = np.searchsorted(centroid_breaks, all_mz)
-    ref_coords = ref_coords_flat.reshape(ms1_iso_patterns.shape[0], -1)
-
-    lib_peaks_matched = (ref_coords % 2 == 1).tolist()
-
-    ref_spec_row_indices_split = [(((rc + 1) // 2) - 1).astype(np.int32)[mask]for rc, mask in zip(ref_coords, lib_peaks_matched)]
-
-    num_lib_peaks_matched = np.fromiter((sum(i) for i in lib_peaks_matched), dtype=np.int32)
-
-    ref_spec_col_indices_split = [np.array([idx]*i,dtype=np.int32) for idx,i in zip(range(len(ref_coords)),num_lib_peaks_matched)] 
-
-    ref_spec_values_split = [ms1_iso_patterns[idx, :, 1][mask] for idx, mask in enumerate(lib_peaks_matched)]
-
-    
-    lib_coefficients = np.zeros(len(ref_coords))
-    dia_spec_int = []
-    matrix = []
-    if any([i.size>0 for i in ref_spec_row_indices_split]):
-        
-        ref_spec_row_indices = np.concatenate(ref_spec_row_indices_split)
-        ref_spec_col_indices = np.concatenate(ref_spec_col_indices_split)
-        ref_spec_values = np.concatenate(ref_spec_values_split)
-        # what peaks from the spectrum are matched by library peps
-        unique_row_idxs = [int(i) for i in set(ref_spec_row_indices)]
-        unique_row_idxs.sort()
-        
-        dia_spec_int = dia_spectrum[unique_row_idxs,1]
-        
-        lower_limit=1e-10
-        last_row = max(unique_row_idxs)
-        
-        #### Type B
-        not_dia_col_indices = np.arange(len(ref_coords))
-        not_dia_row_indices = [last_row+1]*len(not_dia_col_indices)+not_dia_col_indices
-        # not_dia_values2 = np.array([np.sum([ms1_iso_patterns[:,:,1][idx][peak_idx] for peak_idx in range(len(ms1_iso_patterns[:,:,1][idx])) if ref_coords[idx][peak_idx]%2==0])
-        #                           for idx in range(len(ref_coords))])
-                                  
-        
-        ref_coords_arr = np.array(ref_coords)
-        ms1_intensities = ms1_iso_patterns[:, :, 1]  # shape: (num_peptides, num_peaks)
-
-        mask = (ref_coords_arr % 2 == 0)
-        not_dia_values = (ms1_intensities * mask).sum(axis=1)
-         
-        # sparse_row_indices2 = np.append(ref_spec_row_indices,not_dia_row_indices)
-        # sparse_col_indices2 = np.append(ref_spec_col_indices,not_dia_col_indices)
-        # sparse_values2 = np.append(ref_spec_values,not_dia_values)
-
-        sparse_row_indices = np.concatenate([ref_spec_row_indices, not_dia_row_indices])
-        sparse_col_indices = np.concatenate([ref_spec_col_indices, not_dia_col_indices])
-        sparse_values = np.concatenate([ref_spec_values, not_dia_values])
-
-        # #### Type C — each unmatched (non-DIA) peak gets its own matrix row
-        # ref_coords_arr = np.array(ref_coords)
-        # ms1_intensities = ms1_iso_patterns[:, :, 1]   # shape: (num_peptides, num_peaks)
-        # mask = (ref_coords_arr % 2 == 0)              # True for unmatched peaks
-
-        # # find (precursor_idx, peak_idx) pairs of unmatched peaks
-        # not_dia_pairs = np.argwhere(mask)
-        # if not_dia_pairs.size > 0:
-        #     not_dia_values = ms1_intensities[mask]
-
-        #     # give each unmatched peak its own row
-        #     not_dia_row_indices = last_row + 1 + np.arange(len(not_dia_values))
-        #     not_dia_col_indices = not_dia_pairs[:, 0]   # column = precursor index
-
-        #     # combine with matched (DIA) peaks
-        #     sparse_row_indices = np.concatenate([ref_spec_row_indices, not_dia_row_indices])
-        #     sparse_col_indices = np.concatenate([ref_spec_col_indices, not_dia_col_indices])
-        #     sparse_values = np.concatenate([ref_spec_values, not_dia_values])
-        # else:
-        #     # fallback if no unmatched peaks
-        #     sparse_row_indices = ref_spec_row_indices
-        #     sparse_col_indices = ref_spec_col_indices
-        #     sparse_values = ref_spec_values
-        # #end type C
-
-        
-        # some dia peaks are not matched and are therefore ignored
-        # below ranks the rows by number therefore removing missing rows
-
-        unique_vals, new_indices = np.unique(sparse_row_indices, return_inverse=True)
-        sparse_row_indices = new_indices.astype(np.int32)
-        
-        max_row = np.max(sparse_row_indices)+1 # plus 1 for indexing
-        max_col = np.max(sparse_col_indices)+1
-        matrix = np.zeros((max_row,max_col))
-        matrix[sparse_row_indices,sparse_col_indices] = sparse_values
-
-        
-        dia_spec_int = np.append(dia_spec_int,[0]*(matrix.shape[0]-dia_spec_int.shape[0])) 
-
-        lib_coefficients, residuals = optimize.nnls(matrix, dia_spec_int)
-    
-    return lib_coefficients, dia_spec_int,  matrix
-
-
-
-
-
-
-
-
-##iso functions
-import re
-mod_pattern = re.compile(r"\([A-z]+\:(\d+)\)")
-from brainpy import isotopic_variants
-from functools import reduce
-from pyteomics import mass
-unimods = mass.Unimod()
-
-# @profile
-def precursor_isotopes(sequence,charge,n_isotopes=2,decoys=True):    ##added decoys=True
-    if decoys:  #added this conditional
-        sequence = re.sub("Decoy_","",sequence)
-    #split_seq = split_peptide(sequence)
-    split_seq = parse_peptide(sequence)
-    
-    seq_comp = get_seq_comp(split_seq, "M")
-    
-    # if config.tag:
-    #     tags = [t for aa in split_seq for t in re.findall(f"\(({config.tag.name}.*?)\)",aa)]
-    #     if config.tag.channel_comp is not None and len(tags)>0:
-    #             tag_comp = reduce(lambda x, y: x + y, [config.tag.channel_comp[re.findall(f"{config.tag.name}-(\d+)",t)[0]] for t in tags])
-    #             seq_comp = tag_comp + seq_comp
-
-    if config.tag:
-        seq_comp = apply_tag_to_comp(split_seq, seq_comp)
-        
-            
-    
-    isotopes = isotopic_variants(seq_comp,
-                                 npeaks=n_isotopes,
-                                 charge = int(charge))
-    
-    return isotopes
-
-def apply_tag_to_comp(split_seq, seq_comp):
-    tag_name = config.tag.name
-    prefix = f"({tag_name}-"
-    prefix_len = len(prefix)
-    channel_comp = config.tag.channel_comp
-
-    comps = []
-    for aa in split_seq:
-        start = 0
-        while True:
-            i = aa.find(prefix, start)
-            if i == -1:
-                break
-            j = aa.find(")", i)
-            if j == -1:
-                break
-            num = aa[i+prefix_len:j]
-            comp = channel_comp.get(num)
-            if comp is not None:
-                comps.append(comp)
-            start = j + 1
-
-    if comps:
-        tag_comp = mass.Composition()
-        for c in comps:
-            tag_comp += c
-        seq_comp += tag_comp
-
-    return seq_comp
-
-# @profile
-def parse_peptide(seq):
-    close_d = {"[": "]", "(": ")"}
-    open_set = set(close_d.keys())
-    close_set = set(close_d.values())
-    
-    new_seq = []
-    current = ""
-    s_idx = 0
-
-    while s_idx < len(seq):
-        s = seq[s_idx]
-
-        if s in open_set:
-            # Begin collecting the bracketed modification
-            opener = s
-            closer = close_d[opener]
-            mod = s
-            stack = [closer]
-            s_idx += 1
-
-            while s_idx < len(seq) and stack:
-                c = seq[s_idx]
-                mod += c
-
-                if c in open_set:
-                    stack.append(close_d[c])
-                elif c in close_set:
-                    if stack and c == stack[-1]:
-                        stack.pop()
-                s_idx += 1
-
-            current += mod  # Append full modification to current letter
-
-        elif s.isalpha():
-            if current:
-                new_seq.append(current)
-            current = s
-            s_idx += 1
-
-        else:
-            # If somehow an unexpected char, just add it
-            current += s
-            s_idx += 1
-
-    if current:
-        new_seq.append(current)
-
-    return new_seq
-
-# @profile
-def get_seq_comp(split_seq,ion_type):
-    
-    stripped_seq = "".join([i[0] for i in split_seq]) ## assumes AA comes first before mods
-    
-    mods = [int(j) for i in split_seq for j in mod_pattern.findall(i) if len(i)>1]  #this line changed
-
-
-    # tags = [t for aa in split_seq for t in re.findall("(\(.*?\))",aa)]
-    seq_comp = mass.Composition(sequence=stripped_seq,ion_type=ion_type)
-    for unimod_idx in mods:
-        seq_comp += unimods.by_id(unimod_idx)["composition"]
-    return seq_comp
 
