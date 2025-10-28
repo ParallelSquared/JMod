@@ -15,7 +15,9 @@ from functools import reduce
 import copy
 import numpy as np
 
-from src import config
+from src.utils.parse_peptides import parse_peptide
+
+from . import config 
 
 from .utils.misc_functions import frag_to_peak
 
@@ -35,54 +37,54 @@ def split_frag_name(ion_type):
     
     return frag_type,frag_idx,loss,frag_z
 
-def parse_peptide(seq):
-    close_d = {"[": "]", "(": ")"}
-    open_set = set(close_d.keys())
-    close_set = set(close_d.values())
+# def parse_peptide(seq):
+#     close_d = {"[": "]", "(": ")"}
+#     open_set = set(close_d.keys())
+#     close_set = set(close_d.values())
     
-    new_seq = []
-    current = ""
-    s_idx = 0
+#     new_seq = []
+#     current = ""
+#     s_idx = 0
 
-    while s_idx < len(seq):
-        s = seq[s_idx]
+#     while s_idx < len(seq):
+#         s = seq[s_idx]
 
-        if s in open_set:
-            # Begin collecting the bracketed modification
-            opener = s
-            closer = close_d[opener]
-            mod = s
-            stack = [closer]
-            s_idx += 1
+#         if s in open_set:
+#             # Begin collecting the bracketed modification
+#             opener = s
+#             closer = close_d[opener]
+#             mod = s
+#             stack = [closer]
+#             s_idx += 1
 
-            while s_idx < len(seq) and stack:
-                c = seq[s_idx]
-                mod += c
+#             while s_idx < len(seq) and stack:
+#                 c = seq[s_idx]
+#                 mod += c
 
-                if c in open_set:
-                    stack.append(close_d[c])
-                elif c in close_set:
-                    if stack and c == stack[-1]:
-                        stack.pop()
-                s_idx += 1
+#                 if c in open_set:
+#                     stack.append(close_d[c])
+#                 elif c in close_set:
+#                     if stack and c == stack[-1]:
+#                         stack.pop()
+#                 s_idx += 1
 
-            current += mod  # Append full modification to current letter
+#             current += mod  # Append full modification to current letter
 
-        elif s.isalpha():
-            if current:
-                new_seq.append(current)
-            current = s
-            s_idx += 1
+#         elif s.isalpha():
+#             if current:
+#                 new_seq.append(current)
+#             current = s
+#             s_idx += 1
 
-        else:
-            # If somehow an unexpected char, just add it
-            current += s
-            s_idx += 1
+#         else:
+#             # If somehow an unexpected char, just add it
+#             current += s
+#             s_idx += 1
 
-    if current:
-        new_seq.append(current)
+#     if current:
+#         new_seq.append(current)
 
-    return new_seq
+#     return new_seq
     
 ### First get the AA sequence and modifications of the fragment
 def fragment_seq(peptide, ion_type):
@@ -123,11 +125,13 @@ unimods = mass.Unimod()
 
 ## ## get the compostion of the fragment
 
+mod_pattern = re.compile(r"\([A-z]+\:(\d+)\)")
 def get_seq_comp(split_seq,ion_type):
     
     stripped_seq = "".join([i[0] for i in split_seq]) ## assumes AA comes first before mods
     
-    mods = [int(j) for i in split_seq for j in re.findall("\([A-z]+\:(\d+)\)",i) if len(i)>1]
+    # mods = [int(j) for i in split_seq for j in re.findall("\([A-z]+\:(\d+)\)",i) if len(i)>1]
+    mods = [int(j) for i in split_seq for j in mod_pattern.findall(i) if len(i)>1]
     # tags = [t for aa in split_seq for t in re.findall("(\(.*?\))",aa)]
     seq_comp = mass.Composition(sequence=stripped_seq,ion_type=ion_type)
     for unimod_idx in mods:
@@ -251,17 +255,22 @@ def calculate_mz(sequence,charge):
     seq_comp = get_seq_comp(split_seq, "M")
     return mass.calculate_mass(seq_comp,charge=charge)
 
-def precursor_isotopes(sequence,charge,n_isotopes=2):
-    sequence = re.sub("Decoy_","",sequence)
+
+def precursor_isotopes(sequence,charge,tag,n_isotopes=2, decoys=True):
+    if decoys:
+        sequence = re.sub("Decoy_","",sequence)
     #split_seq = split_peptide(sequence)
     split_seq = parse_peptide(sequence)
     
     seq_comp = get_seq_comp(split_seq, "M")
     
-    if config.tag:
-        tags = [t for aa in split_seq for t in re.findall(f"\(({config.tag.name}.*?)\)",aa)]
-        if config.tag.channel_comp is not None and len(tags)>0:
-                tag_comp = reduce(lambda x, y: x + y, [config.tag.channel_comp[re.findall(f"{config.tag.name}-(\d+)",t)[0]] for t in tags])
+    if tag:
+        pattern_tag = re.compile(rf"\(({tag.name}.*?)\)")
+        pattern_channel = re.compile(rf"{tag.name}-(\d+)")
+
+        tags = [t for aa in split_seq for t in pattern_tag.findall(aa)]
+        if tag.channel_comp is not None and len(tags)>0:
+                tag_comp = reduce(lambda x, y: x + y, [tag.channel_comp[pattern_channel.findall(t)[0]] for t in tags])
                 seq_comp+=tag_comp
             
     
@@ -269,7 +278,7 @@ def precursor_isotopes(sequence,charge,n_isotopes=2):
                                  npeaks=n_isotopes,
                                  charge = int(charge))
     
-    return isotopes
+    return isotopes 
 
 ####################################################################################
 ##################   PLexDIA  code    ##########################################
