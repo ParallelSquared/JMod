@@ -331,6 +331,7 @@ if config.args.tag in available_tags:
 elif config.args.tag == "None":
     config.tag = None
 else:
+    print(config.args.tag)
     from run_jmod_from_GUI import send_raise_to_TK
     send_raise_to_TK("Exception - Incompatible Tag")
     raise Exception("Incompatible Tag")
