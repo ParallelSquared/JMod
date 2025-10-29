@@ -5,6 +5,10 @@
 managed = true
 default-groups = ["deps"]
 
+required-environments = [
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
 [dependency-groups]
 deps = [
   # Core
