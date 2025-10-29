@@ -1,0 +1,71 @@
+# No [build-system], no [project] -> uv won't try to build your code.
+# It will only create a venv and install these dependencies.
+
+[tool.uv]
+managed = true
+default-groups = ["deps"]
+
+[dependency-groups]
+deps = [
+  # Core
+  "numpy",
+  "scipy",
+  "dill",
+  "pandas",
+  "numba",
+  "pyteomics",
+  "pymzml",
+  "brain-isotopic-distribution",
+  "biosaur2",
+  "lxml",
+  "regex",
+  "tqdm",
+
+  # Visualization
+  "matplotlib",
+  "seaborn",
+  "plotly",
+  "matplotlib-venn",
+  "upsetplot",
+  "pillow",
+
+  # Data engineering / IO
+  "pyarrow",
+  "polars",
+
+  # Classical ML / stats
+  "scikit-learn",
+  "xgboost",
+  "statsmodels",
+  "joblib",
+
+  # Optimization / math extras
+  "cvxopt",
+  "ptinnls",
+
+  # Profiling & perf tools
+  "line-profiler",
+  "memory-profiler",
+  "pyinstrument",
+
+  # GUI (Qt + optional Tk themes)
+  "PySide6",
+  "shiboken6",
+  "sv-ttk",
+  "ttkthemes",
+
+  # OS-specific helper
+  "pywin32; platform_system == 'Windows'",
+
+  # TensorFlow per platform
+  "tensorflow-intel; platform_system == 'Windows'",
+  "tensorflow-macos; platform_system == 'Darwin' and platform_machine == 'arm64'",
+  "tensorflow-metal; platform_system == 'Darwin' and platform_machine == 'arm64'",
+  "tensorflow; platform_system == 'Darwin' and platform_machine != 'arm64'",
+  "tensorflow; platform_system == 'Linux'",
+
+  # Shared TF tooling
+  "tensorboard",
+  "tensorboard-data-server",
+  "tensorflow-io-gcs-filesystem",
+]
