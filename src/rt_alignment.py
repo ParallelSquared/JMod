@@ -1043,7 +1043,7 @@ def cdf_plots(emp_data,emp_p,percentile,boundary,pred_data=None,pred_p=None,resu
         
         plt.close("all")
 
-def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False):
+def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None):
     """
     Perform a preliminary search of the specrta to align the library mz and RT values
 
@@ -1102,7 +1102,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
 
     import preliminary_search
-    preliminary_search.fit_with_features(dia_spectra, librarySpectra)
+    preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag)
 
     if dino_features is None:
         fit_outputs = fit_without_features(dia_spectra, librarySpectra)

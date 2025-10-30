@@ -261,9 +261,9 @@ def main(GUI_config_json = None):
             rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.concatenate(rt_mz)
         spectrumLibrary = plex_lib
-    else:    
+    else:
         funcs,spectrumLibrary = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
-                                        ms2=config.args.ms2_align)
+                                        ms2=config.args.ms2_align, mass_tag=mass_tag)
         rt_spl,mz_func = funcs[:2]
         # rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
