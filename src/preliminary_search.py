@@ -111,61 +111,75 @@ import numpy as np
 def peptide_to_mod_array(peptide_str, mod_dict):
     """
     Convert peptide string with modifications to a float array.
-
-    Parameters:
-        peptide_str: str, e.g. "K(PSMtag_9plex-6)(PSMtag_9plex-6)VPQVSTPTLVEVSR"
-        mod_dict: dict, e.g. {"PSMtag_9plex-6": 6.02}
-
-    Returns:
-        numpy array of length len(sequence)+2 with modification masses
     """
-
-    # Extract all modifications with their positions
-    # We'll parse N-term modifications first
-    n_term_mod = 0.0
-    c_term_mod = 0.0
-
-    # Pattern for modifications: something like (MODNAME)
-    # Also support modifications before first AA
     mod_pattern = re.compile(r'\(([^\)]+)\)')
-
-    # Remove mods for now to get sequence
     clean_seq = mod_pattern.sub('', peptide_str)
-
-    # Initialize array: length = sequence + 2
     mod_array = np.zeros(len(clean_seq) + 2, dtype=float)
 
-    # Handle N-term modifications
-    # If string starts with "X(MOD)" pattern, consider it N-term if first char is modified
-    n_term_match = re.match(r'^([A-Z])?\(([^\)]+)\)', peptide_str)
-    seq_index = 0  # index for clean_seq
-    mod_index = 0  # index in peptide_str
-
-    # Track positions as we parse
+    seq_index = 0
     i = 0
+    mods_after_first_aa = 0
+    mods_after_last_aa = 0
+
+    seq_len = len(clean_seq)
+
     while i < len(peptide_str):
         char = peptide_str[i]
         if char.isalpha():
-            # Regular amino acid
             seq_index += 1
             i += 1
         elif char == '(':
-            # Start of modification
             j = peptide_str.index(')', i)
             mod_name = peptide_str[i + 1:j]
-            mod_mass = mod_dict.get(mod_name, 0.0) #TODO does this silently fail if mod is not in the list?
-            # Decide if this is N-term, C-term, or AA mod
-            if seq_index == 0:
-                # N-term
+            if mod_name not in mod_dict:
+                raise ValueError(f"Unknown modification: {mod_name}")
+            mod_mass = mod_dict[mod_name]
+
+            # --- N-terminal logic ---
+            if seq_index == 1 and mods_after_first_aa == 0:
+                # First mod after the first residue → N-term
                 mod_array[0] += mod_mass
-            elif seq_index == len(clean_seq):
-                # C-term
-                mod_array[-1] += mod_mass
+                mods_after_first_aa += 1
+
+            # --- C-terminal logic ---
+            elif seq_index == seq_len:
+                # Check if next char(s) are also '(' (another mod at the C-term)
+                next_is_mod = j + 1 < len(peptide_str) and peptide_str[j + 1] == '('
+                if next_is_mod and mods_after_last_aa == 0:
+                    # first of the final two mods → last residue
+                    mod_array[seq_index] += mod_mass
+                    mods_after_last_aa += 1
+                elif mods_after_last_aa >= 1:
+                    # second (or more) final mod → C-term
+                    mod_array[-1] += mod_mass
+                else:
+                    # single mod at end → last residue
+                    mod_array[seq_index] += mod_mass
+
+            # --- Internal residue mods ---
             else:
-                # Modification of previous amino acid
                 mod_array[seq_index] += mod_mass
+
             i = j + 1
         else:
             i += 1
 
-    return mod_array.tolist() # TODO can we keep this as numpy for speed?
+    return mod_array.tolist()
+
+
+if __name__ == '__main__':
+    mod_dict = {"PSMtag_9plex-6": 6.02}
+    peptide = "K(PSMtag_9plex-6)(PSMtag_9plex-6)VPQVSTPTLVEVSR"
+    print(peptide_to_mod_array(peptide, mod_dict))
+
+    peptide = "K(PSMtag_9plex-6)VPQVSTPTLVEVSR"
+    print(peptide_to_mod_array(peptide, mod_dict))
+
+    peptide = "K(PSMtag_9plex-6)(PSMtag_9plex-6)VPQVSTPTLVEVSR(PSMtag_9plex-6)"
+    print(peptide_to_mod_array(peptide, mod_dict))
+
+    peptide = "K(PSMtag_9plex-6)(PSMtag_9plex-6)VPQVSTPTLVEVSR(PSMtag_9plex-6)(PSMtag_9plex-6)"
+    print(peptide_to_mod_array(peptide, mod_dict))
+
+    peptide = "K(PSMtag_9plex-6)VPQVSTPTLVEVS(PSMtag_9plex-6)R"
+    print(peptide_to_mod_array(peptide, mod_dict))
