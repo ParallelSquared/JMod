@@ -1,10 +1,11 @@
+import sys
 import numpy as np
 import peppy_sage as ps
 import pandas as pd
+import re
 
-import sys
+from config import diann_mods
 from tqdm.auto import tqdm
-
 from src.logger import logger
 
 """
@@ -29,10 +30,10 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
     else:
         mod_dict = {}
     # Add all of the other supported modifications
-    # TODO
+    mod_dict.update(diann_mods)
 
+    # Convert to rust-compatible peptide objects
     pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
-
     peps = [ps.Peptide(seq, peptide_to_mod_array(mod_seq, mod_dict)) for seq, mod_seq in pep_seqs]
 
     # Create indexed database
@@ -104,10 +105,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
     sys.exit(0)
 
 
-import re
-import numpy as np
-
-
 def peptide_to_mod_array(peptide_str, mod_dict):
     """
     Convert peptide string with modifications to a float array.
@@ -164,7 +161,7 @@ def peptide_to_mod_array(peptide_str, mod_dict):
         else:
             i += 1
 
-    return mod_array.tolist()
+    return mod_array.tolist() #TODO will a numpy array work for performance reasons?
 
 
 if __name__ == '__main__':
@@ -182,4 +179,8 @@ if __name__ == '__main__':
     print(peptide_to_mod_array(peptide, mod_dict))
 
     peptide = "K(PSMtag_9plex-6)VPQVSTPTLVEVS(PSMtag_9plex-6)R"
+    print(peptide_to_mod_array(peptide, mod_dict))
+
+    mod_dict = diann_mods
+    peptide = "K(UniMod:4)VPQVSTPTLVEVSR"
     print(peptide_to_mod_array(peptide, mod_dict))
