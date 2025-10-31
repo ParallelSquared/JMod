@@ -446,6 +446,8 @@ def make_GUI():
             self.new_tag_window = tk.Toplevel(self)
             self.new_tag_window.title("Create New Mass Tag")
             self.new_tag_window.geometry("260x220")
+            center_on_parent(self.new_tag_window, self)
+
 
             #Num Channels
             tk.Label(self.new_tag_window, text="Number of Channels:").grid(row=0, column=0, padx=5, pady=5)
@@ -510,6 +512,7 @@ def make_GUI():
             self.second_window = tk.Toplevel()
             self.second_window.title("Define Channels")
             self.second_window.geometry("600x400")
+            center_on_parent(self.second_window, self)
 
 
             self.iso_pairs = {
@@ -1154,6 +1157,29 @@ def send_raise_to_TK(error_text):
     logger.error("JMod Exited\n")
     if config.ran_from_GUI is True:
         tk.messagebox.showerror("Error", error_text)
+
+def center_on_parent(win, parent=None):
+    win.update_idletasks()
+    if parent is None:
+        parent = win.master
+    if parent is None:
+        parent = win  # fallback to itself
+
+    # get parent geometry
+    parent_x = parent.winfo_rootx()
+    parent_y = parent.winfo_rooty()
+    parent_w = parent.winfo_width()
+    parent_h = parent.winfo_height()
+
+    # get window size
+    win_w = win.winfo_reqwidth()
+    win_h = win.winfo_reqheight()
+
+    # compute center
+    x = parent_x + (parent_w // 2 - win_w // 2)
+    y = parent_y + (parent_h // 2 - win_h // 2)
+
+    win.geometry(f"+{x}+{y}")
 
 ###### Custom Widgets
 
