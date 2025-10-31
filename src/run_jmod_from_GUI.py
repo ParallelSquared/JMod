@@ -27,6 +27,7 @@ from src.logger import logger, ElapsedFormatter
 import logging
 import threading
 import tempfile
+import platform
 
 
 
@@ -49,8 +50,13 @@ def make_GUI():
             #style.configure("Accent.TButton")
             #style.configure("Red.TButton", foreground="black", background="#cc0202")
 
-            #frames:  1) Logging Frame 2) input frame,  3) MS frame  4)multiplex frame  5)additional frame   6) Output frame
-            #functions 1) Logging Funcs 2) input funcs,  3) MS funcs  4) multiplex funcs 5) additional funcs  6) output funcs
+            """
+            Organization of GUI Code
+
+            frames:  1) Logging Frame 2) input frame,  3) MS frame  4)multiplex frame  5)additional frame   6) Output frame
+
+            functions 1) Logging Funcs 2) input funcs,  3) MS funcs  4) multiplex funcs 5) additional funcs  6) output funcs
+            """
 
 
             ####         Logging Frame      #######
@@ -84,6 +90,7 @@ def make_GUI():
 
 
             #######     input frame      #######
+
             self.input_frame = ttk.LabelFrame(self, text="Input Files")
             self.input_frame.grid(row=0, column=0, columnspan=10, padx=10, pady=10, sticky="ew")
 
@@ -1143,7 +1150,11 @@ def make_GUI():
 
     
     app = JModGUI()
+    if app.tk.call("info", "patchlevel") in ["8.6.12"] and platform.system() in ["Darwin"]:
+        os_name = "macOS" if platform.system() == "Darwin" else platform.system()
+        messagebox.showwarning("Tkinter Version Warning", f'Tkinter Version [{app.tk.call("info", "patchlevel")}] poorly registers button clicks on [{os_name}].\nThis can be resolved by upgrading python.')
     app.mainloop()
+
 
 
 def send_raise_to_TK(error_text):
