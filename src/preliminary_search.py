@@ -10,7 +10,7 @@ from src.logger import logger
 
 """
 Output we need:
-    Retention time - incorrect because not indexed?
+    Retention time - incorrect because not standardized?
     Retention time error - to calculate
     mz observed
     mz library? should be calculated
@@ -36,11 +36,11 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
 
     # Convert to rust-compatible peptide objects
     pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
-    peps = [ps.Peptide(seq, peptide_to_mod_array(mod_seq, mod_dict)) for seq, mod_seq in pep_seqs]
+    rust_peps = [ps.Peptide(seq, peptide_to_mod_array(mod_seq, mod_dict)) for seq, mod_seq in pep_seqs]
 
     # Create indexed database
     db = ps.IndexedDatabase.from_peptides( # TODO pass parameters as parameters
-        peptides=peps,
+        peptides=rust_peps,
         bucket_size=128,
         ion_kinds=["b", "y"],
         min_ion_index=0,
@@ -99,6 +99,11 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
 
     # turn into a DataFrame (fragments stays as a nested dict column)
     df = pd.DataFrame(rows)
+
+
+    for spec in dia_spectra.ms2scans:
+        ms1spec = dia_spectra.get_nearest_ms1_for_scan(spec.id)
+        print(spec.RT, ms1spec.RT)
 
     # save (pick your format)
     #df.to_parquet("features.parquet", index=False)

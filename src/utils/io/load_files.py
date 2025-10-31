@@ -74,27 +74,37 @@ class SpectrumFile:
     def __init__(self,mzml_file=None):
 
         self.filename = None
-        
+        self.ms2_to_ms1_map = None
+
         if mzml_file:
             self.load_spectra(mzml_file)
 
     def load_spectra(self,mzml_file):
         self.filename = mzml_file
         
-        # this may need to be optimised better
+        # this may need to be optimised better and probably should be in the init block
         self.scan_pos = {}
         self.ms1scans = []
         self.ms2scans = []
+        self.ms1_by_id = {}
+        self.ms2_by_id = {}
+
         with mzml.MzML(mzml_file) as reader:
             for scan in reader:
                 if scan["ms level"] == 1:
                     spec = Spectrum(scan)
+                    idx = len(self.ms1scans)
                     self.ms1scans.append(spec)
+                    self.ms1_by_id[spec.scan_num] = idx
                     self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms1scans)-1]
                 if scan["ms level"] == 2:
                     spec = Spectrum(scan)
+                    idx = len(self.ms2scans)
                     self.ms2scans.append(spec)
+                    self.ms2_by_id[spec.scan_num] = idx
                     self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms2scans)-1]
+
+        self.build_ms2_to_ms1_map()
                 
     
     def get_by_idx(self,idx):
@@ -103,7 +113,47 @@ class SpectrumFile:
             return self.ms1scans[level_idx]
         elif level==2:
             return self.ms2scans[level_idx]
-            
+
+    def build_ms2_to_ms1_map(self):
+        """Precompute nearest MS1 scan index for each MS2 scan."""
+        ms1_rts = np.array([s.RT for s in self.ms1scans])
+        ms1_nums = np.array([s.scan_num for s in self.ms1scans])
+        ms2_rts = np.array([s.RT for s in self.ms2scans])
+
+        ms2_to_ms1 = np.zeros(len(ms2_rts), dtype=int)
+        for i, rt in enumerate(ms2_rts):
+            pos = np.searchsorted(ms1_rts, rt)
+            if pos == 0:
+                closest_idx = 0
+            elif pos == len(ms1_rts):
+                closest_idx = len(ms1_rts) - 1
+            else:
+                before, after = ms1_rts[pos - 1], ms1_rts[pos]
+                closest_idx = pos - 1 if abs(rt - before) < abs(rt - after) else pos
+            ms2_to_ms1[i] = closest_idx
+
+        self.ms2_to_ms1_map = ms2_to_ms1
+        self.ms2_to_ms1_scan_num = ms1_nums[ms2_to_ms1]  # parallel array for convenience
+
+    def get_nearest_ms1_for_scan(self, scan_id_or_num):
+        """Return the closest MS1 Spectrum to the given MS2 scan (by ID or number)."""
+        # Normalize to scan number
+        if isinstance(scan_id_or_num, str):
+            match = re.search(r"scan=(\d+)", scan_id_or_num)
+            if not match:
+                raise ValueError(f"Could not parse scan number from ID '{scan_id_or_num}'")
+            scan_num = int(match.group(1))
+        else:
+            scan_num = scan_id_or_num
+
+        if scan_num not in self.ms2_by_id:
+            raise KeyError(f"MS2 scan {scan_num} not found")
+
+        ms2_idx = self.ms2_by_id[scan_num]
+        ms1_idx = self.ms2_to_ms1_map[ms2_idx]
+        return self.ms1scans[ms1_idx]
+
+
 def loadSpectra(mzml_file):
     logger.info("Loading Spectra...")
     python_spec_file = mzml_file+"_pythonspec"
