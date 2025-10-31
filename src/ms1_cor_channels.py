@@ -113,8 +113,7 @@ def ms1_cor_channels(all_spectra, filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_t
     fake_fdc_dict = {}
 
     
-    print(f"number of fdc: {len(filtered_decoy_coeffs)}")
-    print(f"number of fdc groups: {len(fdc_group)}")
+
     fdc_group_idx = -1
     for key in tqdm.tqdm(list(fdc_group.groups)):
         fdc_group_idx += 1
@@ -358,7 +357,48 @@ def minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spec
 
 
 def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_decoy_coeffs, ms2_rt, rt_tol, prec_mz, bottom_of_window, top_of_window, ms2_spec_idxs):
+    """
+    For a given precursor, get the ms2 JMod coefficients at MS2 scan #s and return this dictionary,
+    along with the ms1 scan number corresponding to the highest scan
 
+    Parameters
+    ----------
+    prec_seq : str
+        Precursor non-stripped sequence
+    prec_z : int or float
+        precursor charge
+    prec_rt : float
+        Precursor retention time, not currently used
+    time_channel : int or str or None
+        Precursor time channel
+    timeplex : bool
+        Bool for timeplex
+    grouped_decoy_coeffs : pandas dataframe
+        Pandas dataframe grouped by unstripped_seq, z, time_channel (unlike similar df grouped by stripped_seq, z, time_channel)
+    ms2_rt : 1D Numpy array 
+        Array of retention time of all ms2 scans in MS run
+    rt_tol : float
+        Retention time tolerance
+    prec_mz : float
+        Precursor mz
+    bottom_of_window: 1D Numpy array
+        Array of the bottom of the isolation window for every ms2 scan (same size as ms2_rt)
+    top_of_window: 1D Numpy array
+        Array of the top of the isolation window for every ms2 scan (same size as ms2_rt)
+    ms2_spec_idxs: 1D Numpy array
+        Array of the scan index of every ms2 scan (same size as ms2_rt)
+    
+    
+    Returns
+    -------
+    ms2_vals : dict[int] == float
+        A dictionary with keys as ms2 scan indexes and values as the JMod MS2 coeff
+    highest_ranked_spec : int
+        The ms1 scan index from the highest ranked ms2 Jmod coeff
+    channel_key : tuple of (str, int) or (str, int, int)
+        Tuple of unstripped sequence, charge, and time channel if applicable
+
+    """
     offset = 0
     
     if timeplex:
@@ -375,8 +415,7 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
         group = grouped_decoy_coeffs.get_group(channel_key)
         highest_ranked_spec = group.loc[group["coeff"].idxmax(), "Ms1_spec_id"]
 
-
-        ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
+        # ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
         prec_rt = group.rt.iloc[np.argmax(group.coeff)]
         ms2_window_bool = np.logical_and(prec_mz+offset>bottom_of_window,prec_mz+offset<top_of_window)
         
@@ -398,31 +437,74 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
 
 def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tag, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func):
     isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
-    ms1_vals, prec_isotope_traces = get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset)
-    all_ms1_vals, all_ms2_vals, all_iso_vals = fill_scan_values(all_scans, prec_isotope_traces, interp_func, ms1_vals)
+    all_isotope_traces = get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset)
+    all_ms2_vals = fill_scan_values(all_scans, interp_func, all_isotope_traces[0])
 
-    return all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func
+    return all_isotope_traces[0], all_ms2_vals, all_isotope_traces[1:], isotopes, interp_func
 
 def build_ms2_interpolator(ms2_vals):
     return interp1d(list(ms2_vals.keys()), np.array(list(ms2_vals.values())), bounds_error=False)   
 
 
 def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset):
-    ## note: we have collected similar values for previous channel if the isotopic envelopes are overlapping. 
-    ### However, in cases like diethlyation, isoptopes can differ by > 10 ppm #!!!Maybe investigate wider ppm tol for these cases?
-    prec_isotope_traces=[{} for _ in isotopes]
+    """
+    Get a trace of each isotopic peak across a set of MS1 spectra
 
-    for i, spec in enumerate(spectra_subset):
-        iso_ints = get_trace_int_numba(spec.mz, spec.intens, np.array([isotope.mz for isotope in isotopes]), 0, mz_ppm, min_int)
+    Parameters
+    ----------
+    isotopes : list of brainpy theoretical peak objects
+        Peak objects (with p.mz, p.intensity, and p.charge) for one precursor
+    mz_ppm : float
+        MS1 tolerance
+    spectra_subset : list of Spectrum Objects
+        A list of Sprectrum Objects
+    
+    Returns
+    -------
+    all_isotope_traces : list of dicts[int] = float
+        A list where each element corresponds to one isotope.
+        Each element is a dictionary mapping MS1 scan numbers (`spec.scan_num`)
+        to matched peak intensities for that isotope.
+
+    Notes
+    -------
+    note: we have collected similar values for previous channel if the isotopic envelopes are overlapping. 
+    However, in cases like diethlyation, isoptopes can differ by > 10 ppm #!!!Maybe investigate wider ppm tol for these cases?
+    """
+    all_isotope_traces=[{} for _ in isotopes]
+
+    for spec in spectra_subset:
+        iso_ints = get_trace_int_numba(spec.mz, spec.intens, np.array([isotope.mz for isotope in isotopes]), mz_ppm, min_int)
         for i in range(len(isotopes)):
-            prec_isotope_traces[i][spec.scan_num] = iso_ints[i]
+            all_isotope_traces[i][spec.scan_num] = iso_ints[i]
 
     
-    return prec_isotope_traces[0], prec_isotope_traces[1:]
+    return all_isotope_traces
 
 @nb.njit(cache=True)
-def get_trace_int_numba(spec_mz, spec_intens, mz_array, atol, rtol, base):
+def get_trace_int_numba(spec_mz, spec_intens, mz_array, rtol, base):
+    """
+    Match isotope mz values to the closest peaks in a spectrum and return their intensities.
 
+    Parameters
+    ----------
+    spec_mz : 1D numpy array
+        Array of mz floats from spec
+    spec_intens : 1D numpy array
+        Array of intensity floats from spec
+    mz_array : 1D numpy array
+        Array of mzs of the isotopes to be matched
+    rtol : float
+        The mz ppm
+    base : float
+        Minimum intensity assigned when the peak is unmatched
+    
+    Returns
+    -------
+    vals_to_return : 1D numpy array
+        Array of the intensities of matched peaks (or base for unmatched peaks) of length mz_array
+
+    """
     order_idx = np.searchsorted(spec_mz, mz_array)
 
     left_idx = np.clip(order_idx - 1, 0, len(spec_mz) - 1)
@@ -447,6 +529,34 @@ def get_trace_int_numba(spec_mz, spec_intens, mz_array, atol, rtol, base):
 
 
 def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag):
+    """
+    Gets a list of brainpy theoretical peak isotopes for a precursor
+
+    Parameters
+    ----------
+    prec_seq : str
+        precursor unstripped Sequence
+    prec_mz : float
+        percursor_mz
+    prec_z : float or int
+        precursor charge
+    num_iso : int
+        number of isotopes to return
+    tag : massTag
+        massTag instance
+    
+    Returns
+    -------
+    isotopes : list of brainpy theoretical peak objects
+        A list of peak objects with p.mz, p.intensity, and p.charge of length num_iso
+
+    Notes
+    -------
+    Mostly this is just the function iso.precursor_isotopes. However, if a tag doesn't have compositions, 
+    (or the mass if otherwise off for some reason?) then the other parts of the code correct and make sure
+    isotopes[0] == prec_mz
+
+    """
     isotopes = iso.precursor_isotopes(prec_seq,prec_z,tag,num_iso, decoys=False)
 
     delta_mz = 0
@@ -457,23 +567,39 @@ def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag):
 
     return isotopes
 
-def fill_scan_values(all_scans, prec_isotope_traces, interp_func, ms1_vals):
-    all_ms1_vals = {i: min_int for i in all_scans}
+def fill_scan_values(all_scans, interp_func, ms1_vals):
+    """
+    Interpolate MS2 intensities at the scan numbers corresponding to MS1 spectra.
+
+    Parameters
+    ----------
+    all_scans : list of int
+        List of scans to consider
+    interp_func : scipy interp1d object 
+        An interpolation function from ms2 vals
+    ms1_vals : dict[int] = float
+        A dictionary with MS1 scan #s as keys and intesnity as values
+        ms1_vals.keys() == all_scans for all cases as far as I can tell but I've left the conditional in
+    
+    Returns
+    -------
+    all_ms2_vals : dict[int] = float
+        A dictionary with MS1 scan #s as keys and interpolated MS2 intensities as values
+
+    Notes
+    -------
+    This function lines up the MS1 and MS2 traces by interpolating the value of the MS2 trace at the MS1 scan #
+
+    """
     all_ms2_vals = {i: min_int for i in all_scans}
-    all_iso_vals = [{i: min_int for i in all_scans} for _ in range(len(prec_isotope_traces))]
 
     interp_vals = interp_func(all_scans)
 
     for scan, c in zip(all_scans, interp_vals):
         if scan in ms1_vals:
-            all_ms1_vals[scan] = ms1_vals[scan]
             all_ms2_vals[scan] = c
 
-    for iso_idx, iso_dict in enumerate(prec_isotope_traces):
-        for scan, val in iso_dict.items():
-            all_iso_vals[iso_idx][scan] = val
-
-    return all_ms1_vals, all_ms2_vals, all_iso_vals
+    return all_ms2_vals
 
 
 def get_ms1_index_of_max(ms2_vals, top_ms1_spec_idx, highest_ranked_spec):
@@ -791,7 +917,41 @@ def moving_average(x, w=4):
     return np.convolve(x, np.ones(w), 'same') / w
 
 
-def fit_channel_isotopes_numba(spec,all_iso,mz_ppm, typefit="b"):
+def fit_channel_isotopes_numba(spec,all_iso,mz_ppm):
+    """
+    Takes observed peaks fom spectra and expected peaks from from all_iso for one plex-group and builds a matrix to fit them
+
+    Parameters
+    ----------
+    spec : Spectrum Object
+        The spectrum to look in
+    all_iso : a list of list of brainpy theoretical peak instances
+        i.e.
+        [
+        [Channel_1_Peak_1, Channel_1_Peak_2, ...]
+        [Channel_2_Peak_1, Channel_2_Peak_2, ...]
+        etc
+        ]    
+        where the peaks are brainpy theoretical peaks with p.mz, p.intensity, and p.charge
+    mz_ppm : float
+        MS1 ppm tolerance
+    
+    Returns
+    -------
+    lib_coefficients : 1d numpy array
+        An array containing the coefficient for each channel
+    dia_spec_int : list of floats
+        A list containing all observed peak intensities (or padded 0s) in the spectrum that made it into the matrix
+    dense_matrix : 
+        The matrix used for fitting
+    Notes
+    -------
+    Spectra are matched within mz tolerance between observed (from spectrum) and theoretical (from all_iso) peaks.
+    A matrix is created with columns for each channel and rows for each peak. This corresponds to an observed set of peaks.
+    The rows and observed peaks are filtered to remove unmatched peaks and the matrix is fit with a dense NNLS fitting to minimize
+    the residuals of Matrix * Coeffs = Observed
+
+    """
 
     flat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso], dtype=np.float64)
     ms1_iso_patterns = flat.reshape(len(all_iso), len(all_iso[0]), 2)
