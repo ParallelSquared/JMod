@@ -3,11 +3,14 @@ import numpy as np
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from pyteomics import mass
+from pyteomics.auxiliary.structures import PyteomicsError
+
 
 from src.iso_functions import get_seq_comp, precursor_isotopes
 from brainpy._c.isotopic_distribution import TheoreticalPeak as Peak
 from src.mass_tags import massTag, read_json_to_massTag
 import src.iso_functions as iso
+import copy
 
 
 
@@ -78,6 +81,9 @@ class Test_get_seq_comp():
 class Test_precursor_isotopes():
 
     tag = read_json_to_massTag("src\\MassTags\\", "PSMtag_5plex.json")
+
+    tag_no_comps = copy.deepcopy(tag)
+    tag_no_comps.channel_comp = None
 
     def compare_outputs(self, output, expected_output):
         assert len(output) == len(expected_output)
@@ -161,21 +167,23 @@ class Test_precursor_isotopes():
         expected_output = [Peak(mz=654.285957, intensity=0.590578, charge=2), Peak(mz=654.787415, intensity=0.409422, charge=2)]
         self.compare_outputs(output, expected_output)
 
+    def test_decoy_peptide(self):
+        output = precursor_isotopes("Decoy_MEATSTICK", 2, None, 2)
+        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        self.compare_outputs(output, expected_output)
+
+    def test_decoy_peptide_explicit(self):
+        output = precursor_isotopes("Decoy_MEATSTICK", 2, None, 2, decoys=True)
+        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        self.compare_outputs(output, expected_output)
+
+    def test_decoy_peptide_decoys_off(self):
+        with pytest.raises(PyteomicsError, match="Unknown label: ecoy_M"):
+            precursor_isotopes("Decoy_MEATSTICK", 2, None, 2, decoys=False)
+
+    def test_tag_channel_comp_is_none(self):
+        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK", 2, self.tag_no_comps, 2)
+        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        self.compare_outputs(output, expected_output)
 
 
-    
-
-
-
-    
-
-    
-
-
-
-def main():
-    pass
-
-
-if __name__ == "__main__":
-    main()

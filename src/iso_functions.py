@@ -127,6 +127,23 @@ unimods = mass.Unimod()
 
 mod_pattern = re.compile(r"\([A-z]+\:(\d+)\)")
 def get_seq_comp(split_seq,ion_type):
+    """
+   Get the sequence composition of a parsed pepetide sequence
+
+    Parameters
+    ----------
+    split_seq : list of str
+        A list of individual amino acid strings, as well as their modifications
+        i.e. ["A(PSMtag_5plex-4)", "C(Unimod:4), "R"]
+    ion_type : str
+        Ion type: "M" (intact peptide), "b", or "y" among others
+
+    Returns
+    -------
+    seq_comp : mass.Compostion object
+        Pyteomics mass.Composition object that contains the amount of each element within the peptide
+    
+    """
     
     stripped_seq = "".join([i[0] for i in split_seq]) ## assumes AA comes first before mods
     
@@ -257,6 +274,28 @@ def calculate_mz(sequence,charge):
 
 
 def precursor_isotopes(sequence,charge,tag,n_isotopes=2, decoys=True):
+    """
+    Return a list of brainpy theoretical peak objects: Peak(p.mz, p.intensity, p.charge)
+
+    Parameters
+    ----------
+    sequence : str
+        Peptide sequence including tags and PTMs
+    charge : int or float
+        Peptide Charge
+    tag : massTag
+        massTag Object
+    n_isotopes : int
+        The number of isotopes to be returned
+    decoys: bool
+        True by default, can be set to false if there will be no decoys passed into func
+
+    Returns
+    -------
+    isotopes : list of brainpy theoretical peaks
+        i.e. Peak(p.mz, p.intensity, p.charge), Peak(p.mz, p.intensity, p.charge)]
+    
+    """
     if decoys:
         sequence = re.sub("Decoy_","",sequence)
     #split_seq = split_peptide(sequence)
