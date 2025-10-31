@@ -15,10 +15,10 @@ import copy
 import json
 from pathlib import Path
 
-from .iso_functions import split_frag_name, fragment_seq
+from src.iso_functions import split_frag_name, fragment_seq
 
-from .utils.misc_functions import frag_to_peak, specific_frags
-from .utils.parse_peptides import parse_peptide
+from src.utils.misc_functions import frag_to_peak, specific_frags
+from src.utils.parse_peptides import parse_peptide
 
 from src.logger import logger
 """

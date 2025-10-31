@@ -15,13 +15,13 @@ from scipy import stats
 from scipy import sparse
 from pyteomics import mass
 import re
-from .utils.io.read_output import names
+from src.utils.io.read_output import names
 import src.config as config
 
-from .utils.misc_functions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
+from src.utils.misc_functions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
 hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim,np_pearson_cor
-from .utils.parse_peptides import change_seq, convert_frags
-from .models.spec_lib.spec_lib import frag_to_peak
+from src.utils.parse_peptides import change_seq, convert_frags
+from src.models.spec_lib.spec_lib import frag_to_peak
 
 def get_closest_ms1(prec_rt,ms1_spectra):
     ms1_rt = np.array([i.RT for i in ms1_spectra])

@@ -16,15 +16,15 @@ import sys
 import json
 import biosaur2
 
-from .utils.io import load_files
-from .utils.set_seeds import set_seeds
-from .models.spec_lib import spec_lib
-from .spectral_fitting import fit_to_lib2, merge_spectrum_peaks
-from .rt_alignment import MZRTfit, MZRTfit_timeplex
-from .utils.misc_functions import write_to_csv
+from src.utils.io import load_files
+from src.utils.set_seeds import set_seeds
+from src.models.spec_lib import spec_lib
+from src.spectral_fitting import fit_to_lib2, merge_spectrum_peaks
+from src.rt_alignment import MZRTfit, MZRTfit_timeplex
+from src.utils.misc_functions import write_to_csv
 from src import iso_functions as iso_f
-from .mass_tags import tag_library, available_tags
-from .fdr_analysis import process_data
+from src.mass_tags import tag_library, available_tags
+from src.fdr_analysis import process_data
 
 from src.logger import logger, set_log_filepath
 import logging
