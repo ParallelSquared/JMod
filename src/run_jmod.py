@@ -80,7 +80,7 @@ def main(GUI_config_json = None):
     dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
     use_feat = ""
     dino_features=None
-    feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv"
+    feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv" #TODO this breaks if you run from cd
     if config.args.use_features and os.path.exists(feature_path):
         use_feat = "Dino"
         dino_features = pd.read_csv(feature_path,delimiter="\t")
@@ -163,6 +163,7 @@ def main(GUI_config_json = None):
         logger.info("loading Dinosaur features")
     if config.args.use_features and not os.path.exists(feature_path):
         logger.info("Dinosaur feature file not found, running biosaur2")
+        #TODO no you arent?
 
     logger.info(f"Results will be saved to {results_folder_path}")
 

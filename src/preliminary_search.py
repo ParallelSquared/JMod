@@ -23,6 +23,7 @@ ignore fit to lib
 
 
 def fit_with_features(dia_spectra, library_spectra, mass_tag):
+
     # Construct modification dict to convert names to masses
     # Start with mass tag
     if mass_tag is not None:
@@ -33,6 +34,8 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
         mod_dict = {}
     # Add all of the other supported modifications
     mod_dict.update(diann_mods)
+
+    print(mod_dict)
 
     # Convert to rust-compatible peptide objects
     pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
@@ -60,12 +63,13 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
         wide_window=True,
         chimera=False,
         annotate_matches=True,
-        report_psms=10
+        report_psms=1
     )
 
     # Convert spectra into a Rust-friendly format
     logger.info("Converting spectra")
     rust_specs = []
+    # TODO this should probably be done in chunks
     for spec in tqdm(dia_spectra.ms2scans):
         rust_specs += [spec.to_rust_spectrum()]
 
@@ -84,32 +88,140 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
         batch_hits = scorer.score_many(db, chunk)
         hits.extend(batch_hits)
 
+    # Flatten hits and convert to dict
+    #rows = [feat.to_dict() for group in hits for feat in group]
 
-    """
-    for prelim_hits in hits:
-        for rank_k in prelim_hits:
-            print(rank_k)
-            print(rank_k.fragments.to_dict())
-            print()
-            #print(rank_k.to_dict())
-        print("****")
-    """
+    ppm_errors = []
+    errors = []
 
-    rows = [feat.to_dict() for group in hits for feat in group]
+    for group in hits:
+        for feat in group:
+            d = feat.to_dict()  # your existing dict
+
+            # Compute theoretical m/z if peptide exists
+            pep = ps.Peptide.from_rust(feat.peptide)
+            theo_mz = ps.Peptide.calculate_theoretical_mz(feat.sequence, feat.modifications, feat.charge)
+            d["theoretical_mz"] = theo_mz
+            """
+            print("*********")
+            print(feat.sequence, feat.modifications, feat.charge)
+            print(d["theoretical_mz"], d["calcmass"], d["charge"])
+            print("***")
+            """
+
+            # Get nearest MS1 scan from cached mapping
+            ms1_scan = dia_spectra.get_nearest_ms1_for_scan(feat.spec_id)
+
+            # Find closest peak
+            closest_idx, closest_mz, intensity = ms1_scan.closest_peak(theo_mz)
+
+            print("********")
+            print(ms1_scan.peak_list())
+            print(theo_mz, closest_mz)
+
+
+
+            """
+            d["closest_peak_mz"] = closest_mz
+            d["closest_peak_intensity"] = intensity
+            ppm_error = (d["closest_peak_mz"] - d["theoretical_mz"]) / d["theoretical_mz"] * 1e6
+            ppm_errors.append(ppm_error)
+            print("ppm_error", ppm_error)
+            error = (d["closest_peak_mz"] - d["theoretical_mz"])
+            errors.append(error)
+            print("error", (d["closest_peak_mz"] - d["theoretical_mz"]))
+
+            # Debug print — this is the key part
+            print("------------------------------------------------")
+            print(f"spec_id: {feat.spec_id}")
+            print(f"sequence: {feat.sequence}")
+            print(f"modifications: {feat.modifications}")
+            print(f"charge: {feat.charge}")
+            print(f"calcmass (from Rust feat): {d.get('calcmass')}")
+            print(f"theoretical_mz (Python calc): {theo_mz}")
+            print(f"closest_peak_mz (from MS1): {closest_mz}")
+            print(f"intensity: {intensity}")
+            print(f"mass_diff (Da): {closest_mz - theo_mz}")
+            print(f"ppm_error (calc): {(closest_mz - theo_mz) / theo_mz * 1e6}")  # correct factor
+            print("------------------------------------------------")
+
+            #print(d["closest_peak_mz"], d["theoretical_mz"], ((d["closest_peak_mz"] - d["theoretical_mz"]) / d["theoretical_mz"]) * 10e6)
+            """
 
     # turn into a DataFrame (fragments stays as a nested dict column)
+    with open ("ppm_errors.tsv", "w") as fout:
+        fout.write('ppm_errors\n')
+        fout.write('\n'.join(map(str, ppm_errors)))
+    with open ("errors.tsv", "w") as fout:
+        fout.write('errors\n')
+        fout.write('\n'.join(map(str, errors)))
+
     df = pd.DataFrame(rows)
 
-
-    for spec in dia_spectra.ms2scans:
-        ms1spec = dia_spectra.get_nearest_ms1_for_scan(spec.id)
-        print(spec.RT, ms1spec.RT)
+    # TODO test this function
 
     # save (pick your format)
     #df.to_parquet("features.parquet", index=False)
     df.to_csv("all_matches.tsv", index=False, sep='\t')
 
     sys.exit(0)
+
+
+def compare_ms1_mappings(spectrum_file):
+    """
+    Compare the original closest MS1 scan method with the new build_ms2_to_ms1_map method.
+    Prints out discrepancies.
+    """
+    print(f"Comparing MS1 mappings for {len(spectrum_file.ms2scans)} MS2 spectra...")
+
+    mismatches = 0
+
+    for ms2_idx, ms2_scan in enumerate(spectrum_file.ms2scans):
+        # Old method: brute-force search (closest_ms1spec style)
+        ms1_rts = np.array([s.RT for s in spectrum_file.ms1scans])
+        old_idx = np.argmin(np.abs(ms1_rts - ms2_scan.RT))
+
+        # New method: cached map
+        new_idx = spectrum_file.ms2_to_ms1_map[ms2_idx]
+
+        if old_idx != new_idx:
+            mismatches += 1
+            print(f"MS2 scan {ms2_scan.scan_num}: old_idx={old_idx}, new_idx={new_idx}, ms2_rt={ms2_scan.RT:.4f}, old_ms1_rt={spectrum_file.ms1scans[old_idx].RT:.4f}, new_ms1_rt={spectrum_file.ms1scans[new_idx].RT:.4f}")
+
+    print(f"Total mismatches: {mismatches} / {len(spectrum_file.ms2scans)}")
+
+
+
+def plot_error_histograms(ppm_file="ppm_errors.tsv", error_file="errors.tsv", ppm_clip=500, err_clip=5):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    ppm_vals = pd.read_csv(ppm_file, sep="\t")["ppm_errors"].to_numpy(dtype=float)
+    err_vals = pd.read_csv(error_file, sep="\t")["ppm_errors"].to_numpy(dtype=float)
+
+    print(f"Loaded {len(ppm_vals)} PPM errors, {len(err_vals)} mass errors.")
+
+    # Clip extreme outliers
+    ppm_vals_clip = ppm_vals[(ppm_vals > -ppm_clip) & (ppm_vals < ppm_clip)]
+    err_vals_clip = err_vals[(err_vals > -err_clip) & (err_vals < err_clip)]
+
+    plt.figure(figsize=(10, 4))
+
+    plt.subplot(1, 2, 1)
+    plt.hist(ppm_vals_clip, bins=100, edgecolor='k', alpha=0.7)
+    plt.title(f"PPM Error Distribution (clipped ±{ppm_clip})")
+    plt.xlabel("PPM Error")
+    plt.ylabel("Count")
+
+    plt.subplot(1, 2, 2)
+    plt.hist(err_vals_clip, bins=100, edgecolor='k', alpha=0.7)
+    plt.title(f"Mass Error Distribution (clipped ±{err_clip} Da)")
+    plt.xlabel("Mass Error (Da)")
+    plt.ylabel("Count")
+
+    plt.tight_layout()
+    plt.show()
 
 
 def peptide_to_mod_array(peptide_str, mod_dict):
@@ -172,6 +284,9 @@ def peptide_to_mod_array(peptide_str, mod_dict):
 
 
 if __name__ == '__main__':
+    plot_error_histograms(ppm_file="/Users/danielgeiszler/Documents/jmod_tests/fragment_ion_indexing/ppm_errors.tsv",
+                          error_file="/Users/danielgeiszler/Documents/jmod_tests/fragment_ion_indexing/errors.tsv")
+
     mod_dict = {"PSMtag_9plex-6": 6.02}
     peptide = "K(PSMtag_9plex-6)(PSMtag_9plex-6)VPQVSTPTLVEVSR"
     print(peptide_to_mod_array(peptide, mod_dict))

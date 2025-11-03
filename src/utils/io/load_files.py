@@ -48,6 +48,42 @@ class Spectrum:
             self.ms1window = self.isolation_window["isolation window target m/z"]+np.array([-1,1])*[self.isolation_window['isolation window lower offset'],self.isolation_window['isolation window upper offset']]
         self.TIC = scan["total ion current"]
 
+    def closest_peak(self, target_mz):
+        """
+        Find the index and m/z of the peak closest to the target m/z.
+        Assumes self.mz is sorted.
+
+        Parameters
+        ----------
+        target_mz : float
+            The m/z value to match.
+
+        Returns
+        -------
+        closest_idx : int
+            Index of the closest peak in self.mz
+        closest_mz : float
+            m/z value of the closest peak
+        intensity : float
+            Intensity of the closest peak
+        """
+        mz_array = self.mz
+        idx = np.searchsorted(mz_array, target_mz)
+
+        if idx == 0:
+            closest_idx = 0
+        elif idx >= len(mz_array):
+            closest_idx = len(mz_array) - 1
+        else:
+            before = mz_array[idx - 1]
+            after = mz_array[idx]
+            if abs(target_mz - before) <= abs(target_mz - after):
+                closest_idx = idx - 1
+            else:
+                closest_idx = idx
+
+        return closest_idx, mz_array[closest_idx], self.intens[closest_idx]
+
     def peak_list(self):
         return(np.array([self.mz,self.intens]))
 
