@@ -610,6 +610,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
 def log_df(df):
     filenames = df.iloc[:, 0].unique()
+    filenames = [fn.rstrip("0123456789") for fn in filenames]
+    filenames = list(set(filenames))
     for fn in filenames:
         logger.info(f"File: {fn}")
 
