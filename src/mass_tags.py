@@ -185,7 +185,7 @@ def get_tag_pos(AA_seq,rules):
             tag_pos = [0]
             
         else:
-            from run_jmod_from_GUI import send_raise_to_TK
+            from src.utils.gui_utils import send_raise_to_TK
             send_raise_to_TK("ValueError - Unknown Tag Rule")
             raise(ValueError("Unknown Tag Rule"))
         all_tag_pos += tag_pos
@@ -271,7 +271,7 @@ def tag_library(library,tag=mTRAQ):
                 seq = split_peptide[-int(frag_idx):]
                 num_tags = num_tags_c[frag_idx-1]
             else:
-                from run_jmod_from_GUI import send_raise_to_TK
+                from src.utils.gui_utils import send_raise_to_TK
                 send_raise_to_TK("ValueError - Invalid Ion Type")
                 raise(ValueError("Invalid ion type"))
                     
@@ -331,6 +331,6 @@ if config.args.tag in available_tags:
 elif config.args.tag == "None":
     config.tag = None
 else:
-    from run_jmod_from_GUI import send_raise_to_TK
+    from src.utils.gui_utils import send_raise_to_TK
     send_raise_to_TK("Exception - Incompatible Tag")
     raise Exception("Incompatible Tag")

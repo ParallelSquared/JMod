@@ -53,6 +53,9 @@ else:
 RANDOM_SEED = 42
 
 ran_from_GUI = False
+error_already_handled = False
+GUI_result_queue = None
+
 
 mz_ppm = args.ppm
 mz_tol = mz_ppm*10**(-6)

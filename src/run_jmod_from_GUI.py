@@ -28,6 +28,11 @@ import logging
 import threading
 import tempfile
 import platform
+import multiprocessing
+import queue
+from logging.handlers import QueueHandler
+
+
 
 
 
@@ -50,6 +55,9 @@ def make_GUI():
             #style.configure("Accent.TButton")
             #style.configure("Red.TButton", foreground="black", background="#cc0202")
 
+            self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+
             """
             Organization of GUI Code
 
@@ -67,6 +75,8 @@ def make_GUI():
             self.text_widget = tk.Text(self.logging_frame, height=52, width=100)
             self.text_widget.pack(fill="both", expand=True)
 
+
+            self.log_queue = multiprocessing.Queue()
             class TkinterHandler(logging.Handler):
                 def __init__(self, text_widget):
                     super().__init__()
@@ -80,13 +90,18 @@ def make_GUI():
                     self.text_widget.insert(tk.END, msg + "\n")
                     self.text_widget.see(tk.END)
 
-            tk_handler = TkinterHandler(self.text_widget)
-            tk_handler.setFormatter(ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s"))
-            tk_handler.setLevel(logging.INFO)
+            self.tk_handler = TkinterHandler(self.text_widget)
+            self.tk_formatter = ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s")
+            self.tk_handler.setFormatter(self.tk_formatter)
+            self.tk_handler.setLevel(logging.INFO)
 
-            logger.addHandler(tk_handler)
+            self.queue_listener = logging.handlers.QueueListener(self.log_queue, self.tk_handler)
+            self.queue_listener.start()
 
-            logger.info("GUI logger started.\n")
+            gui_logger = logging.getLogger("GUI")
+            gui_logger.setLevel(logging.INFO)
+            gui_logger.addHandler(self.tk_handler)
+            gui_logger.info("GUI logger started.\n")
 
 
             #######     input frame      #######
@@ -332,6 +347,10 @@ def make_GUI():
             # Run button
             self.run_button = ttk.Button(self.output_frame, text="Run JMod", style="Accent.TButton", width=20, command=self.run_process)
             self.run_button.grid(row=1, column=2, padx=10, pady=10)
+
+            #Stop button
+            self.stop_button = ttk.Button(self.output_frame, text="Stop", command=self.end_main)
+            self.stop_button.grid(row=1, column=6, padx=10, pady=10)
 
 
         ####         Logging Funcs      #######
@@ -952,13 +971,19 @@ def make_GUI():
             if folder_selected:
                 self.output_folder_var.set(folder_selected)
 
-        def check_thread(self, thread):
-            if thread.is_alive():
-                self.after(1_000, lambda: self.check_thread(thread))
+
+        def check_process(self, p):
+            try:
+                msg = self.result_queue.get_nowait()
+                if msg.split("_", 1)[0] == "errorGUI":
+                    tk.messagebox.showerror("Error", msg.split("_", 1)[1])
+            except queue.Empty:
+                pass 
+            if p.is_alive():
+                self.after(1_000, lambda: self.check_process(p))
             else:
                 self.run_button.config(state="normal")
-                if self.exited_properly is False:
-                    logger.error("Error running Jmod. Jmod exited")
+
 
         def run_process(self):
             if not self.mzml_and_lib_error_check():
@@ -978,22 +1003,44 @@ def make_GUI():
                 else:
                     logger.warning("Long Paths Enabled. Downstream processes may break")
                 
-            self.run_button.config(state="disabled")
-            self.exited_properly = False
-            t = threading.Thread(target=self.run_main, daemon=True)
-            t.start()
-            self.check_thread(t)
+            
 
-        def run_main(self):
+            tmp_filenames = self.prepare_to_run()
+            if tmp_filenames == []:
+                return
+
             for handler in logger.handlers:
                 if isinstance(handler.formatter, ElapsedFormatter):
                     handler.formatter.reset_start_time()
+            self.tk_formatter.reset_start_time()
 
+                    
+            self.result_queue = multiprocessing.Queue()
+            self.run_button.config(state="disabled")
+            self.proc = multiprocessing.Process(target=run_main_process, args=(tmp_filenames,self.result_queue, self.log_queue))
+            self.proc.start()
+            self.check_process(self.proc)
+
+        def on_close(self):
+            self.end_main(show_message=False)
+            self.destroy()
+
+        def end_main(self, show_message=True):
+            if show_message is True:
+                logging.getLogger("GUI").info("Process Manually Terminated.\n")
+            if hasattr(self, 'proc') and self.proc.is_alive():
+                self.proc.terminate()
+                self.proc.join()
+
+
+
+        def prepare_to_run(self):
+            tmp_filenames = []
             mzml_files = self.file_dropdown.files
             for i, mzml_path in enumerate(mzml_files, start=1):
                 config_args_dict = self.make_config_dict(mzml_path=mzml_path, run=True)
                 if config_args_dict is None:
-                    return 
+                    return []
                 try:
                     with tempfile.NamedTemporaryFile(mode='w', suffix=".json", delete=False) as tmp_file:
                         json.dump(config_args_dict, tmp_file)
@@ -1002,14 +1049,8 @@ def make_GUI():
                 except Exception as e:
                     tk.messagebox.showerror("JSON Error", f"Failed to write JSON file: {e}")
 
-                logger.info(f"\n\nRunning JMod: File {i} of {len(mzml_files)}\n")
-                from src.run_jmod import main
-                main(tmp_filename)
-                os.remove(tmp_filename)
-                logger.info(f"Finished File {i} of {len(mzml_files)}\n")
-            self.exited_properly = True
-            logger.info("JMod Finished")
-            self.run_button.config(state="normal")
+                tmp_filenames.append(tmp_filename)
+            return tmp_filenames
 
         def mzml_and_lib_error_check(self):
             mzml_files = self.file_dropdown.files
@@ -1156,18 +1197,38 @@ def make_GUI():
     app.mainloop()
 
 
+import sys
+def run_main_process(tmp_filenames, result_queue, log_queue):
+    """
+    Run JMod in a separate process.
+    This is a standalone function so it can be safely used with multiprocessing.
+    """
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # from src.run_jmod import main
+    from src.logger import logger
 
-def send_raise_to_TK(error_text):
-    import sys, importlib
-    if "src.config" in sys.modules:    ##was some weird issue with from . import config here. This seems to fix it and keep the file id the same
-        config = sys.modules["src.config"]
-    else:
-        config = importlib.import_module("src.config")
+    logger = logging.getLogger("appLogger")
+    # logger.handlers.clear()
 
-    logger.error(error_text)
-    logger.error("JMod Exited\n")
-    if config.ran_from_GUI is True:
-        tk.messagebox.showerror("Error", error_text)
+
+    qh = QueueHandler(log_queue)
+    logger.addHandler(qh)
+    logger.setLevel(logging.INFO)
+
+    for i, tmp_filename in enumerate(tmp_filenames, start=1):
+        logger.info(f"\n\nRunning JMod: File {i} of {len(tmp_filenames)}\n")
+        from src.run_jmod import main
+        main_result = main(tmp_filename, result_queue)
+        os.remove(tmp_filename)
+        if main_result == "handled_exit": #if handled exception
+            sys.exit(0)
+        if main_result == "failed":  #if unhandled exception
+            result_queue.put("errorGUI_Unkown Error running JMod. JMod exited")
+            logger.error("Unknown Error running JMod. JMod exited\n")
+            sys.exit(0)
+
+    logger.info("JMod Finished") #if no exceptions
+
 
 def center_on_parent(win, parent=None):
     win.update_idletasks()

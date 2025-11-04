@@ -352,7 +352,7 @@ class score_model():
                     return m
                 
         else:
-            from run_jmod_from_GUI import send_raise_to_TK
+            from src.utils.gui_utils import send_raise_to_TK
             send_raise_to_TK("ValueError - Unsupported Model Type")
             raise ValueError("Unsupported model type")
         

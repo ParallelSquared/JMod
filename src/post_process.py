@@ -57,7 +57,7 @@ def run():
         if  params["TagName"] in available_tags:
             mass_tag = available_tags[params["TagName"]]
         else:
-            from run_jmod_from_GUI import send_raise_to_TK
+            from src.utils.gui_utils import send_raise_to_TK
             send_raise_to_TK("ValueError - Unknown Tag")
             raise ValueError("Unknown Tag")
         config.tag = mass_tag

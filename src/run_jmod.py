@@ -26,11 +26,11 @@ from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
 
-from src.logger import logger, set_log_filepath
+from src.logger import logger, set_log_filepath, log_exceptions
 import logging
 
-
-def main(GUI_config_json = None):
+@log_exceptions
+def main(GUI_config_json=None, GUI_result_queue=None):
     """Main function to run JMod analysis."""
 
     # Check if a single argument is provided and it's a JSON file
@@ -40,6 +40,8 @@ def main(GUI_config_json = None):
 
     if GUI_config_json:
         config.ran_from_GUI = True
+        config.error_already_handled = False
+        config.GUI_result_queue = GUI_result_queue
         config.args.config_json = GUI_config_json
 
     # Load JSON configuration if specified
@@ -112,7 +114,7 @@ def main(GUI_config_json = None):
         try:
             os.mkdir(results_folder_path)
         except:
-            from run_jmod_from_GUI import send_raise_to_TK
+            from src.utils.gui_utils import send_raise_to_TK
             send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
             raise ValueError("Path Length Limit Exceeded")
         
@@ -123,7 +125,7 @@ def main(GUI_config_json = None):
                 f.write("test")
             os.remove(test_path)
         except:
-            from run_jmod_from_GUI import send_raise_to_TK
+            from src.utils.gui_utils import send_raise_to_TK
             send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
             raise ValueError("Path Length Limit Exceeded")
 
@@ -150,7 +152,7 @@ def main(GUI_config_json = None):
             logger.warning("Failed to load JSON configuration. Using command-line arguments.")
     if GUI_config_json:
         config.args.config_json = GUI_config_json
-        logger.info(f"Loading configuration from {config.args.config_json}")
+        logger.info(f"Loading configuration from GUI")
     if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
         logger.info("Running JMod in test mode...")
 
@@ -228,7 +230,7 @@ def main(GUI_config_json = None):
             mass_tag = config.tag
         else:
             if config.args.tag != "None":
-                from run_jmod_from_GUI import send_raise_to_TK
+                from src.utils.gui_utils import send_raise_to_TK
                 send_raise_to_TK(f"Error: Tag '{config.args.tag}' not found in available_tags.")
                 logger.error(f"Available tags: {list(available_tags.keys())}")
                 raise ValueError("Tag Not Found")
