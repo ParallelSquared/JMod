@@ -293,6 +293,7 @@ def loadSpecLib(lib_file):
     return spec_lib
 
 
+# TODO add a test for this, make sure decoys are being generated correctly
 def create_decoy_lib(library,rules):
     ## keep keys the same but change seq, mz and frags
     for key in library:

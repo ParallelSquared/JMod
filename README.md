@@ -41,8 +41,17 @@ In a dedicated terminal, type:
 
 If run successfully, the inputted configurations alongside `"Loading library..."` should be printed.
 
+To set up a UV environment to run JMod in, please first install UV with either ```pip install uv``` or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed.  
+
+In a dedicated terminal in the JMod source directory (that contains the pyproject.toml), type:
+1. ```uv sync --python 3.11``` (note: this will download the correct python version if it is not already on your system)
+2. ```source .venv/bin/activate```
+3. ```python run_jmod.py <args>```
+
 #### Windows
 If on a Windows machine, please use the `data/jmod_env_windows.yml` file to set up your environment. Set up will follow the same steps as Linux/MacOS.
+
+If on a Windows machine, replace Step 2. with ```.venv/bin/activate``` to enter the virtual environment.
 
 
 ### Outputs

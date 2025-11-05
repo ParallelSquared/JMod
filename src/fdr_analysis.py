@@ -253,7 +253,7 @@ class score_model():
             ### Random Forest
             def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=1, random_state=config.RANDOM_SEED)
+                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=-1, random_state=config.RANDOM_SEED)
                     m.model.fit(X,y,sample_weight=sample_weight)
                     m.__predict_fn__ = m.model.predict_proba
 

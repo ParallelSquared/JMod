@@ -328,9 +328,9 @@ def closest_ms1spec(ms2rt,ms1rt):
     Parameters
     ----------
     ms2rt : float
-        Single rt from ms2 spectrum in question.
+        Single rt from MS2 spectrum in question.
     ms1rt : float
-        numpy array of RTs for all MS2 spectra.
+        numpy array of RTs for all MS1 spectra.
 
     Returns
     -------
