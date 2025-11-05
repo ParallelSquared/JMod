@@ -69,7 +69,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
     rust_specs = []
     # TODO this should probably be done in chunks
     for spec in tqdm(dia_spectra.ms2scans):
-        rust_specs += [spec.to_rust_spectrum()] #TODO could be construcitng spectra precursors wrong, check masses of results
+        rust_specs += [spec.to_rust_spectrum()]
 
     #rust_specs = rust_specs[15000:16000]
 
@@ -90,6 +90,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
     # rows = [feat.to_dict() for group in hits for feat in group]
     rows = []
 
+    # TODO clean up results
     for group in hits:
         for feat in group:
             d = feat.to_dict()
@@ -105,17 +106,16 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
 
             d["closest_peak_mz_ms1"] = closest_mz
             d["closest_peak_intensity_ms1"] = intensity
-            ppm_error = (d["closest_peak_mz_MS1"] - d["theoretical_mz"]) / d["theoretical_mz"] * 1000000
+            ppm_error = (d["closest_peak_mz_ms1"] - d["theoretical_mz"]) / d["theoretical_mz"] * 1000000
             d["ppm_error_ms1"] = ppm_error
 
             rows.append(d)
 
     df = pd.DataFrame(rows)
 
-    df.to_csv("all_matches_best.tsv", sep="\t", index=False)
+    df[]
 
-    sys.exit(0)
-
+    return df
 
 
 def compare_ms1_mappings(spectrum_file):

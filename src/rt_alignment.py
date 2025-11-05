@@ -565,84 +565,6 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
     return fit_outputs, top_n_spectra, large_feature_indices, lf_mz
 
 
-def fit_with_features(dia_spectra, library_spectra):
-    all_keys = list(library_spectra)
-    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in library_spectra.values()])
-
-    all_dia_rt = [i.RT for i in dia_spectra.ms2scans]
-    all_dia_windows = np.array([i.ms1window for i in dia_spectra.ms2scans])
-    lowest_mz = np.min(all_dia_windows, 0)[0]  # assume window span is constant over time
-    largest_mz = np.max(all_dia_windows, 0)[1]
-    mz_bins = np.linspace(lowest_mz, largest_mz, 6)
-
-    fit_outputs = []
-    frags = []
-
-    pep_seqs = [v['seq'] for v in library_spectra.values()] #TODO implement modifications
-
-    import peppy_sage as ps
-    peps = [ps.Peptide(seq) for seq in pep_seqs] #TODO implement modifications
-
-    # Create indexed database
-    db = ps.IndexedDatabase.from_peptides( # TODO pass parameters as parameters
-        peptides=peps,
-        bucket_size=128,
-        ion_kinds=["b", "y"],
-        min_ion_index=0,
-        generate_decoys=True,
-        decoy_tag="rev_",
-        peptide_min_mass=0.0,
-        peptide_max_mass=5000.0,
-    )
-
-    # Create scorer
-    scorer = ps.Scorer(
-        precursor_tol_da=(-1,1), # TODO placeholder
-        fragment_tol_ppm=(-10,10),
-        wide_window=True,
-        chimera=False,
-        annotate_matches=True,
-        report_psms=2
-    )
-
-    # Process ids
-    hits = []
-    rust_specs = []
-    from tqdm.auto import tqdm
-    for i, spec in enumerate(tqdm(dia_spectra.ms2scans)):
-        rust_specs += [spec.to_rust_spectrum()]
-
-    chunk_size = 1000
-    hits = []
-    for i in tqdm(range(0, len(rust_specs), chunk_size)):
-        chunk = rust_specs[i:i + chunk_size]
-        batch_hits = scorer.score_many(db, chunk)
-        hits.extend(batch_hits)
-
-        """
-        fit_output = fit_to_lib(dia_spectra.ms2scans[int(lf_spectra[idx])],
-                                library=librarySpectra,
-                                rt_mz=rt_mz,
-                                all_keys=all_keys,
-                                dino_features=None,
-                                rt_filter=False,
-                                ms1_mz=lf_mz[idx],
-                                ms1_spectra=dia_spectra.ms1scans,
-                                frac_matched=.8,  ## NB: this may be selcting for smaller peptides
-                                ms1_tol=config.ms1_tol
-                                )
-        fit_outputs.append(fit_output)
-    """
-
-    for prelim_hits in hits[16000:17000]:
-        for rank_k in prelim_hits:
-            print(rank_k)
-            print(rank_k.fragments.to_dict())
-        print("****")
-
-    sys.exit(0)
-
-
 def process_prelim_search(fit_outputs,
                           librarySpectra,
                           top_n_spectra,
@@ -1102,20 +1024,23 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
 
     import preliminary_search
-    preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag)
+    fit_outputs = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag)
 
+
+    """
     if dino_features is None:
         fit_outputs = fit_without_features(dia_spectra, librarySpectra)
 
     else:
-        #fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
-        fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra)
-        
+        fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
+        #fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra)
+    """
     
     #################################################################################
     
     ########################################################################
-     
+
+    """
     output_df, all_output_df, id_keys, feature_mzs =  process_prelim_search(fit_outputs,
                                                                               librarySpectra,
                                                                               top_n_spectra,
@@ -1127,9 +1052,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
     if results_folder is not None:
         output_df.to_csv(results_folder+"/firstSearch.csv", index=False)
+    """
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
     
-    
+    """
     cor_filter = np.ones_like(output_df.rt,dtype=bool)
     if dino_features is not None:
         
@@ -1141,6 +1067,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         cor_filter = output_df.hyperscore>hyper_cutoff
         # emp_rt_spl = initstepfit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter],1,z=np.array(all_output_df.hyperscore)[all_cor_filter])
         emp_rt_spl = lowess_fit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter])
+    """
+
+    hits_for_calibration = fit_outputs[]
+
+    emp_rt_spl = lowess_fit()
         
     
     
