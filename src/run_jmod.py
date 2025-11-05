@@ -106,7 +106,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
 
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    # results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_timeplex_051425_01"
+
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
 
