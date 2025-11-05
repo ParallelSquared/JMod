@@ -35,8 +35,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
     # Add all of the other supported modifications
     mod_dict.update(diann_mods)
 
-    print(mod_dict)
-
     # Convert to rust-compatible peptide objects
     pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
     rust_peps = [ps.Peptide(seq, peptide_to_mod_array(mod_seq, mod_dict)) for seq, mod_seq in pep_seqs]
@@ -71,7 +69,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
     rust_specs = []
     # TODO this should probably be done in chunks
     for spec in tqdm(dia_spectra.ms2scans):
-        rust_specs += [spec.to_rust_spectrum()]
+        rust_specs += [spec.to_rust_spectrum()] #TODO could be construcitng spectra precursors wrong, check masses of results
 
     #rust_specs = rust_specs[15000:16000]
 
@@ -89,82 +87,35 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
         hits.extend(batch_hits)
 
     # Flatten hits and convert to dict
-    #rows = [feat.to_dict() for group in hits for feat in group]
-
-    ppm_errors = []
-    errors = []
+    # rows = [feat.to_dict() for group in hits for feat in group]
+    rows = []
 
     for group in hits:
         for feat in group:
-            d = feat.to_dict()  # your existing dict
+            d = feat.to_dict()
 
-            # Compute theoretical m/z if peptide exists
-            pep = ps.Peptide.from_rust(feat.peptide)
+            # Compute theoretical m/z
             theo_mz = ps.Peptide.calculate_theoretical_mz(feat.sequence, feat.modifications, feat.charge)
             d["theoretical_mz"] = theo_mz
-            """
-            print("*********")
-            print(feat.sequence, feat.modifications, feat.charge)
-            print(d["theoretical_mz"], d["calcmass"], d["charge"])
-            print("***")
-            """
 
             # Get nearest MS1 scan from cached mapping
             ms1_scan = dia_spectra.get_nearest_ms1_for_scan(feat.spec_id)
 
-            # Find closest peak
             closest_idx, closest_mz, intensity = ms1_scan.closest_peak(theo_mz)
 
-            print("********")
-            print(ms1_scan.peak_list())
-            print(theo_mz, closest_mz)
+            d["closest_peak_mz_ms1"] = closest_mz
+            d["closest_peak_intensity_ms1"] = intensity
+            ppm_error = (d["closest_peak_mz_MS1"] - d["theoretical_mz"]) / d["theoretical_mz"] * 1000000
+            d["ppm_error_ms1"] = ppm_error
 
-
-
-            """
-            d["closest_peak_mz"] = closest_mz
-            d["closest_peak_intensity"] = intensity
-            ppm_error = (d["closest_peak_mz"] - d["theoretical_mz"]) / d["theoretical_mz"] * 1e6
-            ppm_errors.append(ppm_error)
-            print("ppm_error", ppm_error)
-            error = (d["closest_peak_mz"] - d["theoretical_mz"])
-            errors.append(error)
-            print("error", (d["closest_peak_mz"] - d["theoretical_mz"]))
-
-            # Debug print — this is the key part
-            print("------------------------------------------------")
-            print(f"spec_id: {feat.spec_id}")
-            print(f"sequence: {feat.sequence}")
-            print(f"modifications: {feat.modifications}")
-            print(f"charge: {feat.charge}")
-            print(f"calcmass (from Rust feat): {d.get('calcmass')}")
-            print(f"theoretical_mz (Python calc): {theo_mz}")
-            print(f"closest_peak_mz (from MS1): {closest_mz}")
-            print(f"intensity: {intensity}")
-            print(f"mass_diff (Da): {closest_mz - theo_mz}")
-            print(f"ppm_error (calc): {(closest_mz - theo_mz) / theo_mz * 1e6}")  # correct factor
-            print("------------------------------------------------")
-
-            #print(d["closest_peak_mz"], d["theoretical_mz"], ((d["closest_peak_mz"] - d["theoretical_mz"]) / d["theoretical_mz"]) * 10e6)
-            """
-
-    # turn into a DataFrame (fragments stays as a nested dict column)
-    with open ("ppm_errors.tsv", "w") as fout:
-        fout.write('ppm_errors\n')
-        fout.write('\n'.join(map(str, ppm_errors)))
-    with open ("errors.tsv", "w") as fout:
-        fout.write('errors\n')
-        fout.write('\n'.join(map(str, errors)))
+            rows.append(d)
 
     df = pd.DataFrame(rows)
 
-    # TODO test this function
-
-    # save (pick your format)
-    #df.to_parquet("features.parquet", index=False)
-    df.to_csv("all_matches.tsv", index=False, sep='\t')
+    df.to_csv("all_matches_best.tsv", sep="\t", index=False)
 
     sys.exit(0)
+
 
 
 def compare_ms1_mappings(spectrum_file):
@@ -198,7 +149,7 @@ def plot_error_histograms(ppm_file="ppm_errors.tsv", error_file="errors.tsv", pp
     import matplotlib.pyplot as plt
 
     ppm_vals = pd.read_csv(ppm_file, sep="\t")["ppm_errors"].to_numpy(dtype=float)
-    err_vals = pd.read_csv(error_file, sep="\t")["ppm_errors"].to_numpy(dtype=float)
+    err_vals = pd.read_csv(error_file, sep="\t")["errors"].to_numpy(dtype=float)
 
     print(f"Loaded {len(ppm_vals)} PPM errors, {len(err_vals)} mass errors.")
 
