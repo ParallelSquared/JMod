@@ -961,7 +961,7 @@ def make_GUI():
             if filename:
                 try:
                     with open(filename, 'w') as json_file:
-                        json.dump(config_args_dict, json_file)
+                        json.dump(config_args_dict, json_file, indent=4)
                     tk.messagebox.showinfo("Configuration Saved", f"Configuration saved successfully to {filename}")
                 except Exception as e:
                     tk.messagebox.showerror("JSON Error", f"Failed to write JSON file: {e}")
