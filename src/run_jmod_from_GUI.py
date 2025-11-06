@@ -405,6 +405,9 @@ def make_GUI():
                     if key in default_dict.keys():
                         if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF"]: ##does not allow file input from JSON. plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects
                             continue
+                        if key == "speclib":
+                            if value is None or value == "":
+                                continue
                         if default_dict[key]['in_GUI'] is True:  ##if key is part of GUI
                             if default_dict[key]['widget'] == 'checkbutton':
                                 try:
