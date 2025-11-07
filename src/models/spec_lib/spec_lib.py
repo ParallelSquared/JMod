@@ -11,12 +11,12 @@ import sqlite3
 import struct
 import zlib
 import pickle
-from ...utils.misc_functions import  frag_to_peak
-from ...utils.parse_peptides import change_seq, convert_frags
+from src.utils.misc_functions import  frag_to_peak
+from src.utils.parse_peptides import change_seq, convert_frags
 import tqdm
 import copy
 import src.config as config
-from ...iso_functions import gen_isotopes_dict
+from src.iso_functions import gen_isotopes_dict
 from src.logger import logger
 
 
@@ -158,7 +158,7 @@ def load_tsv_speclib(spec_lib_file):
             elif "iRT" in row:
                 rt = row["iRT"]
             else:
-                from run_jmod_from_GUI import send_raise_to_TK
+                from src.utils.gui_utils import send_raise_to_TK
                 send_raise_to_TK("ValueError - Unknown Retention Time Column")
                 raise ValueError("Unknown retention time column")
             python_lib[unique_id]["iRT"] = None if rt=="" else float(rt)
@@ -293,6 +293,7 @@ def loadSpecLib(lib_file):
     return spec_lib
 
 
+# TODO add a test for this, make sure decoys are being generated correctly
 def create_decoy_lib(library,rules):
     ## keep keys the same but change seq, mz and frags
     for key in library:

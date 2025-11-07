@@ -20,10 +20,9 @@ load_model = tf.keras.models.load_model
 import statsmodels.api as sm
 import src.config as config
 from tensorflow import keras
-
 import os
-
 from src.logger import logger
+
 pd.options.display.max_columns = 1000
 
 
@@ -222,7 +221,7 @@ def train_models(models,train_data,results_folder=None):
             try:
                 model.save(results_folder+f'/iRT_updated_model{i}')
             except:
-                from run_jmod_from_GUI import send_raise_to_TK
+                from src.utils.gui_utils import send_raise_to_TK
                 send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
                 raise ValueError("Path Length Limit Exceeded")
     logger.info(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
@@ -255,8 +254,8 @@ def fine_tune_rt(grouped_df,
     
     
     if tag is None:
-        tag=config.tag
-    
+       tag=config.tag
+   
     if tag is None:
         model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_LF_09182024_")
         
@@ -268,10 +267,9 @@ def fine_tune_rt(grouped_df,
         
     elif "PSMtag" in tag.name:
         model_path = os.path.join(current_dir,"../RT_models","iRT_TransferLearning_Tag6_updated_05072025_")
-
         
     else:
-        from run_jmod_from_GUI import send_raise_to_TK
+        from src.utils.gui_utils import send_raise_to_TK
         send_raise_to_TK("ValueError - Unknown Label")
         raise ValueError("Unknown label")
         

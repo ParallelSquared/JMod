@@ -16,21 +16,21 @@ import sys
 import json
 import biosaur2
 
-from .utils.io import load_files
-from .utils.set_seeds import set_seeds
-from .models.spec_lib import spec_lib
-from .spectral_fitting import fit_to_lib2
-from .rt_alignment import MZRTfit, MZRTfit_timeplex
-from .utils.misc_functions import write_to_csv
+from src.utils.io import load_files
+from src.utils.set_seeds import set_seeds
+from src.models.spec_lib import spec_lib
+from src.spectral_fitting import fit_to_lib2, merge_spectrum_peaks
+from src.rt_alignment import MZRTfit, MZRTfit_timeplex
+from src.utils.misc_functions import write_to_csv
 from src import iso_functions as iso_f
-from .mass_tags import tag_library, available_tags
-from .fdr_analysis import process_data
+from src.mass_tags import tag_library, available_tags
+from src.fdr_analysis import process_data
 
-from src.logger import logger, set_log_filepath
+from src.logger import logger, set_log_filepath, log_exceptions
 import logging
 
-
-def main(GUI_config_json = None):
+@log_exceptions
+def main(GUI_config_json=None, GUI_result_queue=None):
     """Main function to run JMod analysis."""
 
     # Check if a single argument is provided and it's a JSON file
@@ -40,6 +40,8 @@ def main(GUI_config_json = None):
 
     if GUI_config_json:
         config.ran_from_GUI = True
+        config.error_already_handled = False
+        config.GUI_result_queue = GUI_result_queue
         config.args.config_json = GUI_config_json
 
     # Load JSON configuration if specified
@@ -104,7 +106,7 @@ def main(GUI_config_json = None):
     
 
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    # results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_timeplex_051425_01"
+
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
 
@@ -112,7 +114,7 @@ def main(GUI_config_json = None):
         try:
             os.mkdir(results_folder_path)
         except:
-            from run_jmod_from_GUI import send_raise_to_TK
+            from src.utils.gui_utils import send_raise_to_TK
             send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
             raise ValueError("Path Length Limit Exceeded")
         
@@ -123,7 +125,7 @@ def main(GUI_config_json = None):
                 f.write("test")
             os.remove(test_path)
         except:
-            from run_jmod_from_GUI import send_raise_to_TK
+            from src.utils.gui_utils import send_raise_to_TK
             send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
             raise ValueError("Path Length Limit Exceeded")
 
@@ -150,7 +152,7 @@ def main(GUI_config_json = None):
             logger.warning("Failed to load JSON configuration. Using command-line arguments.")
     if GUI_config_json:
         config.args.config_json = GUI_config_json
-        logger.info(f"Loading configuration from {config.args.config_json}")
+        logger.info(f"Loading configuration from GUI")
     if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
         logger.info("Running JMod in test mode...")
 
@@ -229,7 +231,7 @@ def main(GUI_config_json = None):
             mass_tag = config.tag
         else:
             if config.args.tag != "None":
-                from run_jmod_from_GUI import send_raise_to_TK
+                from src.utils.gui_utils import send_raise_to_TK
                 send_raise_to_TK(f"Error: Tag '{config.args.tag}' not found in available_tags.")
                 logger.error(f"Available tags: {list(available_tags.keys())}")
                 raise ValueError("Tag Not Found")
@@ -268,6 +270,18 @@ def main(GUI_config_json = None):
         rt_spl,mz_func = funcs[:2]
         # rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
+
+
+    ## Merge peaks in spectra
+    for spec in DIAspectra.ms1scans:
+        merge_spectrum_peaks(spec, config.opt_ms1_tol)
+
+    for spec in DIAspectra.ms2scans:
+        merge_spectrum_peaks(spec, config.mz_tol)
+
+    spectra_to_fit = DIAspectra.ms2scans
+    
+
 
 
     all_keys = list(spectrumLibrary)
@@ -345,6 +359,7 @@ def main(GUI_config_json = None):
                             rt_filter=True,
                             rt_tol = config.opt_rt_tol,
                             ms1_tol = config.opt_ms1_tol,
+                            mz_tol = config.mz_tol,
                             ms1_spectra=DIAspectra.ms1scans,
                             return_frags=False,
                             decoy=True,

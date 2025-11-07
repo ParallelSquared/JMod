@@ -21,17 +21,42 @@ def set_log_filepath(logfile_path):
     with open (logfile_path, "w"):
         pass
     logger = logging.getLogger("appLogger")
+
+    existing_formatters = [
+        h.formatter for h in logger.handlers
+        if isinstance(h.formatter, ElapsedFormatter)
+    ]
+    start_time = existing_formatters[0].start_time if existing_formatters else time.time()
+
     for h in logger.handlers[:]:
         if isinstance(h, logging.FileHandler):
             logger.removeHandler(h)
             h.close()
     file_handler = logging.FileHandler(logfile_path, mode="a")
     file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(
-        ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s")
-    )
+    fmt = ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s")
+    fmt.start_time = start_time
+    file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 
+import sys 
+import importlib
+def log_exceptions(func):
+    def wrapper(*args, **kwargs):
+        if "src.config" in sys.modules:   #this weird import somehow solved an error
+            config = sys.modules["src.config"]
+        else:
+            config = importlib.import_module("src.config")
+
+        try:
+            return func(*args, **kwargs)
+        except Exception:
+            if config.error_already_handled:
+                return "handled_exit"
+            else:
+                logging.getLogger("appLogger").error("Unhandled exception", exc_info=True)
+                return "failed"
+    return wrapper
 
 # load config
 config_file = os.path.join(os.path.dirname(__file__), "logging.conf")

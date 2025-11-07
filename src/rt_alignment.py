@@ -500,7 +500,10 @@ def fit_without_features(dia_spectra, librarySpectra):
                                     rt_filter=False,
                                     return_frags=False,
                                     ms1_spectra = dia_spectra.ms1scans,
-                                    frac_matched=.8
+                                    frac_matched=.8,
+                                    rt_tol = config.rt_tol,
+                                    ms1_tol = config.ms1_tol,
+                                    mz_tol = config.mz_tol,
                                     )
             fit_outputs.append(fit_output)
     
@@ -555,7 +558,9 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
                                     ms1_mz=lf_mz[idx],
                                     ms1_spectra = dia_spectra.ms1scans,
                                     frac_matched=.8,## NB: this may be selcting for smaller peptides
-                                    ms1_tol=config.ms1_tol
+                                    rt_tol = config.rt_tol,
+                                    ms1_tol = config.ms1_tol,
+                                    mz_tol = config.mz_tol
                                     )
         print(fit_output)
         fit_outputs.append(fit_output)
