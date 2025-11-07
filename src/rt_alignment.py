@@ -688,7 +688,7 @@ def empirical_fit(output_df,results_folder=None):
         cor_filter = np.logical_and.reduce(
                                             [output_df[feat]>np.percentile(output_df[feat],feature_percentile) for feat in ["hyperscore",
                                                                                                       "frag_cosines_p",
-                                                                                                      "frag_cosines_p",
+                                                                                                      "frag_cosines_p", #todo
                                                                                                       "manhattan_distances",
                                                                                                       ]]
                                             +
@@ -1024,7 +1024,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
 
     import preliminary_search
-    fit_outputs = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag)
+    output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag)
 
 
     """
@@ -1050,9 +1050,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                                                                               )
     
 
+    """
     if results_folder is not None:
         output_df.to_csv(results_folder+"/firstSearch.csv", index=False)
-    """
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
     
     """
@@ -1068,10 +1068,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         # emp_rt_spl = initstepfit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter],1,z=np.array(all_output_df.hyperscore)[all_cor_filter])
         emp_rt_spl = lowess_fit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter])
     """
-
-    hits_for_calibration = fit_outputs[]
-
-    emp_rt_spl = lowess_fit()
         
     
     

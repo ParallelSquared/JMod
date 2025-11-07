@@ -105,6 +105,10 @@ class Spectrum:
                               )
         return rs
 
+    @staticmethod
+    def extract_scannum(scanname):
+        return int(re.search("scan=(\d+)", scanname)[1])
+
     
 class SpectrumFile:
 

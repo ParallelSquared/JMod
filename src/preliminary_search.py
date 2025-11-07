@@ -7,6 +7,7 @@ import re
 from config import diann_mods
 from tqdm.auto import tqdm
 from src.logger import logger
+from utils.io.load_files import Spectrum
 
 """
 Output we need:
@@ -18,7 +19,16 @@ Output we need:
 
     e value? poisson okay?
 
-ignore fit to lib
+
+    column normalization
+        spec_id is a number
+        Ms1_spec_id is a number
+        seq has mods in it, renormalize
+        stripped_sg
+        z is charge
+        window_mz is window center?
+        rt is normal
+        lib_rt
 """
 
 
@@ -37,7 +47,13 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
 
     # Convert to rust-compatible peptide objects
     pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
-    rust_peps = [ps.Peptide(seq, peptide_to_mod_array(mod_seq, mod_dict)) for seq, mod_seq in pep_seqs]
+
+    rust_peps = []
+    observed_mods: set[str] = set() # Allows us to backtrack original mod names from Sage results
+
+    for seq, mod_seq in pep_seqs:
+        rust_peps.append(ps.Peptide(seq, peptide_to_mod_array(mod_seq, mod_dict)))
+        observed_mods.update(extract_mod_names(mod_seq))
 
     # Create indexed database
     db = ps.IndexedDatabase.from_peptides( # TODO pass parameters as parameters
@@ -52,22 +68,22 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
     )
 
     # Create scorer
-    # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are
+    # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are annotated as
     scorer = ps.Scorer(
-        precursor_tol_da=(-1,1), # TODO placeholder
-        fragment_tol_ppm=(-10,10),
-        min_isotope_err=0,
-        max_isotope_err=0,
-        wide_window=True,
-        chimera=False,
-        annotate_matches=True,
+        precursor_tol_da=(-1,1), # Unused in WWA -> defaults to window tol
+        fragment_tol_ppm=(-10,10), # TODO pass as parameter
+        min_isotope_err=0, # Changing these to look at other isotopes will require increasing report_PSMs due to
+        max_isotope_err=0, # degenerate matches
+        wide_window=True, # Uses window values instead of precursor masses
+        chimera=False, # False, do not iteratively remove peaks
+        annotate_matches=True, # Add fragment annotation
         report_psms=1
     )
 
     # Convert spectra into a Rust-friendly format
     logger.info("Converting spectra")
     rust_specs = []
-    # TODO this should probably be done in chunks
+    # TODO this should probably be done in chunks if it becomes a bottleneck
     for spec in tqdm(dia_spectra.ms2scans):
         rust_specs += [spec.to_rust_spectrum()]
 
@@ -101,6 +117,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
 
             # Get nearest MS1 scan from cached mapping
             ms1_scan = dia_spectra.get_nearest_ms1_for_scan(feat.spec_id)
+            d['Ms1_spec_id'] = ms1_scan.scan_num
 
             closest_idx, closest_mz, intensity = ms1_scan.closest_peak(theo_mz)
 
@@ -111,9 +128,72 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
 
             rows.append(d)
 
+    # Convert results to the downstream-compatible df
     df = pd.DataFrame(rows)
+    rev_map = {round(mod_dict[m], 4): m for m in observed_mods} # Allows us to lookup mods by mass despite float error
 
-    df[]
+    # Get RTs for alignment
+    lib_rts = {v['mod_seq'] : v['iRT'] for v in library_spectra.values()}
+
+    # Format for downstream
+    df = adapt_output_df(df, lib_rts, rev_map)
+
+    return df
+
+
+def adapt_output_df(df, lib_rts, rev_map):
+    """
+    column normalization
+        -spec_id is a number
+        -Ms1_spec_id is a number
+        -seq has mods in it, renormalize
+        -stripped_seq
+        -z is charge
+        window_mz is window center?
+        -rt is normal
+        lib_rt
+
+        Index(['file_id', 'spec_id', 'psm_id', 'rank', 'sequence', 'modifications',
+       'label', 'hyperscore', 'delta_mass', 'matched_peaks', 'peptide_len',
+       'expmass', 'calcmass', 'charge', 'rt', 'aligned_rt', 'predicted_rt',
+       'delta_rt_model', 'ims', 'predicted_ims', 'delta_ims_model',
+       'isotope_error', 'average_ppm', 'delta_next', 'delta_best', 'longest_b',
+       'longest_y', 'longest_y_pct', 'missed_cleavages',
+       'matched_intensity_pct', 'scored_candidates', 'poisson',
+       'discriminant_score', 'posterior_error', 'spectrum_q', 'peptide_q',
+       'protein_q', 'ms2_intensity', 'fragments', 'theoretical_mz',
+       'closest_peak_mz_ms1', 'closest_peak_intensity_ms1', 'ppm_error_ms1'],
+      dtype='object')
+    """
+
+    # Rename columns
+    change_columns_dict = {
+        'spec_id': 'spec_name',
+        'charge' : 'z',
+        'sequence' : 'stripped_seq'
+    }
+    df.rename(columns=change_columns_dict, inplace=True)
+
+    # Make matching spec_id column
+    df['spec_id'] = df['spec_name'].apply(lambda s: Spectrum.extract_scannum(s))
+
+    # Reconstruct modified peptide sequence string
+    def map_mod_list(masses, rev_map):
+        out = []
+        for m in masses:
+            if m != 0.0:
+                name = rev_map.get(round(m, 4))
+                if name is not None:
+                    out.append(name)
+            else:
+                out.append("")
+        return out
+
+    df["modification_names"] = df["modifications"].apply(lambda lst: map_mod_list(lst, rev_map))
+    df["seq"] = df.apply(lambda r: mod_array_to_peptide(r["stripped_seq"], r["modification_names"]), axis=1)
+
+    # Grab library rts based on reconstructed seq
+    df["lib_rt"] = df["seq"].map(lib_rts)
 
     return df
 
@@ -233,11 +313,37 @@ def peptide_to_mod_array(peptide_str, mod_dict):
 
     return mod_array.tolist() #TODO will a numpy array work for performance reasons?
 
+def mod_array_to_peptide(peptide_str, mod_array):
+    """
+    Convert peptide and mod array to peptide string.
+    """
+
+    pep_len = len(peptide_str)
+    mod_pep = peptide_str
+
+    for i in range(len(mod_array) - 1, -1, -1):
+        mod = mod_array[i]
+        if mod != "":
+            if i == pep_len + 1 or i == pep_len:
+                mod_pep = mod_pep[:pep_len] + f"({mod})" + mod_pep[pep_len:]
+            elif i < pep_len and i > 0:
+                mod_pep = mod_pep[:i] + f"({mod})" + mod_pep[i:]
+            elif i == 0:
+                mod_pep = mod_pep[:1] + f"({mod})" + mod_pep[1:]
+
+    return mod_pep
+
+
+def extract_mod_names(mod_seq: str):
+    """
+    From a mod_seq like 'ACD(Phospho)EFG(ox)', return ['Phospho', 'ox'].
+    Duplicates removed automatically.
+    """
+    mod_pattern = re.compile(r'\(([^\)]+)\)')
+    return list(set(mod_pattern.findall(mod_seq)))
+
 
 if __name__ == '__main__':
-    plot_error_histograms(ppm_file="/Users/danielgeiszler/Documents/jmod_tests/fragment_ion_indexing/ppm_errors.tsv",
-                          error_file="/Users/danielgeiszler/Documents/jmod_tests/fragment_ion_indexing/errors.tsv")
-
     mod_dict = {"PSMtag_9plex-6": 6.02}
     peptide = "K(PSMtag_9plex-6)(PSMtag_9plex-6)VPQVSTPTLVEVSR"
     print(peptide_to_mod_array(peptide, mod_dict))
@@ -257,3 +363,32 @@ if __name__ == '__main__':
     mod_dict = diann_mods
     peptide = "K(UniMod:4)VPQVSTPTLVEVSR"
     print(peptide_to_mod_array(peptide, mod_dict))
+
+    mods = ["(UniMod:4)", "", "", "", "", "", "", "", "", ""]
+    peptide = "APTLVVEK"
+    print(mod_array_to_peptide(peptide, mods))
+
+    mods = ["(UniMod:4)", "(UniMod:4)", "", "", "", "", "", "", "", ""]
+    peptide = "APTLVVEK"
+    print(mod_array_to_peptide(peptide, mods))
+
+    mods = ["", "", "", "", "(UniMod:4)", "", "", "", "", ""]
+    peptide = "APTLVVEK"
+    print(mod_array_to_peptide(peptide, mods))
+
+    mods = ["(UniMod:4)", "", "", "", "", "", "", "", "", "(UniMod:4)"]
+    peptide = "APTLVVEK"
+    print(mod_array_to_peptide(peptide, mods))
+
+    mods = ["(UniMod:4)", "", "", "", "", "", "", "", "(UniMod:4)", "(UniMod:4)"]
+    peptide = "APTLVVEK"
+    print(mod_array_to_peptide(peptide, mods))
+
+    mods = ["(UniMod:4)", "", "", "", "", "(UniMod:4)", "", "", "(UniMod:4)", "(UniMod:4)"]
+    peptide = "APTLVVEK"
+    print(mod_array_to_peptide(peptide, mods))
+
+    mods = ["", "", "UniMod:4", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]
+    peptide = "TCQLYPNAIASTLVHK"
+    print(mod_array_to_peptide(peptide, mods))
+
