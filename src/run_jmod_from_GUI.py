@@ -359,7 +359,7 @@ def make_GUI():
         #######     input funcs      #######
 
         def select_mzml(self):
-            files = filedialog.askopenfilenames(title="Select .mzML or .d Files", filetypes=[("Mass Spec Files", "*.mzML *.d")])
+            files = filedialog.askopenfilenames(title="Select .mzML Files", filetypes=[("Mass Spec Files", "*.mzML *.d")])
             if files:
                 for file in files:
                     if file not in self.file_dropdown.files:
