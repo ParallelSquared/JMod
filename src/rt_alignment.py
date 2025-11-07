@@ -681,10 +681,10 @@ def empirical_fit(output_df,results_folder=None):
     logger.info("Filtering IDs from initial search")
     for feature_percentile in  range(20,80,5):
     
-    ## empirically derived cutoffs
+        ## empirically derived cutoffs
         
     
-                                
+        """                            
         cor_filter = np.logical_and.reduce(
                                             [output_df[feat]>np.percentile(output_df[feat],feature_percentile) for feat in ["hyperscore",
                                                                                                       "frag_cosines_p",
@@ -696,8 +696,12 @@ def empirical_fit(output_df,results_folder=None):
                                                                                                               "scribe_scores",
                                                                                                               "gof_stats",
                                                                                                               "max_matched_residuals",
-                                                                                                              "med_frag_error"]]
+                                                                                                           "med_frag_error"]]
                                                                                                             )
+        """
+        poisson = output_df["poisson"].to_numpy()
+        thr = np.percentile(poisson[~np.isnan(poisson)], 100 - feature_percentile)
+        cor_filter = poisson < thr
         
         
         f = lowess_fit(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.1)
@@ -1024,8 +1028,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
 
     import preliminary_search
-    output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag)
-
+    output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10)
+    id_keys = list(zip(output_df["seq"], output_df["z"]))
 
     """
     if dino_features is None:
@@ -1051,12 +1055,13 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
 
     """
+
+
     if results_folder is not None:
         output_df.to_csv(results_folder+"/firstSearch.csv", index=False)
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
-    
-    """
-    cor_filter = np.ones_like(output_df.rt,dtype=bool)
+
+    cor_filter = np.ones_like(output_df.rt,dtype=bool) #TODO what is this doing?
     if dino_features is not None:
         
         cor_filter, emp_rt_spl = empirical_fit(output_df,results_folder=results_folder)
@@ -1067,7 +1072,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         cor_filter = output_df.hyperscore>hyper_cutoff
         # emp_rt_spl = initstepfit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter],1,z=np.array(all_output_df.hyperscore)[all_cor_filter])
         emp_rt_spl = lowess_fit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter])
-    """
         
     
     
@@ -1175,12 +1179,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     ################################################
     
     
-    
+    """
     if dino_features is None:
         resp_ms1scans = [closest_ms1spec(output_df.rt[i], ms1_rt) for i in range(len(output_df.rt))]
         diffs = [closest_peak_diff(mz, ms1spectra[i].mz) for i,mz in zip(resp_ms1scans,output_df.mz)]
     else:
         diffs = np.array([(i-mz)/mz for i,mz in zip(feature_mzs,output_df.mz)])
+    """
+    diffs = output_df["relative_error_ms1"].to_numpy()
     
 
     

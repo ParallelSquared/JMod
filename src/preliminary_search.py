@@ -32,7 +32,7 @@ Output we need:
 """
 
 
-def fit_with_features(dia_spectra, library_spectra, mass_tag):
+def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10):
 
     # Construct modification dict to convert names to masses
     # Start with mass tag
@@ -60,8 +60,8 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
         peptides=rust_peps,
         bucket_size=128,
         ion_kinds=["b", "y"],
-        min_ion_index=0,
-        generate_decoys=True,
+        min_ion_index=1,
+        generate_decoys=False,
         decoy_tag="rev_",
         peptide_min_mass=0.0,
         peptide_max_mass=5000.0,
@@ -71,13 +71,13 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
     # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are annotated as
     scorer = ps.Scorer(
         precursor_tol_da=(-1,1), # Unused in WWA -> defaults to window tol
-        fragment_tol_ppm=(-10,10), # TODO pass as parameter
+        fragment_tol_ppm=(-1*ms2_ppm_error,ms2_ppm_error), # TODO pass as parameter
         min_isotope_err=0, # Changing these to look at other isotopes will require increasing report_PSMs due to
         max_isotope_err=0, # degenerate matches
         wide_window=True, # Uses window values instead of precursor masses
         chimera=False, # False, do not iteratively remove peaks
         annotate_matches=True, # Add fragment annotation
-        report_psms=1
+        report_psms=5
     )
 
     # Convert spectra into a Rust-friendly format
@@ -123,8 +123,10 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
 
             d["closest_peak_mz_ms1"] = closest_mz
             d["closest_peak_intensity_ms1"] = intensity
+            relative_error = (d["closest_peak_mz_ms1"] - d["theoretical_mz"]) / d["theoretical_mz"]
             ppm_error = (d["closest_peak_mz_ms1"] - d["theoretical_mz"]) / d["theoretical_mz"] * 1000000
             d["ppm_error_ms1"] = ppm_error
+            d["relative_error_ms1"] = relative_error
 
             rows.append(d)
 
@@ -137,6 +139,25 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag):
 
     # Format for downstream
     df = adapt_output_df(df, lib_rts, rev_map)
+    print(len(df))
+    # Filter out large MS1 errors
+    df = df[df['ppm_error_ms1'].abs() < ms1_ppm_error]
+    print(len(df))
+
+    ##########
+    # This is a temporary solution to limit peptides to those inside the library
+    # Build valid (seq, charge) keys from the library once
+    valid_keys = {
+        (v["mod_seq"], v["prec_z"])
+        for v in library_spectra.values()
+    }
+
+    # Create tuple key per row and keep only those present in the library
+    df["__key"] = list(zip(df["seq"], df["z"].astype(int)))
+    mask = df["__key"].map(valid_keys.__contains__)
+
+    df = df[mask].drop(columns="__key")
+    ##########
 
     return df
 
@@ -151,7 +172,8 @@ def adapt_output_df(df, lib_rts, rev_map):
         -z is charge
         window_mz is window center?
         -rt is normal
-        lib_rt
+        -lib_rt
+        -mz is theoretical mz
 
         Index(['file_id', 'spec_id', 'psm_id', 'rank', 'sequence', 'modifications',
        'label', 'hyperscore', 'delta_mass', 'matched_peaks', 'peptide_len',
@@ -170,7 +192,8 @@ def adapt_output_df(df, lib_rts, rev_map):
     change_columns_dict = {
         'spec_id': 'spec_name',
         'charge' : 'z',
-        'sequence' : 'stripped_seq'
+        'sequence' : 'stripped_seq',
+        'theoretical_mz' : 'mz'
     }
     df.rename(columns=change_columns_dict, inplace=True)
 
