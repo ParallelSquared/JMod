@@ -151,7 +151,7 @@ def make_GUI():
             # MS1 ppm
             self.ms1_lab = ttk.Label(self.ms_frame, text="MS1 ppm:")
             self.ms1_lab.grid(row=0, column=0, padx=5, pady=5, sticky="e")
-            Hovertip(self.ms1_lab, "MS1 ppm error tolerance ")
+            Hovertip(self.ms1_lab, "User specified MS1 ppm error tolerance. If 0, optimized value will be calculated. ")
             self.ms1_ppm_entry = ttk.Entry(self.ms_frame, width=4)
             self.ms1_ppm_entry.insert(0, "0.0")
             self.ms1_ppm_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
@@ -177,9 +177,9 @@ def make_GUI():
             self.min_frag_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
 
             # Empirical RT (label + checkbox)
-            self.empirical_rt_lab = ttk.Label(self.ms_frame, text="Force lib RT:")
+            self.empirical_rt_lab = ttk.Label(self.ms_frame, text="Use Lib RT:")
             self.empirical_rt_lab.grid(row=2, column=5, padx=20, pady=5, sticky="e")
-            Hovertip(self.empirical_rt_lab, "Force use of library retention time for alignment ")
+            Hovertip(self.empirical_rt_lab, "Don't attempt fine-tuning and use library retention time for search ")
             self.empirical_rt_var = tk.BooleanVar(value=False)
             default_dict["use_emp_rt"]["tk_handle"] = self.empirical_rt_var
             self.empirical_rt_cb = ttk.Checkbutton(self.ms_frame, variable=self.empirical_rt_var)
@@ -188,25 +188,25 @@ def make_GUI():
             # Min Lib Intensity (label + entry)
             self.min_lib_int_lab = ttk.Label(self.ms_frame, text="Min Lib Match:")
             self.min_lib_int_lab.grid(row=1, column=2, padx=20, pady=5, sticky="e")
-            Hovertip(self.min_lib_int_lab, "Minimum fraction library intensity matched")
+            Hovertip(self.min_lib_int_lab, "Minimum fraction of library intensity that must be matched ")
             self.min_lib_int_entry = ttk.Entry(self.ms_frame, width=6)
             self.min_lib_int_entry.grid(row=1, column=3, padx=5, pady=5, sticky="w")
             default_dict["lib_frac"]["tk_handle"] = self.min_lib_int_entry
             self.min_lib_int_entry.insert(0, "0.5")
 
-            self.min_lib_int_score_lab = ttk.Label(self.ms_frame, text="Lib Match Score:")
-            self.min_lib_int_score_lab.grid(row=2, column=2, padx=20, pady=5, sticky="e")
-            Hovertip(self.min_lib_int_score_lab, "Minimum fraction library intensity matched to score")
-            self.min_lib_int_score_entry = ttk.Entry(self.ms_frame, width=6)
-            self.min_lib_int_score_entry.grid(row=2, column=3, padx=5, pady=5, sticky="w")
-            default_dict["score_lib_frac"]["tk_handle"] = self.min_lib_int_score_entry
-            self.min_lib_int_score_entry.insert(0, "0.5")
+            # self.min_lib_int_score_lab = ttk.Label(self.ms_frame, text="Lib Match Score:")
+            # self.min_lib_int_score_lab.grid(row=2, column=2, padx=20, pady=5, sticky="e")
+            # Hovertip(self.min_lib_int_score_lab, "Minimum fraction library intensity matched to score")
+            # self.min_lib_int_score_entry = ttk.Entry(self.ms_frame, width=6)
+            # self.min_lib_int_score_entry.grid(row=2, column=3, padx=5, pady=5, sticky="w")
+            # default_dict["score_lib_frac"]["tk_handle"] = self.min_lib_int_score_entry
+            # self.min_lib_int_score_entry.insert(0, "0.5")
 
 
             # RT Tolerance (label + checkbox + entry)
             self.rt_tolerance_lab = ttk.Label(self.ms_frame, text="RT Tolerance:")
             self.rt_tolerance_lab.grid(row=0, column=5, padx=20, pady=5, sticky="e")
-            Hovertip(self.rt_tolerance_lab, "Force use of specified retention time tolerance for alignment ")
+            Hovertip(self.rt_tolerance_lab, "User specified retention time tolerance for alignment. If unselected, optimized value will be calculated. ")
             self.rt_tolerance_var = tk.BooleanVar(value=False)
             default_dict["user_rt_tol"]["tk_handle"] = self.rt_tolerance_var
             self.rt_tolerance_cb = ttk.Checkbutton(self.ms_frame, variable=self.rt_tolerance_var)
@@ -219,7 +219,7 @@ def make_GUI():
             # Isotopes (label + checkbox + combobox)
             self.isotopes_lab = ttk.Label(self.ms_frame, text="MS2 Isotopes:")
             self.isotopes_lab.grid(row=1, column=5, padx=20, pady=5, sticky="e")
-            Hovertip(self.isotopes_lab, "Select if and the number of MS2 isotopes used in search ")
+            Hovertip(self.isotopes_lab, "Select the number of MS2 isotopes (if any) to be used in the search ")
             self.isotopes_var = tk.BooleanVar(value=False)
             default_dict["iso"]["tk_handle"] = self.isotopes_var
             self.isotopes_cb = ttk.Checkbutton(self.ms_frame, variable=self.isotopes_var)
