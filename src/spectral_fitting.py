@@ -596,11 +596,11 @@ def fit_to_lib2(dia_spec,
                 library,
                 rt_mz,
                 all_keys,
+                rt_tol,
+                ms1_tol,
+                mz_tol,
                 dino_features=None,rt_filter=False,ms1_mz=None,
                ms1_spectra = None,
-               rt_tol = config.rt_tol,
-               ms1_tol = config.ms1_tol,
-               mz_tol = config.mz_tol,
                return_frags = False,
                decoy=False,
                decoy_library=None):
@@ -1082,11 +1082,14 @@ def fit_to_lib2(dia_spec,
 
 
 # #@profile
-def fit_to_lib(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=False,ms1_mz=None,
+def fit_to_lib(dia_spec,library,rt_mz,all_keys,
+               rt_tol,
+               ms1_tol,
+               mz_tol,
+               dino_features=None,
+               rt_filter=False,
+               ms1_mz=None,
                ms1_spectra = None,
-               rt_tol = config.rt_tol,
-               ms1_tol = config.ms1_tol,
-               mz_tol = config.mz_tol,
                return_frags = False,
                frac_matched = 0.5):
     # spec_idx,dia_spec,library = inputs

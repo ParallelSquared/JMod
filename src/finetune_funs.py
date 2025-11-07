@@ -20,10 +20,9 @@ load_model = tf.keras.models.load_model
 import statsmodels.api as sm
 import src.config as config
 from tensorflow import keras
-
 import os
-
 from src.logger import logger
+
 pd.options.display.max_columns = 1000
 
 
@@ -255,8 +254,8 @@ def fine_tune_rt(grouped_df,
     
     
     if tag is None:
-        tag=config.tag
-    
+       tag=config.tag
+   
     if tag is None:
         model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_LF_09182024_")
         
@@ -268,7 +267,6 @@ def fine_tune_rt(grouped_df,
         
     elif "PSMtag" in tag.name:
         model_path = os.path.join(current_dir,"../RT_models","iRT_TransferLearning_Tag6_updated_05072025_")
-
         
     else:
         from src.utils.gui_utils import send_raise_to_TK
