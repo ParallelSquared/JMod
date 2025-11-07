@@ -358,6 +358,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                             rt_filter=True,
                             rt_tol = config.opt_rt_tol,
                             ms1_tol = config.opt_ms1_tol,
+                            mz_tol = config.mz_tol,
                             ms1_spectra=DIAspectra.ms1scans,
                             return_frags=False,
                             decoy=True,
