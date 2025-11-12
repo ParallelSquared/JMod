@@ -63,19 +63,14 @@ deps = [
   "pywin32; platform_system == 'Windows'",
 
   # TensorFlow per platform
-  # Windows x64 only (officially supported TF wheel)
-  "tensorflow-intel; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "tensorflow==2.15.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
+  "tensorflow-metal==1.2.*; platform_system == 'Darwin' and platform_machine == 'arm64'",
 
-  # Apple Silicon (arm64 macOS) → Apple TF + Metal plugin
-  "tensorflow-macos; platform_system == 'Darwin' and platform_machine == 'arm64'",
-  "tensorflow-metal; platform_system == 'Darwin' and platform_machine == 'arm64'",
+  # Important: keep TF-Keras (2.15) and block standalone Keras 3
+  "keras==2.15.*",
 
-  # Intel macOS → CPU TF fallback (no Metal)
-  "tensorflow; platform_system == 'Darwin' and platform_machine != 'arm64'",
-
-  # Linux → standard TF (CPU or NVIDIA GPU runtime if CUDA libs present)
-  "tensorflow; platform_system == 'Linux'",
-
+  "tensorflow==2.15.1; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "tensorflow==2.15.1; platform_system == 'Linux'",
 
   # Shared TF tooling
   "tensorboard",
