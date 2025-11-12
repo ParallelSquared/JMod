@@ -63,14 +63,18 @@ deps = [
   "pywin32; platform_system == 'Windows'",
 
   # TensorFlow per platform
+  # Mac
   "tensorflow==2.15.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
   "tensorflow-metal==1.2.*; platform_system == 'Darwin' and platform_machine == 'arm64'",
 
+  # Windows
+  "tensorflow-intel==2.15.1; sys_platform == 'win32' and platform_machine == 'AMD64'",
+
+  # Linux
+  "tensorflow==2.15.1; platform_system == 'Linux'",
+
   # Important: keep TF-Keras (2.15) and block standalone Keras 3
   "keras==2.15.*",
-
-  "tensorflow==2.15.1; sys_platform == 'win32' and platform_machine == 'AMD64'",
-  "tensorflow==2.15.1; platform_system == 'Linux'",
 
   # Shared TF tooling
   "tensorboard",
