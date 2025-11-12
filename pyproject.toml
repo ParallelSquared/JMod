@@ -24,6 +24,7 @@ deps = [
   "lxml",
   "regex",
   "tqdm",
+  "peppy_sage",
 
   # Visualization
   "matplotlib",

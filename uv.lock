@@ -34,6 +34,7 @@ deps = [
     { name = "numba" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "peppy-sage" },
     { name = "pillow" },
     { name = "plotly" },
     { name = "polars" },
@@ -1333,6 +1334,24 @@ wheels = [
 ]
 
 [[package]]
+name = "peppy-sage"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/f9/f3857c1fd8d1a31d83b3d2b36587b4332a90ad934ef7e6853cab9f1f27d4/peppy_sage-0.1.2.tar.gz", hash = "sha256:ea2cbc6cb654a6c9e0b5cbae3f933aedbf80a4d7c4bef164ef228d9edab2748d", size = 78217, upload-time = "2025-11-12T18:09:52.132Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/34/04a751810333e3882f0e65037d90647fb166d93e0008f4fd3724b59b3f9e/peppy_sage-0.1.2-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:ca1c03fbef74780f10e262a9ebec855d3e2a41795386eeb345e5ca854b5fab97", size = 456185, upload-time = "2025-11-12T18:09:51.11Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/73/518e1eb20e59fffa967d665b0fecc6e5f93f78b8c01524262f6dd53e9373/peppy_sage-0.1.2-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:cb1f8ebe911f943b311d7e18d3075e23d0e0b8c2151d75588273f621c1f7033c", size = 445125, upload-time = "2025-11-12T18:09:50.04Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/96/8cf96daeb8188f2a110fd39227d035eb1371a8d0d27da16f881b38fd2afe/peppy_sage-0.1.2-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:05ce97b9372e67aae474136aa4cd91308e9d9ea42a4073976efb9bdad75873c4", size = 505927, upload-time = "2025-11-12T18:09:21.927Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/5e/635c8ee2a7fbf1ebab72973b8e3947509ac24a97d9283870217ad97a18f4/peppy_sage-0.1.2-cp311-abi3-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:795cf72445b62f51423275ffeaded818eeb73c1343e32b1254093644112cb68a", size = 500131, upload-time = "2025-11-12T18:09:28.844Z" },
+    { url = "https://files.pythonhosted.org/packages/63/5a/64ff18c05399fdabf7ec9d4a94d4c3b4777518858259f993495cab8c8fbf/peppy_sage-0.1.2-cp311-abi3-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:94c216e6c9646c282c1bd296b4f44ea426254ddd01cf40f382417b6679875ba1", size = 544663, upload-time = "2025-11-12T18:09:47.627Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/e3/3f9d870012beb3f94e9cb2e1239534cb57126c466d0643845f98279d74a5/peppy_sage-0.1.2-cp311-abi3-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:08e9c3941afbc5f7a611c6ee76de8a5e9b7496e500b4836a6bdd0eaf107a689a", size = 634470, upload-time = "2025-11-12T18:09:34.338Z" },
+    { url = "https://files.pythonhosted.org/packages/98/b6/794a34061c3e28289f7bbb4af07e79582896b6eec32b4d44c1e7e6712ef1/peppy_sage-0.1.2-cp311-abi3-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:d2ff42b1ad0019f048ada8d85cf5c70ee0319f73cc19e033b97d164ef27e6128", size = 539757, upload-time = "2025-11-12T18:09:40.964Z" },
+    { url = "https://files.pythonhosted.org/packages/21/4d/2bd0137c08dc0717d1f8261bd8c74a78ebda3314c8553ec6146a627058fb/peppy_sage-0.1.2-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:54f70f648ddfe32b29872165176485f93ea02a13d781a3d0cc9029ff4e7126f0", size = 559090, upload-time = "2025-11-12T18:09:48.625Z" },
+    { url = "https://files.pythonhosted.org/packages/34/3d/203c4a5ac910eb72a031bdb2e518f8dbbf6d3a86270faa3c3d2c51e020ce/peppy_sage-0.1.2-cp311-abi3-win32.whl", hash = "sha256:fc82904140ef384da1ea8146f5327878ac871f2045481ab51fad97ca420d2cc7", size = 289887, upload-time = "2025-11-12T18:09:54.1Z" },
+    { url = "https://files.pythonhosted.org/packages/01/ab/d4990bf8144500d60a2c5b40422ea1de548bca28e1ea37af05192746406c/peppy_sage-0.1.2-cp311-abi3-win_amd64.whl", hash = "sha256:43acf3e1bf6fdcaf5967d115d6d1a809e79a901be6d2ede574b4a207df7c9b09", size = 323632, upload-time = "2025-11-12T18:09:53.129Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "12.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2381,7 +2400,7 @@ version = "2.16.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "tensorflow", version = "2.16.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
-    { name = "tensorflow-intel", marker = "sys_platform == 'win32'" },
+    { name = "tensorflow-intel", marker = "platform_machine != 'AMD64' and sys_platform == 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/05/c5/47dee312dde75b7f6c04af18287839cbede72418137ad9ed3c1965dad6ae/tensorflow_macos-2.16.2-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:13687ed18ad93757b9a8b9b5a55c434cbadb142a354888ea28581b5d278338b7", size = 2135, upload-time = "2024-06-28T19:12:30.774Z" },
@@ -2393,8 +2412,8 @@ name = "tensorflow-metal"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "six", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
-    { name = "wheel", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "six", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+    { name = "wheel", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/09/91b253511cd59b9964672567f36b412daf3c70f75fcb5e84468fafa939ac/tensorflow_metal-1.2.0-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:5fa7cee627031c14f45bd97ff0ef422cd6c3866199ff99cf29b94db6674ceb42", size = 1357400, upload-time = "2025-01-31T00:52:56.634Z" },
