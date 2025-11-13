@@ -17,9 +17,7 @@ import numpy as np
 
 from src.utils.parse_peptides import parse_peptide
 
-from . import config 
-
-from .utils.misc_functions import frag_to_peak
+from src.utils.misc_functions import frag_to_peak
 
 from src.logger import logger
 
