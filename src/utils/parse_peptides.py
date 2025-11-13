@@ -317,7 +317,7 @@ def change_seq(seq: str, rules: str) -> str:
     elif rules=="rev":
         new_split_seq = seq[:-1][::-1]+seq[-1:]
     else:
-        from run_jmod_from_GUI import send_raise_to_TK
+        from src.utils.gui_utils import send_raise_to_TK
         send_raise_to_TK("ValueError - Unavailable Rules Selected")
         raise ValueError("Unavailable rules selected")
     # elif rules==None:

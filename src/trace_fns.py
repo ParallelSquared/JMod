@@ -9,11 +9,11 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import numpy as np
 import re
 from scipy import stats
-from .utils.misc_functions import  closest_ms1spec,np_pearson_cor
-from .utils import misc_functions as mf
+from src.utils.misc_functions import  closest_ms1spec,np_pearson_cor
+from src.utils import misc_functions as mf
 import src.config as config 
 import tqdm
-import iso_functions as iso
+import src.iso_functions as iso
 import warnings
 from scipy.interpolate import interp1d
 from scipy import optimize
