@@ -5,9 +5,9 @@ import pandas as pd
 import re
 from tqdm.auto import tqdm
 
-from .config import diann_mods
-from .logger import logger
-from .utils.io.load_files import Spectrum
+from src.config import diann_mods
+from src.logger import logger
+from src.utils.io.load_files import Spectrum
 
 """
 Output we need:
