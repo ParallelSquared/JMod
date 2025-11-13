@@ -3,11 +3,11 @@ import numpy as np
 import peppy_sage as ps
 import pandas as pd
 import re
-
-from config import diann_mods
 from tqdm.auto import tqdm
-from src.logger import logger
-from utils.io.load_files import Spectrum
+
+from .config import diann_mods
+from .logger import logger
+from .utils.io.load_files import Spectrum
 
 """
 Output we need:
