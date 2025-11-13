@@ -1,7 +1,6 @@
 import pytest
 import numpy as np
 import sys, os
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from pyteomics import mass
 from pyteomics.auxiliary.structures import PyteomicsError
 

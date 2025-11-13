@@ -2,7 +2,6 @@ import pytest
 import numpy as np
 import sys, os
 os.environ['NUMBA_DISABLE_JIT'] = '1'
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from src.ms1_cor_channels import get_seqs_and_mzs, get_other_channels, minmax_spec_window, get_ms2_vals, build_ms2_interpolator, compute_isotopes, get_trace_int_numba, get_isotope_traces_vectorized, fit_channel_isotopes_numba, fill_scan_values, get_ms1_index_of_max, moving_average, get_ms1_peak, filter_all_scans, compute_ms1_ms2_cors, select_scans_to_search, fit_isotopes_and_score, ms1_cor_channels, get_matrix_to_fit_numba
 from src.mass_tags import massTag, read_json_to_massTag
 from src.utils.io.load_files import SpectrumFile, Spectrum
