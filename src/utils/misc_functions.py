@@ -11,6 +11,7 @@ import re
 from pyteomics import mass
 import src.config as config
 import pandas as pd 
+from src.utils.parse_peptides import split_frag_name
 from src.logger import logger
 def feature_list_rt(DinoDF,rt,rt_tol): 
     """
