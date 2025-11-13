@@ -106,7 +106,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
 
     results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
-    # results_folder_path = "/Users/nathanwamsley/Data/JMOD_TESTS/May2025/add_json_timeplex_051425_01"
+
     if config.args.output_folder is not None:
         results_folder_path = config.args.output_folder +"/" +results_folder_name
 
@@ -358,6 +358,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                             rt_filter=True,
                             rt_tol = config.opt_rt_tol,
                             ms1_tol = config.opt_ms1_tol,
+                            mz_tol = config.mz_tol,
                             ms1_spectra=DIAspectra.ms1scans,
                             return_frags=False,
                             decoy=True,
