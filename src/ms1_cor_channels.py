@@ -38,10 +38,19 @@ from src.logger import logger
 
 
 # @profile
-def ms1_cor_channels(all_spectra, filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag=None,timeplex=False):
+def ms1_cor_channels(all_spectra,
+                     filtered_decoy_coeffs,
+                     decoy_coeffs,
+                     mz_ppm,
+                     rt_tol,
+                     tag=None,
+                     timeplex=False,
+                     num_iso = None,
+                     num_iso_r = None,
+                     additional_scans = None
+                     ):
 
-    # config.tag=tag
-    # print(config.tag)
+    window_half_width = 10
 
     logger.info("Fitting tagged channels together")
     decoy_coeffs["untag_seq"] = [re.sub(rf"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
@@ -104,9 +113,6 @@ def ms1_cor_channels(all_spectra, filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_t
 
     all_ms1, all_coeff, all_iso, all_group_pearson, all_trace, all_fitted, all_group_keys, all_scans_len = ([] for _ in range(8))
 
-    num_iso = config.num_iso_ms1
-    num_iso_r = config.num_iso_r
-    window_half_width = 10
 
     ms1_spec_dict = {k: {"fdc_idx": [], "peak_mz": [], "rel_iso_int": [], "monoiso_groups": [], "MS1_spectra": None} for k in ms1_spec_idxs}
     dummy_idx_list = list(filtered_decoy_coeffs.index)
@@ -137,7 +143,7 @@ def ms1_cor_channels(all_spectra, filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_t
             ## use monoiso ms1 prec mz to find the elution ms1 peak
             ms1_index_of_max = get_ms1_index_of_max(ms2_vals, top_ms1_spec_idx, highest_ranked_spec)
                 
-            ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), moving_average(list(all_ms1_vals.values())), ms1_index_of_max)
+            ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), moving_average(list(all_ms1_vals.values())), ms1_index_of_max, additional_scans)
             
             ## redefine all_scans to keep only thoe from the above peak
             channel_scans, all_ms1_vals, all_iso_vals, all_ms2_vals = filter_all_scans(all_scans, ms1_peak_edge_idxs, all_ms1_vals, all_iso_vals, all_ms2_vals)
@@ -154,7 +160,7 @@ def ms1_cor_channels(all_spectra, filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_t
             
         ### need to reduce the number of spectra we fit to
         ### fit to those from each channel
-        scans_to_search = reduce_search_space(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width)
+        scans_to_search = select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width)
 
         group_pred, group_obs_peaks, group_matrices, group_fit_cor = ([] for _ in range(4))
 
@@ -201,58 +207,6 @@ def ms1_cor_channels(all_spectra, filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_t
     #                                     "spectra_sparse_matrix": spectra_sparse_matrix
     #                                     }
         
-    # global nanmeans, var_ints
-
-    # log10var = np.log10(var_ints)
-    # log10mean = np.log10(nanmeans)
-    # model = LinearRegression()
-    # model.fit(log10mean.reshape(-1, 1), log10var)
-    # intercept = model.intercept_
-    # coefficient = model.coef_[0]
-
-    # print(f"Intercept: {intercept}")
-    # print(f"Slope: {coefficient}")
-    # r2 = model.score(log10mean.reshape(-1, 1), log10var)
-    # print(f"R²: {r2}")
-
-    # hb = plt.hexbin(
-    #     log10mean,
-    #     log10var,
-    #     gridsize=80,
-    #     cmap="viridis",
-    #     norm=mpl.colors.LogNorm()
-    # )
-
-    # plt.xlabel("Log10 Intensity")
-    # plt.ylabel("Log10 Modelled Variance")
-    # plt.title(f"Modelled Variance vs. Mean")
-    # plt.colorbar(hb, label="Counts")
-    # plt.xlim(3.5, 13)
-    # plt.ylim(3.5, 13)
-    # plt.show()
-    # plt.close()
-
-    # fitted = coefficient*log10mean + intercept
-    # residuals = log10var - fitted
-
-    # hb = plt.hexbin(
-    #     fitted,
-    #     residuals,
-    #     gridsize=80,
-    #     cmap="viridis",
-    #     norm=mpl.colors.LogNorm()
-    # )
-
-    # plt.xlabel("Fitted values")
-    # plt.ylabel("Residuals (Observed - Fitted)")
-    # plt.title(f"Residuals vs Fitted Values For LogLog Line of Best fit")
-    # plt.axhline(0, color='black', linestyle='--', linewidth=1)
-    # plt.colorbar(hb, label="Counts")
-    # plt.show()
-    # plt.close()
-
-
-
 
     
     return all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict
@@ -505,6 +459,9 @@ def get_trace_int_numba(spec_mz, spec_intens, mz_array, rtol, base):
         Array of the intensities of matched peaks (or base for unmatched peaks) of length mz_array
 
     """
+    if spec_mz.size == 0 or spec_intens.size == 0:
+        return np.full(mz_array.shape, base, dtype=np.float64)
+    
     order_idx = np.searchsorted(spec_mz, mz_array)
 
     left_idx = np.clip(order_idx - 1, 0, len(spec_mz) - 1)
@@ -603,6 +560,25 @@ def fill_scan_values(all_scans, interp_func, ms1_vals):
 
 
 def get_ms1_index_of_max(ms2_vals, top_ms1_spec_idx, highest_ranked_spec):
+    """
+    Return the best MS1 spec idx to be used
+
+    Parameters
+    ----------
+    ms2_vals : dict[int] = float
+        Dictionary with keys of MS1 spec idxs and values of corresponding intensities
+    top_ms1_spec_idx : int 
+        MS1 spec idx from get_seqs_and_mzs
+    highest_ranked_spec : int
+        MS1 spec idx from get_ms2_vals
+    
+    Returns
+    -------
+    ms1_index_of_max : int
+        The max index to be used going forwards
+
+    """
+
     ## use monoiso ms1 prec mz to find the elution ms1 peak
     if ms2_vals=={0:0}:
         ms1_index_of_max = top_ms1_spec_idx ## should I just use the max of MS1???? Need to look into again
@@ -611,6 +587,9 @@ def get_ms1_index_of_max(ms2_vals, top_ms1_spec_idx, highest_ranked_spec):
     return ms1_index_of_max
 
 def filter_all_scans(all_scans, ms1_peak_edge_idxs, all_ms1_vals, all_iso_vals, all_ms2_vals):
+    """
+    Filter all scans and corresponding values to only those within the MS1 peak edges.
+    """
     channel_scans = all_scans[all_scans.index(ms1_peak_edge_idxs[0]):all_scans.index(ms1_peak_edge_idxs[1])+1]
     all_ms1_vals = {i:all_ms1_vals[i] for i in channel_scans}
     all_iso_vals = [{i:iso_vals[i] for i in channel_scans} for iso_vals in all_iso_vals]
@@ -619,6 +598,36 @@ def filter_all_scans(all_scans, ms1_peak_edge_idxs, all_ms1_vals, all_iso_vals, 
     return channel_scans, all_ms1_vals, all_iso_vals, all_ms2_vals
 
 def compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes):
+    """
+    Return ms1/ms2 pearson correlation and isotope ratio
+
+    Parameters
+    ----------
+    all_ms2_vals, all_ms1_vals, all_iso_vals: dict[int] : float
+        Dictionaries of intensities for ms2 (interpolated), the first isotopic 
+        ms1 peak, and other ms1 isotopic peaks at given ms1 scan idxs
+    num_iso_r : int
+        From config, the number of isotopes to get a pearson correlation against ms2 for
+    channel_scans : list of int
+        A list of ms1 spec idxs
+    isotopes : list of Brainpy theoretical peak objects
+        A list of peaks with peak.mz, peak.intensity, and peak.charge
+    
+    Returns
+    -------
+    spec_pearsons : list of float
+        A list of pearson correlations between the ms2 intensity and the ms1 intensity of each isotope up to num_iso_r+1
+    iso_ratio : list of [PearsonRResult, list of float, list of float]
+        list[0] : PearsonRResult object with .statistic and .pvalue for the correlation between list[1] and list[2]
+        list[1] : Theoretical Isotopic Intensities from the theoretical peak isotopes
+        list[2] : Observed isotopic intensities of each isotope
+    
+    Notes
+    ------
+    Spec_pearsons is a result that encompasses all relevant scans
+    Iso_ratios is extracted from the scan with the highest ms2 value only
+
+    """
     spec_pearsons = [np_pearson_cor(list(all_ms2_vals.values()),list(i.values())).statistic for i in [all_ms1_vals,*all_iso_vals[:num_iso_r]]]
 
     ms1_spec_idx = channel_scans[np.argmax(list(all_ms2_vals.values()))]
@@ -629,9 +638,10 @@ def compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, ch
 
     return spec_pearsons, iso_ratio
 
-def reduce_search_space(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width):
-    idx_of_max =all_scans.index(top_ms1_spec_idx)
-    scans_to_search = np.array(all_scans)[np.arange(max(0,idx_of_max-window_half_width),min(len(all_scans),idx_of_max+window_half_width+1))]
+def select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width):
+    "Aggregate a sorted list of all unique scans collected from every channel"
+    # idx_of_max =all_scans.index(top_ms1_spec_idx)
+    # scans_to_search = np.array(all_scans)[np.arange(max(0,idx_of_max-window_half_width),min(len(all_scans),idx_of_max+window_half_width+1))]
     scans_to_search = np.sort(np.unique(np.concatenate(all_channel_scans)))
     return scans_to_search
 
@@ -650,202 +660,202 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
     return pred_coeff, obs_peaks, fit_matrix, fit_cor
 
 #@profile
-def add_to_ms1_spec_dict(ms1_spec_dict, ms1_spectra, ms1_spec_idxs, group_iso, key, fdc_group, filtered_decoy_coeffs, tag, scans_to_search, fdc_group_idx, dummy_idx_list, fake_fdc_dict):
-    # for g in group_iso:
-    #     print(g) 
-    idxs = fdc_group.groups[key]
-    rows = filtered_decoy_coeffs.loc[idxs]
-    # print(rows[["seq", "channel"]])
-    # This all assumes tag.channel_names is ordered, as well as group_iso is ordered
-    row_channels = rows["channel"].to_numpy()
-    observed_channels = []
-    for channel in tag.channel_names:
-        if int(channel) in row_channels:
-            observed_channels.append(channel)
-    # print(f"obsered_channels: {observed_channels}")
+# def add_to_ms1_spec_dict(ms1_spec_dict, ms1_spectra, ms1_spec_idxs, group_iso, key, fdc_group, filtered_decoy_coeffs, tag, scans_to_search, fdc_group_idx, dummy_idx_list, fake_fdc_dict):
+#     # for g in group_iso:
+#     #     print(g) 
+#     idxs = fdc_group.groups[key]
+#     rows = filtered_decoy_coeffs.loc[idxs]
+#     # print(rows[["seq", "channel"]])
+#     # This all assumes tag.channel_names is ordered, as well as group_iso is ordered
+#     row_channels = rows["channel"].to_numpy()
+#     observed_channels = []
+#     for channel in tag.channel_names:
+#         if int(channel) in row_channels:
+#             observed_channels.append(channel)
+#     # print(f"obsered_channels: {observed_channels}")
     
     
-    for i, channel in enumerate(tag.channel_names):
-        if not channel in observed_channels:
-            # This assumes dummy_idx_list is sorted
-            if dummy_idx_list[-1]+1 in dummy_idx_list:
-                raise ValueError("Dummy Index List +1 is in Dummy Index List Already")
-            dummy_idx_list.append(dummy_idx_list[-1]+1)
-            fdc_index = dummy_idx_list[-1]
-            fake_fdc_dict[fdc_index] = (fdc_group_idx, channel)
-        else:
-            fdc_index = rows.index[rows["channel"] == int(channel)]
-            if len(fdc_index) == 0:
-                raise ValueError("This is a valueError")
-            elif len(fdc_index) > 1:
-                raise ValueError(f"Multiple matches for channel {channel}")
-            else:
-                fdc_index = fdc_index[0]
+#     for i, channel in enumerate(tag.channel_names):
+#         if not channel in observed_channels:
+#             # This assumes dummy_idx_list is sorted
+#             if dummy_idx_list[-1]+1 in dummy_idx_list:
+#                 raise ValueError("Dummy Index List +1 is in Dummy Index List Already")
+#             dummy_idx_list.append(dummy_idx_list[-1]+1)
+#             fdc_index = dummy_idx_list[-1]
+#             fake_fdc_dict[fdc_index] = (fdc_group_idx, channel)
+#         else:
+#             fdc_index = rows.index[rows["channel"] == int(channel)]
+#             if len(fdc_index) == 0:
+#                 raise ValueError("This is a valueError")
+#             elif len(fdc_index) > 1:
+#                 raise ValueError(f"Multiple matches for channel {channel}")
+#             else:
+#                 fdc_index = fdc_index[0]
 
-        iso_group = group_iso[i]
+#         iso_group = group_iso[i]
 
 
-        for ms1_spec_idx in scans_to_search:
-            for peak in iso_group:
-                ms1_spec_dict[ms1_spec_idx]["peak_mz"].append(peak.mz)
-                ms1_spec_dict[ms1_spec_idx]["rel_iso_int"].append(peak.intensity)
-                ms1_spec_dict[ms1_spec_idx]["fdc_idx"].append(fdc_index)
+#         for ms1_spec_idx in scans_to_search:
+#             for peak in iso_group:
+#                 ms1_spec_dict[ms1_spec_idx]["peak_mz"].append(peak.mz)
+#                 ms1_spec_dict[ms1_spec_idx]["rel_iso_int"].append(peak.intensity)
+#                 ms1_spec_dict[ms1_spec_idx]["fdc_idx"].append(fdc_index)
 
-        if ms1_spec_dict[ms1_spec_idx]["MS1_spectra"] is None:
-            ms1_spec_dict[ms1_spec_idx]["MS1_spectra"] = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
+#         if ms1_spec_dict[ms1_spec_idx]["MS1_spectra"] is None:
+#             ms1_spec_dict[ms1_spec_idx]["MS1_spectra"] = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
     
-    for ms1_spec_idx in scans_to_search:
-        ms1_spec_dict[ms1_spec_idx]["monoiso_groups"].append([iso_group[0].mz for iso_group in group_iso])
+#     for ms1_spec_idx in scans_to_search:
+#         ms1_spec_dict[ms1_spec_idx]["monoiso_groups"].append([iso_group[0].mz for iso_group in group_iso])
 
-    return ms1_spec_dict
+#     return ms1_spec_dict
 
-from scipy.sparse import diags
-import matplotlib as mpl
+# from scipy.sparse import diags
+# import matplotlib as mpl
 
 #@profile
-def fit_whole_MS1_spectrum(dicts, mz_ppm, ms1_spec_idx):
+# def fit_whole_MS1_spectrum(dicts, mz_ppm, ms1_spec_idx):
 
-    spec = dicts["MS1_spectra"]
-    mz_peaks = spec.mz
-    dia_spec_int = spec.intens
+#     spec = dicts["MS1_spectra"]
+#     mz_peaks = spec.mz
+#     dia_spec_int = spec.intens
 
-    offsets = mz_ppm * mz_peaks
-    centroid_breaks = np.empty(mz_peaks.size * 2, dtype=mz_peaks.dtype)
-    centroid_breaks[:mz_peaks.size] = mz_peaks - offsets
-    centroid_breaks[mz_peaks.size:] = mz_peaks + offsets
-    centroid_breaks.sort()
+#     offsets = mz_ppm * mz_peaks
+#     centroid_breaks = np.empty(mz_peaks.size * 2, dtype=mz_peaks.dtype)
+#     centroid_breaks[:mz_peaks.size] = mz_peaks - offsets
+#     centroid_breaks[mz_peaks.size:] = mz_peaks + offsets
+#     centroid_breaks.sort()
 
-    # intercept, slope = calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, dicts["monoiso_groups"])
-    # calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, dicts["monoiso_groups"])
-
-
-    # print(f"centroid_breaks: {centroid_breaks}")
-
-    all_mz = dicts["peak_mz"]
-    ref_coords = np.searchsorted(centroid_breaks, all_mz)
-    # print(f"ref_coords: {ref_coords}")
-
-    lib_peaks_matched = np.array((ref_coords % 2 == 1).tolist())
-    # print(f"lib_peaks_matched: {lib_peaks_matched}")
-
-    num_lib_peaks_unmatched = np.count_nonzero(~lib_peaks_matched)
-    # print(num_lib_peaks_unmatched)
-
-    #matrix = np.zeros((len(mz_peaks)+num_lib_peaks_unmatched, len(set(dicts["fdc_idx"]))), dtype=float)
+#     # intercept, slope = calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, dicts["monoiso_groups"])
+#     # calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, dicts["monoiso_groups"])
 
 
-    unique_fdcs = (set(dicts["fdc_idx"]))
-    fdc_to_col = {fdc: i for i, fdc in enumerate(unique_fdcs)}
+#     # print(f"centroid_breaks: {centroid_breaks}")
 
-    last_unnasigned_peak_idx = len(mz_peaks)
-    if not len(ref_coords) == len(lib_peaks_matched) == len(dicts["rel_iso_int"]) == len(dicts["peak_mz"]) == len(dicts["fdc_idx"]):
-        raise ValueError("Length of lists for fitting is not the same")
+#     all_mz = dicts["peak_mz"]
+#     ref_coords = np.searchsorted(centroid_breaks, all_mz)
+#     # print(f"ref_coords: {ref_coords}")
+
+#     lib_peaks_matched = np.array((ref_coords % 2 == 1).tolist())
+#     # print(f"lib_peaks_matched: {lib_peaks_matched}")
+
+#     num_lib_peaks_unmatched = np.count_nonzero(~lib_peaks_matched)
+#     # print(num_lib_peaks_unmatched)
+
+#     #matrix = np.zeros((len(mz_peaks)+num_lib_peaks_unmatched, len(set(dicts["fdc_idx"]))), dtype=float)
+
+
+#     unique_fdcs = (set(dicts["fdc_idx"]))
+#     fdc_to_col = {fdc: i for i, fdc in enumerate(unique_fdcs)}
+
+#     last_unnasigned_peak_idx = len(mz_peaks)
+#     if not len(ref_coords) == len(lib_peaks_matched) == len(dicts["rel_iso_int"]) == len(dicts["peak_mz"]) == len(dicts["fdc_idx"]):
+#         raise ValueError("Length of lists for fitting is not the same")
     
-    sparse_rows = []
-    sparse_cols = []
-    sparse_vals = []
-    fdc_idx_dummy_peak_dict = {k: None for k in unique_fdcs}
-    for fdc_idx, mz, intensity, ref_coord, matched in zip(dicts["fdc_idx"],
-                                                            dicts["peak_mz"],
-                                                            dicts["rel_iso_int"],
-                                                            ref_coords,
-                                                            lib_peaks_matched
-                                                            ):
+#     sparse_rows = []
+#     sparse_cols = []
+#     sparse_vals = []
+#     fdc_idx_dummy_peak_dict = {k: None for k in unique_fdcs}
+#     for fdc_idx, mz, intensity, ref_coord, matched in zip(dicts["fdc_idx"],
+#                                                             dicts["peak_mz"],
+#                                                             dicts["rel_iso_int"],
+#                                                             ref_coords,
+#                                                             lib_peaks_matched
+#                                                             ):
 
-        # #Type C
-        # if matched:
-        #     ms1_peak_coord = (ref_coord-1)//2
-        # else:
-        #     last_unnasigned_peak_idx += 1
-        #     ms1_peak_coord = last_unnasigned_peak_idx
+#         # #Type C
+#         # if matched:
+#         #     ms1_peak_coord = (ref_coord-1)//2
+#         # else:
+#         #     last_unnasigned_peak_idx += 1
+#         #     ms1_peak_coord = last_unnasigned_peak_idx
 
-        # #Type B
-        # if matched:
-        #     ms1_peak_coord = (ref_coord-1)//2
-        # else:
-        #     if fdc_idx_dummy_peak_dict[fdc_idx] == None:
-        #         last_unnasigned_peak_idx += 1
-        #         fdc_idx_dummy_peak_dict[fdc_idx] = last_unnasigned_peak_idx
+#         # #Type B
+#         # if matched:
+#         #     ms1_peak_coord = (ref_coord-1)//2
+#         # else:
+#         #     if fdc_idx_dummy_peak_dict[fdc_idx] == None:
+#         #         last_unnasigned_peak_idx += 1
+#         #         fdc_idx_dummy_peak_dict[fdc_idx] = last_unnasigned_peak_idx
                 
-        #     ms1_peak_coord = fdc_idx_dummy_peak_dict[fdc_idx]
+#         #     ms1_peak_coord = fdc_idx_dummy_peak_dict[fdc_idx]
 
-        # sparse_rows.append(ms1_peak_coord)
-        # sparse_cols.append(fdc_to_col[fdc_idx])
-        # sparse_vals.append(intensity)
+#         # sparse_rows.append(ms1_peak_coord)
+#         # sparse_cols.append(fdc_to_col[fdc_idx])
+#         # sparse_vals.append(intensity)
 
-        # matrix_sparse = coo_matrix((sparse_vals, (sparse_rows, sparse_cols)))
-        # dia_spec_int = np.append(dia_spec_int,[0]*(matrix_sparse.shape[0]-dia_spec_int.shape[0])) 
-
-
-        # Type A
-        if matched: 
-            ms1_peak_coord = (ref_coord-1)//2
-            sparse_rows.append(ms1_peak_coord)
-            sparse_cols.append(fdc_to_col[fdc_idx])
-            sparse_vals.append(intensity)
-
-    matrix_sparse = coo_matrix((sparse_vals, (sparse_rows, sparse_cols)), shape=(len(mz_peaks), len(unique_fdcs)))
-
-    # dia_spec_int_vars = dia_spec_int**slope * 10**intercept
-    # median_var = np.median(dia_spec_int_vars)
-
-    
+#         # matrix_sparse = coo_matrix((sparse_vals, (sparse_rows, sparse_cols)))
+#         # dia_spec_int = np.append(dia_spec_int,[0]*(matrix_sparse.shape[0]-dia_spec_int.shape[0])) 
 
 
-    matrix_csr = matrix_sparse.tocsr()
-    mask = np.diff(matrix_csr.indptr) != 0
-    matrix_sparse = matrix_csr[mask].tocoo()
-    dia_spec_int = dia_spec_int[mask]
+#         # Type A
+#         if matched: 
+#             ms1_peak_coord = (ref_coord-1)//2
+#             sparse_rows.append(ms1_peak_coord)
+#             sparse_cols.append(fdc_to_col[fdc_idx])
+#             sparse_vals.append(intensity)
 
+#     matrix_sparse = coo_matrix((sparse_vals, (sparse_rows, sparse_cols)), shape=(len(mz_peaks), len(unique_fdcs)))
 
-    res = lsq_linear(matrix_sparse, dia_spec_int, bounds=(0, np.inf), method="trf", lsmr_tol="auto")
-    lib_coefficients = res.x
-    lib_coefficients = lib_coefficients.flatten()
-    mapped_lib_coefficients = {k: v for k, v in list(zip(unique_fdcs, lib_coefficients))}
+#     # dia_spec_int_vars = dia_spec_int**slope * 10**intercept
+#     # median_var = np.median(dia_spec_int_vars)
 
     
-    return mapped_lib_coefficients, dia_spec_int, matrix_sparse
+
+
+#     matrix_csr = matrix_sparse.tocsr()
+#     mask = np.diff(matrix_csr.indptr) != 0
+#     matrix_sparse = matrix_csr[mask].tocoo()
+#     dia_spec_int = dia_spec_int[mask]
+
+
+#     res = lsq_linear(matrix_sparse, dia_spec_int, bounds=(0, np.inf), method="trf", lsmr_tol="auto")
+#     lib_coefficients = res.x
+#     lib_coefficients = lib_coefficients.flatten()
+#     mapped_lib_coefficients = {k: v for k, v in list(zip(unique_fdcs, lib_coefficients))}
+
+    
+#     return mapped_lib_coefficients, dia_spec_int, matrix_sparse
 
 
 # import matplotlib.pyplot as plt
 # from matplotlib.colors import ListedColormap
 # import matplotlib.ticker as ticker
-nanmeans = []
-var_ints = []
-def calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, monoiso_groups):
-    global nanmeans, var_ints
-    # nanmeans = []
-    # var_ints = []
-    monoisos_matched = []
-    for plex_group in monoiso_groups:
-        monoiso_mzs = [p for p in plex_group]
-        ref_coords = np.searchsorted(centroid_breaks, monoiso_mzs)
-        lib_peaks_matched = (ref_coords % 2 == 1)
+# nanmeans = []
+# var_ints = []
+# def calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, monoiso_groups):
+#     global nanmeans, var_ints
+#     # nanmeans = []
+#     # var_ints = []
+#     monoisos_matched = []
+#     for plex_group in monoiso_groups:
+#         monoiso_mzs = [p for p in plex_group]
+#         ref_coords = np.searchsorted(centroid_breaks, monoiso_mzs)
+#         lib_peaks_matched = (ref_coords % 2 == 1)
 
-        num_monoiso_matched = np.sum(lib_peaks_matched)
-        if num_monoiso_matched != 5:
-            continue
+#         num_monoiso_matched = np.sum(lib_peaks_matched)
+#         if num_monoiso_matched != 5:
+#             continue
 
-        group_intensities = np.where(
-                                lib_peaks_matched,
-                                dia_spec_int[(ref_coords-1)//2],
-                                np.nan
-        )
+#         group_intensities = np.where(
+#                                 lib_peaks_matched,
+#                                 dia_spec_int[(ref_coords-1)//2],
+#                                 np.nan
+#         )
         
-        nanmean = np.nanmean(group_intensities)
-        var_int = np.nanvar(group_intensities)
-        monoisos_matched.append(num_monoiso_matched)
-        nanmeans.append(nanmean)
-        var_ints.append(var_int)
+#         nanmean = np.nanmean(group_intensities)
+#         var_int = np.nanvar(group_intensities)
+#         monoisos_matched.append(num_monoiso_matched)
+#         nanmeans.append(nanmean)
+#         var_ints.append(var_int)
 
-    log10var = np.log10(var_ints)
-    log10mean = np.log10(nanmeans)
-    model = LinearRegression()
-    model.fit(log10mean.reshape(-1, 1), log10var)
-    intercept = model.intercept_
-    coefficient = model.coef_[0]
+#     log10var = np.log10(var_ints)
+#     log10mean = np.log10(nanmeans)
+#     model = LinearRegression()
+#     model.fit(log10mean.reshape(-1, 1), log10var)
+#     intercept = model.intercept_
+#     coefficient = model.coef_[0]
 
-    return intercept, coefficient
+#     return intercept, coefficient
 
 
 
@@ -891,7 +901,28 @@ def get_other_channels(prec,mz,tag):
     return channel_dict
 
 
-def get_ms1_peak(x,y,idx):
+def get_ms1_peak(x,y,idx,additional_scans):
+    """
+    Get the peak apex and bounds for a given set of monoisotopic intensities
+
+    Parameters
+    ----------
+    x : list of int
+        A list of MS1 spec idxs (from ms1_vals)
+    y : list or array of float
+        The moving averages of MS1 spec intensities (from ms1_vals)
+    idx : int
+        The MS1 spec idx used to determine the peak (important when there is more than one "peak" found)
+    additional_scans : int
+        The number of scans to add to each side of the peak edges
+
+    Returns
+    -------
+    ms1_peak_idx : int
+        The MS1 index of the peak
+    ms1_peak_edge_idxs : 1D numpy array of int (len==2)
+        The first and last MS1 spec idx that is a part of the peak
+    """
     x = np.array(x)
     y = np.array(y)
     with warnings.catch_warnings():
@@ -907,7 +938,7 @@ def get_ms1_peak(x,y,idx):
     closest_idx = np.argmin(np.abs(idx-peak_idxs))
 
     peak_idx = peaks[closest_idx]
-    peak_edge_idxs = [max(0,peak_attr["left_bases"][closest_idx]-config.additional_scans),min(len(x)-1,peak_attr["right_bases"][closest_idx]+config.additional_scans)]
+    peak_edge_idxs = [max(0,peak_attr["left_bases"][closest_idx]-additional_scans),min(len(x)-1,peak_attr["right_bases"][closest_idx]+additional_scans)]
     # peak_edge_idxs = [peak_attr["left_bases"][closest_idx],peak_attr["right_bases"][closest_idx]]
     
     return x[peak_idx],x[peak_edge_idxs]
