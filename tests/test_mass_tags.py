@@ -2,10 +2,11 @@ import pytest
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.mass_tags import massTag, read_json_to_massTag, refresh_tags, set_config_tag
+from src.mass_tags import massTag, read_json_to_massTag, refresh_tags, set_config_tag, tag_library
 import json
 import numpy as np
 from pathlib import Path
+from pyteomics import mass
 
 
 
@@ -152,6 +153,333 @@ class Test_mass_tag_class():
 
     def test_key_access(self):
         assert self.mass_tag["channel_names"] == ["0", "2"]
+
+
+
+class Test_tag_library():
+
+    def test_single_channel_two_tags(self): #also tests ordering of ordered frag dict
+        tag = read_json_to_massTag("tests/MassTags", "test_one_channel.json")
+
+        initial_dict = {
+            ("PEPTIDEK", 2.0):
+            {
+                'mod_seq': "PEPTIDEK",
+                'seq': "PEPTIDEK",
+                'prec_mz': 464.727463520355,
+                'prec_z': 2,
+                'iRT': 0.57,
+                'frags': {
+                    'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y'), 0.5]
+                },
+                'protein_group': 'P36578',
+                'protein_name': '',
+                'genes': '',
+                'spectrum': np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    [mass.fast_mass(sequence="DEK", ion_type='y'), 0.5]
+                ]),
+                'ordered_frags': np.array([
+                    'b3_1', 'b4_1', "y3_1"
+                ], dtype='<U4')
+            }
+            
+         }
+        
+        final_dict = tag_library(initial_dict, tag)
+        key = final_dict[("P(test_one_channel-0)EPTIDEK(test_one_channel-0)", 2.0)]
+        assert key['mod_seq'] == "P(test_one_channel-0)EPTIDEK(test_one_channel-0)"
+        assert key['seq'] == "PEPTIDEK"
+        assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
+        assert key['prec_z'] == 2
+        assert key['iRT'] == 0.57
+        assert key['frags'] == {
+                    'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y')+tag.mass, 0.5]
+                }
+        assert key['protein_group'] == 'P36578'
+        assert key['protein_name'] == ''
+        assert key['genes'] == ''
+        assert np.allclose(key['spectrum'], np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
+                    [mass.fast_mass(sequence="DEK", ion_type='y')+tag.mass, 0.5],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85]
+                ]), atol=1e-6)
+        assert np.array_equal(key['ordered_frags'], np.array(['b3_1', 'y3_1', 'b4_1'], dtype='<U4'))
+        assert 'spec_frags' not in key
+
+    def test_single_channel_one_tags(self): #test one channel, and z=3, and int in key
+        tag = read_json_to_massTag("tests/MassTags", "test_one_channel.json")
+
+        initial_dict = {
+            ("PEPTIDER", 3):
+            {
+                'mod_seq': "PEPTIDER",
+                'seq': "PEPTIDER",
+                'prec_mz': 319.48702501677,
+                'prec_z': 3,
+                'iRT': 0.57,
+                'frags': {
+                    'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DER", ion_type='y'), 0.5]
+                },
+                'protein_group': 'P36578',
+                'protein_name': '',
+                'genes': '',
+                'spectrum': np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    [mass.fast_mass(sequence="DER", ion_type='y'), 0.5]
+                ]),
+                'ordered_frags': np.array([
+                    'b3_1', 'b4_1', "y3_1"
+                ], dtype='<U4')
+            }
+            
+         }
+        
+        final_dict = tag_library(initial_dict, tag)
+        key = final_dict[("P(test_one_channel-0)EPTIDER", 3.0)]
+        assert key['mod_seq'] == "P(test_one_channel-0)EPTIDER"
+        assert key['seq'] == "PEPTIDER"
+        assert key['prec_mz'] == 319.48702501677 + (1*tag.mass)/3
+        assert key['prec_z'] == 3
+        assert key['iRT'] == 0.57
+        assert key['frags'] == {
+                    'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DER", ion_type='y'), 0.5]
+                }
+        assert key['protein_group'] == 'P36578'
+        assert key['protein_name'] == ''
+        assert key['genes'] == ''
+        assert np.allclose(key['spectrum'], np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
+                    [mass.fast_mass(sequence="DER", ion_type='y'), 0.5],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85]
+                ]), atol=1e-6)
+        assert np.array_equal(key['ordered_frags'], np.array(['b3_1', 'y3_1', 'b4_1'], dtype='<U4'))
+
+
+    def test_mod(self):
+        tag = read_json_to_massTag("tests/MassTags", "test_one_channel.json")
+        phospho_mass = 79.966331
+        initial_dict = {
+            ("PEPT(Unimod:21)IDER", 3):
+            {
+                'mod_seq': "PEPT(Unimod:21)IDER",
+                'seq': "PEPTIDER",
+                'prec_mz': 319.48702501677 + phospho_mass,
+                'prec_z': 3,
+                'iRT': 0.57,
+                'frags': {
+                    'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b') + phospho_mass, 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DER", ion_type='y'), 0.5]
+                },
+                'protein_group': 'P36578',
+                'protein_name': '',
+                'genes': '',
+                'spectrum': np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b') + phospho_mass, 0.85],
+                    [mass.fast_mass(sequence="DER", ion_type='y'), 0.5]
+                ]),
+                'ordered_frags': np.array([
+                    'b3_1', 'b4_1', "y3_1"
+                ], dtype='<U4')
+            }
+            
+         }
+        
+        final_dict = tag_library(initial_dict, tag)
+        key = final_dict[("P(test_one_channel-0)EPT(Unimod:21)IDER", 3.0)]
+        assert key['mod_seq'] == "P(test_one_channel-0)EPT(Unimod:21)IDER"
+        assert key['seq'] == "PEPTIDER"
+        assert key['prec_mz'] == 319.48702501677 + phospho_mass + (1*tag.mass)/3
+        assert key['prec_z'] == 3
+        assert key['iRT'] == 0.57
+        assert key['frags'] == {
+                    'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+phospho_mass+tag.mass, 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DER", ion_type='y'), 0.5]
+                }
+        assert key['protein_group'] == 'P36578'
+        assert key['protein_name'] == ''
+        assert key['genes'] == ''
+        assert np.allclose(key['spectrum'], np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
+                    [mass.fast_mass(sequence="DER", ion_type='y'), 0.5],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b')+phospho_mass+tag.mass, 0.85]
+                ]), atol=1e-6)
+        assert np.array_equal(key['ordered_frags'], np.array(['b3_1', 'y3_1', 'b4_1'], dtype='<U4'))
+
+    def test_two_channels(self):
+        tag = read_json_to_massTag("tests/MassTags", "test_basic.json")
+
+        initial_dict = {
+            ("PEPTIDEK", 2.0):
+            {
+                'mod_seq': "PEPTIDEK",
+                'seq': "PEPTIDEK",
+                'prec_mz': 464.727463520355,
+                'prec_z': 2,
+                'iRT': 0.57,
+                'frags': {
+                    'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y'), 0.5]
+                },
+                'protein_group': 'P36578',
+                'protein_name': '',
+                'genes': '',
+                'spectrum': np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    [mass.fast_mass(sequence="DEK", ion_type='y'), 0.5]
+                ]),
+                'ordered_frags': np.array([
+                    'b3_1', 'b4_1', "y3_1"
+                ], dtype='<U4')
+            }
+            
+         }
+        
+        final_dict = tag_library(initial_dict, tag)
+        assert len(final_dict) == tag.n_channels*len(initial_dict)
+        for i, channel in enumerate(tag.channel_names):
+            key = final_dict[(f"P(test_basic-{channel})EPTIDEK(test_basic-{channel})", 2.0)]
+
+            assert key['mod_seq'] == f"P(test_basic-{channel})EPTIDEK(test_basic-{channel})"
+
+            assert key['seq'] == "PEPTIDEK"
+
+            assert key['prec_mz'] == 464.727463520355 + (2*(tag.mass+tag.delta[i]))/2
+
+            assert key['prec_z'] == 2
+
+            assert key['iRT'] == 0.57
+
+            assert key['frags'] == {
+                        'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+(tag.mass+tag.delta[i]), 1],
+                        'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+(tag.mass+tag.delta[i]), 0.85],
+                        'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y')+(tag.mass+tag.delta[i]), 0.5]
+                    }
+            
+            assert key['protein_group'] == 'P36578'
+
+            assert key['protein_name'] == ''
+
+            assert key['genes'] == ''
+
+            assert np.allclose(key['spectrum'], np.array([
+                        [mass.fast_mass(sequence="PEP", ion_type='b')+(tag.mass+tag.delta[i]), 1],
+                        [mass.fast_mass(sequence="DEK", ion_type='y')+(tag.mass+tag.delta[i]), 0.5],
+                        [mass.fast_mass(sequence="PEPT", ion_type='b')+(tag.mass+tag.delta[i]), 0.85]
+                    ]), atol=1e-6)
+            
+            assert np.array_equal(key['ordered_frags'], np.array(['b3_1', 'y3_1', 'b4_1'], dtype='<U4'))
+
+    def test_bad_fragment(self): 
+        tag = read_json_to_massTag("tests/MassTags", "test_one_channel.json")
+
+        initial_dict = {
+            ("PEPTIDEK", 2.0):
+            {
+                'mod_seq': "PEPTIDEK",
+                'seq': "PEPTIDEK",
+                'prec_mz': 464.727463520355,
+                'prec_z': 2,
+                'iRT': 0.57,
+                'frags': {
+                    'k3_1': [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y'), 0.5]
+                },
+                'protein_group': 'P36578',
+                'protein_name': '',
+                'genes': '',
+                'spectrum': np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    [mass.fast_mass(sequence="DEK", ion_type='y'), 0.5]
+                ]),
+                'ordered_frags': np.array([
+                    'b3_1', 'b4_1', "y3_1"
+                ], dtype='<U4')
+            }
+            
+         }
+        
+        with pytest.raises(ValueError) as excinfo:
+            final_dict = tag_library(initial_dict, tag)
+
+        assert "Invalid ion type" in str(excinfo.value)
+
+    def test_spec_frags(self): #also tests ordering of ordered frag dict
+        tag = read_json_to_massTag("tests/MassTags", "test_one_channel.json")
+
+        initial_dict = {
+            ("PEPTIDEK", 2.0):
+            {
+                'mod_seq': "PEPTIDEK",
+                'seq': "PEPTIDEK",
+                'prec_mz': 464.727463520355,
+                'prec_z': 2,
+                'iRT': 0.57,
+                'frags': {
+                    'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y'), 0.5]
+                },
+                'protein_group': 'P36578',
+                'protein_name': '',
+                'genes': '',
+                'spectrum': np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b'), 1],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b'), 0.85],
+                    [mass.fast_mass(sequence="DEK", ion_type='y'), 0.5]
+                ]),
+                'ordered_frags': np.array([
+                    'b3_1', 'b4_1', "y3_1"
+                ], dtype='<U4'),
+                'spec_frags': []
+            }
+            
+         }
+        
+        final_dict = tag_library(initial_dict, tag)
+        key = final_dict[("P(test_one_channel-0)EPTIDEK(test_one_channel-0)", 2.0)]
+        assert key['mod_seq'] == "P(test_one_channel-0)EPTIDEK(test_one_channel-0)"
+        assert key['seq'] == "PEPTIDEK"
+        assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
+        assert key['prec_z'] == 2
+        assert key['iRT'] == 0.57
+        assert key['frags'] == {
+                    'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
+                    'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85],
+                    'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y')+tag.mass, 0.5]
+                }
+        assert key['protein_group'] == 'P36578'
+        assert key['protein_name'] == ''
+        assert key['genes'] == ''
+        assert np.allclose(key['spectrum'], np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
+                    [mass.fast_mass(sequence="DEK", ion_type='y')+tag.mass, 0.5],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85]
+                ]), atol=1e-6)
+        assert np.array_equal(key['ordered_frags'], np.array(['b3_1', 'y3_1', 'b4_1'], dtype='<U4'))
+        assert np.allclose(key['spec_frags'], np.array([
+                    [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
+                    [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85]
+                ]), atol=1e-6)
+
+
         
 
 
@@ -164,36 +492,31 @@ class Test_mass_tag_class():
     
 
 
-
+import pickle
 def main():
-    mass_tag = massTag(rules="nK",
-                        base_mass=78.03437413308,
-                        delta=[0.0, 2.006709675600007],
-                        channel_names=["0","2"],
-                        name="test_basic",
-                        compositions={
-                                    "0": {
-                                        "C": 5,
-                                        "H": 4,
-                                        "N": 1,
-                                        "O": 0,
-                                        "C[13]": 0,
-                                        "H[2]": 0,
-                                        "N[15]": 0,
-                                        "O[18]": 0
-                                    },
-                                    "2": {
-                                        "C": 3,
-                                        "H": 4,
-                                        "N": 1,
-                                        "O": 0,
-                                        "C[13]": 2,
-                                        "H[2]": 0,
-                                        "N[15]": 0,
-                                        "O[18]": 0
-                                    }
-                                })
-    print(mass_tag)
+    with open("d5_before.pkl", "rb") as f:
+        d5_before = pickle.load(f)
+    with open("d5_after.pkl", "rb") as f:
+        d5_after = pickle.load(f)
+
+    print(len(d5_before))
+    print(len(d5_after))
+
+    print("\n\n")
+    for i, (k, v) in enumerate(d5_before.items()):
+        if i == 0:
+            print(k)
+            print(v)
+
+    print("\n\n")
+    for i, (k, v) in enumerate(d5_after.items()):
+        if i in [0, 1]:
+            print(k)
+            print(v)
+            print("\n")
+
+    
+
 
 if __name__ == "__main__":
     main()
