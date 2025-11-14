@@ -17,8 +17,8 @@ from tkinter import filedialog, messagebox
 import json
 from idlelib.tooltip import Hovertip
 import os
-from config import parser
-from default_dict import default_dict
+from src.config import parser
+from src.default_dict import default_dict
 import shlex
 from pathlib import Path
 from pyteomics import mass
@@ -36,7 +36,7 @@ from logging.handlers import QueueHandler
 
 
 
-def make_GUI():
+def make_GUI(show=True):
     """
     Function to initialize and run the JMod GUI.
     This function is called when the JMod is ran from GUI
@@ -45,7 +45,11 @@ def make_GUI():
     if app.tk.call("info", "patchlevel") in ["8.6.12"] and platform.system() in ["Darwin"]:
         os_name = "macOS" if platform.system() == "Darwin" else platform.system()
         messagebox.showwarning("Tkinter Version Warning", f'Tkinter Version [{app.tk.call("info", "patchlevel")}] poorly registers button clicks on [{os_name}].\nThis can be resolved by upgrading python.')
-    app.mainloop()
+    if show:
+        app.mainloop()
+    else:
+        app.withdraw()
+        return app
 
 
 class JModGUI(ThemedTk):
@@ -1005,7 +1009,7 @@ class JModGUI(ThemedTk):
                 f.write("test")
             os.remove(test_path)
         except:
-            ask_exit = tk.messagebox.askyesno("Path Limit Warning.", "Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
+            ask_exit = tk.messagebox.askyesno("Path Limit Warning.", r"Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
             if ask_exit:
                 logger.info("JMod Exited")
                 return
