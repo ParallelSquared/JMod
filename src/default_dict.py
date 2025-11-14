@@ -297,7 +297,7 @@ default_dict = {
         'flags': ('--score_lib_frac',),
         'default': 0.5,
         'takes_value': True,
-        'in_GUI': True,
+        'in_GUI': False,
         'type': 'float',
         'widget': 'entry',
         'tk_handle': None,

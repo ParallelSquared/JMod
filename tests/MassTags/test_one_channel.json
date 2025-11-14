@@ -1,0 +1,23 @@
+{
+    "rules": "nK",
+    "base_mass": 78.03437413308,
+    "delta": [
+        0.0
+    ],
+    "channel_names": [
+        "0"
+    ],
+    "name": "test_one_channel",
+    "compositions": {
+        "0": {
+            "C": 5,
+            "H": 4,
+            "N": 1,
+            "O": 0,
+            "C[13]": 0,
+            "H[2]": 0,
+            "N[15]": 0,
+            "O[18]": 0
+        }
+    }
+}

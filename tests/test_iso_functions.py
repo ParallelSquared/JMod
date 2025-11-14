@@ -1,206 +1,188 @@
-"""
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
-
-"""
-Tests for functions in mass_tags.py
-"""
-
 import pytest
-from unittest.mock import Mock, patch
-from pyteomics import mass
 import numpy as np
-
-# Import the functions we want to test
-from src.iso_functions import (
-    fragment_seq, split_peptide, get_seq_comp, frag_isotope, gen_isotopes, calculate_mz, precursor_isotopes, iso_distr, my_iso_distr
-)
-from tests.fixtures.test_data import SAMPLE_LIBRARY_ENTRY
+import sys, os
+from pyteomics import mass
+from pyteomics.auxiliary.structures import PyteomicsError
 
 
-class TestFragmentSeq:
-    """Tests for the fragment_seq function"""
+from src.iso_functions import get_seq_comp, precursor_isotopes
+from brainpy._c.isotopic_distribution import TheoreticalPeak as Peak
+from src.mass_tags import massTag, read_json_to_massTag
+import src.iso_functions as iso
+import copy
 
-    def test_b_fragment_basic(self):
-        peptide = "PEPTIDE"
-        ion_type = "b3_1"
-        seq, frag_info = fragment_seq(peptide, ion_type)
+
+
+
+class Test_get_seq_comp():
+
+    ##Tags are ignored by get_seq_comp. They are handled by precursor_isotopes downstream, but maybe not all things that call it?
+    
+    def test_no_tag(self):
+        split_seq = ['A', 'A', 'A', 'A', 'A', 'D', 'L', 'A', 'N', 'R']
+        ion_type = "M"
+        seq_comp = get_seq_comp(split_seq, ion_type)
+        assert seq_comp == mass.Composition({'H': 66, 'C': 38, 'O': 14, 'N': 14})
+
+
+    def test_one_tag(self):
+        split_seq = ['A(PSMtag_5plex-0)', 'A', 'A', 'A', 'A', 'D', 'L', 'A', 'N', 'R']
+        ion_type = "M"
+        seq_comp = get_seq_comp(split_seq, ion_type)
+        assert seq_comp == mass.Composition({'H': 66, 'C': 38, 'O': 14, 'N': 14})
+
+    def test_two_tags(self):
+        split_seq = ['A(PSMtag_5plex-0)', 'A', 'A', 'A', 'A', 'D', 'L', 'A', 'N', 'R(PSMtag_5plex-0)']
+        ion_type = "M"
+        seq_comp = get_seq_comp(split_seq, ion_type)
+        assert seq_comp == mass.Composition({'H': 66, 'C': 38, 'O': 14, 'N': 14})
+
+    def test_one_aa(self):
+        seq_comp = get_seq_comp(["A"], "M")
+        assert seq_comp == mass.Composition({'H': 7, 'C': 3, 'O': 2, 'N': 1})
+
+    def test_y_ion(self):
+        split_seq = ["A", "C", "K"]
+        ion_type = "y"
+        seq_comp = get_seq_comp(split_seq, ion_type)
+        assert seq_comp == mass.Composition({'H': 24, 'C': 12, 'O': 4, 'N': 4, 'S': 1})
+
+    def test_carbamidomethylation(self):
+        seq_comp = get_seq_comp(["A", "C(Unimod:4)", "K"], "M")
+        assert seq_comp == mass.Composition({'H': 27, 'C': 14, 'O': 5, 'N': 5, 'S': 1})
+    
+    def test_phosphorylation(self):
+        seq_comp = get_seq_comp(["A", "S(Unimod:21)", "K"], "M")
+        assert seq_comp == mass.Composition({'H': 25, 'C': 12, 'O': 8, 'N': 4, 'P': 1})
+
+    def test_weird_things_from_parse_peptide_tests(self):
+        seq_comp = get_seq_comp(["A(+15.99)", "S[+80]", "K"], "M")
+        assert seq_comp == mass.Composition({'H': 24, 'C': 12, 'O': 5, 'N': 4})
+
+    def test_tag_before_mod(self):
+        split_seq = ["M(PSMtag_5plex-0)(Unimod:35)", "E", "A", "T", "S", "T", "I", "C", "K"]
+        ion_type = "M"
+        seq_comp = get_seq_comp(split_seq, ion_type)
+        assert seq_comp == mass.Composition({'H': 70, 'C': 39, 'S': 2, 'O': 16, 'N': 10})
+
+    def test_mod_before_tag(self):
+        split_seq = ["M(Unimod:35)(PSMtag_5plex-0)", "E", "A", "T", "S", "T", "I", "C", "K"]
+        ion_type = "M"
+        seq_comp = get_seq_comp(split_seq, ion_type)
+        assert seq_comp == mass.Composition({'H': 70, 'C': 39, 'S': 2, 'O': 16, 'N': 10})
+
+    def test_two_mods(self):
+        seq_comp = get_seq_comp(["A(Unimod:35)", "S(Unimod:21)", "K"], "M")
+        assert seq_comp == mass.Composition({'H': 25, 'C': 12, 'O': 9, 'N': 4, 'P': 1})
+
+
+
+class Test_precursor_isotopes():
+
+    tag = read_json_to_massTag("src\\MassTags\\", "PSMtag_5plex.json")
+
+    tag_no_comps = copy.deepcopy(tag)
+    tag_no_comps.channel_comp = None
+
+    def compare_outputs(self, output, expected_output):
+        assert len(output) == len(expected_output)
+        for peak_a, peak_b in list(zip(output, expected_output)):
+            assert np.isclose(peak_a.mz, peak_b.mz, atol=1e-6)
+            assert np.isclose(peak_a.intensity, peak_b.intensity, atol=1e-6)
+            assert peak_a.charge == peak_b.charge
+
+    def test_stripped_seq(self):
+        output = precursor_isotopes("MEATSTICK", 2, None, 2)
+        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        self.compare_outputs(output, expected_output)
+
+    def test_five_isos(self):
+        output = precursor_isotopes("MEATSTICK", 2, None, 5)
+        expected_output = [Peak(mz=492.230453, intensity=0.548792, charge=2), Peak(mz=492.731859, intensity=0.267757, charge=2), Peak(mz=493.231317, intensity=0.130020, charge=2), Peak(mz=493.731776, intensity=0.041806, charge=2), Peak(mz=494.231870, intensity=0.011625, charge=2)]
+        self.compare_outputs(output, expected_output)
+
+    def test_untag_seq_with_tag(self):
+        output = precursor_isotopes("MEATSTICK", 2, self.tag, 2)
+        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        self.compare_outputs(output, expected_output)
+
+    def test_tag_seq_no_tag(self):
+        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK", 2, None, 2)
+        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        self.compare_outputs(output, expected_output)
+
+    def test_one_tag(self):
+        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK", 2, self.tag, 2)
+        expected_output = [Peak(mz=646.288499, intensity=0.590711, charge=2), Peak(mz=646.789957, intensity=0.409289, charge=2)]
+        self.compare_outputs(output, expected_output)
+
+    def test_two_tags(self):
+        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK(PSMtag_5plex-0)", 2, self.tag, 2)
+        expected_output = [Peak(mz=800.346546, intensity=0.526913, charge=2), Peak(mz=800.848031, intensity=0.473087, charge=2)]
+        self.compare_outputs(output, expected_output)
+
+    def test_different_channel(self):
+        output = precursor_isotopes("M(PSMtag_5plex-4)EATSTICK", 2, self.tag, 2)
+        expected_output = [Peak(mz=648.293977, intensity=0.598493, charge=2), Peak(mz=648.795427, intensity=0.401507, charge=2)]
+        self.compare_outputs(output, expected_output)
+
+    def test_absent_channel(self):
+        with pytest.raises(KeyError) as exc_info:
+            precursor_isotopes("M(PSMtag_5plex-2)EATSTICK", 2, self.tag, 2)
+        assert "'2'" in str(exc_info.value)
         
-        assert seq == ["P", "E", "P"]
-        assert frag_info == ["b", 3, "", "1"]
+    def test_stripped_seq_z3(self):
+        output = precursor_isotopes("MEATSTICK", 3, None, 2)
+        expected_output = [Peak(mz=328.489394, intensity=0.672087, charge=3), Peak(mz=328.823665, intensity=0.327913, charge=3)]
+        self.compare_outputs(output, expected_output)
 
-    def test_y_fragment_basic(self):
-        peptide = "PEPTIDE"
-        ion_type = "y2_2"
-        seq, frag_info = fragment_seq(peptide, ion_type)
-        
-        assert seq == ["D", "E"]
-        assert frag_info == ["y", 2, "", "2"]
+    def test_one_tag_z3(self):
+        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK", 3, self.tag, 2)
+        expected_output = [Peak(mz=431.194758, intensity=0.590711, charge=3), Peak(mz=431.529063, intensity=0.409289, charge=3)]
+        self.compare_outputs(output, expected_output)
 
-    def test_fragment_with_modifications(self):
-        peptide = "PEP(Tide)(+15.99)IDE"
-        ion_type = "b4_1"
-        seq, frag_info = fragment_seq(peptide, ion_type)
-        
-        assert len(seq) == 4
-        assert seq[2].startswith("P") or "(" in seq[2]  # mod may be on 3rd AA
-        assert frag_info[0] == "b"
-        assert frag_info[1] == 4
+    def test_two_different_tags(self):
+        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK(PSMtag_5plex-4)", 3, self.tag, 2)
+        expected_output = [Peak(mz=535.237108, intensity=0.533096, charge=3), Peak(mz=535.571428, intensity=0.466904, charge=3)]
+        self.compare_outputs(output, expected_output)
 
-    def test_invalid_ion_type(self):
-        peptide = "PEPTIDE"
-        ion_type = "q3_1"  # invalid fragment type
-        with pytest.raises(ValueError, match="Invalid ion type"):
-            fragment_seq(peptide, ion_type)
+    def test_oxidation(self):
+        output = precursor_isotopes("M(Unimod:35)EATSTICK", 2, self.tag, 2)
+        expected_output = [Peak(mz=500.227911, intensity=0.671915, charge=2), Peak(mz=500.729317, intensity=0.328085, charge=2)]
+        self.compare_outputs(output, expected_output)
 
-    def test_frag_index_exceeds_length(self):
-        peptide = "PEP"
-        ion_type = "b5_1"  # frag index exceeds peptide length
-        with pytest.raises(AssertionError):
-            fragment_seq(peptide, ion_type)
+    def test_mod_and_tag(self):
+        output = precursor_isotopes("M(Unimod:35)EATSTICK(PSMtag_5plex-0)", 2, self.tag, 2)
+        expected_output = [Peak(mz=654.285957, intensity=0.590578, charge=2), Peak(mz=654.787415, intensity=0.409422, charge=2)]
+        self.compare_outputs(output, expected_output)
 
-class TestSplitPeptide:
-    def test_simple_sequence(self):
-        peptide = "ACDE"
-        result = split_peptide(peptide)
-        assert result == ["A", "C", "D", "E"]
+    def test_tag_before_mod(self):
+        output = precursor_isotopes("M(PSMtag_5plex-0)(Unimod:35)EATSTICK", 2, self.tag, 2)
+        expected_output = [Peak(mz=654.285957, intensity=0.590578, charge=2), Peak(mz=654.787415, intensity=0.409422, charge=2)]
+        self.compare_outputs(output, expected_output)
 
-    def test_sequence_with_mods(self):
-        peptide = "ACD(+15.99)E"
-        result = split_peptide(peptide)
-        assert result == ["A", "C", "D(+15.99)", "E"]
+    def test_mod_before_tag(self):
+        output = precursor_isotopes("M(Unimod:35)(PSMtag_5plex-0)EATSTICK", 2, self.tag, 2)
+        expected_output = [Peak(mz=654.285957, intensity=0.590578, charge=2), Peak(mz=654.787415, intensity=0.409422, charge=2)]
+        self.compare_outputs(output, expected_output)
 
-    def test_empty_sequence(self):
-        peptide = ""
-        result = split_peptide(peptide)
-        assert result == []
+    def test_decoy_peptide(self):
+        output = precursor_isotopes("Decoy_MEATSTICK", 2, None, 2)
+        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        self.compare_outputs(output, expected_output)
 
-    def test_multiple_mods(self):
-        peptide = "A(+15.99)C(+57.02)DE"
-        result = split_peptide(peptide)
-        assert result == ["A(+15.99)", "C(+57.02)", "D", "E"]
+    def test_decoy_peptide_explicit(self):
+        output = precursor_isotopes("Decoy_MEATSTICK", 2, None, 2, decoys=True)
+        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        self.compare_outputs(output, expected_output)
 
-class TestGetSeqComp:
-    def test_sequence_no_mods(self):
-        split_seq = ["A", "C", "D", "E"]
-        comp = get_seq_comp(split_seq, ion_type="b")
-        assert comp is not None
-        assert sum(comp.values()) > 0
+    def test_decoy_peptide_decoys_off(self):
+        with pytest.raises(PyteomicsError, match="Unknown label: ecoy_M"):
+            precursor_isotopes("Decoy_MEATSTICK", 2, None, 2, decoys=False)
 
-    def test_sequence_with_mods(self):
-        split_seq = ["A", "C", "D(UniMod:35)", "E"] 
-        comp = get_seq_comp(split_seq, ion_type="y")
-        assert comp is not None
-        assert sum(comp.values()) > 0
+    def test_tag_channel_comp_is_none(self):
+        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK", 2, self.tag_no_comps, 2)
+        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        self.compare_outputs(output, expected_output)
 
 
-class TestFragIsotope:
-    def test_basic_fragment_isotope_generation(self):
-        seq = SAMPLE_LIBRARY_ENTRY["mod_seq"]
-        frag = "b3_1"
-        isotopes = frag_isotope(frag, seq)
-
-        assert isotopes[0].mz < isotopes[-1].mz 
-
-    def test_isotope_intensity_decreases(self):
-        seq = SAMPLE_LIBRARY_ENTRY["mod_seq"]
-        frag = "y3_1"
-        isotopes = frag_isotope(frag, seq)
-        intensities = [p.intensity for p in isotopes]
-        assert intensities[0] == max(intensities)
-
-
-class TestGenIsotopes:
-    def test_generate_isotopes_from_library(self):
-        seq = SAMPLE_LIBRARY_ENTRY["mod_seq"]
-        frags = SAMPLE_LIBRARY_ENTRY["frags"]
-
-        new_frags = gen_isotopes(seq, frags)
-
-        assert isinstance(new_frags, np.ndarray)
-        assert new_frags.shape[1] == 2
-        assert np.isclose(np.max(new_frags[:, 1]), 1.0, atol=1e-6)
-
-    def test_intensity_scaling_relative_to_mono_peak(self):
-        seq = SAMPLE_LIBRARY_ENTRY["mod_seq"]
-        frags = SAMPLE_LIBRARY_ENTRY["frags"]
-        result = gen_isotopes(seq, frags)
-
-        assert np.all(result[:, 1] <= 1)
-
-    def test_output_is_reproducible(self):
-        seq = SAMPLE_LIBRARY_ENTRY["mod_seq"]
-        frags = SAMPLE_LIBRARY_ENTRY["frags"]
-        first = gen_isotopes(seq, frags)
-        second = gen_isotopes(seq, frags)
-
-        np.testing.assert_allclose(first, second, rtol=1e-6, atol=1e-6)
-
-
-class TestCalculateMz:
-    def test_basic_mz_calculation(self):
-        seq = "PEPTIDE"
-        charge = 2
-        mz = calculate_mz(seq, charge)
-        assert mz > 0
-        assert isinstance(mz, float)
-
-    def test_mz_differs_with_charge(self):
-        seq = "PEPTIDE"
-        mz_2 = calculate_mz(seq, 2)
-        mz_3 = calculate_mz(seq, 3)
-        assert mz_2 != mz_3
-        assert mz_2 > mz_3 
-
-
-class TestPrecursorIsotopes:
-    def test_isotopes_generated(self):
-        seq = "PEPTIDE"
-        charge = 2
-        isotopes = precursor_isotopes(seq, charge, tag=None)
-        assert len(isotopes) > 0
-        assert hasattr(isotopes[0], "mz")
-        assert hasattr(isotopes[0], "intensity")
-
-    def test_isotope_order_and_intensity(self):
-        seq = "PEPTIDE"
-        charge = 2
-        isotopes = precursor_isotopes(seq, charge, tag=None, n_isotopes=3)
-        mzs = [p.mz for p in isotopes]
-        intensities = [p.intensity for p in isotopes]
-        assert mzs[0] < mzs[-1]
-        assert intensities[0] == max(intensities)
-
-
-class TestIsoDistr:
-    def test_iso_distr_output_shape_and_type(self):
-        temp = [10, 20, 2, 5, 1]  # [C, H, N, O, S]
-        iso = iso_distr(temp)
-        assert isinstance(iso, np.ndarray)
-        assert iso.ndim == 1
-        assert np.isclose(np.max(iso), 1.0, atol=1e-6)
-
-    def test_iso_distr_is_normalized(self):
-        temp = [5, 10, 2, 3, 0]
-        iso = iso_distr(temp)
-        assert np.isclose(np.max(iso), 1.0)
-        assert np.all(iso >= 0)
-
-
-class TestMyIsoDistr:
-    def test_my_iso_distr_output_shape_and_type(self):
-        comp = {"C": 10, "H": 20, "N": 2, "O": 5, "S": 1}
-        iso = my_iso_distr(comp)
-        assert isinstance(iso, np.ndarray)
-        assert iso.ndim == 1
-        assert np.isclose(np.max(iso), 1.0, atol=1e-6)
-
-    def test_my_iso_distr_equivalence_with_iso_distr(self):
-        temp = [6, 12, 1, 6, 0]
-        comp = {"C": 6, "H": 12, "N": 1, "O": 6, "S": 0}
-        iso1 = iso_distr(temp)
-        iso2 = my_iso_distr(comp)
-        np.testing.assert_allclose(iso1, iso2, rtol=1e-6, atol=1e-6)
- 

@@ -489,19 +489,22 @@ def fit_errors(errors,limit=10,percentile=.999):
     
 #     fit_outputs=[]
     
-#     frags = []
-#     for idx in tqdm.trange(len(top_n)):
-#             fit_output = fit_to_lib(top_n_spectra[idx],
-#                                     library=librarySpectra,
-#                                     rt_mz=rt_mz,
-#                                     all_keys=all_keys,
-#                                     dino_features=None,
-#                                     rt_filter=False,
-#                                     return_frags=False,
-#                                     ms1_spectra = dia_spectra.ms1scans,
-#                                     frac_matched=.8
-#                                     )
-#             fit_outputs.append(fit_output)
+    frags = []
+    for idx in tqdm.trange(len(top_n)):
+            fit_output = fit_to_lib(top_n_spectra[idx],
+                                    library=librarySpectra,
+                                    rt_mz=rt_mz,
+                                    all_keys=all_keys,
+                                    dino_features=None,
+                                    rt_filter=False,
+                                    return_frags=False,
+                                    ms1_spectra = dia_spectra.ms1scans,
+                                    frac_matched=.8,
+                                    rt_tol = config.rt_tol,
+                                    ms1_tol = config.ms1_tol,
+                                    mz_tol = config.mz_tol,
+                                    )
+            fit_outputs.append(fit_output)
     
 #     return fit_outputs                                    
 
@@ -545,7 +548,9 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
                                     ms1_mz=lf_mz[idx],
                                     ms1_spectra = dia_spectra.ms1scans,
                                     frac_matched=.8,## NB: this may be selcting for smaller peptides
-                                    ms1_tol=config.ms1_tol
+                                    rt_tol = config.rt_tol,
+                                    ms1_tol = config.ms1_tol,
+                                    mz_tol = config.mz_tol
                                     )
         fit_outputs.append(fit_output)
         
