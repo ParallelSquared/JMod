@@ -11,7 +11,10 @@ import re
 from pyteomics import mass
 import src.config as config
 import pandas as pd 
+
 from src.logger import logger
+from src.utils.parse_peptides import split_frag_name
+
 def feature_list_rt(DinoDF,rt,rt_tol): 
     """
     Description:
@@ -266,7 +269,8 @@ def get_diff(mz,peaks,tol):
         
         # in case of multiple matches
         # select idx with smallest error
-        closest_idx = idxs[np.argmin(log_diff[idxs,1])]
+        #closest_idx = idxs[np.argmin(log_diff[idxs,1])]
+        closest_idx = idxs[np.argmin(np.abs(log_diff[idxs,1]))]
         
         return (peaks[closest_idx]-mz)/mz
     
@@ -311,7 +315,8 @@ def closest_feature(mz,rt,dino_features,rt_tol,mz_tol):
         
         # in case of multiple matches
         # select idx with smallest error
-        closest_idx = idxs[np.argmin(log_diff[idxs,1])]
+        #closest_idx = idxs[np.argmin(log_diff[idxs,1])]
+        closest_idx = idxs[np.argmin(np.abs(log_diff[idxs,1]))]
         
         return (feature_mzs[closest_idx]-mz)/mz
     

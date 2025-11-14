@@ -99,129 +99,129 @@ def twostepfit(x,y,n_knots=2,z=None,k1=1):
     # plt.scatter(x,spl2(x),s=1)
     return spl2
 
-def threestepfit(x,y,n_knots=2,z=None,k1=1):
-    """
-    Get spline that maps x to y in 3 steps. Outliers are removed after each step
+# def threestepfit(x,y,n_knots=2,z=None,k1=1):
+#     """
+#     Get spline that maps x to y in 3 steps. Outliers are removed after each step
 
-    Parameters
-    ----------
-    x : array
-        Series of x values.
-    y : array
-        Series of x values.
-    n_knots : int, optional
-        How many knots in the spline. The default is 2.
-    z : array, optional
-        If present, attributes used to weight the spline fitting. The default is None.
-    k1 : int, optional
-        Degree of spline. The default is 1.
+#     Parameters
+#     ----------
+#     x : array
+#         Series of x values.
+#     y : array
+#         Series of x values.
+#     n_knots : int, optional
+#         How many knots in the spline. The default is 2.
+#     z : array, optional
+#         If present, attributes used to weight the spline fitting. The default is None.
+#     k1 : int, optional
+#         Degree of spline. The default is 1.
 
-    Returns
-    -------
-    spl2 : scipy.interpolate.UnivariateSpline
-        Spline mapping x to y.
+#     Returns
+#     -------
+#     spl2 : scipy.interpolate.UnivariateSpline
+#         Spline mapping x to y.
 
-    """
-    if z is None:
-        z= np.ones_like(x)
-    y_exists = np.isfinite(y)
-    x_exists = np.isfinite(x)*y_exists
-    x=np.array(x)[x_exists]
-    y=np.array(y)[x_exists]
-    z=np.array(z)[x_exists]
-    y_range = np.max(y)-np.min(y)
-    sorted_idxs = np.argsort(x)
-    sort_x = np.array(x)[sorted_idxs]
-    sort_y = np.array(y)[sorted_idxs]
-    sort_z = np.array(z)[sorted_idxs]
-    knots = quantiles(sort_x,n=n_knots)
-    spl = spline(sort_x,sort_y,knots,w=sort_z,k=1)
-    # poly = np.polyfit(sort_x, sort_y, w=sort_z, deg=5)
-    # sort_x+=np.arange(len(sort_x))*1e-7
-    # spl  = InterpolatedUnivariateSpline(sort_x,sort_y,w=np.log10(sort_z),k=5)
-    # plt.plot(sort_x,np.polyval(poly, sort_x))
-    # plt.scatter(x,y,s=1)
-    # plt.scatter(x,spl(x),s=1)
-    # find outliers and remove; points over 1/4 of the y range away from prediction
-    _bool = abs(spl(sort_x)-sort_y)<(y_range/4)
-    # knots = quantiles(sort_x,n=4)
-    spl2 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
-    # spl2 = UnivariateSpline(sort_x,sort_y)
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # plt.scatter(x,spl2(x),s=1)
+#     """
+#     if z is None:
+#         z= np.ones_like(x)
+#     y_exists = np.isfinite(y)
+#     x_exists = np.isfinite(x)*y_exists
+#     x=np.array(x)[x_exists]
+#     y=np.array(y)[x_exists]
+#     z=np.array(z)[x_exists]
+#     y_range = np.max(y)-np.min(y)
+#     sorted_idxs = np.argsort(x)
+#     sort_x = np.array(x)[sorted_idxs]
+#     sort_y = np.array(y)[sorted_idxs]
+#     sort_z = np.array(z)[sorted_idxs]
+#     knots = quantiles(sort_x,n=n_knots)
+#     spl = spline(sort_x,sort_y,knots,w=sort_z,k=1)
+#     # poly = np.polyfit(sort_x, sort_y, w=sort_z, deg=5)
+#     # sort_x+=np.arange(len(sort_x))*1e-7
+#     # spl  = InterpolatedUnivariateSpline(sort_x,sort_y,w=np.log10(sort_z),k=5)
+#     # plt.plot(sort_x,np.polyval(poly, sort_x))
+#     # plt.scatter(x,y,s=1)
+#     # plt.scatter(x,spl(x),s=1)
+#     # find outliers and remove; points over 1/4 of the y range away from prediction
+#     _bool = abs(spl(sort_x)-sort_y)<(y_range/4)
+#     # knots = quantiles(sort_x,n=4)
+#     spl2 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
+#     # spl2 = UnivariateSpline(sort_x,sort_y)
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # plt.scatter(x,spl2(x),s=1)
     
-    _bool = abs(spl2(sort_x)-sort_y)<(y_range/8)
+#     _bool = abs(spl2(sort_x)-sort_y)<(y_range/8)
     
-    # knots = quantiles(sort_x,n=n_knots)
-    spl3 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # plt.scatter(sort_x[_bool],spl3(sort_x[_bool]),s=1)
+#     # knots = quantiles(sort_x,n=n_knots)
+#     spl3 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # plt.scatter(sort_x[_bool],spl3(sort_x[_bool]),s=1)
     
-    return spl3
+#     return spl3
 
 
 
-def initstepfit(x,y,n_knots=2,z=None,k1=1):
-    """
-    Get spline that maps x to y in 3 steps. Outliers are removed after each step.
-    SIinitial guess is a straight line from [min_x,min_] to [max_x,max_y]
+# def initstepfit(x,y,n_knots=2,z=None,k1=1):
+#     """
+#     Get spline that maps x to y in 3 steps. Outliers are removed after each step.
+#     SIinitial guess is a straight line from [min_x,min_] to [max_x,max_y]
     
-    Parameters
-    ----------
-    x : array
-        Series of x values.
-    y : array
-        Series of x values.
-    n_knots : int, optional
-        How many knots in the spline. The default is 2.
-    z : array, optional
-        If present, attributes used to weight the spline fitting. The default is None.
-    k1 : int, optional
-        Degree of spline. The default is 1.
+#     Parameters
+#     ----------
+#     x : array
+#         Series of x values.
+#     y : array
+#         Series of x values.
+#     n_knots : int, optional
+#         How many knots in the spline. The default is 2.
+#     z : array, optional
+#         If present, attributes used to weight the spline fitting. The default is None.
+#     k1 : int, optional
+#         Degree of spline. The default is 1.
 
-    Returns
-    -------
-    spl2 : scipy.interpolate.UnivariateSpline
-        Spline mapping x to y.
+#     Returns
+#     -------
+#     spl2 : scipy.interpolate.UnivariateSpline
+#         Spline mapping x to y.
 
-    """
-    ### like above but initial guess is just a straight line from [min_x,min_] to [max_x,max_y]
-    if z is None:
-        z= np.ones_like(x)
-    y_exists = np.isfinite(y)
-    x_exists = np.isfinite(x)*y_exists
-    x=np.array(x)[x_exists]
-    y=np.array(y)[x_exists]
-    z=np.array(z)[x_exists]
-    y_range = np.max(y)-np.min(y)
-    x_range = np.max(x)-np.min(x)
-    sorted_idxs = np.argsort(x)
-    sort_x = np.array(x)[sorted_idxs]
-    sort_y = np.array(y)[sorted_idxs]
-    sort_z = np.array(z)[sorted_idxs]
-    knots = quantiles(sort_x,n=n_knots)
-    # spl = spline(sort_x,sort_y,knots,w=sort_z,k=1)
-    # plt.scatter(x,y,s=1)
-    # plt.scatter(x,spl(x),s=1)
-    # plt.plot(x,((y_range/x_range)*x)+min(y)-((y_range/x_range)*min(x)))
-    _bool = np.abs((((y_range/x_range)*sort_x)+min(y)-((y_range/x_range)*min(x)))-sort_y)<(y_range/4)
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # find outliers and remove; points over 1/4 of the y range away from prediction
-    # _bool = np.abs(spl(sort_x)-sort_y)<(y_range/4)
-    # knots = quantiles(sort_x,n=4)
-    spl2 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
-    # spl2 = UnivariateSpline(sort_x,sort_y)
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # plt.scatter(x,spl2(x),s=1)
+#     """
+#     ### like above but initial guess is just a straight line from [min_x,min_] to [max_x,max_y]
+#     if z is None:
+#         z= np.ones_like(x)
+#     y_exists = np.isfinite(y)
+#     x_exists = np.isfinite(x)*y_exists
+#     x=np.array(x)[x_exists]
+#     y=np.array(y)[x_exists]
+#     z=np.array(z)[x_exists]
+#     y_range = np.max(y)-np.min(y)
+#     x_range = np.max(x)-np.min(x)
+#     sorted_idxs = np.argsort(x)
+#     sort_x = np.array(x)[sorted_idxs]
+#     sort_y = np.array(y)[sorted_idxs]
+#     sort_z = np.array(z)[sorted_idxs]
+#     knots = quantiles(sort_x,n=n_knots)
+#     # spl = spline(sort_x,sort_y,knots,w=sort_z,k=1)
+#     # plt.scatter(x,y,s=1)
+#     # plt.scatter(x,spl(x),s=1)
+#     # plt.plot(x,((y_range/x_range)*x)+min(y)-((y_range/x_range)*min(x)))
+#     _bool = np.abs((((y_range/x_range)*sort_x)+min(y)-((y_range/x_range)*min(x)))-sort_y)<(y_range/4)
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # find outliers and remove; points over 1/4 of the y range away from prediction
+#     # _bool = np.abs(spl(sort_x)-sort_y)<(y_range/4)
+#     # knots = quantiles(sort_x,n=4)
+#     spl2 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
+#     # spl2 = UnivariateSpline(sort_x,sort_y)
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # plt.scatter(x,spl2(x),s=1)
     
-    _bool = np.abs(spl2(sort_x)-sort_y)<(y_range/8)
+#     _bool = np.abs(spl2(sort_x)-sort_y)<(y_range/8)
     
-    # knots = quantiles(sort_x,n=n_knots)
-    spl3 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # plt.scatter(sort_x[_bool],spl3(sort_x[_bool]),s=1)
+#     # knots = quantiles(sort_x,n=n_knots)
+#     spl3 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # plt.scatter(sort_x[_bool],spl3(sort_x[_bool]),s=1)
     
-    return spl3
+#     return spl3
 
 
 
@@ -432,78 +432,78 @@ def fit_errors(errors,limit=10,percentile=.999):
 ##################################################################################################################################
 
 
-def fit_without_features(dia_spectra, librarySpectra):
+# def fit_without_features(dia_spectra, librarySpectra):
 
-    all_keys = list(librarySpectra)
-    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
+#     all_keys = list(librarySpectra)
+#     rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
     
-    # Adjust partitioning based on available data
-    totalIC = np.array([np.sum(i.intens) for i in dia_spectra.ms2scans])
-    total_scans = len(totalIC)
+#     # Adjust partitioning based on available data
+#     totalIC = np.array([np.sum(i.intens) for i in dia_spectra.ms2scans])
+#     total_scans = len(totalIC)
     
-    # Dynamically adjust number of partitions based on data size
-    num_partition = min(10, max(1, total_scans // 10))  # At least 1 partition, at most 10
+#     # Dynamically adjust number of partitions based on data size
+#     num_partition = min(10, max(1, total_scans // 10))  # At least 1 partition, at most 10
     
-    if num_partition > 0 and total_scans > 0:
-        # Calculate desired scans per partition
-        desired_per_partition = min(total_scans // num_partition, 
-                                   config.n_most_intense // num_partition)
+#     if num_partition > 0 and total_scans > 0:
+#         # Calculate desired scans per partition
+#         desired_per_partition = min(total_scans // num_partition, 
+#                                    config.n_most_intense // num_partition)
         
-        split_size = max(1, int(np.ceil(total_scans/num_partition)))
-        split_tic = [totalIC[i*split_size:min(total_scans, (i+1)*split_size)] for i in range(num_partition)]
+#         split_size = max(1, int(np.ceil(total_scans/num_partition)))
+#         split_tic = [totalIC[i*split_size:min(total_scans, (i+1)*split_size)] for i in range(num_partition)]
         
-        # Only take as many as available in each partition
-        split_top_n = []
-        for idx, tics in enumerate(split_tic):
-            if len(tics) > 0:  # Only process non-empty partitions
-                # Take min of desired or available
-                n_to_take = min(len(tics), desired_per_partition)
-                if n_to_take > 0:
-                    split_top_n.append((np.argsort(-tics)+(idx*split_size))[:n_to_take])
+#         # Only take as many as available in each partition
+#         split_top_n = []
+#         for idx, tics in enumerate(split_tic):
+#             if len(tics) > 0:  # Only process non-empty partitions
+#                 # Take min of desired or available
+#                 n_to_take = min(len(tics), desired_per_partition)
+#                 if n_to_take > 0:
+#                     split_top_n.append((np.argsort(-tics)+(idx*split_size))[:n_to_take])
         
-        if split_top_n:  # If we have any results
-            top_n = np.concatenate(split_top_n)
-        else:
-            # Fallback if partitioning fails
-            top_n = np.random.choice(np.arange(total_scans), 
-                                    min(total_scans, config.n_most_intense), 
-                                    replace=False)
-    else:
-        # Fallback for very small datasets
-        top_n = np.random.choice(np.arange(total_scans), 
-                                min(total_scans, config.n_most_intense), 
-                                replace=False)
+#         if split_top_n:  # If we have any results
+#             top_n = np.concatenate(split_top_n)
+#         else:
+#             # Fallback if partitioning fails
+#             top_n = np.random.choice(np.arange(total_scans), 
+#                                     min(total_scans, config.n_most_intense), 
+#                                     replace=False)
+#     else:
+#         # Fallback for very small datasets
+#         top_n = np.random.choice(np.arange(total_scans), 
+#                                 min(total_scans, config.n_most_intense), 
+#                                 replace=False)
    
     
 
     
 
-    top_n_spectra = [dia_spectra.ms2scans[i] for i in top_n]
+#     top_n_spectra = [dia_spectra.ms2scans[i] for i in top_n]
 
 
 
-    ### redefine "top_n_spectra" to evenly span Rt and m/z
-    np.random.seed(0)
-    #top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
+#     ### redefine "top_n_spectra" to evenly span Rt and m/z
+#     np.random.seed(0)
+#     #top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
     
     
-    fit_outputs=[]
+#     fit_outputs=[]
     
-    frags = []
-    for idx in tqdm.trange(len(top_n)):
-            fit_output = fit_to_lib(top_n_spectra[idx],
-                                    library=librarySpectra,
-                                    rt_mz=rt_mz,
-                                    all_keys=all_keys,
-                                    dino_features=None,
-                                    rt_filter=False,
-                                    return_frags=False,
-                                    ms1_spectra = dia_spectra.ms1scans,
-                                    frac_matched=.8
-                                    )
-            fit_outputs.append(fit_output)
+#     frags = []
+#     for idx in tqdm.trange(len(top_n)):
+#             fit_output = fit_to_lib(top_n_spectra[idx],
+#                                     library=librarySpectra,
+#                                     rt_mz=rt_mz,
+#                                     all_keys=all_keys,
+#                                     dino_features=None,
+#                                     rt_filter=False,
+#                                     return_frags=False,
+#                                     ms1_spectra = dia_spectra.ms1scans,
+#                                     frac_matched=.8
+#                                     )
+#             fit_outputs.append(fit_output)
     
-    return fit_outputs                                    
+#     return fit_outputs                                    
 
 def fit_with_features(dia_spectra, librarySpectra, dino_features):
     
@@ -1012,11 +1012,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
     
 
-    if dino_features is None:
-        fit_outputs = fit_without_features(dia_spectra, librarySpectra)
-
-    else:
-        fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
+    # if dino_features is None:
+    #     fit_outputs = fit_without_features(dia_spectra, librarySpectra)
+    # 
+    # else:
+    fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
         
     
     #################################################################################

@@ -18,7 +18,7 @@ from pathlib import Path
 from src.iso_functions import split_frag_name, fragment_seq
 
 from src.utils.misc_functions import frag_to_peak, specific_frags
-from src.utils.parse_peptides import parse_peptide
+from src.utils.parse_peptides import parse_peptide, split_frag_name
 
 from src.logger import logger
 """
@@ -139,17 +139,17 @@ def read_json_to_massTag(mass_tags_dir,filename):
         return None
                     
 
-## split up the fragment name (b/y)(-loss)(frag index)_charge
-def split_frag_name(ion_type):
-    frag_name,frag_z = ion_type.split("_")
-    loss_check = frag_name.split("-")
-    loss = ""
-    if len(loss_check)>1:
-        frag_name,loss = loss_check
-    frag_type = frag_name[0]
-    frag_idx = int(frag_name[1:])
+# ## split up the fragment name (b/y)(-loss)(frag index)_charge
+# def split_frag_name(ion_type):
+#     frag_name,frag_z = ion_type.split("_")
+#     loss_check = frag_name.split("-")
+#     loss = ""
+#     if len(loss_check)>1:
+#         frag_name,loss = loss_check
+#     frag_type = frag_name[0]
+#     frag_idx = int(frag_name[1:])
     
-    return frag_type,frag_idx,loss,frag_z 
+#     return frag_type,frag_idx,loss,frag_z 
 
 
 
