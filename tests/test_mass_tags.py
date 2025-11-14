@@ -1,7 +1,6 @@
 import pytest
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.mass_tags import massTag, read_json_to_massTag, refresh_tags, set_config_tag, tag_library
 import json
 import numpy as np
@@ -479,44 +478,3 @@ class Test_tag_library():
                     [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85]
                 ]), atol=1e-6)
 
-
-        
-
-
-
-
-
-
-
-
-    
-
-
-import pickle
-def main():
-    with open("d5_before.pkl", "rb") as f:
-        d5_before = pickle.load(f)
-    with open("d5_after.pkl", "rb") as f:
-        d5_after = pickle.load(f)
-
-    print(len(d5_before))
-    print(len(d5_after))
-
-    print("\n\n")
-    for i, (k, v) in enumerate(d5_before.items()):
-        if i == 0:
-            print(k)
-            print(v)
-
-    print("\n\n")
-    for i, (k, v) in enumerate(d5_after.items()):
-        if i in [0, 1]:
-            print(k)
-            print(v)
-            print("\n")
-
-    
-
-
-if __name__ == "__main__":
-    main()
