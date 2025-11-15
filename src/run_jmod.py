@@ -87,7 +87,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         use_feat = "Dino"
         dino_features = pd.read_csv(feature_path,delimiter="\t")
 
-    if config.args.use_features and not os.path.exists(feature_path):
+    if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
         import subprocess
         subprocess.run(["biosaur2", mzml_file], check=True)
         use_feat = "Dino"
@@ -161,11 +161,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     logger.info(config.args)
 
 
-    if config.args.use_features and os.path.exists(feature_path):
+    if config.args.use_features and os.path.exists(feature_path) and config.args.timeplex:
         logger.info("loading Dinosaur features")
-    if config.args.use_features and not os.path.exists(feature_path):
+    if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
         logger.info("Dinosaur feature file not found, running biosaur2")
-        #TODO no you arent?
+
 
     logger.info(f"Results will be saved to {results_folder_path}")
 

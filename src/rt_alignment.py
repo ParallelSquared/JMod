@@ -1066,17 +1066,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         output_df.to_csv(results_folder+"/firstSearch.csv", index=False)
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
 
-    cor_filter = np.ones_like(output_df.rt,dtype=bool) #TODO what is this doing?
-    if dino_features is not None:
-        
-        cor_filter, emp_rt_spl = empirical_fit(output_df,results_folder=results_folder)
-    else:
-        
-        hyper_cutoff = np.percentile(all_output_df.hyperscore,80)
-        all_cor_filter = all_output_df.hyperscore>hyper_cutoff
-        cor_filter = output_df.hyperscore>hyper_cutoff
-        # emp_rt_spl = initstepfit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter],1,z=np.array(all_output_df.hyperscore)[all_cor_filter])
-        emp_rt_spl = lowess_fit(np.array(all_output_df.lib_rt)[all_cor_filter],np.array(all_output_df.rt)[all_cor_filter])
+
+    cor_filter, emp_rt_spl = empirical_fit(output_df,results_folder=results_folder)
         
     
     
