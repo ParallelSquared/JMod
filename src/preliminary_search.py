@@ -9,28 +9,6 @@ from src.config import diann_mods
 from src.logger import logger
 from src.utils.io.load_files import Spectrum
 
-"""
-Output we need:
-    Retention time - incorrect because not standardized?
-    Retention time error - to calculate
-    mz observed
-    mz library? should be calculated
-    mz error
-
-    e value? poisson okay?
-
-
-    column normalization
-        spec_id is a number
-        Ms1_spec_id is a number
-        seq has mods in it, renormalize
-        stripped_sg
-        z is charge
-        window_mz is window center?
-        rt is normal
-        lib_rt
-"""
-
 
 def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10):
 
@@ -42,6 +20,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
                     for i in range(len(mass_tag.channel_names))}
     else:
         mod_dict = {}
+
     # Add all of the other supported modifications
     mod_dict.update(diann_mods)
 
@@ -54,6 +33,8 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     for seq, mod_seq in pep_seqs:
         rust_peps.append(ps.Peptide(seq, peptide_to_mod_array(mod_seq, mod_dict)))
         observed_mods.update(extract_mod_names(mod_seq))
+
+    print(observed_mods)
 
     # Create indexed database
     db = ps.IndexedDatabase.from_peptides( # TODO pass parameters as parameters
@@ -71,7 +52,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are annotated as
     scorer = ps.Scorer(
         precursor_tol_da=(-1,1), # Unused in WWA -> defaults to window tol
-        fragment_tol_ppm=(-1*ms2_ppm_error,ms2_ppm_error), # TODO pass as parameter
+        fragment_tol_ppm=(-1*ms2_ppm_error,ms2_ppm_error),
         min_isotope_err=0, # Changing these to look at other isotopes will require increasing report_PSMs due to
         max_isotope_err=0, # degenerate matches
         wide_window=True, # Uses window values instead of precursor masses
@@ -139,10 +120,8 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
 
     # Format for downstream
     df = adapt_output_df(df, lib_rts, rev_map)
-    print(len(df))
     # Filter out large MS1 errors
     df = df[df['ppm_error_ms1'].abs() < ms1_ppm_error]
-    print(len(df))
 
     ##########
     # This is a temporary solution to limit peptides to those inside the library
