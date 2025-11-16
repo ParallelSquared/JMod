@@ -262,6 +262,217 @@ def lowess_fit(x,y,frac=.2, it=3):
     return f
 
 
+def modal_lowess_fit(x, y, frac=0.2, grid_size=200):
+    """
+    Modal LOWESS-like smoother using local KDE to estimate mode(y | x).
+
+    Parameters
+    ----------
+    x : array-like
+    y : array-like
+    frac : float
+        Fraction of points to use in each local window (like LOWESS)
+    grid_size : int
+        Resolution of KDE evaluation for locating the mode.
+
+    Returns
+    -------
+    f : interp1d
+        Function mapping x -> modal-smoothed y.
+    """
+
+    from scipy.stats import gaussian_kde
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # Sort for consistency
+    order = np.argsort(x)
+    x_sorted = x[order]
+    y_sorted = y[order]
+    n = len(x_sorted)
+
+    # Window size like LOWESS
+    window = int(np.ceil(frac * n))
+    if window < 5:
+        window = 5
+
+    modal_y = []
+
+    # For each x point, compute the local mode
+    for i in range(n):
+        # Determine window indices
+        start = max(0, i - window // 2)
+        end = min(n, i + window // 2)
+
+        x_win = x_sorted[start:end]
+        y_win = y_sorted[start:end]
+
+        # KDE on y-values only
+        kde = gaussian_kde(y_win)
+
+        # Make a grid for searching the mode
+        y_grid = np.linspace(np.min(y_win), np.max(y_win), grid_size)
+        density = kde(y_grid)
+
+        # Mode = y with highest density
+        y_mode = y_grid[np.argmax(density)]
+        modal_y.append(y_mode)
+
+    modal_y = np.asarray(modal_y)
+
+    # Build interpolation function
+    f = interp1d(
+        x_sorted,
+        modal_y,
+        bounds_error=False,
+        fill_value=(modal_y.min(), modal_y.max())
+    )
+
+    return f
+
+
+import numpy as np
+from scipy.stats import gaussian_kde
+from scipy.interpolate import interp1d
+from statsmodels.nonparametric.smoothers_lowess import lowess
+
+
+def automated_robust_modal_lowess(x, y,
+                                  local_frac=0.2,
+                                  grid_size=200,
+                                  post_smooth_frac=0.1):
+    """
+    Automated Modal LOWESS-like smoother with a post-processing step
+    to ensure smoothness and stability.
+
+    Parameters
+    ----------
+    x : array-like
+    y : array-like
+    local_frac : float
+        Fraction of points to use in each local window for mode estimation.
+        (Controls local density analysis).
+    kde_grid_size : int
+        Resolution of KDE evaluation for locating the mode.
+    post_smooth_frac : float
+        Fraction used for the final LOWESS smoothing step on the calculated modes.
+        (Controls final curve smoothness, typical value 0.1).
+
+    Returns
+    -------
+    f_interp : interp1d
+        Function mapping x -> modal-smoothed y.
+    """
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # 1. Sort Data
+    order = np.argsort(x)
+    x_sorted = x[order]
+    y_sorted = y[order]
+    n = len(x_sorted)
+
+    # Calculate window size based on local_frac
+    window = int(np.ceil(local_frac * n))
+    if window < 5:
+        window = 5
+
+    modal_y = []
+
+    # 2. Local Mode Estimation
+    #    This step inherently resists outlier pull
+    for i in range(n):
+        # Determine window indices
+        start = max(0, i - window // 2)
+        end = min(n, i + window // 2)
+
+        y_win = y_sorted[start:end]
+
+        # KDE on y-values only (default bandwidth is automatically set)
+        kde = gaussian_kde(y_win)
+
+        # Make a grid for searching the mode
+        # Adding a small buffer for grid range improves stability near min/max
+        y_min, y_max = np.min(y_win), np.max(y_win)
+        y_range = y_max - y_min
+        y_grid = np.linspace(y_min - y_range * 0.05, y_max + y_range * 0.05, grid_size)
+
+        density = kde(y_grid)
+
+        # Mode = y with highest density
+        y_mode = y_grid[np.argmax(density)]
+        modal_y.append(y_mode)
+
+    modal_y = np.asarray(modal_y)
+
+    # 3. Post-Smoothing (Automated Noise Reduction)
+    #    Applying a non-robust LOWESS to the modes smooths the "gaps" (slopes)
+    #    between successive modal estimates.
+
+    # We use 'lowess' from statsmodels for the smoothing operation
+    # It returns a 2-column array (x, y_smoothed), so we take the 2nd column (index 1)
+    y_smoothed = lowess(
+        endog=modal_y,
+        exog=x_sorted,
+        frac=post_smooth_frac,  # Controls final smoothness
+        it=0,  # Turn off robustness (not needed on clean modal data)
+        delta=0.0  # Calculate at every point
+    )[:, 1]
+
+    # 4. Build Interpolation Function
+    f_interp = interp1d(
+        x_sorted,
+        y_smoothed,
+        bounds_error=False,
+        # Use the min/max of the smoothed values for boundary handling
+        fill_value=(y_smoothed.min(), y_smoothed.max())
+    )
+
+    return f_interp
+
+
+from sklearn.cluster import MeanShift
+
+def mean_shift_ridge_fit(x, y, bandwidth=None, quantile=0.2):
+    """
+    Extracts the dominant ridge in (x, y) using 2D mean-shift density ascent.
+
+    Returns an interp1d f(x) like lowess_fit.
+    """
+
+    # Combine into 2D points
+    pts = np.column_stack((x, y))
+
+    # Auto bandwidth if not given
+    if bandwidth is None:
+        from sklearn.neighbors import NearestNeighbors
+        nbrs = NearestNeighbors(n_neighbors=int(len(x) * quantile)).fit(pts)
+        dists, _ = nbrs.kneighbors(pts)
+        bandwidth = np.median(dists[:, -1])  # k-NN heuristic
+
+    # Run mean-shift clustering
+    ms = MeanShift(bandwidth=bandwidth, bin_seeding=True)
+    ms.fit(pts)
+    labels = ms.labels_
+
+    # Find the largest-density trajectory = largest cluster
+    largest_cluster = np.argmax(np.bincount(labels))
+    ridge_points = pts[labels == largest_cluster]
+
+    # Sort by x
+    ridge_points = ridge_points[np.argsort(ridge_points[:, 0])]
+
+    # Build interpolator
+    f = interp1d(
+        ridge_points[:, 0],
+        ridge_points[:, 1],
+        bounds_error=False,
+        fill_value=(ridge_points[:, 1].min(), ridge_points[:, 1].max())
+    )
+
+    return f
     
     
 def closest_spec(dia_rt_mzwin, mz, rt):
@@ -705,11 +916,15 @@ def empirical_fit(output_df,results_folder=None):
                                                                                                             )
         """
         poisson = output_df["poisson"].to_numpy()
-        thr = np.percentile(poisson[~np.isnan(poisson)], 100 - feature_percentile)
-        cor_filter = poisson < thr
+        hyperscore = output_df["hyperscore"].to_numpy()
+        thr_poisson = np.percentile(poisson[~np.isnan(poisson)], 100 - feature_percentile)
+        thr_hyperscore = np.percentile(hyperscore[~np.isnan(hyperscore)], feature_percentile)
+        cor_filter = (poisson < thr_poisson) & (hyperscore > thr_hyperscore)
+        cor_filter = (poisson < thr_poisson)# & (hyperscore > thr_hyperscore)
+
         
         
-        f = lowess_fit(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.1)
+        f = automated_robust_modal_lowess(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.05, grid_size=200, post_smooth_frac=0.1)
         plt.subplots()
         plt.scatter(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],s=1)
         plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)
