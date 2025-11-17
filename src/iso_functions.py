@@ -11,16 +11,80 @@ from pyteomics import mass
 import src.config as config
 import tqdm
 import os
+import copy
 from functools import reduce
 import copy
 import numpy as np
 
+from src.utils.parse_peptides import parse_peptide, split_frag_name
 from src.utils.parse_peptides import parse_peptide, split_frag_name
 
 from src.utils.misc_functions import frag_to_peak
 
 from src.logger import logger
 
+
+
+# ## split up the fragment name (b/y)(frag index)(-loss)_charge
+# def split_frag_name(ion_type):
+#     frag_name,frag_z = ion_type.split("_")
+#     loss_check = frag_name.split("-")
+#     loss = ""
+#     if len(loss_check)>1:
+#         frag_name,loss = loss_check
+#     frag_type = frag_name[0]
+#     frag_idx = int(frag_name[1:])
+    
+#     return frag_type,frag_idx,loss,frag_z
+
+# def parse_peptide(seq):
+#     close_d = {"[": "]", "(": ")"}
+#     open_set = set(close_d.keys())
+#     close_set = set(close_d.values())
+    
+#     new_seq = []
+#     current = ""
+#     s_idx = 0
+
+#     while s_idx < len(seq):
+#         s = seq[s_idx]
+
+#         if s in open_set:
+#             # Begin collecting the bracketed modification
+#             opener = s
+#             closer = close_d[opener]
+#             mod = s
+#             stack = [closer]
+#             s_idx += 1
+
+#             while s_idx < len(seq) and stack:
+#                 c = seq[s_idx]
+#                 mod += c
+
+#                 if c in open_set:
+#                     stack.append(close_d[c])
+#                 elif c in close_set:
+#                     if stack and c == stack[-1]:
+#                         stack.pop()
+#                 s_idx += 1
+
+#             current += mod  # Append full modification to current letter
+
+#         elif s.isalpha():
+#             if current:
+#                 new_seq.append(current)
+#             current = s
+#             s_idx += 1
+
+#         else:
+#             # If somehow an unexpected char, just add it
+#             current += s
+#             s_idx += 1
+
+#     if current:
+#         new_seq.append(current)
+
+#     return new_seq
     
 ### First get the AA sequence and modifications of the fragment
 def fragment_seq(peptide, ion_type):
@@ -91,10 +155,6 @@ def get_seq_comp(split_seq,ion_type):
         seq_comp += unimods.by_id(unimod_idx)["composition"]
     return seq_comp
 
-
-
-
-import copy
 
 def frag_isotope(frag,seq):
     # mz,intensity = frags[frag]

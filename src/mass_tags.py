@@ -19,7 +19,7 @@ from src.iso_functions import fragment_seq
 from src.utils.parse_peptides import split_frag_name
 
 from src.utils.misc_functions import frag_to_peak, specific_frags
-from src.utils.parse_peptides import parse_peptide
+from src.utils.parse_peptides import parse_peptide, split_frag_name
 
 from src.logger import logger
 """
