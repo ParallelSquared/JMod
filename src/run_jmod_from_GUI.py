@@ -1003,7 +1003,7 @@ class JModGUI(ThemedTk):
             return
         
         try: ##test if long paths break system
-            long_name = "a" * 260 + ".txt"
+            long_name = "a" * 250 + ".txt"
             test_path = os.path.join(tempfile.gettempdir(), long_name)
             with open(test_path, "w") as f:
                 f.write("test")
