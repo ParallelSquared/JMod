@@ -95,20 +95,16 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     
     ms2_align = "MS2align" if config.args.ms2_align else ""
-    results_folder_name = "_".join([spec_file_name,
-                                    lib_file_name+"Update130525",
-                                    f"{config.mz_ppm}ppm",
-                                    f"{config.atleast_m}m",
-                                    f"unmatch{config.unmatched_fit_type}",
-                                    f"DECOY{config.args.decoy}",
-                                    f"libfrac{config.args.lib_frac}",
-                                    *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,plexDIA,is_timeplex,dummy_val]))])
-    
 
-    results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
+    results_folder_name = spec_file_name + "_results" + "_" + dummy_val
+    results_folder_name = results_folder_name.rstrip("_")
 
     if config.args.output_folder is not None:
-        results_folder_path = config.args.output_folder +"/" +results_folder_name
+        os.makedirs(config.args.output_folder, exist_ok=True)
+        results_folder_path = os.path.join(config.args.output_folder, results_folder_name)
+    else:
+        results_folder_path = os.path.join(os.path.dirname(mzml_file), results_folder_name)
+
 
     if not os.path.exists(results_folder_path):
         try:
@@ -181,7 +177,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     if config.args.use_features and not os.path.exists(feature_path):
         logger.info("Dinosaur feature file not found, running biosaur2")
 
-    logger.info(f"Results will be saved to {results_folder_path}")
+    logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
 
     
     # logger.info(config.args.tag)
