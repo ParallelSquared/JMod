@@ -113,10 +113,16 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     if not os.path.exists(results_folder_path):
         try:
             os.mkdir(results_folder_path)
-        except:
+        except FileNotFoundError as e:
+            if "[WinError 3]" in str(e):
+                from src.utils.gui_utils import send_raise_to_TK
+                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+                raise ValueError("Path Length Limit Exceeded")
+        except Exception as e:
             from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
-            raise ValueError("Path Length Limit Exceeded")
+            send_raise_to_TK(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError: \n{str(e)}")
+            raise e
+           
         
     if len(results_folder_path) >= 225:  ##if results path is long, check to make sure putting things in it wont break (i.e. windows with long paths enabled or different OS)
         try:
@@ -124,10 +130,15 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             with open(test_path, "w") as f:
                 f.write("test")
             os.remove(test_path)
-        except:
+        except FileNotFoundError as e:
+            if "[WinError 3]" in str(e):
+                from src.utils.gui_utils import send_raise_to_TK
+                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+                raise ValueError("Path Length Limit Exceeded")
+        except Exception as e:
             from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
-            raise ValueError("Path Length Limit Exceeded")
+            send_raise_to_TK(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError:\n{str(e)}")
+            raise e
 
     
 

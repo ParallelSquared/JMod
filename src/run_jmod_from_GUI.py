@@ -397,7 +397,7 @@ class JModGUI(ThemedTk):
                 display_name = basename
             self.presets_label.config(text=display_name)
             self.import_json(file_path)
-            logger.info(f"Loaded Presets from {file_path}")
+            logging.getLogger("GUI").info(f"Loaded Presets from {file_path}")
         else:
             pass
 
@@ -968,7 +968,7 @@ class JModGUI(ThemedTk):
         config_args_dict = self.make_config_dict(None, run=False)
         if config_args_dict is None:
             return
-        logger.info("Saving Configuration")
+        logging.getLogger("GUI").info("Saving Configuration")
         initial_dir = os.path.join(os.path.dirname(__file__), "Presets")
         filename = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")], title="Save Configuration As", initialdir = initial_dir)
         if filename:
@@ -1003,18 +1003,28 @@ class JModGUI(ThemedTk):
             return
         
         try: ##test if long paths break system
-            long_name = "a" * 240 + ".txt"
+            long_name = "a" * 260 + ".txt"
             test_path = os.path.join(tempfile.gettempdir(), long_name)
             with open(test_path, "w") as f:
                 f.write("test")
             os.remove(test_path)
-        except:
-            ask_exit = tk.messagebox.askyesno("Path Limit Warning.", r"Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
-            if ask_exit:
-                logger.info("JMod Exited")
-                return
+        except FileNotFoundError as e:
+            if "[WinError 3]" in str(e) or "[Errno 2]" in str(e):
+                ask_exit = tk.messagebox.askyesno("Path Limit Warning.", r"Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
+                if ask_exit:
+                    logging.getLogger("GUI").info("JMod Exited")
+                    return
+                else:
+                    # logger.warning("Long Paths Enabled. Downstream processes may break")
+                    logging.getLogger("GUI").warning("Long Paths Enabled. Downstream processes may break")
             else:
-                logger.warning("Long Paths Enabled. Downstream processes may break")
+                logging.getLogger("GUI").warning(f"Long path test failed with unknown FileNotFoundError:\n{e}")
+                tk.messagebox.showwarning("Path Test Warning", f"Long path test failed with unknown FileNotFoundError:\n{e}")
+                return
+        except Exception as e:
+            logging.getLogger("GUI").warning(f"Long path test failed with unknown error:\n{e}")
+            tk.messagebox.showwarning("Path Test Warning", f"Long path test failed with unknown error:\n{e}")
+            return
             
         
 

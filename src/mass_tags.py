@@ -21,7 +21,9 @@ from src.utils.parse_peptides import split_frag_name
 from src.utils.misc_functions import frag_to_peak, specific_frags
 from src.utils.parse_peptides import parse_peptide, split_frag_name
 
+import logging
 from src.logger import logger
+logger = logging.getLogger("GUI")
 """
 ## Load in the library
 from SpecLib import loadSpecLib, write_speclib_tsv
