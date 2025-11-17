@@ -129,7 +129,7 @@ def get_seq_comp(split_seq,ion_type):
     stripped_seq = "".join([i[0] for i in split_seq]) ## assumes AA comes first before mods
     
     # mods = [int(j) for i in split_seq for j in re.findall("\([A-z]+\:(\d+)\)",i) if len(i)>1]
-    mods = [int(j) for i in split_seq for j in mod_pattern.findall(i) if len(i)>1]
+    mods = [int(j) for i in split_seq for j in mod_pattern.findall(i) if len(i)>1] ### TODO Make work for more mod types
     # tags = [t for aa in split_seq for t in re.findall("(\(.*?\))",aa)]
     seq_comp = mass.Composition(sequence=stripped_seq,ion_type=ion_type)
     for unimod_idx in mods:
@@ -177,7 +177,7 @@ def gen_isotopes(seq,frags):
     sorted_frags = new_frags[np.argsort(new_frags[:,0])]
     return sorted_frags/[1,np.max(np.array(new_frags)[:,1])]
 
-def gen_isotopes_dict(seq,frags, tag = None):
+def gen_isotopes_dict(seq,frags, tag, n_iso):
     new_frags = {}
     for frag in frags:
         mz,intensity = frags[frag]
@@ -198,7 +198,7 @@ def gen_isotopes_dict(seq,frags, tag = None):
             tag_mz = 0
         
         isotopes = isotopic_variants(frag_comp,
-                                     npeaks=config.num_iso_peaks,
+                                     npeaks=n_iso,
                                      charge = frag_z)
         mono_iso_peak = isotopes[0]
         for iso_idx,iso in enumerate(isotopes):
@@ -211,7 +211,7 @@ def gen_isotopes_dict(seq,frags, tag = None):
                 
     return frag_to_peak(new_frags,return_frags=True)
 
-def iso_library(library):
+def iso_library(library,tag,n_iso):
     ## add n isotpic peaks to the "spectrum" portio of each library entry
     logger.info("Creating Copy of Library...")
     new_library = copy.deepcopy(library)
@@ -221,12 +221,12 @@ def iso_library(library):
         frags = new_library[key]["frags"]
         
         # new_library[key]["spectrum"] = gen_isotopes(key[0],frags)
-        new_library[key]["spectrum"],new_library[key]["ordered_frags"] = gen_isotopes_dict(key[0],frags)
+        new_library[key]["spectrum"],new_library[key]["ordered_frags"] = gen_isotopes_dict(key[0],frags,tag,n_iso)
         
     return new_library
 
 import multiprocessing
-def iso_library_multi(library):
+def iso_library_multi(library,tag,n_iso):
     ## add n isotpic peaks to the "spectrum" portio of each library entry
     logger.info("Creating Copy of Library...")
     new_library = copy.deepcopy(library)
@@ -235,8 +235,10 @@ def iso_library_multi(library):
     all_keys = list(new_library)
     all_seqs = [i[0] for i in all_keys]
     all_frags = [new_library[i]["frags"] for i in new_library]
+    all_tag = [tag for _ in all_keys]
+    all_iso = [n_iso for _ in all_keys]
     with multiprocessing.Pool(8) as p:
-        iso_out = p.starmap(gen_isotopes_dict,tqdm.tqdm(zip(all_seqs,all_frags),total=len(all_seqs)))
+        iso_out = p.starmap(gen_isotopes_dict,tqdm.tqdm(zip(all_seqs,all_frags,all_tag,all_iso),total=len(all_seqs)))
     for key,out in zip(all_keys,iso_out):
         new_library[key]["spectrum"],new_library[key]["ordered_frags"] = out
         

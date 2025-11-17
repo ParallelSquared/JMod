@@ -6,7 +6,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
 # Update imports to relative imports
-from src import config
+import src.config as config
 import numpy as np
 import os
 import time 
@@ -297,14 +297,18 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
 
     if config.args.iso:
-        # spectrumLibrary = iso_f.iso_library(spectrumLibrary)
-        spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary)
+        # spectrumLibrary = iso_f.iso_library(spectrumLibrary
+        #                                            tag=config.tag,
+        #                                            n_iso=config.num_iso_peaks)
+        spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
+                                                  tag=config.tag,
+                                                  n_iso=config.num_iso_peaks)
         
     # with open(results_folder_path+"/slib","wb") as dill_file:
     #     slib = dill.dump(spectrumLibrary,dill_file)   
       
     logger.info("Creating Decoy Library")
-    decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev")
+    decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev",tag=config.tag,n_iso=config.num_iso_peaks)
     for key in spectrumLibrary:
         spectrumLibrary[key]["top_n"]=np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
     for key in decoy_lib:
