@@ -432,6 +432,67 @@ def automated_robust_modal_lowess(x, y,
 
     return f_interp
 
+def fast_modal_lowess(x, y,
+                      local_frac=0.2,
+                      grid_size=100,
+                      anchors=200,
+                      post_smooth_frac=0.1):
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # Sort
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+    n = len(x)
+
+    # window size
+    w = max(5, int(local_frac * n))
+
+    # choose anchor positions
+    anchor_idx = np.linspace(0, n - 1, anchors).astype(int)
+
+    modal_vals = np.zeros(len(anchor_idx))
+
+    # Silverman bandwidth (fixed)
+    bw = 1.06 * np.std(y) * n ** (-1 / 5)
+
+    from scipy.stats import norm
+
+    for k, i in enumerate(anchor_idx):
+
+        start = max(0, i - w // 2)
+        end = min(n, i + w // 2)
+        y_win = y[start:end]
+
+        y_min, y_max = y_win.min(), y_win.max()
+        y_range = y_max - y_min
+
+        # small grid
+        grid = np.linspace(y_min - 0.05 * y_range,
+                           y_max + 0.05 * y_range,
+                           grid_size)
+
+        # fast KDE
+        diff = (grid[None, :] - y_win[:, None]) / bw
+        density = norm.pdf(diff).sum(axis=0)
+
+        modal_vals[k] = grid[np.argmax(density)]
+
+    # interpolate modal values to full x-grid
+    modal_full = np.interp(x, x[anchor_idx], modal_vals)
+
+    # Post smooth
+    smooth = lowess(modal_full, x, frac=post_smooth_frac, it=0)[:, 1]
+
+    # Build interpolator
+    return interp1d(
+        x, smooth,
+        bounds_error=False,
+        fill_value=(smooth.min(), smooth.max())
+    )
+
 
 from sklearn.cluster import MeanShift
 
@@ -474,7 +535,104 @@ def mean_shift_ridge_fit(x, y, bandwidth=None, quantile=0.2):
 
     return f
     
-    
+from scipy.stats import norm
+def mean_shift_lowess(x, y,
+                      local_frac=0.2,
+                      anchors=300,
+                      bandwidth=None,
+                      max_iter=10,
+                      tol=1e-3,
+                      post_smooth_frac=0.1):
+    """
+    Fast 1D Mean-Shift LOWESS-like smoother.
+    Tracks the dominant ridge of the data (mode-following trend).
+
+    Parameters
+    ----------
+    x, y : array-like
+        Input data.
+    local_frac : float
+        Fraction of points used in each local window.
+    anchors : int
+        Number of mean-shift anchor evaluation points.
+    bandwidth : float or None
+        KDE bandwidth. If None, uses Silverman's rule.
+    max_iter : int
+        Max iterations for mean-shift.
+    tol : float
+        Convergence threshold.
+    post_smooth_frac : float
+        Final LOWESS smoothing fraction.
+
+    Returns
+    -------
+    f_interp : interp1d
+        Function mapping x → smoothed ridge curve.
+    """
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # Sort by x
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+
+    n = len(x)
+    w = max(5, int(local_frac * n))
+
+    # Anchors: compute ridge only at these points → fast
+    anchor_idx = np.linspace(0, n - 1, anchors).astype(int)
+    anchor_x = x[anchor_idx]
+    result_y = np.zeros_like(anchor_x)
+
+    # Bandwidth: Silverman rule (global)
+    if bandwidth is None:
+        bw = 1.06 * np.std(y) * n ** (-1/5)
+        if bw <= 0:
+            bw = np.std(y[y > np.median(y)])  # fallback
+        bw = max(bw, 1e-6)
+    else:
+        bw = bandwidth
+
+    for k, idx in enumerate(anchor_idx):
+        # Local window around anchor
+        start = max(0, idx - w//2)
+        end = min(n, idx + w//2)
+        y_win = y[start:end]
+
+        # Initialize mean-shift position
+        y0 = np.median(y_win)
+
+        for _ in range(max_iter):
+            # Compute Gaussian weights
+            u = (y0 - y_win) / bw
+            wts = norm.pdf(u)
+
+            # Weighted mean update
+            y1 = np.sum(wts * y_win) / (np.sum(wts) + 1e-12)
+
+            # Check convergence
+            if abs(y1 - y0) < tol:
+                break
+
+            y0 = y1
+
+        result_y[k] = y0
+
+    # Interpolate anchor points back to full x-resolution
+    ridge = np.interp(x, anchor_x, result_y)
+
+    # Final smoothness pass (true LOWESS)
+    ridge_smooth = lowess(ridge, x, frac=post_smooth_frac, it=0)[:, 1]
+
+    return interp1d(
+        x, ridge_smooth,
+        bounds_error=False,
+        fill_value=(ridge_smooth.min(), ridge_smooth.max())
+    )
+
+
 def closest_spec(dia_rt_mzwin, mz, rt):
     """
     Find which window is closest to the desired m/z and RT 
@@ -924,7 +1082,10 @@ def empirical_fit(output_df,results_folder=None):
 
         
         
-        f = automated_robust_modal_lowess(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.05, grid_size=200, post_smooth_frac=0.1)
+        #f = automated_robust_modal_lowess(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.05, grid_size=200, post_smooth_frac=0.1)
+        #f = fast_modal_lowess(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.05, grid_size=100, anchors=200, post_smooth_frac=0.1)
+        f = mean_shift_lowess(output_df.lib_rt[cor_filter], output_df.rt[cor_filter], local_frac=0.05, max_iter=10, anchors=200,
+                              post_smooth_frac=0.1)
         plt.subplots()
         plt.scatter(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],s=1)
         plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)
