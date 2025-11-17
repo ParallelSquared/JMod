@@ -21,6 +21,18 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     else:
         mod_dict = {}
 
+    # Get tag plex
+    if mass_tag.name == "PSMtag":
+        plex = 1
+    elif mass_tag.name == "PSMtag_3plex":
+        plex = 3
+    elif mass_tag.name == "PSMtag_5plex":
+        plex = 5
+    elif mass_tag.name == "PSMtag_9plex":
+        plex = 9
+    else:
+        plex = 1
+
     # Add all of the other supported modifications
     mod_dict.update(diann_mods)
 
@@ -58,7 +70,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         wide_window=True, # Uses window values instead of precursor masses
         chimera=False, # False, do not iteratively remove peaks
         annotate_matches=True, # Add fragment annotation
-        report_psms=5
+        report_psms=5*plex
     )
 
     # Convert spectra into a Rust-friendly format
