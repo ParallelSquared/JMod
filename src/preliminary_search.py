@@ -39,7 +39,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     # Create indexed database
     db = ps.IndexedDatabase.from_peptides( # TODO pass parameters as parameters
         peptides=rust_peps,
-        bucket_size=128,
+        bucket_size=256,
         ion_kinds=["b", "y"],
         min_ion_index=1,
         generate_decoys=False,
@@ -58,7 +58,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         wide_window=True, # Uses window values instead of precursor masses
         chimera=False, # False, do not iteratively remove peaks
         annotate_matches=True, # Add fragment annotation
-        report_psms=5
+        report_psms=9
     )
 
     # Convert spectra into a Rust-friendly format
