@@ -1,0 +1,13 @@
+{
+    "rules": "nK",
+    "base_mass": 78.03437413308,
+    "delta": [
+        0.0,
+        2.006709675600007
+    ],
+    "channel_names": [
+        "0",
+        "2"
+    ],
+    "name": "test_no_comps"
+}

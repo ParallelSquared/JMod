@@ -15,10 +15,11 @@ import copy
 import json
 from pathlib import Path
 
-from src.iso_functions import split_frag_name, fragment_seq
+from src.iso_functions import fragment_seq
+from src.utils.parse_peptides import split_frag_name
 
 from src.utils.misc_functions import frag_to_peak, specific_frags
-from src.utils.parse_peptides import parse_peptide
+from src.utils.parse_peptides import parse_peptide, split_frag_name
 
 from src.logger import logger
 """
@@ -138,19 +139,6 @@ def read_json_to_massTag(mass_tags_dir,filename):
     else:
         return None
                     
-
-## split up the fragment name (b/y)(-loss)(frag index)_charge
-def split_frag_name(ion_type):
-    frag_name,frag_z = ion_type.split("_")
-    loss_check = frag_name.split("-")
-    loss = ""
-    if len(loss_check)>1:
-        frag_name,loss = loss_check
-    frag_type = frag_name[0]
-    frag_idx = int(frag_name[1:])
-    
-    return frag_type,frag_idx,loss,frag_z 
-
 
 
 
@@ -302,10 +290,10 @@ def tag_library(library,tag=mTRAQ):
 
 # mTRAQ_lib = tag_library(library, tag=mTRAQ)
 
-available_tags = {}
-def refresh_tags():
-    available_tags.clear()
-    mass_tags_dir = Path(__file__).parent / "MassTags"
+def refresh_tags(mass_tags_dir=None): #set mass tags dir to none for testing purposes
+    available_tags = {}
+    if mass_tags_dir is None:
+        mass_tags_dir = Path(__file__).parent / "MassTags"
     subset_dir = mass_tags_dir / "Subsets"
     for directory in (mass_tags_dir, subset_dir):
         for filename in os.listdir(directory):
@@ -315,22 +303,21 @@ def refresh_tags():
                     logger.warning(f"Unable to load mass tag from {filename}\n")  
                 elif mass_tag:
                     available_tags[mass_tag.name] = mass_tag
+    return available_tags
 
-refresh_tags()
+available_tags = refresh_tags()
 
 
 
-# if config.args.mTRAQ:
-#     config.tag = mTRAQ
+def set_config_tag(available_tags, config_args_tag):
+    if config_args_tag in available_tags:
+        return available_tags[config_args_tag]
+    elif config_args_tag == "None":
+        return None
+    else:
+        from src.utils.gui_utils import send_raise_to_TK
+        send_raise_to_TK(f"Exception - Tag {config_args_tag} not in available tags")
+        raise Exception(f"Exception - Tag '{config_args_tag}' not in available tags:\n{list(available_tags.keys())}")
 
-# else: 
-#     config.tag = None
 
-if config.args.tag in available_tags:
-    config.tag = available_tags[config.args.tag]
-elif config.args.tag == "None":
-    config.tag = None
-else:
-    from src.utils.gui_utils import send_raise_to_TK
-    send_raise_to_TK("Exception - Incompatible Tag")
-    raise Exception("Incompatible Tag")
+config.tag = set_config_tag(available_tags, config.args.tag)

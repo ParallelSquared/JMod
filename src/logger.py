@@ -35,7 +35,7 @@ def set_log_filepath(logfile_path):
     file_handler = logging.FileHandler(logfile_path, mode="a")
     file_handler.setLevel(logging.DEBUG)
     fmt = ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s")
-    fmt.start_time = start_time
+    fmt.start_time = start_time 
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 

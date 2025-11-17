@@ -101,7 +101,10 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
                                                                                                                                         mz_ppm=mz_ppm, 
                                                                                                                                         rt_tol = rt_tol,
                                                                                                                                         tag=mass_tag,
-                                                                                                                                        timeplex=timeplex
+                                                                                                                                        timeplex=timeplex,
+                                                                                                                                        num_iso = config.num_iso_ms1,
+                                                                                                                                        num_iso_r = config.num_iso_r,
+                                                                                                                                        additional_scans = config.additional_scans                                             
                                                                                                                                         )
         
         ## create dictionary  that links keys to data so we can match the order of "fdc"
