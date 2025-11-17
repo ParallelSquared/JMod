@@ -58,7 +58,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         wide_window=True, # Uses window values instead of precursor masses
         chimera=False, # False, do not iteratively remove peaks
         annotate_matches=True, # Add fragment annotation
-        report_psms=9
+        report_psms=5
     )
 
     # Convert spectra into a Rust-friendly format
