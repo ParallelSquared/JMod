@@ -1009,7 +1009,7 @@ class JModGUI(ThemedTk):
                 f.write("test")
             os.remove(test_path)
         except FileNotFoundError as e:
-            if "[WinError 3]" in str(e) or "[Errno 2]" in str(e):
+            if "[WinError 3]" in str(e) or "[Errno 2]" in str(e) or "[WinError 206]" in str(e):
                 ask_exit = tk.messagebox.askyesno("Path Limit Warning.", r"Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
                 if ask_exit:
                     logging.getLogger("GUI").info("JMod Exited")
