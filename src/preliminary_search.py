@@ -2,6 +2,7 @@ import sys
 import numpy as np
 import peppy_sage as ps
 import pandas as pd
+import polars as pl
 import re
 from tqdm.auto import tqdm
 
@@ -46,15 +47,15 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         rust_peps.append(ps.Peptide(seq, peptide_to_mod_array(mod_seq, mod_dict)))
         observed_mods.update(extract_mod_names(mod_seq))
 
-    print(observed_mods)
+    rev_map = {round(mod_dict[m], 4): m for m in observed_mods}  # Allows us to lookup mods by mass despite float error
 
     # Create indexed database
-    db = ps.IndexedDatabase.from_peptides( # TODO pass parameters as parameters
+    db = ps.IndexedDatabase.from_peptides(  # TODO pass parameters as parameters
         peptides=rust_peps,
-        bucket_size=256,
+        bucket_size=2048,
         ion_kinds=["b", "y"],
         min_ion_index=1,
-        generate_decoys=False,
+        generate_decoys=True,
         decoy_tag="rev_",
         peptide_min_mass=0.0,
         peptide_max_mass=5000.0,
@@ -89,51 +90,67 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     #   up new threads)
     logger.info("Searching spectra in chunks")
     chunk_size = 1000
-    hits = []
+    hits = None # Rust object holding arrays of hits
     for i in tqdm(range(0, len(rust_specs), chunk_size)):
         chunk = rust_specs[i:i + chunk_size]
         batch_hits = scorer.score_many(db, chunk)
-        hits.extend(batch_hits)
+        if hits is None:
+            hits = batch_hits
+        else:
+            hits.extend(batch_hits)
 
-    # Flatten hits and convert to dict
-    # rows = [feat.to_dict() for group in hits for feat in group]
-    rows = []
+    # Make Polars dataframe
+    logger.info("Building results dataframe")
+    col_names = hits.get_column_names()
+    df = pl.DataFrame({name: getattr(hits, name) for name in col_names})
+    del hits # Free the memory of the Rust result container
 
-    # TODO clean up results
-    for group in hits:
-        for feat in group:
-            d = feat.to_dict()
+    # 2. Vectorized Calculation of Theoretical m/z (using Polars UDF)
+    # The UDF will run the Python function but is integrated into Polars' execution engine.
+    df = df.with_columns(
+        pl.struct(['sequence', 'modifications', 'charge'])
+        .map_elements(calculate_theo_mz_udf, return_dtype=pl.Float64)
+        .alias("theoretical_mz")
+    )
 
-            # Compute theoretical m/z
-            theo_mz = ps.Peptide.calculate_theoretical_mz(feat.sequence, feat.modifications, feat.charge)
-            d["theoretical_mz"] = theo_mz
+    # 3. MS1 Lookup (The non-vectorized bottleneck, handled in a dedicated function)
+    # Convert Polars DF to Python lists, run the loop, and convert result back to Polars.
+    ms1_data_list = lookup_ms1_data_list(df, dia_spectra)
+    ms1_df = pl.DataFrame(ms1_data_list)
 
-            # Get nearest MS1 scan from cached mapping
-            ms1_scan = dia_spectra.get_nearest_ms1_for_scan(feat.spec_id)
-            d['Ms1_spec_id'] = ms1_scan.scan_num
+    # Add the MS1 data columns back to the main DataFrame
+    # Since the data was iterated in order, we can just horizontally stack (hstack)
+    df = df.hstack(ms1_df)
 
-            closest_idx, closest_mz, intensity = ms1_scan.closest_peak(theo_mz)
+    # 4. Vectorized Error Calculations (Polars Expressions)
+    df = df.with_columns([
+        # Calculate difference
+        (pl.col("closest_peak_mz_ms1") - pl.col("theoretical_mz")).alias("mz_diff")
+    ]).with_columns([
+        # Calculate relative error
+        (pl.col("mz_diff") / pl.col("theoretical_mz")).alias("relative_error_ms1")
+    ]).with_columns([
+        # Calculate PPM error
+        (pl.col("relative_error_ms1") * 1_000_000).alias("ppm_error_ms1")
+    ])
+    # Clean up the intermediate column
+    df = df.drop("mz_diff")
 
-            d["closest_peak_mz_ms1"] = closest_mz
-            d["closest_peak_intensity_ms1"] = intensity
-            relative_error = (d["closest_peak_mz_ms1"] - d["theoretical_mz"]) / d["theoretical_mz"]
-            ppm_error = (d["closest_peak_mz_ms1"] - d["theoretical_mz"]) / d["theoretical_mz"] * 1000000
-            d["ppm_error_ms1"] = ppm_error
-            d["relative_error_ms1"] = relative_error
-
-            rows.append(d)
-
-    # Convert results to the downstream-compatible df
-    df = pd.DataFrame(rows)
-    rev_map = {round(mod_dict[m], 4): m for m in observed_mods} # Allows us to lookup mods by mass despite float error
+    # 5. Filter out large MS1 errors (Polars syntax)
+    df = df.filter(pl.col('ppm_error_ms1').abs() < ms1_ppm_error)
 
     # Get RTs for alignment
     lib_rts = {v['mod_seq'] : v['iRT'] for v in library_spectra.values()}
 
-    # Format for downstream
+    # Adapt the dataframe to the format expected downstream
     df = adapt_output_df(df, lib_rts, rev_map)
-    # Filter out large MS1 errors
-    df = df[df['ppm_error_ms1'].abs() < ms1_ppm_error]
+
+    # Back to pandas
+    df = df.to_pandas()
+
+    """
+    print(df)
+    logger.info("6")
 
     ##########
     # This is a temporary solution to limit peptides to those inside the library
@@ -147,126 +164,128 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     df["__key"] = list(zip(df["seq"], df["z"].astype(int)))
     mask = df["__key"].map(valid_keys.__contains__)
 
-    df = df[mask].drop(columns="__key")
+    #df = df[mask].drop(columns="__key"
     ##########
+    """
 
     return df
 
 
-def adapt_output_df(df, lib_rts, rev_map):
+def calculate_theo_mz_udf(row):
+    """Polars UDF to calculate theoretical m/z."""
+    # The Polars struct will yield a dictionary-like object per row
+    return ps.Peptide.calculate_theoretical_mz(
+        row['sequence'], row['modifications'], row['charge']
+    )
+
+
+def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
     """
-    column normalization
-        -spec_id is a number
-        -Ms1_spec_id is a number
-        -seq has mods in it, renormalize
-        -stripped_seq
-        -z is charge
-        window_mz is window center?
-        -rt is normal
-        -lib_rt
-        -mz is theoretical mz
+    Performs the non-vectorized MS1 scan lookup and closest peak finding
+    in a dedicated Python loop.
 
-        Index(['file_id', 'spec_id', 'psm_id', 'rank', 'sequence', 'modifications',
-       'label', 'hyperscore', 'delta_mass', 'matched_peaks', 'peptide_len',
-       'expmass', 'calcmass', 'charge', 'rt', 'aligned_rt', 'predicted_rt',
-       'delta_rt_model', 'ims', 'predicted_ims', 'delta_ims_model',
-       'isotope_error', 'average_ppm', 'delta_next', 'delta_best', 'longest_b',
-       'longest_y', 'longest_y_pct', 'missed_cleavages',
-       'matched_intensity_pct', 'scored_candidates', 'poisson',
-       'discriminant_score', 'posterior_error', 'spectrum_q', 'peptide_q',
-       'protein_q', 'ms2_intensity', 'fragments', 'theoretical_mz',
-       'closest_peak_mz_ms1', 'closest_peak_intensity_ms1', 'ppm_error_ms1'],
-      dtype='object')
+    Returns a list of dictionaries with the MS1 data to be converted back
+    to a Polars DataFrame.
+    """
+    ms1_data = []
+
+    # We must extract the columns and iterate in Python because the underlying
+    # dia_spectra methods are not vectorized.
+    spec_ids = df['spec_id'].to_list()
+    theo_mzs = df['theoretical_mz'].to_list()
+
+    for spec_id, theo_mz in tqdm(
+            zip(spec_ids, theo_mzs),
+            desc="MS1 Peak Finding",
+            total=len(spec_ids),
+            leave=False
+    ):
+        ms1_scan = dia_spectra.get_nearest_ms1_for_scan(spec_id)
+
+        if ms1_scan:
+            # Assumes ms1_scan.closest_peak(theo_mz) returns (idx, mz, intensity)
+            closest_idx, closest_mz, intensity = ms1_scan.closest_peak(theo_mz)
+            ms1_data.append({
+                'Ms1_spec_id': ms1_scan.scan_num,
+                "closest_peak_mz_ms1": closest_mz,
+                "closest_peak_intensity_ms1": intensity,
+            })
+        else:
+            # Use 0.0 or None/NaN placeholders for missing data
+            ms1_data.append({
+                'Ms1_spec_id': None,
+                "closest_peak_mz_ms1": 0.0,
+                "closest_peak_intensity_ms1": 0.0,
+            })
+
+    return ms1_data
+
+
+def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFrame:
+    """
+    Performs column normalization and peptide sequence reconstruction using Polars.
     """
 
-    # Rename columns
-    change_columns_dict = {
-        'spec_id': 'spec_name',
-        'charge' : 'z',
-        'sequence' : 'stripped_seq',
-        'theoretical_mz' : 'mz'
-    }
-    df.rename(columns=change_columns_dict, inplace=True)
+    # --- UDF Wrappers to handle non-Polars logic ---
 
-    # Make matching spec_id column
-    df['spec_id'] = df['spec_name'].apply(lambda s: Spectrum.extract_scannum(s))
-
-    # Reconstruct modified peptide sequence string
-    def map_mod_list(masses, rev_map):
+    # 1. Wrapper for map_mod_list (requires rev_map lookup)
+    def map_mod_list_wrapper(mod_list: list[float]) -> list[str]:
         out = []
-        for m in masses:
+        for m in mod_list:
             if m != 0.0:
                 name = rev_map.get(round(m, 4))
-                if name is not None:
-                    out.append(name)
+                out.append(name if name is not None else "")
             else:
                 out.append("")
         return out
 
-    df["modification_names"] = df["modifications"].apply(lambda lst: map_mod_list(lst, rev_map))
-    df["seq"] = df.apply(lambda r: mod_array_to_peptide(r["stripped_seq"], r["modification_names"]), axis=1)
+    # 2. Wrapper for mod_array_to_peptide (requires data from two columns)
+    def mod_array_to_peptide_wrapper(r: dict) -> str:
+        # r is a dictionary containing the fields in the struct
+        return mod_array_to_peptide(r["stripped_seq"], r["modification_names"])
 
-    # Grab library rts based on reconstructed seq
-    df["lib_rt"] = df["seq"].map(lib_rts)
+    # 3. Wrapper for library RT lookup (Polars < 0.19.0 compatibility)
+    def map_rt_wrapper(seq: str) -> float:
+        # Returns the iRT value, or np.nan if the sequence is not found
+        return lib_rts.get(seq, np.nan)
+
+    # 1. Rename columns (Polars version)
+    df = df.rename({
+        'spec_id': 'spec_name',
+        'charge': 'z',
+        'sequence': 'stripped_seq',
+        'theoretical_mz': 'mz'
+    })
+
+    # 2. Make matching spec_id column
+    df = df.with_columns(
+        pl.col('spec_name')
+        .map_elements(lambda s: Spectrum.extract_scannum(s), return_dtype=pl.UInt32)
+        .alias('spec_id')
+    )
+
+    # 3. Reconstruct modification names (Polars UDF)
+    df = df.with_columns(
+        pl.col("modifications")
+        .map_elements(map_mod_list_wrapper, return_dtype=pl.List(pl.Utf8))
+        .alias("modification_names")
+    )
+
+    # 4. Reconstruct modified peptide sequence string (Polars struct UDF)
+    df = df.with_columns(
+        pl.struct(["stripped_seq", "modification_names"])
+        .map_elements(mod_array_to_peptide_wrapper, return_dtype=pl.Utf8)
+        .alias("seq")
+    )
+
+    # 5. Grab library rts based on reconstructed seq (Polars map_dict)
+    df = df.with_columns(
+        pl.col("seq")
+          .map_elements(map_rt_wrapper, return_dtype=pl.Float32) # Use Float32 for RTs
+          .alias("lib_rt")
+    )
 
     return df
-
-
-def compare_ms1_mappings(spectrum_file):
-    """
-    Compare the original closest MS1 scan method with the new build_ms2_to_ms1_map method.
-    Prints out discrepancies.
-    """
-    print(f"Comparing MS1 mappings for {len(spectrum_file.ms2scans)} MS2 spectra...")
-
-    mismatches = 0
-
-    for ms2_idx, ms2_scan in enumerate(spectrum_file.ms2scans):
-        # Old method: brute-force search (closest_ms1spec style)
-        ms1_rts = np.array([s.RT for s in spectrum_file.ms1scans])
-        old_idx = np.argmin(np.abs(ms1_rts - ms2_scan.RT))
-
-        # New method: cached map
-        new_idx = spectrum_file.ms2_to_ms1_map[ms2_idx]
-
-        if old_idx != new_idx:
-            mismatches += 1
-            print(f"MS2 scan {ms2_scan.scan_num}: old_idx={old_idx}, new_idx={new_idx}, ms2_rt={ms2_scan.RT:.4f}, old_ms1_rt={spectrum_file.ms1scans[old_idx].RT:.4f}, new_ms1_rt={spectrum_file.ms1scans[new_idx].RT:.4f}")
-
-    print(f"Total mismatches: {mismatches} / {len(spectrum_file.ms2scans)}")
-
-
-
-def plot_error_histograms(ppm_file="ppm_errors.tsv", error_file="errors.tsv", ppm_clip=500, err_clip=5):
-    import pandas as pd
-    import numpy as np
-    import matplotlib.pyplot as plt
-
-    ppm_vals = pd.read_csv(ppm_file, sep="\t")["ppm_errors"].to_numpy(dtype=float)
-    err_vals = pd.read_csv(error_file, sep="\t")["errors"].to_numpy(dtype=float)
-
-    print(f"Loaded {len(ppm_vals)} PPM errors, {len(err_vals)} mass errors.")
-
-    # Clip extreme outliers
-    ppm_vals_clip = ppm_vals[(ppm_vals > -ppm_clip) & (ppm_vals < ppm_clip)]
-    err_vals_clip = err_vals[(err_vals > -err_clip) & (err_vals < err_clip)]
-
-    plt.figure(figsize=(10, 4))
-
-    plt.subplot(1, 2, 1)
-    plt.hist(ppm_vals_clip, bins=100, edgecolor='k', alpha=0.7)
-    plt.title(f"PPM Error Distribution (clipped ±{ppm_clip})")
-    plt.xlabel("PPM Error")
-    plt.ylabel("Count")
-
-    plt.subplot(1, 2, 2)
-    plt.hist(err_vals_clip, bins=100, edgecolor='k', alpha=0.7)
-    plt.title(f"Mass Error Distribution (clipped ±{err_clip} Da)")
-    plt.xlabel("Mass Error (Da)")
-    plt.ylabel("Count")
-
-    plt.tight_layout()
-    plt.show()
 
 
 def peptide_to_mod_array(peptide_str, mod_dict):
@@ -326,6 +345,7 @@ def peptide_to_mod_array(peptide_str, mod_dict):
             i += 1
 
     return mod_array.tolist() #TODO will a numpy array work for performance reasons?
+
 
 def mod_array_to_peptide(peptide_str, mod_array):
     """
