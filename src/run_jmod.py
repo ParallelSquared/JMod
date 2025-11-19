@@ -10,6 +10,7 @@ from src import config
 import numpy as np
 import os
 import time 
+import datetime
 import tqdm
 import pandas as pd
 import sys 
@@ -104,6 +105,12 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         results_folder_path = os.path.join(config.args.output_folder, results_folder_name)
     else:
         results_folder_path = os.path.join(os.path.dirname(mzml_file), results_folder_name)
+
+    if os.path.exists(results_folder_path):
+        datestamp = str(datetime.datetime.now())
+        datestamp = datestamp.split()
+        datestamp = datestamp[0].replace("-", "_") + "_" + datestamp[1].split(".")[0].replace(":", "_")
+        results_folder_path = results_folder_path + "_" + datestamp
 
 
     if not os.path.exists(results_folder_path):
