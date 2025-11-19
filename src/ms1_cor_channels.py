@@ -120,9 +120,16 @@ def ms1_cor_channels(all_spectra,
 
     
 
+
+    GUI_print_idxs = [int(((len(fdc_group.groups)-1)/10)*y) for y in range(1,11)]
     fdc_group_idx = -1
     for key in tqdm.tqdm(list(fdc_group.groups)):
         fdc_group_idx += 1
+        if config.ran_from_GUI:
+            if fdc_group_idx in GUI_print_idxs:
+                frac_done = (GUI_print_idxs.index(fdc_group_idx)+1) * 10
+                logger.info(f"{frac_done}%")
+
         prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key)
         all_scans, spectra_subset = minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width)
 

@@ -214,6 +214,7 @@ def train_models(models,train_data,results_folder=None):
     # Compile and fine-tune each model with new data
     all_history = []
     for i, model in enumerate(models):
+        logger.info(f"Fitting Model {i+1} of {len(models)}")
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4), loss='mae')
         history = model.fit(np.array(X_train), Y_train, epochs=50, batch_size=24, validation_split=0.1, callbacks=[early_stopping],verbose=1)
         all_history.append(history)
