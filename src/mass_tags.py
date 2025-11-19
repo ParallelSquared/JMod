@@ -23,7 +23,6 @@ from src.utils.parse_peptides import parse_peptide, split_frag_name
 
 import logging
 from src.logger import logger
-logger = logging.getLogger("GUI")
 """
 ## Load in the library
 from SpecLib import loadSpecLib, write_speclib_tsv
@@ -111,19 +110,19 @@ def read_json_to_massTag(mass_tags_dir,filename):
             masses = [mass.calculate_mass(compositions[channel_name]) for channel_name in compositions]
             delta_calcs = [current_mass - masses[0] for current_mass in masses]
             if round(masses[0], 3) != round(mass_tag_data['base_mass'], 3):
-                logger.warning(f"Calculated Base Mass: {round(masses[0], 3)}")
-                logger.warning(f"JSON Base Mass: {round(mass_tag_data['base_mass'], 3)}")
-                logger.warning("First mass composition mass does not match base mass in tag JSON")
+                logging.getLogger("GUI").warning(f"Calculated Base Mass: {round(masses[0], 3)}")
+                logging.getLogger("GUI").warning(f"JSON Base Mass: {round(mass_tag_data['base_mass'], 3)}")
+                logging.getLogger("GUI").warning("First mass composition mass does not match base mass in tag JSON")
                 return mass_tag_data['name']
             if [round(x, 3) for x in mass_tag_data['delta']] != [round(x, 3) for x in delta_calcs]:
-                logger.warning([round(x, 3) for x in mass_tag_data['delta']])
-                logger.warning([round(x, 3) for x in delta_calcs])
-                logger.warning("Deltas do not match mass compositions in tag JSON")
+                logging.getLogger("GUI").warning([round(x, 3) for x in mass_tag_data['delta']])
+                logging.getLogger("GUI").warning([round(x, 3) for x in delta_calcs])
+                logging.getLogger("GUI").warning("Deltas do not match mass compositions in tag JSON")
                 return mass_tag_data['name']
             if mass_tag_data['name'] != os.path.splitext(filename)[0]:
-                logger.warning(f"Tag name:  {mass_tag_data['name']}")
-                logger.warning(f"File name: {os.path.splitext(filename)[0]}")
-                logger.warning("Tag name does not match filename")
+                logging.getLogger("GUI").warning(f"Tag name:  {mass_tag_data['name']}")
+                logging.getLogger("GUI").warning(f"File name: {os.path.splitext(filename)[0]}")
+                logging.getLogger("GUI").warning("Tag name does not match filename")
                 return(mass_tag_data['name'])
             mass_tag = massTag(rules=mass_tag_data['rules'],
                         base_mass=mass_tag_data['base_mass'],
@@ -133,10 +132,10 @@ def read_json_to_massTag(mass_tags_dir,filename):
                         compositions=compositions)
             return mass_tag
         except AttributeError:
-            logger.warning("Compositions are not defined for tag")
+            logging.getLogger("GUI").warning("Compositions are not defined for tag")
             return mass_tag_data['name']
         except Exception as e:
-            logger.warning({e}) 
+            logging.getLogger("GUI").warning({e}) 
             return mass_tag_data['name']
     else:
         return None
@@ -302,7 +301,7 @@ def refresh_tags(mass_tags_dir=None): #set mass tags dir to none for testing pur
             if os.path.splitext(filename)[1].lower() == ".json":
                 mass_tag = read_json_to_massTag(directory, filename)
                 if type(mass_tag) == str:
-                    logger.warning(f"Unable to load mass tag from {filename}\n")  
+                    logging.getLogger("GUI").warning(f"Unable to load mass tag from {filename}\n")  
                 elif mass_tag:
                     available_tags[mass_tag.name] = mass_tag
     return available_tags
