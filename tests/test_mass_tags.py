@@ -44,7 +44,7 @@ class Test_read_json_to_massTag():
         
     def test_decode_error(self):
         output_tag = read_json_to_massTag("tests/MassTags", "test_decode_error.json")
-        assert os.path.normpath(str(output_tag)) == os.path.normpath(r"tests/MassTags\test_decode_error.json")
+        assert os.path.normpath(str(output_tag)) == os.path.normpath(r"tests/MassTags/test_decode_error.json")
 
     def test_no_comps(self):
         output_tag = read_json_to_massTag("tests/MassTags", "test_no_comps.json")
@@ -78,7 +78,7 @@ class Test_refresh_tags():
 
     def test_refresh_tags(self):
         available_tags = refresh_tags(Path("tests/MassTags"))
-        assert list(available_tags.keys()) == ["test_basic", "test_one_channel", "test_subset"]
+        assert set(available_tags.keys()) == set(["test_basic", "test_one_channel", "test_subset"])
         assert all([type(x) == massTag for x in available_tags.values()])
 
 class Test_set_config_tag():

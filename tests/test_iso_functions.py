@@ -79,7 +79,7 @@ class Test_get_seq_comp():
 
 class Test_precursor_isotopes():
 
-    tag = read_json_to_massTag("src\\MassTags\\", "PSMtag_5plex.json")
+    tag = read_json_to_massTag("src/MassTags/", "PSMtag_5plex.json")
 
     tag_no_comps = copy.deepcopy(tag)
     tag_no_comps.channel_comp = None
