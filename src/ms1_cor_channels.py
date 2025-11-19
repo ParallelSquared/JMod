@@ -128,7 +128,7 @@ def ms1_cor_channels(all_spectra,
         if config.ran_from_GUI:
             if fdc_group_idx in GUI_print_idxs:
                 frac_done = (GUI_print_idxs.index(fdc_group_idx)+1) * 10
-                logger.info(f"{frac_done}%")
+                logger.info(f"Fitting - {frac_done}%")
 
         prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key)
         all_scans, spectra_subset = minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width)

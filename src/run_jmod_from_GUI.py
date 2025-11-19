@@ -93,6 +93,8 @@ class JModGUI(ThemedTk):
                 self.text_widget = text_widget
 
             def emit(self, record):
+                if record.levelno == logging.DEBUG:
+                    return
                 msg = self.format(record)
                 self.text_widget.after(0, self.append, msg)
 
@@ -1226,7 +1228,7 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
 
     qh = QueueHandler(log_queue)
     logger.addHandler(qh)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     for i, tmp_filename in enumerate(tmp_filenames, start=1):
         logger.info(f"\n\nRunning JMod: File {i} of {len(tmp_filenames)}\n")

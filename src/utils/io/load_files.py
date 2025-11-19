@@ -89,18 +89,18 @@ def loadSpectra(mzml_file):
     logger.info("Loading Spectra...")
     python_spec_file = mzml_file+"_pythonspec"
     if not os.path.exists(python_spec_file):
-        logger.info("Loading Spectra... from file")
+        logger.debug("Loading Spectra... from file")
         spectra = SpectrumFile(mzml_file)
         with open(python_spec_file,"wb") as write_file:
             pickle.dump(spectra, write_file)
     else:
         with open(python_spec_file,"rb") as read_file:
-            logger.info("Loading Spectra... from pickle")
+            logger.debug("Loading Spectra... from pickle")
             spectra = pickle.load(read_file)
             
     logger.info(f"Loaded {len(spectra.ms1scans)} MS1 spectra")
     logger.info(f"Loaded {len(spectra.ms2scans)} MS2 spectra")
-    logger.info("finished")
+    logger.debug("finished")
     
     return spectra
 

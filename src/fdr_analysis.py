@@ -359,7 +359,7 @@ class score_model():
             send_raise_to_TK("ValueError - Unsupported Model Type")
             raise ValueError("Unsupported model type")
         
-        logger.info(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
+        logger.debug(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
         
         kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = config.RANDOM_SEED)
         k_orders = [i for i in kf.split(X,y)]
@@ -623,7 +623,7 @@ def log_df(df):
         logger.info(line)
 
 def compute_protein_FDR(df,results_folder=None):
-    logger.info("Computing Protein FDR\n")
+    logger.info("Computing Protein FDR")
 
   
     df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)
@@ -760,7 +760,7 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     result_df = df.copy()
     
     if verbose:
-        logger.info(f"Adding median-based features for {len(metric_columns)} metrics...")
+        logger.debug(f"Adding median-based features for {len(metric_columns)} metrics...")
     
     for metric_col in metric_columns:
         # Calculate median for each group
@@ -779,8 +779,8 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
         result_df[diff_col] = result_df[diff_col].fillna(mean_val)
         
         if verbose:
-            logger.info(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
-            logger.info(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
+            logger.debug(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
+            logger.debug(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
     
     return result_df
 

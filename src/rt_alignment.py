@@ -543,7 +543,7 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
         if config.ran_from_GUI:
             if idx in GUI_print_idxs:
                 frac_done = (GUI_print_idxs.index(idx)+1) * 10
-                logger.info(f"{frac_done}%")
+                logger.info(f"Initial Seach - {frac_done}%")
             
         fit_output = fit_to_lib(dia_spectra.ms2scans[int(lf_spectra[idx])],
                                     library=librarySpectra,
@@ -1011,7 +1011,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     else:
         scans_per_cycle = 1
 
-    logger.info("Initial search")
+    logger.info("Starting Initial Search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
     ms1spectra = dia_spectra.ms1scans

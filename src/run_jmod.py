@@ -243,7 +243,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # Find the tag object based on the tag name
         if config.args.tag in available_tags:
             config.tag = available_tags[config.args.tag]
-            logger.info(f"Using tag: {config.tag.name}")
+            logger.info(f"Using tag: {config.tag.name} - {config.tag.n_channels} channels")
             spectrumLibrary = tag_library(spectrumLibrary, config.tag)
             mass_tag = config.tag
         else:
@@ -327,7 +327,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary[key]["top_n"]=np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
     for key in decoy_lib:
         decoy_lib[key]["top_n"]=np.argsort(-decoy_lib[key]["spectrum"][:,1])[:config.top_n]
-    logger.info("... Finished Decoy Library")
+    logger.info("Finished Decoy Library")
     
     
     ######################################################
