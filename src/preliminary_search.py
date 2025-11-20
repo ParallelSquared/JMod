@@ -5,11 +5,23 @@ import pandas as pd
 import polars as pl
 import re
 from tqdm.auto import tqdm
+import ast
+from numpy import linalg as la
 
 from src.config import diann_mods
 from src.logger import logger
 from src.utils.io.load_files import Spectrum
 
+
+def print_column_dtype(df: pl.DataFrame, col_name: str):
+    """Prints the Polars dtype and a sample value for a specified column."""
+    if col_name in df.columns:
+        print(f"Column '{col_name}' dtype in Polars: {df[col_name].dtype}")
+        # Show first non-null value for context
+        sample_value = df[col_name].drop_nulls().head(1).to_list()
+        print(f"Sample value (before conversion): {sample_value}")
+    else:
+        print(f"Column '{col_name}' not found in DataFrame.")
 
 def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10):
 
@@ -40,6 +52,8 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     # Convert to rust-compatible peptide objects
     pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
 
+    print(library_spectra[('Y(PSMtag_5plex-8)QPPGIR', 2.0)])
+
     rust_peps = []
     observed_mods: set[str] = set() # Allows us to backtrack original mod names from Sage results
 
@@ -52,7 +66,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     # Create indexed database
     db = ps.IndexedDatabase.from_peptides(  # TODO pass parameters as parameters
         peptides=rust_peps,
-        bucket_size=2048,
+        bucket_size=4096,
         ion_kinds=["b", "y"],
         min_ion_index=1,
         generate_decoys=True,
@@ -71,6 +85,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         wide_window=True, # Uses window values instead of precursor masses
         chimera=False, # False, do not iteratively remove peaks
         annotate_matches=True, # Add fragment annotation
+        max_fragment_charge=1,
         report_psms=5*plex
     )
 
@@ -145,12 +160,96 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     # Adapt the dataframe to the format expected downstream
     df = adapt_output_df(df, lib_rts, rev_map)
 
+    # Calculate spectral angle
+    fragment_library_map = create_fragment_library_map(library_spectra)
+
+    logger.info("Computing spectral angle")
+    # Define the Polars UDF closure to capture the fragment_library_map
+    def spectral_angle_polars_udf(r: dict) -> float:
+        """
+        Polars UDF to calculate the Normalized Spectral Contrast Angle (P=0.5).
+        r is a dictionary-like view of the row data (struct of columns).
+
+        OPTIMIZED: Receives native Polars List types (which are Python lists)
+        """
+        # The lookup key must be the tuple (modified_sequence, charge)
+        seq = r['seq']  # Modified sequence string
+        z = r['z']  # Charge (renamed from 'charge')
+        ms2_intensity = r['ms2_intensity']
+
+        if seq is None or ms2_intensity is None or ms2_intensity == 0.0:
+            return 0.0
+
+        # 1. Get the library fragment vector for the peptide (using TUPLE KEY)
+        library_key = (seq, z)
+        library_vec = fragment_library_map.get(library_key)
+        if not library_vec:
+            return 0.0
+
+        # 2. Access observed fragment data directly (no string parsing needed!)
+        charges = r['frag_charges']  # List(Int64) -> list[int]
+        kinds_raw = r['frag_kinds']  # List(String) -> list[str]
+        ordinals = r['frag_fragment_ordinals']  # List(Int64) -> list[int]
+        intensities = r['frag_intensities']  # List(Float64) -> list[float]
+
+        # 3. Check for consistent array lengths
+        if not (len(charges) == len(kinds_raw) == len(ordinals) == len(intensities)):
+            logger.error(
+                f"Fragment array length mismatch for seq {seq}. Lengths: {len(charges)}, {len(kinds_raw)}, {len(ordinals)}, {len(intensities)}")
+            return 0.0
+
+        # 4. Create raw observed vector (A_raw)
+        observed_vec = {}
+
+        # Iterate over lists to build observed_vec dictionary
+        for c, k, o, i in zip(charges, kinds_raw, ordinals, intensities):
+            # Alignment key: (ion_kind, ordinal, charge)
+            key = (k.upper(), o, c)
+            # Normalize intensity by total MS2 intensity
+            observed_vec[key] = i / ms2_intensity
+
+        # 5. Align vectors and create raw intensity vectors (NumPy conversion happens here)
+        all_keys = set(observed_vec.keys()) | set(library_vec.keys())
+
+        # Cast to NumPy arrays for fast dot product calculation
+        A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
+        B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
+
+        # 6. Apply Power Transformation (P=0.5)
+        A_pow = np.sqrt(A_raw)
+        B_pow = np.sqrt(B_raw)
+
+        # 7. Spectral Contrast Angle Calculation
+        dot_product = np.dot(A_pow, B_pow)
+        norm_A = la.norm(A_pow)
+        norm_B = la.norm(B_pow)
+
+        if norm_A == 0.0 or norm_B == 0.0:
+            return 0.0
+
+        return dot_product / (norm_A * norm_B)
+
+    # Apply the Polars UDF
+    # Note: We must include the fragment columns by their new names
+    df = df.with_columns(
+        pl.struct([
+            'frag_charges',
+            'frag_kinds',
+            'frag_fragment_ordinals',
+            'frag_intensities',
+            'ms2_intensity',
+            'seq',
+            'z'
+        ])
+        .map_elements(spectral_angle_polars_udf, return_dtype=pl.Float32)
+        .alias('spectral_contrast_angle')
+    )
+
     # Back to pandas
     df = df.to_pandas()
 
-    """
-    print(df)
-    logger.info("6")
+    has_rt_df = df[~df['lib_rt'].isna()]
+    print("has_rt " + str(len(has_rt_df)))
 
     ##########
     # This is a temporary solution to limit peptides to those inside the library
@@ -164,11 +263,124 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     df["__key"] = list(zip(df["seq"], df["z"].astype(int)))
     mask = df["__key"].map(valid_keys.__contains__)
 
-    #df = df[mask].drop(columns="__key"
+    df = df[mask].drop(columns="__key")
     ##########
-    """
 
     return df
+
+
+def create_fragment_library_map(library_spectra):
+    """
+    Converts the library spectra dictionary into a nested, fast-lookup map
+    for spectral comparison.
+
+    Keys: (Modified Sequence, Precursor Charge) [TUPLE KEY REQUIRED FOR ACCURACY]
+    Values: Dict mapping (ion_kind, ordinal, charge) -> RelativeIntensity
+
+    This function is updated to correctly handle the tuple key.
+    """
+    frag_map = {}
+    for data in library_spectra.values():
+        mod_seq = data.get('mod_seq')
+        prec_z = data.get('prec_z')  # New: Get precursor charge
+        library_frags = data.get('frags', {})
+
+        if not mod_seq or prec_z is None:
+            continue
+
+        peptide_map = {}
+        # The key for the map is now (modified sequence, charge)
+        map_key = (mod_seq, prec_z)
+
+        for frag_str, mz_int_list in library_frags.items():
+            # Example frag_str: "b3_1" (type + nr + optional_loss + "_" + z)
+
+            parts = frag_str.split('_')
+            if len(parts) != 2:
+                # Skip if format is unexpected
+                continue
+
+            frag_name = parts[0].upper()  # e.g., "B3" or "Y7-H2O"
+            frag_z = int(parts[1])  # e.g., 1
+
+            # Extract type and ordinal, ignoring loss notation for this key
+            match = re.match(r'([BY])(\d+)', frag_name)
+            if not match:
+                continue
+
+            frag_type = match.group(1)  # B or Y
+            frag_ordinal = int(match.group(2))  # 3, 7, etc.
+
+            intensity = mz_int_list[1]  # Relative Intensity is the second element
+
+            # Key for alignment: (IonType, Ordinal, Charge)
+            key = (frag_type, frag_ordinal, frag_z)
+            peptide_map[key] = intensity
+
+        if peptide_map:
+            frag_map[map_key] = peptide_map  # Store map with (mod_seq, prec_z) key
+
+    return frag_map
+
+
+def calculate_spectral_contrast_angle(row, fragment_library_map):
+    """
+    Pandas UDF to calculate the Normalized Spectral Contrast Angle (P=0.5)
+    between observed and library fragments, using (Type, Ordinal, Charge) as key.
+
+    This is mathematically equivalent to Cosine Similarity on square-rooted intensities.
+    """
+
+    if pd.isna(row['seq']) or pd.isna(row['fragments']):
+        return 0.0
+
+    # 1. Parse observed fragment data
+    try:
+        observed_data = ast.literal_eval(row['fragments'])
+    except:
+        return 0.0
+
+    # 2. Get the library fragment vector for the peptide
+    library_vec = fragment_library_map.get(row['seq'])
+    if not library_vec:
+        return 0.0
+
+    # 3. Create raw observed vector (A_raw)
+    observed_vec = {}
+    ms2_intensity = row['ms2_intensity']
+
+    # Iterate over charges, kinds, ordinals, and intensities simultaneously
+    for c, k, o, i in zip(
+            observed_data['charges'],
+            observed_data['kinds'],
+            observed_data['fragment_ordinals'],
+            observed_data['intensities']
+    ):
+        # Alignment key: (ion_kind, ordinal, charge)
+        key = (k.upper(), o, c)
+        # Normalize intensity by total MS2 intensity
+        observed_vec[key] = i / ms2_intensity if ms2_intensity > 0 else 0.0
+
+    # 4. Align vectors and create raw intensity vectors
+    all_keys = set(observed_vec.keys()) | set(library_vec.keys())
+
+    A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
+    B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
+
+    # 5. Apply Power Transformation (P=0.5)
+    A_pow = np.sqrt(A_raw)
+    B_pow = np.sqrt(B_raw)
+
+    # 6. Spectral Contrast Angle Calculation: (A_pow . B_pow) / (||A_pow|| * ||B_pow||)
+    dot_product = np.dot(A_pow, B_pow)
+    norm_A = la.norm(A_pow)
+    norm_B = la.norm(B_pow)
+
+    # Return 0.0 if either vector has zero magnitude
+    if norm_A == 0.0 or norm_B == 0.0:
+        return 0.0
+
+    return dot_product / (norm_A * norm_B)
 
 
 def calculate_theo_mz_udf(row):

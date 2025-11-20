@@ -227,7 +227,7 @@ def initstepfit(x,y,n_knots=2,z=None,k1=1):
 
 
 def lowess_fit(x,y,frac=.2, it=3):
-    
+    print(len(x))
     """    
     Fit LOWESS regression line mapping x to y
     
@@ -484,7 +484,7 @@ def fast_modal_lowess(x, y,
     modal_full = np.interp(x, x[anchor_idx], modal_vals)
 
     # Post smooth
-    smooth = lowess(modal_full, x, frac=post_smooth_frac, it=0)[:, 1]
+    smooth = lowess(modal_full, x, frac=post_smooth_frac, it=3)[:, 1]
 
     # Build interpolator
     return interp1d(
@@ -1053,7 +1053,7 @@ def empirical_fit(output_df,results_folder=None):
     
     
     logger.info("Filtering IDs from initial search")
-    for feature_percentile in  range(20,80,5):
+    for feature_percentile in  range(20, 100, 5):
     
         ## empirically derived cutoffs
         
@@ -1075,19 +1075,32 @@ def empirical_fit(output_df,results_folder=None):
         """
         poisson = output_df["poisson"].to_numpy()
         hyperscore = output_df["hyperscore"].to_numpy()
+        spectral_angle = output_df["spectral_contrast_angle"].to_numpy()
         thr_poisson = np.percentile(poisson[~np.isnan(poisson)], 100 - feature_percentile)
         thr_hyperscore = np.percentile(hyperscore[~np.isnan(hyperscore)], feature_percentile)
+        thr_spectral_angle = np.percentile(spectral_angle[~np.isnan(spectral_angle)], feature_percentile)
         cor_filter = (poisson < thr_poisson) & (hyperscore > thr_hyperscore)
         cor_filter = (poisson < thr_poisson)# & (hyperscore > thr_hyperscore)
+        #cor_filter = (spectral_angle > thr_spectral_angle) & (poisson < thr_poisson)
+        #cor_filter = (spectral_angle > thr_spectral_angle)
+        #cor_filter = (spectral_angle > thr_spectral_angle) & (hyperscore > thr_hyperscore)
+
 
         
         
         #f = automated_robust_modal_lowess(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.05, grid_size=200, post_smooth_frac=0.1)
-        #f = fast_modal_lowess(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.05, grid_size=100, anchors=200, post_smooth_frac=0.1)
-        f = mean_shift_lowess(output_df.lib_rt[cor_filter], output_df.rt[cor_filter], local_frac=0.05, max_iter=10, anchors=200,
-                              post_smooth_frac=0.1)
+        f = fast_modal_lowess(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.05, grid_size=100, anchors=200, post_smooth_frac=0.1)
+        #f = mean_shift_lowess(output_df.lib_rt[cor_filter], output_df.rt[cor_filter], local_frac=0.05, max_iter=10, anchors=200,
+        #                      post_smooth_frac=0.1)
+        #f = lowess_fit(output_df.lib_rt[cor_filter], output_df.rt[cor_filter])
+
+        # 🔹 NEW: store aligned RT for this step for *all* rows
+        aligned_step = f(output_df["lib_rt"].to_numpy())
+        col_name = f"aligned_rt_p{feature_percentile}"
+        output_df[col_name] = aligned_step
+
         plt.subplots()
-        plt.scatter(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],s=1)
+        plt.hexbin(output_df.lib_rt[cor_filter],output_df.rt[cor_filter])
         plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)
         plt.title(str(feature_percentile))
         if results_folder is not None:
@@ -1157,7 +1170,9 @@ def empirical_fit(output_df,results_folder=None):
     # # plt.title(str(feature_percentile))
     # print(str(feature_percentile),min(density))
     #plt.close()
-    
+
+
+    output_df.to_csv('first_search_stepwise_rt.tsv', sep='\t', index=False)
     
     emp_rt_spl = lowess_fit(np.array(output_df.lib_rt)[cor_filter],np.array(output_df.rt)[cor_filter],.02)
 
@@ -1439,7 +1454,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
 
     if results_folder is not None:
-        output_df.to_csv(results_folder+"/firstSearch.csv", index=False)
+        output_df.to_csv(results_folder+"/firstSearch.tsv", index=False,sep='\t')
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
 
 
