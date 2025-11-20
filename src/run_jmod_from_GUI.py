@@ -99,8 +99,14 @@ class JModGUI(ThemedTk):
                 self.text_widget.after(0, self.append, msg)
 
             def append(self, msg):
-                self.text_widget.insert(tk.END, msg + "\n")
-                self.text_widget.see(tk.END)
+                self.text_widget.config(state="normal")
+                if "- INFO -" in msg and (msg.split("- INFO -")[1] == "" or msg.split("- INFO -")[1] == " "):
+                    self.text_widget.insert(tk.END, "\n")
+                    self.text_widget.see(tk.END)
+                else:
+                    self.text_widget.insert(tk.END, msg + "\n")
+                    self.text_widget.see(tk.END)
+                self.text_widget.config(state="disabled")
 
         self.tk_handler = TkinterHandler(self.text_widget)
         self.tk_formatter = ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s")
@@ -965,8 +971,6 @@ class JModGUI(ThemedTk):
     ####         Output Funcs      #######
 
     def save_configuration(self):
-        # if not self.mzml_and_lib_error_check():
-        #     return
         config_args_dict = self.make_config_dict(None, run=False)
         if config_args_dict is None:
             return
@@ -978,8 +982,12 @@ class JModGUI(ThemedTk):
                 with open(filename, 'w') as json_file:
                     json.dump(config_args_dict, json_file, indent=4)
                 tk.messagebox.showinfo("Configuration Saved", f"Configuration saved successfully to {filename}")
+                logging.getLogger("GUI").info(f"Configuration saved successfully to {filename}")
             except Exception as e:
                 tk.messagebox.showerror("JSON Error", f"Failed to write JSON file: {e}")
+                logging.getLogger("GUI").warning(f"Failed to write JSON file: {e}")
+        else:
+            logging.getLogger("GUI").warning(f"No path given to save JSON file")
 
     def select_output_folder(self):
         folder_selected = filedialog.askdirectory()
@@ -1231,7 +1239,8 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
     logger.setLevel(logging.DEBUG)
 
     for i, tmp_filename in enumerate(tmp_filenames, start=1):
-        logger.info(f"\n\nRunning JMod: File {i} of {len(tmp_filenames)}\n")
+        logger.info("")
+        logger.info(f"Running JMod: File {i} of {len(tmp_filenames)}\n")
         from src.run_jmod import main
         main_result = main(tmp_filename, result_queue)
         os.remove(tmp_filename)
