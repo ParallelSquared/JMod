@@ -88,6 +88,25 @@ from src.logger import logger
     
 ### First get the AA sequence and modifications of the fragment
 def fragment_seq(peptide, ion_type):
+    """
+   Get the parsed peptide sequence and parsed ion information
+
+    Parameters
+    ----------
+    peptide : str or list of str
+        A list of individual amino acid strings, as well as their modifications or the string altogether
+        i.e. ["A(PSMtag_5plex-4)", "C(Unimod:4), "R"] or "A(PSMtag_5plex-4)C(Unimod:4)R"
+    ion_type : str
+        ion_type: the ion type, i.e. b5_2, y3-H2O_1. See split_frag_name
+
+    Returns
+    -------
+    peptide : list of str
+        A parsed list of each amino acid with its modification. See parse_peptide
+    [frag_type,frag_idx,loss,frag_z]: [str, int, str, str]
+        A list of ion type information. See split_frag_name
+    
+    """
     
     peptide = "".join(peptide)
     # split_peptide = re.findall("([A-Z](?:\(.*?\))?)",peptide)
@@ -111,9 +130,9 @@ def fragment_seq(peptide, ion_type):
     return seq, [frag_type,frag_idx,loss,frag_z]
 
 
-def split_peptide(peptide):
+# def split_peptide(peptide):
     
-    return re.findall("([A-Z](?:\(.*?\))?)",peptide)
+#     return re.findall("([A-Z](?:\(.*?\))?)",peptide)
 
 ### all unimod modifications are stored here
 unimods = mass.Unimod()
@@ -156,41 +175,41 @@ def get_seq_comp(split_seq,ion_type):
     return seq_comp
 
 
-def frag_isotope(frag,seq):
-    # mz,intensity = frags[frag]
-    split_frag_seq,frag_info = fragment_seq(seq,frag)
-    loss = "-"+frag_info[2] if frag_info[2] else frag_info[2]
-    ion_type = frag_info[0] + loss
-    frag_comp = get_seq_comp(split_frag_seq, ion_type)
+# def frag_isotope(frag,seq):
+#     # mz,intensity = frags[frag]
+#     split_frag_seq,frag_info = fragment_seq(seq,frag)
+#     loss = "-"+frag_info[2] if frag_info[2] else frag_info[2]
+#     ion_type = frag_info[0] + loss
+#     frag_comp = get_seq_comp(split_frag_seq, ion_type)
     
-    isotopes = isotopic_variants(frag_comp,
-                                 npeaks=config.num_iso_peaks,
-                                 charge = int(frag_info[3]))
-    mono_iso_peak = isotopes[0]
-    return isotopes
+#     isotopes = isotopic_variants(frag_comp,
+#                                  npeaks=config.num_iso_peaks,
+#                                  charge = int(frag_info[3]))
+#     mono_iso_peak = isotopes[0]
+#     return isotopes
 
 
-def gen_isotopes(seq,frags):
-    new_frags = []
-    for frag in frags:
-        mz,intensity = frags[frag]
-        split_frag_seq,frag_info = fragment_seq(seq,frag)
-        loss = "-"+frag_info[2] if frag_info[2] else frag_info[2]
-        ion_type = frag_info[0] + loss
-        frag_comp = get_seq_comp(split_frag_seq, ion_type)
+# def gen_isotopes(seq,frags):
+#     new_frags = []
+#     for frag in frags:
+#         mz,intensity = frags[frag]
+#         split_frag_seq,frag_info = fragment_seq(seq,frag)
+#         loss = "-"+frag_info[2] if frag_info[2] else frag_info[2]
+#         ion_type = frag_info[0] + loss
+#         frag_comp = get_seq_comp(split_frag_seq, ion_type)
         
-        isotopes = isotopic_variants(frag_comp,
-                                     npeaks=config.num_iso_peaks,
-                                     charge = int(frag_info[3]))
-        mono_iso_peak = isotopes[0]
-        for iso in isotopes:
-            new_intensity = intensity*(iso.intensity/mono_iso_peak.intensity)
-            if True:#new_intensity > config.min_iso_intensity:
-                new_frags.append([iso.mz,new_intensity])
+#         isotopes = isotopic_variants(frag_comp,
+#                                      npeaks=config.num_iso_peaks,
+#                                      charge = int(frag_info[3]))
+#         mono_iso_peak = isotopes[0]
+#         for iso in isotopes:
+#             new_intensity = intensity*(iso.intensity/mono_iso_peak.intensity)
+#             if True:#new_intensity > config.min_iso_intensity:
+#                 new_frags.append([iso.mz,new_intensity])
     
-    new_frags = np.array(new_frags)
-    sorted_frags = new_frags[np.argsort(new_frags[:,0])]
-    return sorted_frags/[1,np.max(np.array(new_frags)[:,1])]
+#     new_frags = np.array(new_frags)
+#     sorted_frags = new_frags[np.argsort(new_frags[:,0])]
+#     return sorted_frags/[1,np.max(np.array(new_frags)[:,1])]
 
 def gen_isotopes_dict(seq,frags, tag, n_iso):
     new_frags = {}
@@ -227,6 +246,25 @@ def gen_isotopes_dict(seq,frags, tag, n_iso):
     return frag_to_peak(new_frags,return_frags=True)
 
 def iso_library(library,tag,n_iso):
+    """
+    Generate isotopes for library fragments
+
+    Parameters
+    ----------
+    library : dict[(str, int)]['frags'] = {b1_1:[mass, int], ..., y10-H2O_2[mass_int]}
+        A dictionary with keys of (peptide_seq, z) and corresponding values of another dictionary. 
+        This dictionary contains the key 'frags' among other keys.
+        library[(seq, z)][frags] is a dictionary with fragment identies (see split_frag_name) as keys and [mass, int] as values
+    tag : massTag
+        a massTag instance
+    n_iso : number of isotopes for each fragment to generate
+
+    Returns
+    -------
+    new_library : dict
+        The same library as before but with updated spectrum and ordered_frags dictionaries (same level as 'frags') with additonal isotopes
+    """
+    
     ## add n isotpic peaks to the "spectrum" portio of each library entry
     logger.info("Creating Copy of Library...")
     new_library = copy.deepcopy(library)
@@ -242,6 +280,24 @@ def iso_library(library,tag,n_iso):
 
 import multiprocessing
 def iso_library_multi(library,tag,n_iso):
+    """
+    Generate isotopes for library fragments (but multiprocessed)
+
+    Parameters
+    ----------
+    library : dict[(str, int)]['frags'] = {b1_1:[mass, int], ..., y10-H2O_2[mass_int]}
+        A dictionary with keys of (peptide_seq, z) and corresponding values of another dictionary. 
+        This dictionary contains the key 'frags' among other keys.
+        library[(seq, z)][frags] is a dictionary with fragment identies (see split_frag_name) as keys and [mass, int] as values
+    tag : massTag
+        a massTag instance
+    n_iso : number of isotopes for each fragment to generate
+
+    Returns
+    -------
+    new_library : dict
+        The same library as before but with updated spectrum and ordered_frags dictionaries (same level as 'frags') with additonal isotopes
+    """
     ## add n isotpic peaks to the "spectrum" portio of each library entry
     logger.info("Creating Copy of Library...")
     new_library = copy.deepcopy(library)
@@ -263,12 +319,12 @@ def iso_library_multi(library,tag,n_iso):
     return new_library
 
 
-def calculate_mz(sequence,charge):
+# def calculate_mz(sequence,charge):
     
-    split_seq = split_peptide(sequence)
+#     split_seq = split_peptide(sequence)
     
-    seq_comp = get_seq_comp(split_seq, "M")
-    return mass.calculate_mass(seq_comp,charge=charge)
+#     seq_comp = get_seq_comp(split_seq, "M")
+#     return mass.calculate_mass(seq_comp,charge=charge)
 
 
 def precursor_isotopes(sequence,charge,tag,n_isotopes=2, decoys=True):

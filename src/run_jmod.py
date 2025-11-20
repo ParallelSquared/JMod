@@ -316,7 +316,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
 
     if config.args.iso:
-        # spectrumLibrary = iso_f.iso_library(spectrumLibrary
+        # spectrumLibrary = iso_f.iso_library(spectrumLibrary,
         #                                            tag=config.tag,
         #                                            n_iso=config.num_iso_peaks)
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
