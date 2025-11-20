@@ -294,7 +294,7 @@ def loadSpecLib(lib_file):
 
 
 # TODO add a test for this, make sure decoys are being generated correctly
-def create_decoy_lib(library,rules):
+def create_decoy_lib(library,rules,tag,n_iso):
     ## keep keys the same but change seq, mz and frags
     for key in library:
         library[key]["parent_key"] = key
@@ -311,7 +311,7 @@ def create_decoy_lib(library,rules):
         entry["frags"] = convert_frags(key[0], entry["frags"],rules)
         
         if config.args.iso:
-            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(entry["seq"], entry["frags"], tag = config.tag)
+            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(entry["seq"], entry["frags"], tag, n_iso)
         else:
             entry["spectrum"], entry["ordered_frags"] = frag_to_peak(entry["frags"],return_frags=True)
             

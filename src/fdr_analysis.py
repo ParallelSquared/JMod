@@ -27,7 +27,8 @@ import os
 import pandas as pd
 
 from src.trace_fns import ms1_cor#, ms1_cor_channels
-from src.ms1_cor_channels import ms1_cor_channels
+# from src.ms1_cor_channels import ms1_cor_channels
+import src.ms1_cor_channels as ms1_mod
 from src.utils.io.load_files import loadSpectra
 from src.models.spec_lib.spec_lib import loadSpecLib
 
@@ -96,7 +97,7 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     if mass_tag:
 
         #fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
-        group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict = ms1_cor_channels(DIAspectra, 
+        group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict = ms1_mod.ms1_cor_channels(DIAspectra, 
                                                                                                                                         fdc, 
                                                                                                                                         dc, 
                                                                                                                                         mz_ppm=mz_ppm, 

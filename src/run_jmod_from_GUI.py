@@ -861,11 +861,13 @@ class JModGUI(ThemedTk):
             self.channel_labels.append(channel_L)
             self.mass_labels.append(mass_L)
         
-
+        
+        
         if len(channels) > 5:
             self.massTag_scrollbar = tk.Scrollbar(self.tagInfo_frame, orient="vertical", command=self.tagInfo_canvas.yview)
             self.massTag_scrollbar.grid(row=0, column=2, sticky="ns")
             self.tagInfo_canvas.configure(yscrollcommand=self.massTag_scrollbar.set)
+
 
         for i, (channel, delta) in enumerate(zip(channels, deltas), start=2):
             channel_L = tk.Label(self.inner_frame, text=f"\u0394{channel}", borderwidth=1, relief="solid", font=self.massTag_font)

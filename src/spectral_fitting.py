@@ -17,6 +17,7 @@ from pyteomics import mass
 import re
 from src.utils.io.read_output import names
 import src.config as config
+import math
 
 from src.utils.misc_functions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
 hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim,np_pearson_cor
@@ -320,7 +321,7 @@ def hyperscore2(frags,frag_names_matched):
     num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
     num_y = sum(["y" in i for i in frag_names_matched if "iso" not in i])
     dp = np.sum([frags[i] for i in frag_names_matched if "iso" not in i])
-    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
+    return max(0,np.log(dp*math.factorial(num_b)*math.factorial(num_y))), num_b, num_y
     
 #@profile
 def get_features(

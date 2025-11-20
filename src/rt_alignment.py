@@ -553,7 +553,7 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
                                     rt_filter=False,
                                     ms1_mz=lf_mz[idx],
                                     ms1_spectra = dia_spectra.ms1scans,
-                                    frac_matched=.8,## NB: this may be selcting for smaller peptides
+                                    frac_matched=.8, ## NB: this may be selcting for smaller peptides
                                     rt_tol = config.rt_tol,
                                     ms1_tol = config.ms1_tol,
                                     mz_tol = config.mz_tol
@@ -874,8 +874,6 @@ def alignment_plots(filtered_output,
             plt.savefig(results_folder+"/RTdiff.png",dpi=600,bbox_inches="tight")
         
         
-        
-
         ##plot mz rt alignment
         plt.subplots()
         plt.scatter(filtered_output.updated_lib_rt,np.array(filtered_output.mz_diffs),label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(filtered_output.rt))//1000)+1)))
@@ -887,8 +885,7 @@ def alignment_plots(filtered_output,
         if results_folder is not None:
             plt.savefig(results_folder+"/MZrtfit.png",dpi=600,bbox_inches="tight")
         
-        
-
+    
         ##plot mz alignment
         plt.subplots()
         plt.scatter(np.array(filtered_output.mz),(filtered_output.mz_diffs-f_rt_mz(filtered_output.updated_lib_rt)),label="Original_MZ",s=1,alpha=min(1,5/((len(np.array(filtered_output.updated_lib_rt))//1000)+1)))

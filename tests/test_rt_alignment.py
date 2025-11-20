@@ -18,8 +18,9 @@ import os
 
 # Import the functions we want to test
 from src.rt_alignment import (
-    twostepfit, lowess_fit, closest_spec, gaussian, fit_errors, cdf_plots, alignment_plots, cdf_data, get_multiples, get_df_filter, empirical_fit, filter_rts_by_dense, fit_with_features
+    twostepfit, lowess_fit, closest_spec, gaussian, fit_errors, cdf_plots, alignment_plots, cdf_data, get_multiples, get_df_filter, empirical_fit, filter_rts_by_dense, MZRTfit
 )
+
 from tests.fixtures.test_data import SAMPLE_LIBRARY_ENTRY, SAMPLE_MS2_SPECTRUM, SAMPLE_FEATURE
 
 
@@ -337,4 +338,3 @@ class TestFilterRtsByDense:
         assert isinstance(mask, np.ndarray)
         assert mask.dtype == bool
         assert len(mask) == len(rts)
-

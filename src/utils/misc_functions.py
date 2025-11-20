@@ -13,7 +13,7 @@ import src.config as config
 import pandas as pd 
 from src.utils.parse_peptides import split_frag_name
 from src.logger import logger
-from src.utils.parse_peptides import split_frag_name
+import math
 
 def feature_list_rt(DinoDF,rt,rt_tol): 
     """
@@ -458,7 +458,7 @@ def hyperscore_b_y(frag_list: dict[str, list[float]],matches: npt.NDArray[np.boo
 
     #Not efficient to have to allocate and sort every time. 
     dp = np.sum(frag_to_peak(frag_list)[:,1][matches])
-    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
+    return max(0,np.log(dp*math.factorial(num_b)*math.factorial(num_y))), num_b, num_y
 
 def longest_y(frag_list: dict[str, list[float]],matches: npt.NDArray[np.bool_]) -> int:
     """
