@@ -78,7 +78,7 @@ class Test_refresh_tags():
 
     def test_refresh_tags(self):
         available_tags = refresh_tags(Path("tests/MassTags"))
-        assert set(available_tags.keys()) == set(["test_basic", "test_one_channel", "test_subset"])
+        assert set(available_tags.keys()) == set(["test_basic", "test_one_channel", "test_subset", "PSMtag_5plex"])
         assert all([type(x) == massTag for x in available_tags.values()])
 
 class Test_set_config_tag():
