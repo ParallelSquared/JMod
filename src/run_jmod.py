@@ -177,6 +177,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     # Log the configuration that will be used
     logger.info("Using configuration:")
     logger.info(config.args)
+    logger.info("")
 
 
     if config.args.use_features and os.path.exists(feature_path):
@@ -349,7 +350,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
     ######################################################
     ### Start the search
-    logger.info("Starting Search")
+    logger.info("")
+    logger.info("Starting Main Search")
     # write dia spectra meta data
     ms2scans_info = [[i.prec_mz,i.RT,i.scan_num,*i.ms1window] for i in spectra_to_fit]
     ms2_info_path = results_folder_path+"/ms2scans.csv"
@@ -383,7 +385,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                             decoy_library=decoy_lib))
             
         long_outputs = [j for i in outputs for j in i]
-        logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
+        logger.debug(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         
         decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
         write_mode = "w" if batch_idx==0 else "a"

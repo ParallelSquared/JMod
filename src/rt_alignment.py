@@ -677,7 +677,7 @@ def empirical_fit(output_df,results_folder=None):
     """
     
     
-    
+    logger.info("")
     logger.info("Filtering IDs from initial search")
     for feature_percentile in  range(20,80,5):
     
@@ -756,7 +756,7 @@ def empirical_fit(output_df,results_folder=None):
         if outside_ratio<.05 or (sum(cor_filter)-sum(bad_IDs)<800):
             break
     
-    logger.info(f"{feature_percentile} {np.round(outside_ratio,4)} {sum(cor_filter)}")
+    logger.debug(f"{feature_percentile} {np.round(outside_ratio,4)} {sum(cor_filter)}")
             
     
     cor_filter = np.logical_and(cor_filter,np.abs(first_rt_diffs)<first_rt_tolerance)
@@ -1011,6 +1011,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     else:
         scans_per_cycle = 1
 
+    logger.info("")
     logger.info("Starting Initial Search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
@@ -1074,6 +1075,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     if not config.args.use_emp_rt:
         ## filter for only a single channel for each
+        logger.info("")
         logger.info("Trying RT Prediction")
         seq_rt = {}
         for s,rt in zip(np.array(id_keys)[cor_filter],np.array(output_df.rt)[cor_filter]):
@@ -1224,6 +1226,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     new_ms1_tol = np.abs(4*mz_stddev)
     logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
+    logger.info("")
     
     
     if config.args.ms1_ppm!=0:
@@ -2153,7 +2156,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
 
 
     new_ms1_tol = np.abs(4*mz_stddev)
-    logger.info(f"Optimized ms1 tolerance: {new_ms1_tol}")
+    logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
+    logger.info("")
     
     config.opt_ms1_tol  = new_ms1_tol
     

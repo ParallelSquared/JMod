@@ -79,6 +79,7 @@ def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];
 def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     # X = fdc.iloc[:,6:-5]
    
+    logger.info("")
     logger.info("Performing MS1 Quantitation") 
     
     fdc = dat[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
@@ -623,6 +624,7 @@ def log_df(df):
         logger.info(line)
 
 def compute_protein_FDR(df,results_folder=None):
+    logger.info("")
     logger.info("Computing Protein FDR")
 
   
@@ -655,6 +657,7 @@ def compute_protein_FDR(df,results_folder=None):
         .reset_index(name="Precursor_IDs")
         .sort_values("channel")
     )    
+    logger.info("")
     logger.info("Number of precursors at 1% FDR:")
     logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
     log_df(df_counts_prec)
@@ -668,6 +671,7 @@ def compute_protein_FDR(df,results_folder=None):
         .reset_index(name="Protein_IDs")
         .sort_values("channel")
         )
+    logger.info("")
     logger.info("Number of proteins at 1% FDR:")
     logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
     log_df(df_counts_prots)
@@ -689,7 +693,8 @@ def compute_protein_FDR(df,results_folder=None):
     #         df["BestChannel_Protein_Qvalue"] = df.groupby(["file_name", "protein", "decoy"])["Protein_Qvalue"].transform("min")
 
     if config.args.plexDIA:
-        logger.info("\nAfter plexDIA identification propagation based on best channel Q-value:")
+        logger.info("")
+        logger.info("After plexDIA identification propagation based on best channel Q-value:")
         
         # Compute number of precursor IDs at 1% FDR
         df_counts_prec = (
@@ -702,6 +707,7 @@ def compute_protein_FDR(df,results_folder=None):
         )
         
         # Print precursor ID counts
+        logger.info("")
         logger.info("Number of precursors at 1% FDR (best channel):")
         logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
         log_df(df_counts_prec)
@@ -717,6 +723,7 @@ def compute_protein_FDR(df,results_folder=None):
         )
         
         # Print protein ID counts
+        logger.info("")
         logger.info("Number of proteins at 1% FDR (best channel):")
         logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
         log_df(df_counts_prots)
@@ -881,6 +888,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
     fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder)
 
+    logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
     fdx_quant.to_csv(results_folder+"/all_IDs.csv",index=False)

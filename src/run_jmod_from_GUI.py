@@ -103,10 +103,19 @@ class JModGUI(ThemedTk):
                 if "- INFO -" in msg and (msg.split("- INFO -")[1] == "" or msg.split("- INFO -")[1] == " "):
                     self.text_widget.insert(tk.END, "\n")
                     self.text_widget.see(tk.END)
+                elif "Running JMod:" in msg:
+                    self.text_widget.insert(tk.END, msg + "\n", "bold")
+                    self.text_widget.see(tk.END)
                 else:
                     self.text_widget.insert(tk.END, msg + "\n")
                     self.text_widget.see(tk.END)
                 self.text_widget.config(state="disabled")
+
+            self.text_widget.tag_config(
+                "bold",
+                font=("Courier New", 10, "bold"),
+                foreground="#0560B6"
+            )
 
         self.tk_handler = TkinterHandler(self.text_widget)
         self.tk_formatter = ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s")
@@ -1060,6 +1069,7 @@ class JModGUI(ThemedTk):
 
     def end_main(self, show_message=True):
         if show_message is True:
+            logging.getLogger("GUI").info("")
             logging.getLogger("GUI").info("Process Manually Terminated.\n")
         if hasattr(self, 'proc') and self.proc.is_alive():
             self.proc.terminate()
@@ -1239,7 +1249,8 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
     logger.setLevel(logging.DEBUG)
 
     for i, tmp_filename in enumerate(tmp_filenames, start=1):
-        logger.info("")
+        if i > 1:
+            logger.info("")
         logger.info(f"Running JMod: File {i} of {len(tmp_filenames)}\n")
         from src.run_jmod import main
         main_result = main(tmp_filename, result_queue)
@@ -1251,6 +1262,7 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
             logger.error("Unknown Error running JMod. JMod exited\n")
             sys.exit(0)
 
+    logger.info ("")
     logger.info("JMod Finished") #if no exceptions
 
 
