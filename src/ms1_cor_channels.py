@@ -15,20 +15,9 @@ from src import iso_functions as iso
 
 import warnings
 from scipy.signal import find_peaks
-import pickle
-import math
-from functools import reduce
-from brainpy import isotopic_variants
 import logging
 
-import json
-from pyteomics import mass
 from scipy import optimize
-from scipy.sparse import coo_matrix
-import ptinnls as sparse_nnls
-from scipy.optimize import lsq_linear
-from sklearn.linear_model import LinearRegression
-from scipy.sparse.linalg import lsmr
 import numba as nb
 
 
@@ -66,15 +55,6 @@ def ms1_cor_channels(all_spectra,
     
     if "abs_mz_error" not in decoy_coeffs.columns:
         decoy_coeffs["abs_mz_error"] = np.abs(decoy_coeffs.mz_error)
-        
-    
-    ## features where bigger is better 
-    greater_features =["hyperscore","frag_cosines_p","frag_cosines_p","manhattan_distances","coeff","frac_lib_int"]
-    greater_features_present = [i for i in greater_features if i in decoy_coeffs.columns and np.ptp(decoy_coeffs[i][~np.isnan(decoy_coeffs[i])])>0]
-    
-    lesser_features =["scribe_scores","gof_stats","max_matched_residuals","med_frag_error","abs_mz_error","abs_rt_error"]
-    lesser_features_present = [i for i in lesser_features if i in decoy_coeffs.columns and np.ptp(decoy_coeffs[i][~np.isnan(decoy_coeffs[i])])>0]
-    
     
     ms1_spectra = all_spectra.ms1scans
     ms2_spectra = all_spectra.ms2scans
@@ -82,20 +62,14 @@ def ms1_cor_channels(all_spectra,
     ## array of ms1 and ms2 retention time
     ms2_rt = np.array([i.RT for i in ms2_spectra])
     ms1_rt = np.array([i.RT for i in ms1_spectra])
-    # ms2_rt = np.array([i.RT for i in ms2_spectra])
-    # ms1_rt = np.array([i.RT for i in ms1_spectra])
     
     ## array of scan numbers for ms1 and ms2 spectra
     ms1_spec_idxs = np.array([i.scan_num for i in ms1_spectra])
     ms2_spec_idxs = np.array([i.scan_num for i in ms2_spectra])
-    # ms1_spec_idxs = np.array([i.scan_num for i in ms1_spectra])
-    # ms2_spec_idxs = np.array([i.scan_num for i in ms2_spectra])
     
     ## get ms2 info for filtering
     bottom_of_window, top_of_window = np.array([i.ms1window for i in ms2_spectra]).T
     ms2_rt = np.array([i.RT for i in ms2_spectra])
-    # bottom_of_window, top_of_window = np.array([i.ms1window for i in all_spectra.ms2scans]).T
-    # ms2_rt = np.array([i.RT for i in all_spectra.ms2scans])
 
     ## list of scan nums of the closest ms1 scan for each ms2 scan
     resp_ms1scans = [ms1_spec_idxs[closest_ms1spec(ms2_rt[i], ms1_rt)] for i in range(len(ms2_rt))]
@@ -117,8 +91,6 @@ def ms1_cor_channels(all_spectra,
     ms1_spec_dict = {k: {"fdc_idx": [], "peak_mz": [], "rel_iso_int": [], "monoiso_groups": [], "MS1_spectra": None} for k in ms1_spec_idxs}
     dummy_idx_list = list(filtered_decoy_coeffs.index)
     fake_fdc_dict = {}
-
-    
 
 
     GUI_print_idxs = [int(((len(fdc_group.groups)-1)/10)*y) for y in range(1,11)]

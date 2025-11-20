@@ -15,7 +15,6 @@ import tqdm
 import pandas as pd
 import sys 
 import json
-import biosaur2
 
 from src.utils.io import load_files
 from src.utils.set_seeds import set_seeds
@@ -66,36 +65,19 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     set_seeds(config.RANDOM_SEED)
     mzml_file = config.args.mzml.replace("\\","/")
     lib_file = config.args.speclib.replace("\\","/")
-
-    
-    
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
-    lib_file_name = lib_file.split("/")[-1].rsplit(".",1)[0]
 
 
-    use_rt = "RT" if config.args.use_rt else ""
-    iso = f"iso{config.num_iso_peaks}" if config.args.iso else ""
-    lib_frac = f"iso{config.args.lib_frac}"
-    mTRAQ = "mTRAQ" if config.args.mTRAQ else ""
-    plexDIA = "plexDIA" if config.args.plexDIA else ""
-    tag = config.args.tag
-    is_timeplex = "timeplex" if config.args.timeplex else ""
     dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
-    use_feat = ""
     dino_features=None
     feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv"
     if config.args.use_features and os.path.exists(feature_path):
-        use_feat = "Dino"
         dino_features = pd.read_csv(feature_path,delimiter="\t")
 
     if config.args.use_features and not os.path.exists(feature_path):
         import subprocess
         subprocess.run(["biosaur2", mzml_file], check=True)
-        use_feat = "Dino"
         dino_features = pd.read_csv(feature_path,delimiter="\t")
-
-    
-    ms2_align = "MS2align" if config.args.ms2_align else ""
 
     results_folder_name = spec_file_name + "_results" + "_" + dummy_val
     results_folder_name = results_folder_name.rstrip("_")
@@ -186,16 +168,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         logger.info("Dinosaur feature file not found, running biosaur2")
 
     logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
-
-    
-    # logger.info(config.args.tag)
-    
-    # stop
-    
-    
-    
-    overall_start_time = time.time()
-    # python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
 
     
     ######################################################
