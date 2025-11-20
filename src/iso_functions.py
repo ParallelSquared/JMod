@@ -145,7 +145,7 @@ unimods = mass.Unimod()
 ## ## get the compostion of the fragment
 
 mod_pattern = re.compile(r"\([A-z]+\:(\d+)\)")
-def get_seq_comp(split_seq,ion_type):
+def get_seq_comp(split_seq,ion_type,neutral_loss=None):
     """
    Get the sequence composition of a parsed pepetide sequence
 
@@ -170,6 +170,8 @@ def get_seq_comp(split_seq,ion_type):
     mods = [int(j) for i in split_seq for j in mod_pattern.findall(i) if len(i)>1] ### TODO Make work for more mod types
     # tags = [t for aa in split_seq for t in re.findall("(\(.*?\))",aa)]
     seq_comp = mass.Composition(sequence=stripped_seq,ion_type=ion_type)
+    if neutral_loss:
+        seq_comp -= mass.Composition(neutral_loss)
     for unimod_idx in mods:
         seq_comp += unimods.by_id(unimod_idx)["composition"]
     return seq_comp
@@ -216,9 +218,7 @@ def gen_isotopes_dict(seq,frags, tag, n_iso):
     for frag in frags:
         mz,intensity = frags[frag]
         split_frag_seq,frag_info = fragment_seq(seq,frag)
-        loss = "-"+frag_info[2] if frag_info[2] else frag_info[2]
-        ion_type = frag_info[0] + loss
-        frag_comp = get_seq_comp(split_frag_seq, ion_type)
+        frag_comp = get_seq_comp(split_frag_seq, frag_info[0], neutral_loss=frag_info[2])
         frag_z = int(frag_info[3])
         
         
@@ -355,7 +355,7 @@ def precursor_isotopes(sequence,charge,tag,n_isotopes=2, decoys=True):
     #split_seq = split_peptide(sequence)
     split_seq = parse_peptide(sequence)
     
-    seq_comp = get_seq_comp(split_seq, "M")
+    seq_comp = get_seq_comp(split_seq, "M", neutral_loss=None)
     
     if tag:
         pattern_tag = re.compile(rf"\(({tag.name}.*?)\)")
