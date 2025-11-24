@@ -26,7 +26,6 @@ import re
 import os
 import pandas as pd
 
-from src.trace_fns import ms1_cor#, ms1_cor_channels
 # from src.ms1_cor_channels import ms1_cor_channels
 import src.ms1_cor_channels as ms1_mod
 from src.utils.io.load_files import loadSpectra
@@ -38,6 +37,8 @@ from src.utils.misc_functions import unstring_floats
 from src import config
 from src.logger import logger
 from src.utils.misc_functions import p_result
+from mass_tags import massTag
+from pyteomics import mass
 
 
 
@@ -95,86 +96,94 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
         all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
 
     if mass_tag:
-
-        #fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
-        group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict = ms1_mod.ms1_cor_channels(DIAspectra, 
-                                                                                                                                        fdc, 
-                                                                                                                                        dc, 
-                                                                                                                                        mz_ppm=mz_ppm, 
-                                                                                                                                        rt_tol = rt_tol,
-                                                                                                                                        tag=mass_tag,
-                                                                                                                                        timeplex=timeplex,
-                                                                                                                                        num_iso = config.num_iso_ms1,
-                                                                                                                                        num_iso_r = config.num_iso_r,
-                                                                                                                                        additional_scans = config.additional_scans                                             
-                                                                                                                                        )
-        
-        ## create dictionary  that links keys to data so we can match the order of "fdc"
-        
-        linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}
-        
-        p_corrs = [group_p_corrs[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-        ms1_traces = [group_ms1_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-        ms2_traces = [group_ms2_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-        iso_ratios = [group_iso_ratios[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-        extracted_keys = [group_keys[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-
-        ## Fit mTRAQ
-        
-        extracted_fitted = [group_fitted[linker_dict[key][0]][0][:,linker_dict[key][1]] for key in all_keys]
-        extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in all_keys]
-        extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in all_keys]
-
-
-
-
-        # # Fit Whole MS1
-
-        # ##TODO deal with fake_fdc_dict values make sure they get properly assigned
-
-        # all_fdc_idxs = list(set(key for ms1_spec_idx in new_output_dict.keys() for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys()))
-        # extracted_fitted_specs = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
-        # extracted_fitted_p = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
-        # for ms1_spec_idx in new_output_dict.keys():
-        #     for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys():
-        #         if key not in fake_fdc_dict.keys():
-        #             extracted_fitted_specs[key].append(ms1_spec_idx)
-        #             extracted_fitted_p[key].append(p_result(r_sq=np.nan, p=np.nan))
-
-        # extracted_fitted = []
-        # for fdc_idx in all_fdc_idxs:
-        #     if fdc_idx not in fake_fdc_dict.keys():
-        #         fdc_coeffs = []
-        #         for scan in extracted_fitted_specs[fdc_idx]:
-        #             fdc_coeffs.append(new_output_dict[scan]["mapped_pred_coeffs"][fdc_idx])
-                
-        #         extracted_fitted.append(np.array(fdc_coeffs))
-        
-        
-        fdc["plexfitMS1"] = [np.max(i) for i in extracted_fitted]
-        fdc["plexfitMS1_p"] = [j[np.argmax(i)].statistic  if type(j[np.argmax(i)])!=float else 0 for i,j in zip(extracted_fitted,extracted_fitted_p)]
-    
-        plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
-        plexfit_ps = [[i[k].statistic if type(i[k])!=float else 0 for k in j] for i,j in zip(extracted_fitted_p,plexfittrace_idxs)]
-        # fdc["plexfitMS1_new"] = [np.max(i) for i in plexfittrace]
-        fdc["plexfittrace"] = [";".join(map(str,i)) for i in plexfittrace] ###spec ids come from ms2_traces
-        fdc["plexfit_ps"] = [";".join(map(str,i)) for i in plexfit_ps]
-        
-        fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        #fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
-        fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) if fdc.plexfittrace.iloc[idx] != '' else np.nan for idx in range(len(fdc))]
-
+        tag_to_use = mass_tag
     else:
-        #fdc["untag_seq"] = fdc["seq"]
-        p_corrs, ms1_traces, ms2_traces, iso_ratios = ms1_cor(DIAspectra, 
-                                                                fdc, 
-                                                                dc, 
-                                                                mz_ppm=mz_ppm, 
-                                                                rt_tol = rt_tol,
-                                                                timeplex=timeplex)
+        tag_to_use = massTag(rules="nK",
+                            base_mass=0.00,
+                            delta=[0],
+                            channel_names=["0"],
+                            name="no_tag",
+                            compositions=mass.Composition())
+
+    (
+    group_p_corrs,
+    group_ms1_traces,
+    group_ms2_traces,
+    group_iso_ratios,
+    group_keys,
+    group_fitted,
+    new_output_dict,
+    fake_fdc_dict
+    ) = ms1_mod.ms1_cor_channels(DIAspectra, 
+                                fdc, 
+                                dc, 
+                                mz_ppm=mz_ppm, 
+                                rt_tol = rt_tol,
+                                tag=tag_to_use,
+                                timeplex=timeplex,
+                                num_iso = config.num_iso_ms1,
+                                num_iso_r = config.num_iso_r,
+                                additional_scans = config.additional_scans                                             
+                                )
+        
+    ## create dictionary  that links keys to data so we can match the order of "fdc"
+    
+    linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}
+    
+    p_corrs = [group_p_corrs[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+    ms1_traces = [group_ms1_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+    ms2_traces = [group_ms2_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+    iso_ratios = [group_iso_ratios[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+    extracted_keys = [group_keys[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+
+    ## Fit mTRAQ
+    
+    extracted_fitted = [group_fitted[linker_dict[key][0]][0][:,linker_dict[key][1]] for key in all_keys]
+    extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in all_keys]
+    extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in all_keys]
+
+
+
+
+    # # Fit Whole MS1
+
+    # ##TODO deal with fake_fdc_dict values make sure they get properly assigned
+
+    # all_fdc_idxs = list(set(key for ms1_spec_idx in new_output_dict.keys() for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys()))
+    # extracted_fitted_specs = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
+    # extracted_fitted_p = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
+    # for ms1_spec_idx in new_output_dict.keys():
+    #     for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys():
+    #         if key not in fake_fdc_dict.keys():
+    #             extracted_fitted_specs[key].append(ms1_spec_idx)
+    #             extracted_fitted_p[key].append(p_result(r_sq=np.nan, p=np.nan))
+
+    # extracted_fitted = []
+    # for fdc_idx in all_fdc_idxs:
+    #     if fdc_idx not in fake_fdc_dict.keys():
+    #         fdc_coeffs = []
+    #         for scan in extracted_fitted_specs[fdc_idx]:
+    #             fdc_coeffs.append(new_output_dict[scan]["mapped_pred_coeffs"][fdc_idx])
+            
+    #         extracted_fitted.append(np.array(fdc_coeffs))
+    
+    
+    fdc["plexfitMS1"] = [np.max(i) for i in extracted_fitted]
+    fdc["plexfitMS1_p"] = [j[np.argmax(i)].statistic  if type(j[np.argmax(i)])!=float else 0 for i,j in zip(extracted_fitted,extracted_fitted_p)]
+
+    plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+    plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
+    plexfit_ps = [[i[k].statistic if type(i[k])!=float else 0 for k in j] for i,j in zip(extracted_fitted_p,plexfittrace_idxs)]
+    # fdc["plexfitMS1_new"] = [np.max(i) for i in plexfittrace]
+    fdc["plexfittrace"] = [";".join(map(str,i)) for i in plexfittrace] ###spec ids come from ms2_traces
+    fdc["plexfit_ps"] = [";".join(map(str,i)) for i in plexfit_ps]
+    
+    fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+    fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+    fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+    #fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
+    fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) if fdc.plexfittrace.iloc[idx] != '' else np.nan for idx in range(len(fdc))]
+       
 
 
     

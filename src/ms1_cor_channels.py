@@ -7,7 +7,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import src.config as config 
 
 import tqdm
-# from src.trace_fns import fit_mTRAQ_isotopes
 from src.utils.misc_functions import  closest_ms1spec,np_pearson_cor
 from scipy.interpolate import interp1d
 from src.utils import misc_functions as mf
@@ -41,7 +40,10 @@ def ms1_cor_channels(all_spectra,
 
     window_half_width = 10
 
-    logger.info("Fitting tagged channels together")
+    if tag.name != "no_tag":
+        logger.info("Fitting tagged channels together")
+    else:
+        logger.info("Fitting Precursors Individually")
     decoy_coeffs["untag_seq"] = [re.sub(rf"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
     decoy_coeffs["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(decoy_coeffs["untag_seq"],decoy_coeffs["z"])]
     
@@ -239,9 +241,12 @@ def get_seqs_and_mzs(fdc_group, timeplex, tag, key):
     top_ms1_spec_idx = list(tag_group["Ms1_spec_id"])[largest_id]
     prec_rt = list(tag_group["rt"])[largest_id]
     
-    ### search for all channels always:
-    channel_dict = get_other_channels((prec_seqs.iloc[largest_id],prec_z), prec_mzs.iloc[largest_id], tag)
-    prec_seqs,prec_mzs = tuple(zip(*channel_dict.values()))
+    if tag.name != "no_tag":
+        channel_dict = get_other_channels((prec_seqs.iloc[largest_id],prec_z), prec_mzs.iloc[largest_id], tag)
+        prec_seqs,prec_mzs = tuple(zip(*channel_dict.values()))
+    else:
+        prec_seqs = (prec_seqs.iloc[largest_id],)
+        prec_mzs = (prec_mzs.iloc[largest_id],)
 
     largest_coeff_scans = list(tag_group["Ms1_spec_id"])
 
@@ -495,9 +500,7 @@ def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag):
     """
     isotopes = iso.precursor_isotopes(prec_seq,prec_z,tag,num_iso, decoys=False)
 
-    delta_mz = 0
-    if tag.name in prec_seq:
-        delta_mz = prec_mz-isotopes[0].mz
+    delta_mz = prec_mz-isotopes[0].mz
     for i in isotopes:
         i.mz+=delta_mz
 
