@@ -223,7 +223,7 @@ def train_models(models,train_data,results_folder=None):
                 model.save(results_folder+f'/iRT_updated_model{i}')
             except:
                 from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
                 raise ValueError("Path Length Limit Exceeded")
     logger.debug(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
     return models, all_history

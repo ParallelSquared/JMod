@@ -105,7 +105,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 raise FileNotFoundError(f"Parent Path Does Not Exist - {os.path.dirname(results_folder_path)}")
             if "[WinError 3]" in str(e) or "[WinError 206]" in str(e):
                 from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
                 raise ValueError("Path Length Limit Exceeded")
         except Exception as e:
             from src.utils.gui_utils import send_raise_to_TK
@@ -122,7 +122,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         except FileNotFoundError as e:
             if "[WinError 3]" in str(e) or "[WinError 206]" in str(e):
                 from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
                 raise ValueError("Path Length Limit Exceeded")
         except Exception as e:
             from src.utils.gui_utils import send_raise_to_TK
