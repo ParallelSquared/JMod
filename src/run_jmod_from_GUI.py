@@ -1212,6 +1212,8 @@ class JModGUI(ThemedTk):
 
             if data['values'] == 'any':  ##while we know data are the right type, now make sure they are valid given specific parameters for each command
                 continue
+            if key == "tag":
+                continue
             elif type(data['values']) == list:
                 if config_args_dict[key] not in data['values']:
                     tk.messagebox.showerror("Invalid Value", f"Value for {key} is not in the allowed list:\n\n{data['values']}\n\nValue: '{config_args_dict[key]}'")
