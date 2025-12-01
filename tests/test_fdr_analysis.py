@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import os
 import types
 import pytest
 
@@ -26,7 +27,8 @@ def test_score_model_minimal_fixed():
     except ValueError:
         pass
 
-def test_score_precursors_minimal_fixed():
+def test_score_precursors_minimal_fixed(tmp_path):
+    # Minimal valid input
     fdc = pd.DataFrame({
         "coeff": [2.0, 0.5, 2.1, 0.7, 1.5],
         "decoy": [False, True, False, True, False],
@@ -37,12 +39,28 @@ def test_score_precursors_minimal_fixed():
         "feature2": [5.0, 4.0, 3.0, 2.0, 1.0],
     })
 
-    out = score_precursors(fdc, model_type="lda", fdr_t=0.01, folder=None)
-    
+    out = score_precursors(
+        fdc,
+        model_type="lda",
+        fdr_t=0.01,
+        folder=str(tmp_path)  # ensures the plot-saving code runs
+    )
+
     assert isinstance(out, pd.DataFrame)
+    assert len(out) == len(fdc)
+
     for col in ["PredVal", "Qvalue"]:
         assert col in out.columns
-    assert len(out) == len(fdc)
+
+    expected_files = [
+        "ModelScore.png",
+        "RT_error.png",
+        "mz_error.png"
+    ]
+    for fname in expected_files:
+        f = tmp_path / fname
+        assert f.exists()
+
 
 def test_add_median_based_features_basic():
     # minimal dummy dataframe
