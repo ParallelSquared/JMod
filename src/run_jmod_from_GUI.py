@@ -185,7 +185,6 @@ class JModGUI(ThemedTk):
         self.presets_label.grid(row=0, column=1, padx=10, pady=10)
         self.json_button_in = ttk.Button(self.presets_frame, text="Browse", style="Accent.TButton", command=lambda: self.select_json_internal())
         self.json_button_in.grid(row=0, column=2, padx=10, pady=10)
-        self.presets_label.config(text="Label_Free_DIA_Defaults")
 
         ####         MS Frame      #######
         self.ms_frame = ttk.LabelFrame(self, text="MS Settings")
@@ -401,6 +400,12 @@ class JModGUI(ThemedTk):
         self.stop_button = ttk.Button(self.output_frame, text="Stop", command=self.end_main)
         self.stop_button.grid(row=1, column=6, padx=10, pady=10)
 
+        ### Things that need to run after GUI is created:
+
+        file_path = os.path.join("src", "Presets", "Label_Free_DIA_Defaults.json")
+        file_path = os.path.join("src", "Presets", "PSMtag_5plex_DIA_Defaults.json")
+        self.handle_json(file_path, update_log=False)
+
 
     ####### Miscellaneous Funcs ##########
 
@@ -492,16 +497,21 @@ class JModGUI(ThemedTk):
         file_path = filedialog.askopenfilename(
             title="Select JSON Config File", filetypes=[("JSON files", "*.json")], initialdir=initial_dir)
         if file_path:
-            basename = os.path.basename(file_path)
-            if len(basename) > 50:
-                display_name = f"...{basename[-50:]}"
-            else:
-                display_name = basename
-            self.presets_label.config(text=display_name)
-            self.import_json(file_path)
-            logging.getLogger("GUI").info(f"Loaded Presets from {file_path}")
+            self.handle_json(file_path)
         else:
             pass
+
+    def handle_json(self, file_path, update_log=True):
+        print(file_path)
+        basename = os.path.basename(file_path)
+        if len(basename) > 50:
+            display_name = f"...{basename[-50:]}"
+        else:
+            display_name = basename
+        self.presets_label.config(text=display_name)
+        self.import_json(file_path)
+        if update_log:
+            logging.getLogger("GUI").info(f"Loaded Presets from {file_path}")
 
 
     def import_json(self, file_path): 
