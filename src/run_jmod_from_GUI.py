@@ -77,7 +77,7 @@ class JModGUI(ThemedTk):
         functions 1) Miscellaneous Funcs 2) Logging Funcs 3) input funcs, 4) presets funcs  5) MS funcs  6) multiplex funcs 7) additional funcs  8) output funcs
         """
 
-        ####          Miscellaneous
+        ####          Miscellaneous  #####
 
         #Info Button
         self.info_button = ttk.Button(self, text="?", command=self.show_info)
@@ -87,7 +87,7 @@ class JModGUI(ThemedTk):
         ####         Logging Frame      #######
 
         self.logging_frame = ttk.LabelFrame(self, text="Logging")
-        self.logging_frame.grid(row=0, column=11, columnspan=10, rowspan=5, padx=10, pady=10, sticky="ew")
+        self.logging_frame.grid(row=0, column=11, columnspan=10, rowspan=6, padx=10, pady=3, sticky="ew")
 
         self.text_widget = tk.Text(self.logging_frame, height=52, width=100)
         self.text_widget.pack(fill="both", expand=True)
@@ -138,10 +138,17 @@ class JModGUI(ThemedTk):
         gui_logger.info("GUI logger started.\n")
 
 
+
+        self.top_container = ttk.Frame(self)
+        self.top_container.grid(row=0, column=0, sticky="ew")
+        self.top_container.columnconfigure(1, weight=1)
+
         #######     input frame      #######
 
-        self.input_frame = ttk.LabelFrame(self, text="Input Files")
-        self.input_frame.grid(row=0, column=0, columnspan=10, padx=10, pady=10, sticky="ew")
+        self.input_frame = ttk.LabelFrame(self.top_container, text="Input Files")
+        self.input_frame.grid(row=0, column=0, columnspan=3, padx=10, pady=3, sticky="ew")
+        self.input_frame.columnconfigure(1, weight=1)
+
 
         # mzML and .d file input
         # Not saving this in default dict because we are only running one at a time
@@ -163,20 +170,26 @@ class JModGUI(ThemedTk):
         self.tsv_button = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=self.select_tsv)
         self.tsv_button.grid(row=1, column=2, padx=10, pady=10)
 
+        ##### Presets Frame  ######
+
+        self.presets_frame = ttk.LabelFrame(self.top_container, text="Presets")
+        self.presets_frame.grid(row=1, column=0, columnspan=3, padx=10, pady=3, sticky="ew")
+        self.presets_frame.columnconfigure(1, weight=1)
+
         #JSON Config input
         # Not saving this in default dict because once we have loaded in the JSON we don't care about it anymore
-        self.json_label = ttk.Label(self.input_frame, text="Presets:")
-        self.json_label.grid(row=2, column=0, padx=10, pady=10, sticky="e")
-        Hovertip(self.json_label, "Select Presets to load into GUI")
-        self.presets_label = ttk.Label(self.input_frame, text='')
-        self.presets_label.grid(row=2, column=1, padx=10, pady=10)
-        self.json_button_in = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=lambda: self.select_json_internal())
-        self.json_button_in.grid(row=2, column=2, padx=10, pady=10)
+        self.json_label = ttk.Label(self.presets_frame, text="Configuration File:")
+        self.json_label.grid(row=0, column=0, padx=10, pady=10, sticky="e")
+        Hovertip(self.json_label, "Select Presets to load into GUI from default folder or from previous experiments.\nThis will populate the GUI with these parameters.\nAdditionally, any further changes within the GUI are taken into account at runtime.")
+        self.presets_label = ttk.Label(self.presets_frame, text='')
+        self.presets_label.grid(row=0, column=1, padx=10, pady=10)
+        self.json_button_in = ttk.Button(self.presets_frame, text="Browse", style="Accent.TButton", command=lambda: self.select_json_internal())
+        self.json_button_in.grid(row=0, column=2, padx=10, pady=10)
         self.presets_label.config(text="Label_Free_DIA_Defaults")
 
         ####         MS Frame      #######
         self.ms_frame = ttk.LabelFrame(self, text="MS Settings")
-        self.ms_frame.grid(row=1, column=0, columnspan=10, padx=10, pady=10, sticky="ew")
+        self.ms_frame.grid(row=2, column=0, columnspan=10, padx=10, pady=3, sticky="ew")
 
         def on_combobox_select(event):
             event.widget.icursor("end")
@@ -266,7 +279,7 @@ class JModGUI(ThemedTk):
 
         ####         Multiplex Frame      #######
         self.multiplex_frame = ttk.LabelFrame(self, text="Multiplexing")
-        self.multiplex_frame.grid(row=2, column=0, columnspan=10, padx=10, pady=10, sticky="ew")
+        self.multiplex_frame.grid(row=3, column=0, columnspan=10, padx=10, pady=3, sticky="ew")
 
         def combined_handler(event):
             on_combobox_select(event)
@@ -344,7 +357,7 @@ class JModGUI(ThemedTk):
 
         ####         Additional Frame      #######
         self.additional_frame = ttk.LabelFrame(self, text="Additional Commands")
-        self.additional_frame.grid(row=3, column=0, columnspan=10, padx=10, pady=10, sticky="ew")
+        self.additional_frame.grid(row=4, column=0, columnspan=10, padx=10, pady=3, sticky="ew")
 
         # Large multi-line text box
         self.additional_text = tk.Text(self.additional_frame, wrap="word", height=5, width=50, font=("Courier New", 11))
@@ -360,7 +373,7 @@ class JModGUI(ThemedTk):
 
         ####         Output Frame      #######
         self.output_frame = ttk.LabelFrame(self, text="Output")
-        self.output_frame.grid(row=4, column=0, columnspan=10, padx=10, pady=10, sticky="ew")
+        self.output_frame.grid(row=5, column=0, columnspan=10, padx=10, pady=3, sticky="ew")
 
         # Output Folder Label + Entry + Select Button
         self.output_folder_label = ttk.Label(self.output_frame, text="Output Folder:")
