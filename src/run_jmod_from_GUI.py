@@ -403,7 +403,6 @@ class JModGUI(ThemedTk):
         ### Things that need to run after GUI is created:
 
         file_path = os.path.join("src", "Presets", "Label_Free_DIA_Defaults.json")
-        file_path = os.path.join("src", "Presets", "PSMtag_5plex_DIA_Defaults.json")
         self.handle_json(file_path, update_log=False)
 
 
