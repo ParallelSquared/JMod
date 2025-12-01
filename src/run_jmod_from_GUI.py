@@ -21,6 +21,7 @@ from src.config import parser
 from src.default_dict import default_dict
 import shlex
 from pathlib import Path
+import subprocess
 from pyteomics import mass
 import re
 from src.logger import logger, ElapsedFormatter
@@ -71,10 +72,16 @@ class JModGUI(ThemedTk):
         """
         Organization of GUI Code
 
-        frames:  1) Logging Frame 2) input frame,  3) MS frame  4)multiplex frame  5)additional frame   6) Output frame
+        frames:  1) Miscellaneous 2) Logging Frame 3) input frame, 4) presets frame  5) MS frame  6)multiplex frame  7)additional frame   8) Output frame
 
-        functions 1) Logging Funcs 2) input funcs,  3) MS funcs  4) multiplex funcs 5) additional funcs  6) output funcs
+        functions 1) Miscellaneous Funcs 2) Logging Funcs 3) input funcs, 4) presets funcs  5) MS funcs  6) multiplex funcs 7) additional funcs  8) output funcs
         """
+
+        ####          Miscellaneous
+
+        #Info Button
+        self.info_button = ttk.Button(self, text="?", command=self.show_info)
+        self.info_button.grid(row=0, column=21, padx=0, pady=10, sticky="n")
 
 
         ####         Logging Frame      #######
@@ -287,7 +294,7 @@ class JModGUI(ThemedTk):
 
 
         # Timeplex label + dropdown
-        self.timeplex_label = ttk.Label(self.multiplex_frame, text="Timeplex:")
+        self.timeplex_label = ttk.Label(self.multiplex_frame, text="timePlex:")
         self.timeplex_label.grid(row=2, column=0, padx=10, pady=10, sticky="e")
         Hovertip(self.timeplex_label, "Select the number of timeplexes (1 for no timeplexing) ")
         self.timeplex_count_var = tk.IntVar(value=0)
@@ -347,6 +354,8 @@ class JModGUI(ThemedTk):
         self.additional_frame.columnconfigure(0, weight=1)
         self.additional_frame.rowconfigure(0, weight=1)
 
+        self.show_commands_button = ttk.Button(self.additional_frame, text="?", command=self.open_additional_command_pdf)
+        self.show_commands_button.grid(row=0, column=1, padx=(0,5), pady=10, sticky="n")
 
 
         ####         Output Frame      #######
@@ -380,6 +389,69 @@ class JModGUI(ThemedTk):
         self.stop_button.grid(row=1, column=6, padx=10, pady=10)
 
 
+    ####### Miscellaneous Funcs ##########
+
+    # Info button
+    def show_info(self):
+        if hasattr(self, "show_info_window") and self.show_info_window.winfo_exists():
+            self.show_info_window.destroy()
+        self.show_info_window = tk.Toplevel(self)
+        self.show_info_window.title("Information Links")
+        self.show_info_window.geometry("200x150")
+        center_on_parent(self.show_info_window, self)
+
+        tutorial_button = ttk.Button(self.show_info_window, text="Tutorial PDF", width=12, command=self.open_tutorial)
+        tutorial_button.grid(row=0, column=0, padx=42, pady=(10, 0))
+
+        video_button = ttk.Button(self.show_info_window, text="Tutorial Video", width=12, command=self.open_tutorial_video)
+        video_button.grid(row=1, column=0, padx=42)
+
+        outputs_button = ttk.Button(self.show_info_window, text="Outputs PDF", width=12, command=self.open_outputs)
+        outputs_button.grid(row=2, column=0, padx=42)
+
+        github_button = ttk.Button(self.show_info_window, text="GitHub", width=12, command=self.open_github)
+        github_button.grid(row=3, column=0, padx=42)
+
+    def open_tutorial(self):  ##TODO Update tutorial with final tutorial
+        self.open_folder_file("Help", "JMod Tutorial.pdf")
+
+    def open_tutorial_video(self):  ##TODO Update link to go to tutorial video
+        link = "https://www.youtube.com/@ParallelSquared"
+        try:
+            import webbrowser
+            webbrowser.open(link)
+        except:
+            print(f"Failed to open video. Try Navigating to:\n{link}")
+
+    def open_outputs(self):  ##TODO Update outputs.pdf to go to an output pdf explanation
+        self.open_folder_file("Help", "outputs.pdf")
+
+    def open_github(self):
+        link = "https://github.com/ParallelSquared/JMod"
+        try:
+            import webbrowser
+            webbrowser.open(link)
+        except:
+            print(f"Failed to open GitHub Page. Try Navigating to:\n{link}")
+
+    def open_folder_file(self, foldername, filename):
+        script_dir = Path(__file__).resolve().parent
+        project_root = script_dir.parent
+        open_path = project_root / foldername / filename
+        if not open_path.exists():
+            messagebox.showerror("Error", f"Could not find:\n{open_path}")
+            return
+        
+        if sys.platform.startswith("win"):
+            os.startfile(open_path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", open_path])
+        else:
+            subprocess.Popen(["xdg-open", open_path])
+
+
+
+        
     ####         Logging Funcs      #######
 
     
@@ -979,6 +1051,9 @@ class JModGUI(ThemedTk):
             tk.messagebox.showerror("Unknown Additional Commands Error", f"Unknown Additional Commands Error.\n\nError: {e}")
             return False
 
+    def open_additional_command_pdf(self):  ##TODO Update commands.pdf to go to command list
+        self.open_folder_file("Help", "commands.pdf")
+
     ####         Output Funcs      #######
 
     def save_configuration(self):
@@ -1269,7 +1344,7 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
     logger.info ("")
     logger.info("JMod Finished") #if no exceptions
 
-
+# After creating a popup, call center_on_parent to make it center on its parent window (and be on its monitor)
 def center_on_parent(win, parent=None):
     win.update_idletasks()
     if parent is None:
