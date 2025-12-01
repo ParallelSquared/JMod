@@ -596,7 +596,7 @@ class JModGUI(ThemedTk):
             self.new_tag_window.destroy()
         self.new_tag_window = tk.Toplevel(self)
         self.new_tag_window.title("Create New Mass Tag")
-        self.new_tag_window.geometry("260x220")
+        self.new_tag_window.geometry("281x260")
         center_on_parent(self.new_tag_window, self)
 
 
@@ -636,6 +636,9 @@ class JModGUI(ThemedTk):
         self.atomic_composition_o = tk.StringVar(value="")
         self.atomic_composition_o_entry = tk.Entry(self.new_tag_window, textvariable=self.atomic_composition_o, width=5)
         self.atomic_composition_o_entry.grid(row=5, column=1, padx=5, pady=5)
+
+        tk.Label(self.new_tag_window, text="This is the modification formula.\nI.e. Unmodified peptide + x = Tagged Composition").grid(row=6, column=0, padx=5, pady=5, columnspan=3)
+
 
     def make_second_tag_window(self):
         if hasattr(self, "second_window") and self.second_window.winfo_exists():
