@@ -44,53 +44,53 @@ def create_python_lib(spec_lib):
     
 #####################################################
 
-def load_tsv_lib(spec_lib_file):
-    with open(spec_lib_file,newline="") as tsv_file:
-        csv_reader = csv.DictReader(tsv_file,delimiter="\t")
-        python_lib = {}
-        idx = 0
-        for row in csv_reader:
-            unique_id = (row["modification_sequence"],float(row["prec_z"]))
-            python_lib.setdefault(unique_id,{})
-            python_lib[unique_id]["mod_seq"] = row["modification_sequence"]
-            python_lib[unique_id]["seq"] = row["stripped_sequence"]
-            python_lib[unique_id]["prec_mz"] = float(row["Q1"])
-            python_lib[unique_id]["prec_z"] = float(row["prec_z"]) 
-            rt = row["iRT"]
-            python_lib[unique_id]["iRT"] = None if rt=="" else float(rt)
-            python_lib[unique_id].setdefault("frags",{})
-            frag_type = str(row["frg_type"])+str(row["frg_nr"])+"_"+str(row["frg_z"])
-            python_lib[unique_id]["frags"][frag_type]=[float(row["Q3"]),float(row["relative_intensity"])]
-            # idx+=1
-            # if idx>1117038:
-            #     break
-        for key in python_lib:
-            python_lib[key]["spectrum"] = frag_to_peak(python_lib[key]["frags"])
-        return python_lib
+# def load_tsv_lib(spec_lib_file):
+#     with open(spec_lib_file,newline="") as tsv_file:
+#         csv_reader = csv.DictReader(tsv_file,delimiter="\t")
+#         python_lib = {}
+#         idx = 0
+#         for row in csv_reader:
+#             unique_id = (row["modification_sequence"],float(row["prec_z"]))
+#             python_lib.setdefault(unique_id,{})
+#             python_lib[unique_id]["mod_seq"] = row["modification_sequence"]
+#             python_lib[unique_id]["seq"] = row["stripped_sequence"]
+#             python_lib[unique_id]["prec_mz"] = float(row["Q1"])
+#             python_lib[unique_id]["prec_z"] = float(row["prec_z"]) 
+#             rt = row["iRT"]
+#             python_lib[unique_id]["iRT"] = None if rt=="" else float(rt)
+#             python_lib[unique_id].setdefault("frags",{})
+#             frag_type = str(row["frg_type"])+str(row["frg_nr"])+"_"+str(row["frg_z"])
+#             python_lib[unique_id]["frags"][frag_type]=[float(row["Q3"]),float(row["relative_intensity"])]
+#             # idx+=1
+#             # if idx>1117038:
+#             #     break
+#         for key in python_lib:
+#             python_lib[key]["spectrum"] = frag_to_peak(python_lib[key]["frags"])
+#         return python_lib
 
-def load_tsv_lib_sp(spec_lib_file):
-    with open(spec_lib_file,newline="") as tsv_file:
-        csv_reader = csv.DictReader(tsv_file,delimiter="\t")
-        python_lib = {}
-        idx = 0
-        for row in csv_reader:
-            unique_id = (row["modification_sequence"],float(row["prec_z"]))
-            python_lib.setdefault(unique_id,{})
-            python_lib[unique_id]["mod_seq"] = row["modification_sequence"]
-            python_lib[unique_id]["seq"] = row["stripped_sequence"]
-            python_lib[unique_id]["PrecursorMZ"] = float(row["Q1"])
-            python_lib[unique_id]["prec_z"] = float(row["prec_z"]) 
-            rt = row["iRT"]
-            python_lib[unique_id]["PrecursorRT"] = None if rt=="" else float(rt)
-            python_lib[unique_id].setdefault("frags",{})
-            frag_type = str(row["frg_type"])+str(row["frg_nr"])+"_"+str(row["frg_z"])
-            python_lib[unique_id]["frags"][frag_type]=[float(row["Q3"]),float(row["relative_intensity"])]
-            # idx+=1
-            # if idx>1117038:
-            #     break
-        for key in python_lib:
-            python_lib[key]["Spectrum"] = frag_to_peak(python_lib[key]["frags"])
-        return python_lib
+# def load_tsv_lib_sp(spec_lib_file):
+#     with open(spec_lib_file,newline="") as tsv_file:
+#         csv_reader = csv.DictReader(tsv_file,delimiter="\t")
+#         python_lib = {}
+#         idx = 0
+#         for row in csv_reader:
+#             unique_id = (row["modification_sequence"],float(row["prec_z"]))
+#             python_lib.setdefault(unique_id,{})
+#             python_lib[unique_id]["mod_seq"] = row["modification_sequence"]
+#             python_lib[unique_id]["seq"] = row["stripped_sequence"]
+#             python_lib[unique_id]["PrecursorMZ"] = float(row["Q1"])
+#             python_lib[unique_id]["prec_z"] = float(row["prec_z"]) 
+#             rt = row["iRT"]
+#             python_lib[unique_id]["PrecursorRT"] = None if rt=="" else float(rt)
+#             python_lib[unique_id].setdefault("frags",{})
+#             frag_type = str(row["frg_type"])+str(row["frg_nr"])+"_"+str(row["frg_z"])
+#             python_lib[unique_id]["frags"][frag_type]=[float(row["Q3"]),float(row["relative_intensity"])]
+#             # idx+=1
+#             # if idx>1117038:
+#             #     break
+#         for key in python_lib:
+#             python_lib[key]["Spectrum"] = frag_to_peak(python_lib[key]["frags"])
+#         return python_lib
     
 
 ### FileName	PrecursorMz	ProductMz	Tr_recalibrated	IonMobility	transition_name	LibraryIntensity	transition_group_id	decoy	

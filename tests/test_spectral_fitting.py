@@ -12,7 +12,7 @@ import numpy as np
 
 # Import the functions we want to test
 from src.spectral_fitting import (
-    get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, unmatched_peaks
+    get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, unmatched_peaks, gof_stat
 )
 
 class TestGetClosestMS1:
@@ -197,3 +197,31 @@ class TestCreateEntries:
         # check that it returns a tuple with the expected number of elements
         assert isinstance(out, tuple)
         assert len(out) == 10
+
+class TestGofStat:
+    def test_gof_stat_basic(self):
+        row_idx_split = [np.array([0, 1]), np.array([2, 3])]
+        col_idx_split = [np.array([0, 1]), np.array([0, 1])]
+        val_split = [np.array([1.0, 2.0]), np.array([1.5, 2.5])]
+        residuals = np.array([0.5, 1.0, 0.0, 2.0])
+        val_obs = np.array([1.0, 0.0, 0.0, 1.0])
+        coeffs = np.array([1.0, 2.0])
+        offset = 0
+
+        result, max_unmatched_res, max_matched_res = gof_stat(
+            row_idx_split,
+            col_idx_split,
+            val_split,
+            residuals,
+            val_obs,
+            coeffs,
+            offset
+        )
+
+        assert len(result) == 2
+        assert len(max_unmatched_res) == 2
+        assert len(max_matched_res) == 2
+
+        np.testing.assert_allclose(result, np.log2([ (0.5+1.0)/(1*1.0 + 2*2.0),  (0.0+2.0)/(1*1.5 + 2*2.5) ]), rtol=1e-6)
+        np.testing.assert_allclose(max_matched_res, np.log2([0.5/(1*1.0 + 2*2.0 + 1e-10) + 1e-10, 2.0/(1*1.5 + 2*2.5 + 1e-10) + 1e-10]), rtol=1e-6)
+        np.testing.assert_allclose(max_unmatched_res, np.log2([1.0/(1*1.0 + 2*2.0 + 1e-10) + 1e-10, 0.0/(1*1.5 + 2*2.5 + 1e-10) + 1e-10]), rtol=1e-6)
