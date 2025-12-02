@@ -402,7 +402,8 @@ class JModGUI(ThemedTk):
 
         ### Things that need to run after GUI is created:
 
-        file_path = os.path.join("src", "Presets", "Label_Free_DIA_Defaults.json")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(base_dir, "Presets", "Label_Free_DIA_Defaults.json")
         self.handle_json(file_path, update_log=False)
 
 
@@ -439,6 +440,7 @@ class JModGUI(ThemedTk):
             webbrowser.open(link)
         except:
             print(f"Failed to open video. Try Navigating to:\n{link}")
+            self.show_info_window.focus()
 
     def open_outputs(self):  ##TODO Update outputs.pdf to go to an output pdf explanation
         self.open_folder_file("Help", "outputs.pdf")
@@ -450,13 +452,16 @@ class JModGUI(ThemedTk):
             webbrowser.open(link)
         except:
             print(f"Failed to open GitHub Page. Try Navigating to:\n{link}")
+            self.show_info_window.focus()
 
     def open_folder_file(self, foldername, filename):
         script_dir = Path(__file__).resolve().parent
         project_root = script_dir.parent
         open_path = project_root / foldername / filename
         if not open_path.exists():
-            messagebox.showerror("Error", f"Could not find:\n{open_path}")
+            messagebox.showerror("Error", f"Could not find:\n\n{open_path}\n\nThis can be found on GitHub in the Help Folder")
+            if hasattr(self, "show_info_window") and self.show_info_window.winfo_exists():
+                self.show_info_window.focus()
             return
         
         if sys.platform.startswith("win"):
@@ -507,10 +512,14 @@ class JModGUI(ThemedTk):
             display_name = f"...{basename[-50:]}"
         else:
             display_name = basename
-        self.presets_label.config(text=display_name)
-        self.import_json(file_path)
-        if update_log:
-            logging.getLogger("GUI").info(f"Loaded Presets from {file_path}")
+        imported_properly = self.import_json(file_path)
+        if imported_properly:
+            self.presets_label.config(text=display_name)
+            if update_log:
+                logging.getLogger("GUI").info(f"Loaded Presets from {file_path}")
+        else:
+            logging.getLogger("GUI").info(f"Failed to Load Presets from {file_path}")
+            
 
 
     def import_json(self, file_path): 
@@ -572,9 +581,12 @@ class JModGUI(ThemedTk):
 
         except json.JSONDecodeError as e:
             tk.messagebox.showerror("Failed to Decode JSON File", f"Failed to decode JSON file:\n\nCheck JSON file for formatting errors\n\n {e}")
+            return False
         except Exception as e:
             tk.messagebox.showerror("JSON Read Error", f"Unknown Error loading JSON configuration: \n\n {e}")
+            return False
         self.update_masstag()
+        return True
 
 
     ####         MS Funcs      #######
@@ -1077,7 +1089,7 @@ class JModGUI(ThemedTk):
             return False
 
     def open_additional_command_pdf(self):  ##TODO Update commands.pdf to go to command list
-        self.open_folder_file("Help", "commands.pdf")
+        self.open_folder_file("Help", "command.pdf")
 
     ####         Output Funcs      #######
 
