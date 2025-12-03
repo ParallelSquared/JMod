@@ -80,6 +80,7 @@ def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];
 
 def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     # X = fdc.iloc[:,6:-5]
+    fit_whole_MS1 = False
    
     logger.info("")
     logger.info("Performing MS1 Quantitation") 
@@ -123,7 +124,8 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
                                 timeplex=timeplex,
                                 num_iso = config.num_iso_ms1,
                                 num_iso_r = config.num_iso_r,
-                                additional_scans = config.additional_scans                                             
+                                additional_scans = config.additional_scans,
+                                fit_whole_MS1=fit_whole_MS1                                           
                                 )
     
     dat = process_ms1_quant(dat,
@@ -137,7 +139,7 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
                             group_fitted,
                             new_output_dict,
                             fake_fdc_dict,
-                            fit_whole_MS1=False
+                            fit_whole_MS1=fit_whole_MS1
                             )
 
     return dat

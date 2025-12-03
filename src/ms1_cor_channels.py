@@ -24,6 +24,10 @@ import numba as nb
 min_int = 1e-3
 from src.logger import logger
 
+## To enable fitting whole MS1 spectrum: in FDR analysis, set fit_whole_MS1 to true
+    # Uncomment the two blocks of code that follow if fit_whole_MS1:
+    # Uncomment functions fit_whole_MS1_sepctrum, add_to_MS1_spec_dict, and fit_all_ms1_specs
+
 
 # @profile
 def ms1_cor_channels(all_spectra,
@@ -35,7 +39,8 @@ def ms1_cor_channels(all_spectra,
                      timeplex=False,
                      num_iso = None,
                      num_iso_r = None,
-                     additional_scans = None
+                     additional_scans = None,
+                     fit_whole_MS1 = False
                      ):
 
     window_half_width = 10
@@ -89,7 +94,7 @@ def ms1_cor_channels(all_spectra,
 
     all_ms1, all_coeff, all_iso, all_group_pearson, all_trace, all_fitted, all_group_keys, all_scans_len = ([] for _ in range(8))
 
-
+    #these are for fit_whole_ms1
     ms1_spec_dict = {k: {"fdc_idx": [], "peak_mz": [], "rel_iso_int": [], "monoiso_groups": [], "MS1_spectra": None} for k in ms1_spec_idxs}
     dummy_idx_list = list(filtered_decoy_coeffs.index)
     fake_fdc_dict = {}
@@ -145,19 +150,20 @@ def ms1_cor_channels(all_spectra,
 
         group_pred, group_obs_peaks, group_matrices, group_fit_cor = ([] for _ in range(4))
 
-        # ms1_spec_dict = add_to_ms1_spec_dict(ms1_spec_dict,
-        #                                      ms1_spectra,
-        #                                      ms1_spec_idxs,
-        #                                      group_iso,
-        #                                      key,
-        #                                      fdc_group,
-        #                                      filtered_decoy_coeffs,
-        #                                      tag,
-        #                                      scans_to_search,
-        #                                      fdc_group_idx,
-        #                                      dummy_idx_list,
-        #                                      fake_fdc_dict
-        #                                      )
+        # if fit_whole_MS1:
+        #     ms1_spec_dict, fake_fdc_dict, dummy_idx_list = add_to_ms1_spec_dict(ms1_spec_dict,
+                                        #                                         ms1_spectra,
+                                        #                                         ms1_spec_idxs,
+                                        #                                         group_iso,
+                                        #                                         key,
+                                        #                                         fdc_group,
+                                        #                                         filtered_decoy_coeffs,
+                                        #                                         tag,
+                                        #                                         scans_to_search,
+                                        #                                         fdc_group_idx,
+                                        #                                         dummy_idx_list,
+                                        #                                         fake_fdc_dict
+                                        #                                         )
 
         for ms1_spec_idx in scans_to_search:
             pred_coeff, obs_peaks, fit_matrix, fit_cor = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
@@ -178,15 +184,8 @@ def ms1_cor_channels(all_spectra,
         # all_pearson, ms1_traces, coeff_traces, iso_ratios
 
     new_output_dict = {}
-    # for ms1_spec_idx, dicts in tqdm.tqdm(ms1_spec_dict.items()):
-    #     if dicts["MS1_spectra"] == None:
-    #         continue
-    #     mapped_pred_coeffs, spectra_obs_peaks, spectra_sparse_matrix = fit_whole_MS1_spectrum(dicts, mz_ppm, ms1_spec_idx)
-    #     new_output_dict[ms1_spec_idx] = {
-    #                                     "mapped_pred_coeffs": mapped_pred_coeffs,
-    #                                     "spectra_obs_peaks": spectra_obs_peaks,
-    #                                     "spectra_sparse_matrix": spectra_sparse_matrix
-    #                                     }
+    # if fit_whole_MS1:
+    #     new_output_dict = fit_all_ms1_specs(ms1_spec_dict, new_output_dict, mz_ppm)
         
 
     
@@ -641,22 +640,68 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
       
     return pred_coeff, obs_peaks, fit_matrix, fit_cor
 
-#@profile
 # def add_to_ms1_spec_dict(ms1_spec_dict, ms1_spectra, ms1_spec_idxs, group_iso, key, fdc_group, filtered_decoy_coeffs, tag, scans_to_search, fdc_group_idx, dummy_idx_list, fake_fdc_dict):
-#     # for g in group_iso:
-#     #     print(g) 
+#     """
+#     As each fdc group is iterated through, it will be passed into this function to be
+#     added to one ms1_spec_dict that contains all the fitting information for all spectra
+
+#     Parameters
+#     ----------
+#     ms1_spec_dict : dict
+#         Has been initialized as {k: {"fdc_idx": [], "peak_mz": [], "rel_iso_int": [], "monoiso_groups": [], "MS1_spectra": None} for k in ms1_spec_idxs}
+#     ms1_spectra : Spectrum
+#         The spectrum object
+#     ms1_spec_idxs : list of int
+#         List of ms1 spec idxs
+#     group_iso : list of list of brainpy theoretical peak objects (one for each channel)
+#         group_iso contains a list of outputs from compute_isotopes corresponding to each channel
+#     key : tuple
+#         The key identifying the group in fdc_group:
+#         - (seq, z) if not timeplex
+#         - (seq, z, time_channel) if timeplex
+#     fdc_group : pandas.core.groupby.generic.DataFrameGroupBy
+#         Grouped FDC DataFrame, either by ('seq', 'z') or ('seq', 'z', 'time_channel') if timeplex.
+#     filtered_decoy_coeffs : pandas df
+#     tag : massTag instance
+#     scans_to_search: list of int
+#         list of scan indexes for each precursor to be searched in
+#     fdc_group_idx: int
+#         the index of the fdc group
+#     dummy_idx_list: list of int
+#         Starts as list of fdc indexes. Dummy (+1) gets appended every time a channel is not found
+#     fake_fdc_dict: dict
+#         starts as an empty dict, and through iterations get filled with (for channels that are not identified)
+#         key -> dummy_idx 
+#         value -> (fdc_group_idx, channel)
+        
+
+#     Returns
+#     -------
+#     ms1_spec_dict : dict of dict
+#         keys = ms1_spec_idxs
+#         values = dict as shown in same entry above but filled
+#     fake_fdc_dict : dict
+#         see same entry above
+#     dummy_idx_list : list of int
+#         a list of indicies that gets [-1]+1 appended to it every time a channel is not identified
+
+#     Notes: See comments below for important assumptions that might not always be true, and for more granular information
+
+#     """
+
+#     #see which channels are observed in an fdc group
 #     idxs = fdc_group.groups[key]
 #     rows = filtered_decoy_coeffs.loc[idxs]
-#     # print(rows[["seq", "channel"]])
 #     # This all assumes tag.channel_names is ordered, as well as group_iso is ordered
 #     row_channels = rows["channel"].to_numpy()
 #     observed_channels = []
 #     for channel in tag.channel_names:
 #         if int(channel) in row_channels:
 #             observed_channels.append(channel)
-#     # print(f"obsered_channels: {observed_channels}")
     
-    
+#     # for each channel in the tag:
+#         #if it isnt observed at to dummy_idx_list and fake_fdc_dict
+#         #if it is observed get the fdc index of the channel
 #     for i, channel in enumerate(tag.channel_names):
 #         if not channel in observed_channels:
 #             # This assumes dummy_idx_list is sorted
@@ -674,28 +719,84 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
 #             else:
 #                 fdc_index = fdc_index[0]
 
+#         # get the entry from group_iso that corresponds to said channel
 #         iso_group = group_iso[i]
 
-
+#         #then, add these as corresponding mzs, intensities, and fdc_idxs to three lists in the ms1_spec_dict list
 #         for ms1_spec_idx in scans_to_search:
 #             for peak in iso_group:
 #                 ms1_spec_dict[ms1_spec_idx]["peak_mz"].append(peak.mz)
 #                 ms1_spec_dict[ms1_spec_idx]["rel_iso_int"].append(peak.intensity)
 #                 ms1_spec_dict[ms1_spec_idx]["fdc_idx"].append(fdc_index)
 
+#         #finally if the spectra hasnt been added, add the spectra to the dict
 #         if ms1_spec_dict[ms1_spec_idx]["MS1_spectra"] is None:
 #             ms1_spec_dict[ms1_spec_idx]["MS1_spectra"] = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
     
+#     #Im not sure why monoiso groups is in here. It could probably be removed
 #     for ms1_spec_idx in scans_to_search:
 #         ms1_spec_dict[ms1_spec_idx]["monoiso_groups"].append([iso_group[0].mz for iso_group in group_iso])
 
-#     return ms1_spec_dict
+#     return ms1_spec_dict, fake_fdc_dict, dummy_idx_list
 
-# from scipy.sparse import diags
-# import matplotlib as mpl
 
-#@profile
-# def fit_whole_MS1_spectrum(dicts, mz_ppm, ms1_spec_idx):
+# def fit_all_ms1_specs(ms1_spec_dict, new_output_dict, mz_ppm):
+#     """
+#     Calls fit_whole_ms1_spectum for each spectra in the dict and adds it to new_output_dict
+
+#     Parameters
+#     ----------
+#     ms1_spec_dict : dict
+#         Has been initialized as {k: {"fdc_idx": [], "peak_mz": [], "rel_iso_int": [], "monoiso_groups": [], "MS1_spectra": None} for k in ms1_spec_idxs}
+#         and filled by add_to_ms1_spec_dict()
+#     new_output_dict : dict
+#         an empty dict
+#     mz_ppm : float
+#         m/z tolerance in ppm
+
+#     Returns
+#     -------
+#     new_output_dict : dict
+#         a dictionary with keys of ms1_spec_idx and values of a dictionary with
+#             key value pairs of the outputs from fit_whole_ms1_spectrum for that spec
+#     """
+#     for ms1_spec_idx, dicts in tqdm.tqdm(ms1_spec_dict.items()):
+#         if dicts["MS1_spectra"] == None:
+#             continue
+#         mapped_pred_coeffs, spectra_obs_peaks, spectra_sparse_matrix = fit_whole_MS1_spectrum(dicts, mz_ppm, ms1_spec_idx)
+#         new_output_dict[ms1_spec_idx] = {
+#                                         "mapped_pred_coeffs": mapped_pred_coeffs,
+#                                         "spectra_obs_peaks": spectra_obs_peaks,
+#                                         "spectra_sparse_matrix": spectra_sparse_matrix
+#                                         }
+#     return new_output_dict
+
+# from scipy.sparse import coo_matrix
+# from scipy.optimize import lsq_linear
+# def fit_whole_MS1_spectrum(dicts, mz_ppm, ms1_spec_idx, fit_type="b"):
+#     """
+#     Reads an MS1_spec_dict entry to fit an entire MS1 spectrum at a time as a sparse matrix
+
+#     Parameters
+#     ----------
+#     dicts : dict
+#         {"fdc_idx": [], "peak_mz": [], "rel_iso_int": [], "MS1_spectra": Spectrum}
+#     mz_ppm : float
+#         The m/z tolerance in ppm
+#     ms1_spec_idx : int
+#         The index of the current ms1 scan. Not currently used
+#     fit_type : str
+#         The type of fit being used. Currently supports "b", "c", and "no_penalty"
+
+#     Returns
+#     -------
+#     mapped_lib_coefficients : dict
+#         A dictionary with keys of fdc_idx and values of their coefficient
+#     dia_spec_int : list of floats
+#         A list containing all observed peak intensities (or padded 0s) in the spectrum that made it into the matrix
+#     dense_matrix : 2d numpy array
+#         The matrix used for fitting
+#     """
 
 #     spec = dicts["MS1_spectra"]
 #     mz_peaks = spec.mz
@@ -707,24 +808,13 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
 #     centroid_breaks[mz_peaks.size:] = mz_peaks + offsets
 #     centroid_breaks.sort()
 
-#     # intercept, slope = calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, dicts["monoiso_groups"])
-#     # calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, dicts["monoiso_groups"])
-
-
-#     # print(f"centroid_breaks: {centroid_breaks}")
 
 #     all_mz = dicts["peak_mz"]
 #     ref_coords = np.searchsorted(centroid_breaks, all_mz)
-#     # print(f"ref_coords: {ref_coords}")
 
 #     lib_peaks_matched = np.array((ref_coords % 2 == 1).tolist())
-#     # print(f"lib_peaks_matched: {lib_peaks_matched}")
 
 #     num_lib_peaks_unmatched = np.count_nonzero(~lib_peaks_matched)
-#     # print(num_lib_peaks_unmatched)
-
-#     #matrix = np.zeros((len(mz_peaks)+num_lib_peaks_unmatched, len(set(dicts["fdc_idx"]))), dtype=float)
-
 
 #     unique_fdcs = (set(dicts["fdc_idx"]))
 #     fdc_to_col = {fdc: i for i, fdc in enumerate(unique_fdcs)}
@@ -744,45 +834,34 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
 #                                                             lib_peaks_matched
 #                                                             ):
 
-#         # #Type C
-#         # if matched:
-#         #     ms1_peak_coord = (ref_coord-1)//2
-#         # else:
-#         #     last_unnasigned_peak_idx += 1
-#         #     ms1_peak_coord = last_unnasigned_peak_idx
+#         if fit_type == "c":
+#             if matched:
+#                 ms1_peak_coord = (ref_coord-1)//2
+#             else:
+#                 last_unnasigned_peak_idx += 1
+#                 ms1_peak_coord = last_unnasigned_peak_idx
 
-#         # #Type B
-#         # if matched:
-#         #     ms1_peak_coord = (ref_coord-1)//2
-#         # else:
-#         #     if fdc_idx_dummy_peak_dict[fdc_idx] == None:
-#         #         last_unnasigned_peak_idx += 1
-#         #         fdc_idx_dummy_peak_dict[fdc_idx] = last_unnasigned_peak_idx
-                
-#         #     ms1_peak_coord = fdc_idx_dummy_peak_dict[fdc_idx]
-
-#         # sparse_rows.append(ms1_peak_coord)
-#         # sparse_cols.append(fdc_to_col[fdc_idx])
-#         # sparse_vals.append(intensity)
-
-#         # matrix_sparse = coo_matrix((sparse_vals, (sparse_rows, sparse_cols)))
-#         # dia_spec_int = np.append(dia_spec_int,[0]*(matrix_sparse.shape[0]-dia_spec_int.shape[0])) 
+#         elif fit_type == "b":
+#             if matched:
+#                 ms1_peak_coord = (ref_coord-1)//2
+#             else:
+#                 if fdc_idx_dummy_peak_dict[fdc_idx] == None:
+#                     last_unnasigned_peak_idx += 1
+#                     fdc_idx_dummy_peak_dict[fdc_idx] = last_unnasigned_peak_idx
+#                 ms1_peak_coord = fdc_idx_dummy_peak_dict[fdc_idx]
+#         elif fit_type == "no_penalty":
+#             if matched: 
+#                 ms1_peak_coord = (ref_coord-1)//2
 
 
-#         # Type A
-#         if matched: 
-#             ms1_peak_coord = (ref_coord-1)//2
-#             sparse_rows.append(ms1_peak_coord)
-#             sparse_cols.append(fdc_to_col[fdc_idx])
-#             sparse_vals.append(intensity)
+#         sparse_rows.append(ms1_peak_coord)
+#         sparse_cols.append(fdc_to_col[fdc_idx])
+#         sparse_vals.append(intensity)
 
-#     matrix_sparse = coo_matrix((sparse_vals, (sparse_rows, sparse_cols)), shape=(len(mz_peaks), len(unique_fdcs)))
+#     matrix_sparse = coo_matrix((sparse_vals, (sparse_rows, sparse_cols)))
+#     dia_spec_int = np.append(dia_spec_int,[0]*(matrix_sparse.shape[0]-dia_spec_int.shape[0])) 
 
-#     # dia_spec_int_vars = dia_spec_int**slope * 10**intercept
-#     # median_var = np.median(dia_spec_int_vars)
-
-    
-
+#     # matrix_sparse = coo_matrix((sparse_vals, (sparse_rows, sparse_cols)), shape=(len(mz_peaks), len(unique_fdcs)))
 
 #     matrix_csr = matrix_sparse.tocsr()
 #     mask = np.diff(matrix_csr.indptr) != 0
@@ -798,46 +877,6 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
     
 #     return mapped_lib_coefficients, dia_spec_int, matrix_sparse
 
-
-# import matplotlib.pyplot as plt
-# from matplotlib.colors import ListedColormap
-# import matplotlib.ticker as ticker
-# nanmeans = []
-# var_ints = []
-# def calculate_mean_variance(centroid_breaks, mz_peaks, dia_spec_int, monoiso_groups):
-#     global nanmeans, var_ints
-#     # nanmeans = []
-#     # var_ints = []
-#     monoisos_matched = []
-#     for plex_group in monoiso_groups:
-#         monoiso_mzs = [p for p in plex_group]
-#         ref_coords = np.searchsorted(centroid_breaks, monoiso_mzs)
-#         lib_peaks_matched = (ref_coords % 2 == 1)
-
-#         num_monoiso_matched = np.sum(lib_peaks_matched)
-#         if num_monoiso_matched != 5:
-#             continue
-
-#         group_intensities = np.where(
-#                                 lib_peaks_matched,
-#                                 dia_spec_int[(ref_coords-1)//2],
-#                                 np.nan
-#         )
-        
-#         nanmean = np.nanmean(group_intensities)
-#         var_int = np.nanvar(group_intensities)
-#         monoisos_matched.append(num_monoiso_matched)
-#         nanmeans.append(nanmean)
-#         var_ints.append(var_int)
-
-#     log10var = np.log10(var_ints)
-#     log10mean = np.log10(nanmeans)
-#     model = LinearRegression()
-#     model.fit(log10mean.reshape(-1, 1), log10var)
-#     intercept = model.intercept_
-#     coefficient = model.coef_[0]
-
-#     return intercept, coefficient
 
 
 
@@ -955,7 +994,7 @@ def fit_channel_isotopes_numba(spec,all_iso,mz_ppm):
         An array containing the coefficient for each channel
     dia_spec_int : list of floats
         A list containing all observed peak intensities (or padded 0s) in the spectrum that made it into the matrix
-    dense_matrix : 
+    dense_matrix : 2d numpy array
         The matrix used for fitting
     Notes
     -------
