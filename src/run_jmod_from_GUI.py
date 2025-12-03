@@ -54,6 +54,9 @@ def make_GUI(show=True):
 
 
 class JModGUI(ThemedTk):
+    """
+    Define the GUI class. The GUI uses TKinter, and specifically the sv-ttk theme. See https://github.com/rdbende/Sun-Valley-ttk-theme
+    """
     def __init__(self):
         super().__init__()  #theme='vista' is classic
         self.title("JMod")
@@ -62,9 +65,6 @@ class JModGUI(ThemedTk):
         sv_ttk.set_theme("light")
         caption_font = tkfont.nametofont("SunValleyCaptionFont")
         caption_font.configure(size=10)
-        #style = ttk.Style()
-        #style.configure("Accent.TButton")
-        #style.configure("Red.TButton", foreground="black", background="#cc0202")
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -139,11 +139,13 @@ class JModGUI(ThemedTk):
 
 
 
+
+        #######     input frame      #######
+
+        ## Input frame and presets frame are bot put into the top_container frame to make their columns line up
         self.top_container = ttk.Frame(self)
         self.top_container.grid(row=0, column=0, sticky="ew")
         self.top_container.columnconfigure(1, weight=1)
-
-        #######     input frame      #######
 
         self.input_frame = ttk.LabelFrame(self.top_container, text="Input Files")
         self.input_frame.grid(row=0, column=0, columnspan=3, padx=10, pady=3, sticky="ew")
@@ -183,7 +185,7 @@ class JModGUI(ThemedTk):
         Hovertip(self.json_label, "Select Presets to load into GUI from default folder or from previous experiments.\nThis will populate the GUI with these parameters.\nAdditionally, any further changes within the GUI are taken into account at runtime.")
         self.presets_label = ttk.Label(self.presets_frame, text='')
         self.presets_label.grid(row=0, column=1, padx=10, pady=10)
-        self.json_button_in = ttk.Button(self.presets_frame, text="Browse", style="Accent.TButton", command=lambda: self.select_json_internal())
+        self.json_button_in = ttk.Button(self.presets_frame, text="Browse", style="Accent.TButton", command=lambda: self.select_json())
         self.json_button_in.grid(row=0, column=2, padx=10, pady=10)
 
         ####         MS Frame      #######
@@ -393,7 +395,7 @@ class JModGUI(ThemedTk):
         Hovertip(self.save_config_button, "Save a configuration JSON file for the current settings ")
 
         # Run button
-        self.run_button = ttk.Button(self.output_frame, text="Run JMod", style="Accent.TButton", width=20, command=self.run_process)
+        self.run_button = ttk.Button(self.output_frame, text="Run JMod", style="Accent.TButton", width=20, command=self.begin_running)
         self.run_button.grid(row=1, column=2, padx=10, pady=10)
 
         #Stop button
@@ -411,6 +413,9 @@ class JModGUI(ThemedTk):
 
     # Info button
     def show_info(self):
+        """
+        When the info button is clicked, open a menu with button links to various help objects
+        """
         if hasattr(self, "show_info_window") and self.show_info_window.winfo_exists():
             self.show_info_window.destroy()
         self.show_info_window = tk.Toplevel(self)
@@ -455,6 +460,9 @@ class JModGUI(ThemedTk):
             self.show_info_window.focus()
 
     def open_folder_file(self, foldername, filename):
+        """
+        Open foldername/filename on various filesystems. Used (for now) only for opening info PDFs
+        """
         script_dir = Path(__file__).resolve().parent
         project_root = script_dir.parent
         open_path = project_root / foldername / filename
@@ -480,6 +488,10 @@ class JModGUI(ThemedTk):
     #######     input funcs      #######
 
     def select_mzml(self):
+        """
+        Open filedialog for mzML
+        Button: Browse button for mzML
+        """
         files = filedialog.askopenfilenames(title="Select .mzML or .d Files", filetypes=[("Mass Spec Files", "*.mzML *.d")])
         if files:
             for file in files:
@@ -487,6 +499,10 @@ class JModGUI(ThemedTk):
                     self.file_dropdown.add_files([file])
 
     def select_tsv(self):
+        """
+        Open filedialog for tsv
+        Button: Browse button for specLib
+        """
         file_path = filedialog.askopenfilename(
             title="Select .tsv File", filetypes=[("TSV files", "*.tsv")]
         )
@@ -496,7 +512,11 @@ class JModGUI(ThemedTk):
 
 
 
-    def select_json_internal(self):
+    def select_json(self):
+        """
+        Select a JSON config file, initially opening the presets dir to do so. If selected, handle_json
+        Button: Browse button for presets
+        """
         initial_dir = os.path.join(os.path.dirname(__file__), "Presets")
         file_path = filedialog.askopenfilename(
             title="Select JSON Config File", filetypes=[("JSON files", "*.json")], initialdir=initial_dir)
@@ -506,6 +526,9 @@ class JModGUI(ThemedTk):
             pass
 
     def handle_json(self, file_path, update_log=True):
+        """
+        Wrapper for import_json. Set displays and logs related to it
+        """
         print(file_path)
         basename = os.path.basename(file_path)
         if len(basename) > 50:
@@ -523,7 +546,7 @@ class JModGUI(ThemedTk):
 
 
     def import_json(self, file_path): 
-        """Load configuration parameters from a JSON file."""
+        """Load configuration parameters from a JSON file and import them into the GUI"""
         
         try:
             args_list = []
@@ -596,6 +619,7 @@ class JModGUI(ThemedTk):
     ####         Multiplex Funcs      #######
 
     def get_tag_list(self):
+        """Update the mass_tags dropdown with the list of available tags"""
         from src.mass_tags import available_tags
         tag_list = ['None'] + [tag for tag in available_tags.keys() if "#" not in tag]  ##filter out subsetted tags from dropdown might be cleaner?
         #tag_list = ['None'] + list(available_tags.keys())
@@ -603,6 +627,10 @@ class JModGUI(ThemedTk):
         return tag_list
 
     def create_new_tag(self): 
+        """
+        Create the first window for create new tag (base atomic composition and number of channels)
+        Button: Create New Tag
+        """
         if hasattr(self, "new_tag_window") and self.new_tag_window.winfo_exists():
             self.new_tag_window.destroy()
         self.new_tag_window = tk.Toplevel(self)
@@ -652,6 +680,11 @@ class JModGUI(ThemedTk):
 
 
     def make_second_tag_window(self):
+        """
+        Make the second tag window, where individual channel comps are defined and the tag is saved.
+        Also defines some functions in here that are used in this process.
+        Button: Go button in first make new tag window
+        """
         if hasattr(self, "second_window") and self.second_window.winfo_exists():
             self.second_window.destroy()
         try:
@@ -679,7 +712,8 @@ class JModGUI(ThemedTk):
         self.second_window.geometry("600x400")
         center_on_parent(self.second_window, self)
 
-
+        #this list can easily be added to if we want to add S or any other element. 
+        #Only complications would stem from an element with >2 isotopes used
         self.iso_pairs = {
             "C": "C[13]",
             "H": "H[2]",
@@ -767,6 +801,10 @@ class JModGUI(ThemedTk):
         massTag_save_button.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
 
     def save_masstag(self):
+        """
+        From the second masstag window, save the masstag to a JSON and update the massTag in the dropdown
+        Button: Save Mass Tag Button in second create mass tag popup
+        """
         from src.mass_tags import refresh_tags
         base_composition = {}
         for element in list(self.iso_pairs.keys()) + list(self.rev_iso_pairs.keys()):
@@ -837,6 +875,10 @@ class JModGUI(ThemedTk):
 
 
     def update_masstag(self):
+        """
+        Find the path to the massTag entered (and handle it if its a subset). Then call update_mass_tag_viewer to update the viewer
+        Called by: 1) Changing the mass tag in the dropdown    2) Creating a new mass_tag     3) Loading in a config JSON
+        """
         filename = default_dict['tag']['tk_handle'].get()
         if filename == "None" or filename == "":
             self.update_mass_tag_viewer([], [], None, None, None)
@@ -903,6 +945,10 @@ class JModGUI(ThemedTk):
 
 
     def update_mass_tag_viewer(self, channels, deltas, base_mass, rules, subset):
+        """
+        Update the mass tag view with basic information about the tag
+        This happens when update_masstag is called
+        """
         for label in self.channel_labels:
             label.destroy()
         for label in self.mass_labels:
@@ -998,6 +1044,10 @@ class JModGUI(ThemedTk):
             
     
     def generate_tag_subset(self, base_tag_name):
+        """
+        Create a tag subset JSON if onoy using a subset of channels
+        Called by: make_config_dict (when the JSON file is being created for any reason) IF not all channel boxes are checked
+        """
         from src.mass_tags import available_tags, refresh_tags
         base_tag_instance = available_tags[base_tag_name]
         channels = base_tag_instance.channel_names
@@ -1039,6 +1089,10 @@ class JModGUI(ThemedTk):
 
 
     def read_additional_funcs(self):
+        """
+        Parse the additional command args with the shlex parser and return filtered_args if successful, else False
+        Called by: make_config_dict  (when the JSON file is being created for any reason)
+        """
         try:
             user_input = self.additional_text.get("1.0", tk.END).strip()
             args_list = shlex.split(user_input)
@@ -1094,6 +1148,10 @@ class JModGUI(ThemedTk):
     ####         Output Funcs      #######
 
     def save_configuration(self):
+        """
+        Save current GUI configuration to a JSON
+        Called by: Save Presets Button
+        """
         config_args_dict = self.make_config_dict(None, run=False)
         if config_args_dict is None:
             return
@@ -1113,12 +1171,21 @@ class JModGUI(ThemedTk):
             logging.getLogger("GUI").warning(f"No path given to save JSON file")
 
     def select_output_folder(self):
+        """
+        Select an output folder for searches
+        Button: Browse button for Output Folder
+        """
         folder_selected = filedialog.askdirectory()
         if folder_selected:
             self.output_folder_var.set(folder_selected)
 
 
     def check_process(self, p):
+        """
+        While main is running as a process, every 1 second, check to see if an error has come in
+        If there is an error, show it.
+        If the process is no longer running for any reason, make run button clickable
+        """
         try:
             msg = self.result_queue.get_nowait()
             if msg.split("_", 1)[0] == "errorGUI":
@@ -1131,36 +1198,28 @@ class JModGUI(ThemedTk):
             self.run_button.config(state="normal")
 
 
-    def run_process(self):
+    def begin_running(self):
+        """
+        Begin the JMod run procedure.
+
+        First: Error checking
+            1) mzml_and_lib_error_check
+            2) test_long_paths
+
+        Then: 
+        Get list of JSON to be ran with prepare_to_run
+        Reset logger start time
+        Run_main_process in its own process and begin check_process checking
+
+        Button: Run JMod
+        
+        """
         if not self.mzml_and_lib_error_check():
             return
-        
-        try: ##test if long paths break system
-            long_name = "a" * 250 + ".txt"
-            test_path = os.path.join(tempfile.gettempdir(), long_name)
-            with open(test_path, "w") as f:
-                f.write("test")
-            os.remove(test_path)
-        except FileNotFoundError as e:
-            if "[WinError 3]" in str(e) or "[Errno 2]" in str(e) or "[WinError 206]" in str(e):
-                ask_exit = tk.messagebox.askyesno("Path Limit Warning.", r"Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
-                if ask_exit:
-                    logging.getLogger("GUI").info("JMod Exited")
-                    return
-                else:
-                    # logger.warning("Long Paths Enabled. Downstream processes may break")
-                    logging.getLogger("GUI").warning("Long Paths Enabled. Downstream processes may break")
-            else:
-                logging.getLogger("GUI").warning(f"Long path test failed with unknown FileNotFoundError:\n{e}")
-                tk.messagebox.showwarning("Path Test Warning", f"Long path test failed with unknown FileNotFoundError:\n{e}")
-                return
-        except Exception as e:
-            logging.getLogger("GUI").warning(f"Long path test failed with unknown error:\n{e}")
-            tk.messagebox.showwarning("Path Test Warning", f"Long path test failed with unknown error:\n{e}")
+
+        if not self.test_long_paths():
             return
             
-        
-
         tmp_filenames = self.prepare_to_run()
         if tmp_filenames == []:
             return
@@ -1178,10 +1237,15 @@ class JModGUI(ThemedTk):
         self.check_process(self.proc)
 
     def on_close(self):
+        """When TK window is closed, kill the process"""
         self.end_main(show_message=False)
         self.destroy()
 
     def end_main(self, show_message=True):
+        """
+        Terminate the process
+        Called by: Stop button or closing TK window
+        """
         if show_message is True:
             logging.getLogger("GUI").info("")
             logging.getLogger("GUI").info("Process Manually Terminated.\n")
@@ -1192,6 +1256,9 @@ class JModGUI(ThemedTk):
 
 
     def prepare_to_run(self):
+        """
+        For each mzML file added, use make_config_dict to generate a config JSON file and add it to a list of jsons to run
+        """
         tmp_filenames = []
         mzml_files = self.file_dropdown.files
         for i, mzml_path in enumerate(mzml_files, start=1):
@@ -1205,11 +1272,13 @@ class JModGUI(ThemedTk):
 
             except Exception as e:
                 tk.messagebox.showerror("JSON Error", f"Failed to write JSON file: {e}")
+                return []
 
             tmp_filenames.append(tmp_filename)
         return tmp_filenames
 
     def mzml_and_lib_error_check(self):
+        """Ensure mzml, speclib, and output folder exist and are the right file types"""
         mzml_files = self.file_dropdown.files
         tsv_path = self.tsv_entry.get().strip()
 
@@ -1223,7 +1292,7 @@ class JModGUI(ThemedTk):
             if os.path.exists(mzml_path) is False:
                 tk.messagebox.showerror("Data File Not Found", f"Data File not found: {mzml_path}")
                 return False
-            if os.path.splitext(mzml_path)[1].lower() not in [".mzml", ".d"]:
+            if os.path.splitext(mzml_path)[1].lower() not in [".mzml"]:
                 tk.messagebox.showerror("Data File Type Error", f"Data File type not supported: {mzml_path}")
                 return False
         if os.path.exists(tsv_path) is False:
@@ -1239,8 +1308,49 @@ class JModGUI(ThemedTk):
             tk.messagebox.showerror("Output Folder Error", "Output Folder Error: Please make sure output folder exists")
             return False
         return True
+    
+    def test_long_paths(self): ##test if long paths break system
+        try:
+            long_name = "a" * 250 + ".txt"
+            test_path = os.path.join(tempfile.gettempdir(), long_name)
+            with open(test_path, "w") as f:
+                f.write("test")
+            os.remove(test_path)
+            return True
+        except FileNotFoundError as e:
+            if "[WinError 3]" in str(e) or "[Errno 2]" in str(e) or "[WinError 206]" in str(e):
+                ask_exit = tk.messagebox.askyesno("Path Limit Warning.", r"Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
+                if ask_exit:
+                    logging.getLogger("GUI").info("JMod Exited")
+                    return False
+                else:
+                    # logger.warning("Long Paths Enabled. Downstream processes may break")
+                    logging.getLogger("GUI").warning("Long Paths Enabled. Downstream processes may break")
+                    return True
+            else:
+                logging.getLogger("GUI").warning(f"Long path test failed with unknown FileNotFoundError:\n{e}")
+                tk.messagebox.showwarning("Path Test Warning", f"Long path test failed with unknown FileNotFoundError:\n{e}")
+                return False
+        except Exception as e:
+            logging.getLogger("GUI").warning(f"Long path test failed with unknown error:\n{e}")
+            tk.messagebox.showwarning("Path Test Warning", f"Long path test failed with unknown error:\n{e}")
+            return False
+
         
     def make_config_dict(self, mzml_path=None, run=True):
+        """
+        From the GUI, make the config_dict that will be used to create the config JSON
+
+        For every key in default_dict:
+            do some things for special cases
+            If its not in the GUI, if its in the command line args get the value, else get the value from default dict
+            If it is in the GUI, retrieve the value
+
+        Ensure all values are within parameters set by default_dict (i.e. positive only, in ['a', 'b', 'c'], etc)
+        Generate tag subset if required
+
+        return config_args_dict
+        """
         handles_map = {k: v['tk_handle'] for k, v in default_dict.items()}
         filtered_args = self.read_additional_funcs()  ##get additional args from text box
         if filtered_args is False:
@@ -1324,7 +1434,7 @@ class JModGUI(ThemedTk):
 
             if data['values'] == 'any':  ##while we know data are the right type, now make sure they are valid given specific parameters for each command
                 continue
-            if key == "tag":
+            if key == "tag": ##TODO not the cleanest bugfix, ideally the tag list would update proprely
                 continue
             elif type(data['values']) == list:
                 if config_args_dict[key] not in data['values']:
@@ -1380,6 +1490,10 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
 
     logger.info ("")
     logger.info("JMod Finished") #if no exceptions
+
+
+
+##### Beneath this is special GUI functions and widgets not native to TKinter
 
 # After creating a popup, call center_on_parent to make it center on its parent window (and be on its monitor)
 def center_on_parent(win, parent=None):
@@ -1495,6 +1609,7 @@ class FileListDropdown(tk.Frame):
         return text[:half] + "..." + text[-half:]
 
 
+#The custom widget used for page 2 of create new tag dropdown
 class ListboxNotebook(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
