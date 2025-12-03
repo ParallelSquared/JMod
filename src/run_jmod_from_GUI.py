@@ -1089,7 +1089,7 @@ class JModGUI(ThemedTk):
             return False
 
     def open_additional_command_pdf(self):  ##TODO Update commands.pdf to go to command list
-        self.open_folder_file("Help", "command.pdf")
+        self.open_folder_file("Help", "commands.pdf")
 
     ####         Output Funcs      #######
 
