@@ -423,6 +423,7 @@ class JModGUI(ThemedTk):
         ######    QUEUE Frame   ########
         #this is defined in a function. See Queue funcs
         self.run_queue_number = 1
+        self.has_shown_no_dummy_val = False
 
 
     ####### Miscellaneous Funcs ##########
@@ -601,7 +602,7 @@ class JModGUI(ThemedTk):
                 if key in default_dict.keys():
                     if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF"]: ##does not allow file input from JSON. plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects
                         continue
-                    if key == "speclib":
+                    if key == "speclib" or key == "output_folder":
                         if value is None or value == "":
                             continue
                     if default_dict[key]['in_GUI'] is True:  ##if key is part of GUI
@@ -1590,11 +1591,62 @@ class JModGUI(ThemedTk):
         for idx, tmp_filename in enumerate(tmp_filenames):
             with open(tmp_filename, 'r') as f:
                 cfg = json.load(f)
-            mzml_display_name = cfg["mzml"]
+            mzml_path = cfg["mzml"]
+            mzml_display_name = os.path.basename(mzml_path) + "   " + (cfg.get("dummy_value") or "")
+            if cfg.get("dummy_value") is None and self.has_shown_no_dummy_val is False:
+                self.has_shown_no_dummy_val = True
+                tk.messagebox.showinfo("Queue Information", "Tip: You can use '-z your_text_here' in the additional commands frame to add a suffix to a foldername")
             display_name = f"Queue {run_queue_number} - {mzml_display_name}"
             self.queue_data.append((display_name, tmp_filename))
             self.queue_listbox.insert(tk.END, display_name)
         self.queue_listbox.see(tk.END)
+
+        # Setup hover tooltips if not already done
+        if not hasattr(self, '_listbox_tooltip_setup'):
+            self._setup_listbox_tooltips()
+            self._listbox_tooltip_setup = True
+
+    def _setup_listbox_tooltips(self):
+        """Setup hover tooltips for listbox items"""
+        self.current_tooltip = None
+        
+        def show_tooltip(event):
+            # Get the index of the item under the mouse
+            index = self.queue_listbox.nearest(event.y)
+            
+            # Check if we're actually over an item
+            bbox = self.queue_listbox.bbox(index)
+            if bbox is None or not (bbox[1] <= event.y <= bbox[1] + bbox[3]):
+                hide_tooltip()
+                return
+            
+            # Get the full path from queue_data
+            if 0 <= index < len(self.queue_data):
+                display_name, tmp_filename = self.queue_data[index]
+                
+                # Read the mzml path from the config
+                with open(tmp_filename, 'r') as f:
+                    cfg = json.load(f)
+                full_path = cfg["mzml"]
+                
+                # Create or update tooltip
+                if self.current_tooltip is None or self.current_tooltip.winfo_exists() == 0:
+                    self.current_tooltip = tk.Toplevel(self.queue_listbox)
+                    self.current_tooltip.wm_overrideredirect(True)
+                    self.current_tooltip.wm_geometry(f"+{event.x_root + 10}+{event.y_root + 10}")
+                    
+                    label = tk.Label(self.current_tooltip, text=full_path, 
+                                background="#ffffe0", relief="solid", 
+                                borderwidth=1, padx=5, pady=2)
+                    label.pack()
+        
+        def hide_tooltip(event=None):
+            if self.current_tooltip is not None:
+                self.current_tooltip.destroy()
+                self.current_tooltip = None
+        
+        self.queue_listbox.bind("<Motion>", show_tooltip)
+        self.queue_listbox.bind("<Leave>", hide_tooltip)
 
     def remove_from_queue(self):
         """Remove selected item from queue"""
@@ -1743,7 +1795,7 @@ class FileListDropdown(tk.Frame):
 
             # Calculate height: min(number of files, max_visible) * 25 pixels per row
             visible_count = min(len(self.files), self.max_visible)
-            height = visible_count * 25 if visible_count > 0 else 50
+            height = max(visible_count * 30, 50)
             self.canvas.config(height=height)
 
             self.canvas.pack(side="left", fill="x", expand=True)
@@ -1768,14 +1820,16 @@ class FileListDropdown(tk.Frame):
             row.pack(fill="x", pady=1)
 
             # Truncate filename if too long
-            max_chars = 55
+            max_chars = 50
             display_name = self.truncate_middle(f, max_chars)
 
             label = ttk.Label(row, text=display_name, anchor="w")
             label.pack(side="left", fill="x", expand=True)
 
+            Hovertip(label, f)
+
             remove_btn = ttk.Button(row, text="X", width=2, style="Red.TButton", command=lambda idx=i: self.remove_file(idx))
-            remove_btn.pack(side="right")
+            remove_btn.pack(side="right", padx=10)
 
     def add_files(self, filepaths):
         self.files.extend(filepaths)
@@ -1790,11 +1844,19 @@ class FileListDropdown(tk.Frame):
             self.refresh_list()
 
 
+    # def truncate_middle(self, text, max_len):
+    #     if len(text) <= max_len:
+    #         return text
+    #     half = (max_len - 3) // 2
+    #     return text[:half] + "..." + text[-half:]
+
     def truncate_middle(self, text, max_len):
+        text = os.path.basename(text)
         if len(text) <= max_len:
             return text
-        half = (max_len - 3) // 2
-        return text[:half] + "..." + text[-half:]
+        
+        else:
+            return "..." + text[-(max_len-3):]
 
 
 #The custom widget used for page 2 of create new tag dropdown
