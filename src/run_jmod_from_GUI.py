@@ -1287,7 +1287,7 @@ class JModGUI(ThemedTk):
         Button: Run JMod
         
         """
-        if self.queue_data == []: #JMod ran without Queue
+        if not hasattr(self, "queue_data") or self.queue_data == []: #JMod ran without Queue
             tmp_filenames = self.get_tmp_filenames()
         else: ## JMod ran from Queue
             tmp_filenames= [filename for _, filename in self.queue_data]
