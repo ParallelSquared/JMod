@@ -113,11 +113,14 @@ class JModGUI(ThemedTk):
 
             def append(self, msg):
                 self.text_widget.config(state="normal")
-                if "- INFO -" in msg and (msg.split("- INFO -")[1] == "" or msg.split("- INFO -")[1] == " "):
+                if "- INFO -" in msg and (msg.split("- INFO -")[1] == "" or msg.split("- INFO -")[1] == " "): #if log.info("") make an empty line in the GUI logger
                     self.text_widget.insert(tk.END, "\n")
                     self.text_widget.see(tk.END)
                 elif "Running JMod:" in msg:
-                    self.text_widget.insert(tk.END, msg + "\n", "bold")
+                    self.text_widget.insert(tk.END, msg + "\n", "blue")
+                    self.text_widget.see(tk.END)
+                elif "runERROR:" in msg:
+                    self.text_widget.insert(tk.END, msg + "\n", "red")
                     self.text_widget.see(tk.END)
                 else:
                     self.text_widget.insert(tk.END, msg + "\n")
@@ -125,9 +128,14 @@ class JModGUI(ThemedTk):
                 self.text_widget.config(state="disabled")
 
             self.text_widget.tag_config(
-                "bold",
+                "blue",
                 font=("Courier New", 10, "bold"),
                 foreground="#0560B6"
+            )
+            self.text_widget.tag_config(
+                "red",
+                font=("Courier New", 10, "bold"),
+                foreground="#EB0A06"
             )
 
         self.tk_handler = TkinterHandler(self.text_widget)
@@ -1257,8 +1265,8 @@ class JModGUI(ThemedTk):
         """
         try:
             msg = self.result_queue.get_nowait()
-            if msg.split("_", 1)[0] == "errorGUI":
-                tk.messagebox.showerror("Error", msg.split("_", 1)[1])
+            # if msg.split("_", 1)[0] == "errorGUI":
+            #     tk.messagebox.showerror("Error", msg.split("_", 1)[1])
         except queue.Empty:
             pass 
         if p.is_alive():
@@ -1722,11 +1730,12 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
         from src.run_jmod import main
         main_result = main(tmp_filename, result_queue)
         if main_result == "handled_exit": #if handled exception
-            sys.exit(0)
+            # sys.exit(0)
+            pass
         if main_result == "failed":  #if unhandled exception
             result_queue.put("errorGUI_Unkown Error running JMod. JMod exited")
-            logger.error("Unknown Error running JMod. JMod exited\n")
-            sys.exit(0)
+            logger.error("runERROR: Unknown Error running JMod. Run exited\n")
+            # sys.exit(0)
 
     logger.info ("")
     logger.info("JMod Finished") #if no exceptions
