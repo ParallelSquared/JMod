@@ -32,6 +32,7 @@ import platform
 import multiprocessing
 import queue
 from logging.handlers import QueueHandler
+import atexit
 
 
 
@@ -69,12 +70,17 @@ class JModGUI(ThemedTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
 
+        #tmp_file_handling
+        self.tmp_files_created = [] ## a list of any tmpfiles created so we can remove them all on close
+        atexit.register(self.cleanup_tempfiles)
+
+
         """
         Organization of GUI Code
 
-        frames:  1) Miscellaneous 2) Logging Frame 3) input frame, 4) presets frame  5) MS frame  6)multiplex frame  7)additional frame   8) Output frame
+        frames:  1) Miscellaneous 2) Logging Frame 3) input frame, 4) presets frame  5) MS frame  6)multiplex frame  7)additional frame   8) Output frame    9) Queue
 
-        functions 1) Miscellaneous Funcs 2) Logging Funcs 3) input funcs, 4) presets funcs  5) MS funcs  6) multiplex funcs 7) additional funcs  8) output funcs
+        functions 1) Miscellaneous Funcs 2) Logging Funcs 3) input funcs, 4) presets funcs  5) MS funcs  6) multiplex funcs 7) additional funcs  8) output funcs    9) Queue funcs
         """
 
         ####          Miscellaneous  #####
@@ -144,7 +150,7 @@ class JModGUI(ThemedTk):
 
         ## Input frame and presets frame are bot put into the top_container frame to make their columns line up
         self.top_container = ttk.Frame(self)
-        self.top_container.grid(row=0, column=0, sticky="ew")
+        self.top_container.grid(row=0, column=0, rowspan=2, sticky="ew")
         self.top_container.columnconfigure(1, weight=1)
 
         self.input_frame = ttk.LabelFrame(self.top_container, text="Input Files")
@@ -389,6 +395,11 @@ class JModGUI(ThemedTk):
         self.select_output_button = ttk.Button(self.output_frame, text="Select", style="Accent.TButton", command=self.select_output_folder)
         self.select_output_button.grid(row=0, column=6, padx=10, pady=10)
 
+        # Add to queue button
+        self.queue_add_button = ttk.Button(self.output_frame, text="Queue", width=10, command=self.add_to_queue)
+        self.queue_add_button.grid(row=1, column=0, padx=10, pady=10, sticky="e")
+        Hovertip(self.queue_add_button, "Add the current configuration to the Queue")
+
         # Save Configuration Label + Save Button
         self.save_config_button = ttk.Button(self.output_frame, text="Save Presets", style="Accent.TButton", width=20, command=self.save_configuration)
         self.save_config_button.grid(row=1, column=1, padx=20, pady=10, sticky="e")
@@ -407,6 +418,11 @@ class JModGUI(ThemedTk):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(base_dir, "Presets", "Label_Free_DIA_Defaults.json")
         self.handle_json(file_path, update_log=False)
+
+
+        ######    QUEUE Frame   ########
+        #this is defined in a function. See Queue funcs
+        self.run_queue_number = 1
 
 
     ####### Miscellaneous Funcs ##########
@@ -480,6 +496,34 @@ class JModGUI(ThemedTk):
             subprocess.Popen(["xdg-open", open_path])
 
 
+    def cleanup_tempfiles(self):
+        """
+        Remove all tempfiles created on this run
+        Called on Tkinter X out or atexit
+        """
+        for f in getattr(self, "tmp_files_created", []):
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except:
+                pass
+
+    def cleanup_stale_tempfiles(self):
+        """
+        Remove leftover temp JSON files from previous JMod runs.
+        Called at GUI startup
+        """
+        temp_dir = tempfile.gettempdir()
+        suffix = "_JMod_json.json"
+
+        for name in os.listdir(temp_dir):
+            if name.endswith(suffix):
+                path = os.path.join(temp_dir, name)
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
 
         
     ####         Logging Funcs      #######
@@ -529,7 +573,6 @@ class JModGUI(ThemedTk):
         """
         Wrapper for import_json. Set displays and logs related to it
         """
-        print(file_path)
         basename = os.path.basename(file_path)
         if len(basename) > 50:
             display_name = f"...{basename[-50:]}"
@@ -1179,6 +1222,31 @@ class JModGUI(ThemedTk):
         if folder_selected:
             self.output_folder_var.set(folder_selected)
 
+    def disable_buttons(self):
+        """While JMod runs, disable run and queue related buttons"""
+        self.run_button.config(state="disabled")
+        if hasattr(self, "queue_listbox"):
+            self.queue_listbox.config(state="disabled")
+        if hasattr(self, "remove_button"):
+            self.remove_button.config(state="disabled")
+        if hasattr(self, "clear_button"):
+            self.clear_button.config(state="disabled")
+        if hasattr(self, "queue_add_button"):
+            self.queue_add_button.config(state="disabled")
+
+
+    def enable_buttons(self):
+        """When JMod finishes running (properly or by failure), re-enable run and queue related buttons"""
+        self.run_button.config(state="normal")
+        if hasattr(self, "queue_listbox"):
+            self.queue_listbox.config(state="normal")
+        if hasattr(self, "remove_button"):
+            self.remove_button.config(state="normal")
+        if hasattr(self, "clear_button"):
+            self.clear_button.config(state="normal")
+        if hasattr(self, "queue_add_button"):
+            self.queue_add_button.config(state="normal")
+
 
     def check_process(self, p):
         """
@@ -1195,32 +1263,26 @@ class JModGUI(ThemedTk):
         if p.is_alive():
             self.after(1_000, lambda: self.check_process(p))
         else:
-            self.run_button.config(state="normal")
+            self.enable_buttons()
 
 
     def begin_running(self):
         """
-        Begin the JMod run procedure.
+        Begin the JMod run procedure
 
-        First: Error checking
-            1) mzml_and_lib_error_check
-            2) test_long_paths
+        get temp_filenames (JSONs) to run: Either create them with the function or get them from the queue
 
-        Then: 
-        Get list of JSON to be ran with prepare_to_run
         Reset logger start time
         Run_main_process in its own process and begin check_process checking
 
         Button: Run JMod
         
         """
-        if not self.mzml_and_lib_error_check():
-            return
+        if self.queue_data == []: #JMod ran without Queue
+            tmp_filenames = self.get_tmp_filenames()
+        else: ## JMod ran from Queue
+            tmp_filenames= [filename for _, filename in self.queue_data]
 
-        if not self.test_long_paths():
-            return
-            
-        tmp_filenames = self.prepare_to_run()
         if tmp_filenames == []:
             return
 
@@ -1231,14 +1293,32 @@ class JModGUI(ThemedTk):
 
                 
         self.result_queue = multiprocessing.Queue()
-        self.run_button.config(state="disabled")
+        self.disable_buttons()
         self.proc = multiprocessing.Process(target=run_main_process, args=(tmp_filenames,self.result_queue, self.log_queue))
         self.proc.start()
         self.check_process(self.proc)
 
+    def get_tmp_filenames(self):
+        """
+        1) Error checking: mzml_and_lib_error_check
+        2) Error checking: test_long_paths
+        3) Get list of JSON to be ran with prepare_to_run
+
+        called by: Run Button, also add to queue
+        """
+        if not self.mzml_and_lib_error_check():
+            return []
+
+        if not self.test_long_paths():
+            return []
+            
+        tmp_filenames = self.prepare_to_run()
+        return tmp_filenames
+
     def on_close(self):
         """When TK window is closed, kill the process"""
         self.end_main(show_message=False)
+        self.cleanup_tempfiles()
         self.destroy()
 
     def end_main(self, show_message=True):
@@ -1266,7 +1346,7 @@ class JModGUI(ThemedTk):
             if config_args_dict is None:
                 return []
             try:
-                with tempfile.NamedTemporaryFile(mode='w', suffix=".json", delete=False) as tmp_file:
+                with tempfile.NamedTemporaryFile(mode='w', suffix="_JMod_json.json", delete=False) as tmp_file:
                     json.dump(config_args_dict, tmp_file)
                     tmp_filename = tmp_file.name
 
@@ -1275,6 +1355,7 @@ class JModGUI(ThemedTk):
                 return []
 
             tmp_filenames.append(tmp_filename)
+            self.tmp_files_created.append(tmp_filename)
         return tmp_filenames
 
     def mzml_and_lib_error_check(self):
@@ -1283,10 +1364,10 @@ class JModGUI(ThemedTk):
         tsv_path = self.tsv_entry.get().strip()
 
         if not mzml_files:
-            messagebox.showerror("Missing mzML or .d Files", "Please select the mzML or .d files before running.")
+            messagebox.showerror("Missing mzML or .d Files", "Please select the mzML or .d files before running or adding to queue.")
             return False
         if not tsv_path:
-            messagebox.showerror("Missing Library File", "Please select the Library file before running.")
+            messagebox.showerror("Missing Library File", "Please select the Library file before running or adding to queue.")
             return False
         for mzml_path in mzml_files:
             if os.path.exists(mzml_path) is False:
@@ -1454,6 +1535,114 @@ class JModGUI(ThemedTk):
                 new_tag_name = self.generate_tag_subset(base_tag_name)
                 config_args_dict['tag'] = new_tag_name
         return config_args_dict
+    
+
+
+    ######    QUEUE FUNCS    #######
+
+    def define_queue_frame(self):
+        """
+        Make the queue frame and move the log frame down
+        """
+        self.queue_frame = ttk.LabelFrame(self, text="Queue")
+        self.queue_frame.grid(row=0, column=11, columnspan=10, rowspan=2, padx=10, pady=3, sticky="ew")
+        
+        # Configure grid weights for proper expansion
+        self.queue_frame.rowconfigure(0, weight=1)
+        self.queue_frame.columnconfigure(0, weight=1)
+        
+        # Create frame to hold listbox and scrollbar
+        list_frame = ttk.Frame(self.queue_frame)
+        list_frame.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+        
+        # Create listbox
+        self.queue_listbox = tk.Listbox(list_frame, height=7)
+        self.queue_listbox.grid(row=0, column=0, sticky="nsew")
+        
+        # Create scrollbar
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.queue_listbox.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.queue_listbox.config(yscrollcommand=scrollbar.set)
+
+        # Button frame for actions
+        button_frame = ttk.Frame(self.queue_frame)
+        button_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        
+        self.remove_button = ttk.Button(button_frame, text="Remove Selected", command=self.remove_from_queue)
+        self.remove_button.grid(row=0, column=0, padx=2)
+        self.clear_button = ttk.Button(button_frame, text="Clear All", command=self.clear_queue)
+        self.clear_button.grid(row=0, column=1, padx=2)
+        
+        # Store queue data: list of tuples (display_name, tmp_filename)
+        self.queue_data = []
+        
+        # Move Logging frame down when queue is added
+        self.logging_frame.grid(row=2, column=11, columnspan=10, rowspan=4, padx=10, pady=3, sticky="ew")
+        self.text_widget.config(height=39)
+        
+
+    def add_items_to_queue(self, tmp_filenames, run_queue_number):
+        """
+        For each mzml associated JSON from current GUI params, add to the queue index of the added queue (run_queue_number)
+        """
+        for idx, tmp_filename in enumerate(tmp_filenames):
+            with open(tmp_filename, 'r') as f:
+                cfg = json.load(f)
+            mzml_display_name = cfg["mzml"]
+            display_name = f"Queue {run_queue_number} - {mzml_display_name}"
+            self.queue_data.append((display_name, tmp_filename))
+            self.queue_listbox.insert(tk.END, display_name)
+        self.queue_listbox.see(tk.END)
+
+    def remove_from_queue(self):
+        """Remove selected item from queue"""
+        selected_indices = self.queue_listbox.curselection()
+        if not selected_indices:
+            return
+        
+        # Remove from back to front to maintain correct indices
+        for index in reversed(selected_indices):
+            self.queue_listbox.delete(index)
+            del self.queue_data[index]
+
+    def clear_queue(self):
+        """Remove all items from queue and reset the run_queue_number"""
+        self.queue_listbox.delete(0, tk.END)
+        self.queue_data.clear()
+        self.run_queue_number = 1
+
+    def add_to_queue(self):
+        """
+        Add items to queue
+
+        1) Make JSONs for current GUI params
+        2) If queue frame does not exist, define it
+        3) Add the JSONS to the queue and iterate run_queue_number
+        """
+        tmp_filenames = self.get_tmp_filenames()
+        if tmp_filenames == []:
+            return
+
+        if not hasattr(self, "queue_frame") or not self.queue_frame.winfo_exists():
+            self.define_queue_frame()
+
+        self.add_items_to_queue(tmp_filenames, self.run_queue_number)
+
+        self.run_queue_number += 1
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 import sys
@@ -1480,7 +1669,6 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
         logger.info(f"Running JMod: File {i} of {len(tmp_filenames)}\n")
         from src.run_jmod import main
         main_result = main(tmp_filename, result_queue)
-        os.remove(tmp_filename)
         if main_result == "handled_exit": #if handled exception
             sys.exit(0)
         if main_result == "failed":  #if unhandled exception
