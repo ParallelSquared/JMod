@@ -543,7 +543,7 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
         if config.ran_from_GUI:
             if idx in GUI_print_idxs:
                 frac_done = (GUI_print_idxs.index(idx)+1) * 10
-                logger.info(f"Initial Seach - {frac_done}%")
+                logger.info(f"Initial Search - {frac_done}%")
             
         fit_output = fit_to_lib(dia_spectra.ms2scans[int(lf_spectra[idx])],
                                     library=librarySpectra,

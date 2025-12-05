@@ -33,6 +33,8 @@ import multiprocessing
 import queue
 from logging.handlers import QueueHandler
 import atexit
+import sys
+
 
 
 
@@ -73,6 +75,14 @@ class JModGUI(ThemedTk):
         #tmp_file_handling
         self.tmp_files_created = [] ## a list of any tmpfiles created so we can remove them all on close
         atexit.register(self.cleanup_tempfiles)
+
+        #Set icon topleft
+        ico_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "JMod_icon.ico")
+        try:
+            self.iconbitmap(ico_path)
+        except Exception:
+            pass 
+
 
 
         """
@@ -1705,7 +1715,6 @@ class JModGUI(ThemedTk):
 
 
 
-import sys
 def run_main_process(tmp_filenames, result_queue, log_queue):
     """
     Run JMod in a separate process.
