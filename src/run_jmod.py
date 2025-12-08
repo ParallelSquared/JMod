@@ -138,7 +138,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
     logfile_path = os.path.join(results_folder_path, "Log.log")
     set_log_filepath(logfile_path)
-
+    config.results_folder_path = results_folder_path
 
 
 
