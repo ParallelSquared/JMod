@@ -76,6 +76,9 @@ class JModGUI(ThemedTk):
         self.tmp_files_created = [] ## a list of any tmpfiles created so we can remove them all on close
         atexit.register(self.cleanup_tempfiles)
 
+        icon = tk.PhotoImage(file=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "JMod_icon.png"))
+        self.iconphoto(True, icon)
+
         #Set icon topleft
         ico_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "JMod_icon.ico")
         try:
