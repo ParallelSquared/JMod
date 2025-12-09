@@ -1076,15 +1076,18 @@ def empirical_fit(output_df,results_folder=None):
         poisson = output_df["poisson"].to_numpy()
         hyperscore = output_df["hyperscore"].to_numpy()
         spectral_angle = output_df["spectral_contrast_angle"].to_numpy()
+        scribe_score = output_df["scribe_score"].to_numpy()
         thr_poisson = np.percentile(poisson[~np.isnan(poisson)], 100 - feature_percentile)
         thr_hyperscore = np.percentile(hyperscore[~np.isnan(hyperscore)], feature_percentile)
         thr_spectral_angle = np.percentile(spectral_angle[~np.isnan(spectral_angle)], feature_percentile)
+        thr_scribe_score = np.percentile(scribe_score[~np.isnan(scribe_score)], feature_percentile)
         cor_filter = (poisson < thr_poisson) & (hyperscore > thr_hyperscore)
         cor_filter = (poisson < thr_poisson)# & (hyperscore > thr_hyperscore)
+        #cor_filter = (hyperscore > thr_hyperscore)
         #cor_filter = (spectral_angle > thr_spectral_angle) & (poisson < thr_poisson)
         #cor_filter = (spectral_angle > thr_spectral_angle)
         #cor_filter = (spectral_angle > thr_spectral_angle) & (hyperscore > thr_hyperscore)
-
+        #cor_filter = (scribe_score > thr_scribe_score)
 
         
         
@@ -1100,8 +1103,8 @@ def empirical_fit(output_df,results_folder=None):
         output_df[col_name] = aligned_step
 
         plt.subplots()
-        plt.hexbin(output_df.lib_rt[cor_filter],output_df.rt[cor_filter])
-        plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)
+        plt.scatter(output_df.lib_rt[cor_filter],output_df.rt[cor_filter], s=1)#, facecolors='none',)
+        plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)#sadasd, facecolors='none',)
         plt.title(str(feature_percentile))
         if results_folder is not None:
             plt.savefig(results_folder+f"/Percentile_{str(feature_percentile)}.png",dpi=600,bbox_inches="tight")
@@ -1172,10 +1175,11 @@ def empirical_fit(output_df,results_folder=None):
     #plt.close()
 
 
-    output_df.to_csv('first_search_stepwise_rt.tsv', sep='\t', index=False)
+    output_df.to_csv(results_folder + '/first_search_stepwise_rt.tsv', sep='\t', index=False)
     
     emp_rt_spl = lowess_fit(np.array(output_df.lib_rt)[cor_filter],np.array(output_df.rt)[cor_filter],.02)
-
+    #emp_rt_spl = automated_robust_modal_lowess(output_df.lib_rt[cor_filter], output_df.rt[cor_filter], .05, grid_size=200,
+    #                                  post_smooth_frac=0.1)
 
     return cor_filter, emp_rt_spl
 

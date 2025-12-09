@@ -10,6 +10,7 @@ from numpy import linalg as la
 
 from src.config import diann_mods
 from src.logger import logger
+from src.models.spec_lib.spec_lib import python_lib_to_diann_df
 from src.utils.io.load_files import Spectrum
 
 
@@ -24,6 +25,12 @@ def print_column_dtype(df: pl.DataFrame, col_name: str):
         print(f"Column '{col_name}' not found in DataFrame.")
 
 def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10):
+    # Get tag plex
+    if mass_tag is not None:
+        if mass_tag.channel_names is not None:
+            plex = len(mass_tag.channel_names)
+    else:
+        plex = 1
 
     # Construct modification dict to convert names to masses
     # Start with mass tag
@@ -34,25 +41,25 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     else:
         mod_dict = {}
 
-    # Get tag plex
-    if mass_tag.name == "PSMtag":
-        plex = 1
-    elif mass_tag.name == "PSMtag_3plex":
-        plex = 3
-    elif mass_tag.name == "PSMtag_5plex":
-        plex = 5
-    elif mass_tag.name == "PSMtag_9plex":
-        plex = 9
-    else:
-        plex = 1
-
     # Add all of the other supported modifications
     mod_dict.update(diann_mods)
 
+    # Construct polars df from python lib
+    pl_lib = python_lib_to_diann_df(library_spectra)
+    pl_lib.write_csv('temp.tsv', separator='\t')
+
+    # Add modification array to the polars dataframe
+    pl_lib = pl_lib.with_columns(
+        pl.struct(["ModifiedPeptide"])
+        .map_elements(lambda r: peptide_to_mod_array(r["ModifiedPeptide"], mod_dict),
+                      return_dtype=pl.List(pl.Float32))
+        .alias("Modifications")
+    )
+
+    print(pl_lib)
+
     # Convert to rust-compatible peptide objects
     pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
-
-    print(library_spectra[('Y(PSMtag_5plex-8)QPPGIR', 2.0)])
 
     rust_peps = []
     observed_mods: set[str] = set() # Allows us to backtrack original mod names from Sage results
@@ -68,12 +75,27 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         peptides=rust_peps,
         bucket_size=4096,
         ion_kinds=["b", "y"],
-        min_ion_index=1,
-        generate_decoys=True,
+        min_ion_index=2,
+        generate_decoys=False,
         decoy_tag="rev_",
         peptide_min_mass=0.0,
         peptide_max_mass=5000.0,
     )
+
+    print(db.debug_fragment_summary())
+
+    db = ps.IndexedDatabase.from_library(  # TODO pass parameters as parameters
+        library=pl_lib,
+        bucket_size=4096,
+        ion_kinds=["b", "y"],
+        min_ion_index=2,
+        generate_decoys=False,
+        decoy_tag="rev_",
+        peptide_min_mass=0.0,
+        peptide_max_mass=5000.0,
+    )
+
+    print(db.debug_fragment_summary())
 
     # Create scorer
     # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are annotated as
@@ -83,9 +105,10 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         min_isotope_err=0, # Changing these to look at other isotopes will require increasing report_PSMs due to
         max_isotope_err=0, # degenerate matches
         wide_window=True, # Uses window values instead of precursor masses
-        chimera=False, # False, do not iteratively remove peaks
+        chimera=True, # False, do not iteratively remove peaks
         annotate_matches=True, # Add fragment annotation
-        max_fragment_charge=1,
+        min_matched_peaks=3,
+        max_fragment_charge=2,
         report_psms=5*plex
     )
 
@@ -245,6 +268,97 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         .alias('spectral_contrast_angle')
     )
 
+    def scribe_score_polars_udf(r: dict) -> float:
+        """
+        Polars UDF to calculate the primary Scribe Score:
+        Score = -ln(sum((A_sqrt - L_sqrt)^2)), where A and L are normalized to sum to 1.
+        """
+        seq = r['seq']  # Modified sequence string
+        z = r['z']  # Charge
+        ms2_intensity = r['ms2_intensity']
+
+        if seq is None or z is None or ms2_intensity is None or ms2_intensity == 0.0:
+            # Return a definite low score if key data is missing or spectrum is empty
+            return -999.0
+
+            # 1. Get the library fragment vector for the peptide (using TUPLE KEY)
+        library_key = (seq, z)
+        library_vec = fragment_library_map.get(library_key)
+        if not library_vec:
+            return -999.0
+
+        # 2. Access observed fragment data directly (no string parsing needed!)
+        charges = r['frag_charges']  # List(Int64) -> list[int]
+        kinds_raw = r['frag_kinds']  # List(String) -> list[str]
+        ordinals = r['frag_fragment_ordinals']  # List(Int64) -> list[int]
+        intensities = r['frag_intensities']  # List(Float64) -> list[float]
+
+        # 3. Check for consistent array lengths
+        if not (len(charges) == len(kinds_raw) == len(ordinals) == len(intensities)):
+            logger.error(
+                f"Fragment array length mismatch for seq {seq}. Lengths: {len(charges)}, {len(kinds_raw)}, {len(ordinals)}, {len(intensities)}")
+            return -999.0
+
+        # 4. Create raw observed vector (A_raw)
+        observed_vec = {}
+
+        # Iterate over lists to build observed_vec dictionary
+        for c, k, o, i in zip(charges, kinds_raw, ordinals, intensities):
+            # Alignment key: (ion_kind, ordinal, charge)
+            key = (k.upper(), o, c)
+            # Note: The initial intensity normalization by ms2_intensity is NOT used here,
+            # as the Scribe formula requires normalization AFTER alignment.
+            observed_vec[key] = i
+
+            # 5. Align vectors and create raw intensity vectors (NumPy conversion happens here)
+
+        # KEY CHANGE: Only include ions that are present in the library.
+        all_keys = set(library_vec.keys())
+
+        # Cast to NumPy arrays for fast calculation
+        # A_raw will be 0.0 if the ion was observed but is NOT in the library keys.
+        A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
+        B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
+
+        # Check for zero vectors AFTER alignment
+        sum_A_raw = np.sum(A_raw)
+        sum_B_raw = np.sum(B_raw)
+
+        if sum_A_raw == 0.0 or sum_B_raw == 0.0:
+            return -999.0
+
+        # 6. Normalization (to sum to 1) and Square Root Transformation
+        A_norm = A_raw / sum_A_raw
+        B_norm = B_raw / sum_B_raw
+
+        A_sqrt = np.sqrt(A_norm)
+        B_sqrt = np.sqrt(B_norm)
+
+        # 7. Sum of Squared Errors
+        sq_error_sum = np.sum((A_sqrt - B_sqrt) ** 2)
+
+        # Guard against zero error (perfect match) to avoid log(0)
+        if sq_error_sum <= 1e-12:
+            return 25.0  # Return a large, stable score
+
+        # 8. Final Negative Log Transformation
+        return -np.log(sq_error_sum)
+
+    # Apply the Polars UDF
+    df = df.with_columns(
+        pl.struct([
+            'frag_charges',
+            'frag_kinds',
+            'frag_fragment_ordinals',
+            'frag_intensities',
+            'ms2_intensity',
+            'seq',  # Modified sequence column
+            'z',  # Charge column (renamed from 'charge')
+        ])
+        .map_elements(scribe_score_polars_udf, return_dtype=pl.Float32)
+        .alias('scribe_score')  # Renamed column
+    )
+
     # Back to pandas
     df = df.to_pandas()
 
@@ -361,8 +475,8 @@ def calculate_spectral_contrast_angle(row, fragment_library_map):
         # Normalize intensity by total MS2 intensity
         observed_vec[key] = i / ms2_intensity if ms2_intensity > 0 else 0.0
 
-    # 4. Align vectors and create raw intensity vectors
-    all_keys = set(observed_vec.keys()) | set(library_vec.keys())
+    # 4. Limit ions to just those in the library
+    all_keys = set(library_vec.keys())
 
     A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
     B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
