@@ -13,6 +13,13 @@ This allows you to keep the main script in src/ while still running from root.
 import sys
 import os
 import multiprocessing
+import tqdm
+
+#Give tqdm somewhere to write to if running without a console (Pyinstaller Compiled)
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w')
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w')
 
 # Add src directory to Python path
 src_path = os.path.join(os.path.dirname(__file__), 'src')
