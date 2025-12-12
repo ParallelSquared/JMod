@@ -15,6 +15,7 @@ import src.config as config
 from src.spectral_fitting import fit_to_lib
 
 from scipy.interpolate import LSQUnivariateSpline as spline
+from scipy.stats import norm
 #from scipy.optimize import isotonic_regression
 from statistics import quantiles
 from src.utils.misc_functions import within_tol
@@ -675,109 +676,238 @@ def empirical_fit(output_df,results_folder=None):
         DESCRIPTION.
 
     """
-    
-    
+
     logger.info("")
     logger.info("Filtering IDs from initial search")
-    for feature_percentile in  range(20,80,5):
-    
-    ## empirically derived cutoffs
-        
-    
-                                
+
+    for feature_percentile in range(20, 80, 5):
+
         cor_filter = np.logical_and.reduce(
-                                            [output_df[feat]>np.percentile(output_df[feat],feature_percentile) for feat in ["hyperscore",
-                                                                                                      "frag_cosines_p",
-                                                                                                      "frag_cosines_p",
-                                                                                                      "manhattan_distances",
-                                                                                                      ]]
-                                            +
-                                            [output_df[feat]<np.percentile(output_df[feat],100-feature_percentile) for feat in [
-                                                                                                              "scribe_scores",
-                                                                                                              "gof_stats",
-                                                                                                              "max_matched_residuals",
-                                                                                                              "med_frag_error"]]
-                                                                                                            )
-        
-        
-        f = lowess_fit(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.1)
+            [output_df[feat] > np.percentile(output_df[feat], feature_percentile)
+             for feat in [
+                 "hyperscore",
+                 "frag_cosines_p",
+                 "frag_cosines_p",
+                 "manhattan_distances",
+             ]]
+            +
+            [output_df[feat] < np.percentile(output_df[feat], 100 - feature_percentile)
+             for feat in [
+                 "scribe_scores",
+                 "gof_stats",
+                 "max_matched_residuals",
+                 "med_frag_error",
+             ]]
+        )
+
+        f = lowess_fit(output_df.lib_rt[cor_filter],
+                       output_df.rt[cor_filter],
+                       .1)
+
         plt.subplots()
-        plt.scatter(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],s=1)
-        plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)
+        plt.scatter(output_df.lib_rt[cor_filter],
+                    output_df.rt[cor_filter], s=1)
+        plt.scatter(output_df.lib_rt[cor_filter],
+                    f(output_df.lib_rt[cor_filter]), s=1)
         plt.title(str(feature_percentile))
         if results_folder is not None:
-            plt.savefig(results_folder+f"/Percentile_{str(feature_percentile)}.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder + f"/Percentile_{feature_percentile}.png",
+                        dpi=600, bbox_inches="tight")
         plt.close()
-        
-        # plt.subplots()
-        # f = lowess_fit(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],.1)
-        # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],s=1)
-        # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],
-        #             f(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter]),s=1)
-        # plt.title(str(feature_percentile))
-        #plt.close()
-        
-        # r_filter =np.logical_and(output_df.last_aa=="R",cor_filter)
-        # fr = lowess_fit(output_rts[r_filter], output_df.rt[r_filter],.1)
-        # plt.subplots()
-        # plt.scatter(output_rts[r_filter],output_df.rt[r_filter],s=1)
-        # x = np.linspace(min(output_rts[r_filter]),max(output_rts[r_filter]),100)
-        # plt.scatter(x,fr(x),s=1)
-        # plt.title(str(feature_percentile))
-        #plt.close()
-        
-        
-        # k_filter =np.logical_and(output_df.last_aa=="K",cor_filter)
-        # fk = lowess_fit(output_rts[k_filter], output_df.rt[k_filter],.1)
-        # # plt.subplots()
-        # plt.scatter(output_rts[k_filter],output_df.rt[k_filter],s=1)
-        # x = np.linspace(min(output_rts[k_filter]),max(output_rts[k_filter]),100)
-        # plt.scatter(x,fk(x),s=1)
-        # plt.title(str(feature_percentile))
-        #plt.close()
-        
-     
-       
-        
-        first_rt_diffs = (f(output_df.lib_rt)-output_df.rt)
-        rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
-        first_rt_tolerance = 4*np.abs(rt_stddev)
-        # rt_mean, rt_stddev = stats.norm.fit(first_rt_diffs[cor_filter])
-        # vals,bins,_=plt.hist(first_rt_diffs[cor_filter],np.linspace(-10,10,100),density=True)
-        # plt.title(str(feature_percentile))
-        # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),gaussian(np.linspace(-first_rt_tolerance,first_rt_tolerance,100), rt_amplitude, rt_mean, rt_stddev))
-        # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),stats.norm.pdf(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),loc= rt_mean, scale=rt_stddev))
-        
-        # plt.vlines([-first_rt_tolerance,first_rt_tolerance],[0]*2,[max(vals)]*2)
-        
-        bad_IDs  = (np.abs(first_rt_diffs)>np.min([first_rt_tolerance,np.ptp(output_df.rt)/5]))[cor_filter]
-        outside_ratio = sum(bad_IDs)/len(bad_IDs)
-        logger.info(f"Testing Percentile: {feature_percentile}, Ratio: {np.round(outside_ratio,4)}, #IDs: {sum(cor_filter)}")
-        if outside_ratio<.05 or (sum(cor_filter)-sum(bad_IDs)<800):
-            break
-    
-    logger.debug(f"{feature_percentile} {np.round(outside_ratio,4)} {sum(cor_filter)}")
-            
-    
-    cor_filter = np.logical_and(cor_filter,np.abs(first_rt_diffs)<first_rt_tolerance)
-    # plt.scatter(output_rts[cor_filter],output_df.rt[cor_filter],s=1)
-    # plt.scatter(output_rts[cor_filter],f(output_rts[cor_filter]),s=1)
-    # plt.title(str(feature_percentile))
-    
-    # x = f(output_rts[cor_filter])-output_df.rt[cor_filter]
-    # x_d = np.linspace(-10,10,100)
-    # density = sum(stats.norm(xi).pdf(x_d) for xi in x)
-    # # plt.subplots()
-    # # plt.plot(x_d,density)
-    # # plt.title(str(feature_percentile))
-    # print(str(feature_percentile),min(density))
-    #plt.close()
-    
-    
-    emp_rt_spl = lowess_fit(np.array(output_df.lib_rt)[cor_filter],np.array(output_df.rt)[cor_filter],.02)
 
+        first_rt_diffs = f(output_df.lib_rt) - output_df.rt
+
+        rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
+        first_rt_tolerance = 4 * np.abs(rt_stddev)
+
+        bad_IDs = (
+                np.abs(first_rt_diffs) >
+                np.min([first_rt_tolerance, np.ptp(output_df.rt) / 5])
+        )[cor_filter]
+        outside_ratio = bad_IDs.sum() / len(bad_IDs)
+
+        # GMM on residuals from current filter
+        res = first_rt_diffs[cor_filter]
+        weights, sigmas = fit_zero_mean_gmm_1d(res, n_components=2)
+
+        order = np.argsort(sigmas)
+        sigmas = sigmas[order]
+        weights = weights[order]
+
+        num = weights * norm.pdf(0.0, loc=0.0, scale=sigmas)
+        pep0 = num[0] / num.sum()
+
+        # rt error + mixture plot, saved per percentile
+        if results_folder is not None:
+            plot_rt_residuals_mixture(
+                residuals=res,
+                feat=feature_percentile,
+                weights=weights,
+                sigmas=sigmas,
+                results_folder=results_folder
+            )
+
+        logger.info(
+            f"Testing Percentile: {feature_percentile}, "
+            f"Ratio: {outside_ratio:.4f}, #IDs: {cor_filter.sum()}, PEP(0): {pep0:.4f}"
+        )
+
+        # new + existing stopping criteria
+        if (pep0 >= 0.95 or
+                outside_ratio < 0.05 or
+                (cor_filter.sum() - bad_IDs.sum()) < 800):
+            break
+
+    logger.debug(f"{feature_percentile} {np.round(outside_ratio, 4)} {cor_filter.sum()}")
+
+    cor_filter = np.logical_and(
+        cor_filter,
+        np.abs(first_rt_diffs) < first_rt_tolerance
+    )
+
+    emp_rt_spl = lowess_fit(
+        np.array(output_df.lib_rt)[cor_filter],
+        np.array(output_df.rt)[cor_filter],
+        .02
+    )
 
     return cor_filter, emp_rt_spl
+
+
+def fit_zero_mean_gmm_1d(x, n_components=2, max_iter=200, tol=1e-6):
+    x = np.asarray(x, dtype=float)
+    x = x[~np.isnan(x)]
+    n = x.shape[0]
+
+    # init by splitting on |x| to define narrow and wide components
+    abs_x = np.abs(x)
+    split = np.median(abs_x)
+    resp = np.zeros((n, n_components))
+    resp[:, 0] = abs_x <= split
+    resp[:, 1] = abs_x > split
+    resp /= resp.sum(axis=1, keepdims=True)
+
+    weights = resp.mean(axis=0)
+    variances = np.array([
+        np.sum(resp[:, k] * x**2) / np.sum(resp[:, k])
+        for k in range(n_components)
+    ])
+    sigmas = np.sqrt(variances)
+
+    def log_likelihood():
+        pdfs = np.stack(
+            [weights[k] * norm.pdf(x, loc=0.0, scale=sigmas[k])
+             for k in range(n_components)],
+            axis=1,
+        )
+        return np.sum(np.log(pdfs.sum(axis=1) + 1e-300))
+
+    prev_ll = log_likelihood()
+
+    # iterate until convergence
+    for _ in range(max_iter):
+        pdfs = np.stack(
+            [weights[k] * norm.pdf(x, loc=0.0, scale=sigmas[k])
+             for k in range(n_components)],
+            axis=1,
+        )
+        denom = pdfs.sum(axis=1, keepdims=True) + 1e-300
+        resp = pdfs / denom
+
+        weights = resp.mean(axis=0)
+        variances = np.array([
+            np.sum(resp[:, k] * x**2) / np.sum(resp[:, k])
+            for k in range(n_components)
+        ])
+        sigmas = np.sqrt(variances)
+
+        ll = log_likelihood()
+        if abs(ll - prev_ll) < tol:
+            break
+        prev_ll = ll
+
+    return weights, sigmas
+
+
+def plot_rt_residuals_mixture(residuals,
+                              feat,
+                              weights=None,
+                              sigmas=None,
+                              results_folder=None):
+    """
+    Make the RT residual histogram + 2-comp zero-mean GMM overlay and PEP(0) text.
+    """
+    res = np.asarray(residuals, dtype=float)
+    res = res[~np.isnan(res)]
+
+    # sort so comp 0 is narrow
+    order = np.argsort(sigmas)
+    sigmas = sigmas[order]
+    weights = weights[order]
+
+    # posterior at x=0 for the narrow component
+    num = weights * norm.pdf(0.0, loc=0.0, scale=sigmas)
+    pep0 = num[0] / num.sum()
+
+    max_abs = np.percentile(np.abs(res), 99)
+    bins = np.linspace(-max_abs, max_abs, 80)
+
+    plt.figure(figsize=(6, 4))
+
+    counts, edges, _ = plt.hist(
+        res,
+        bins=bins,
+        density=True,
+        alpha=0.5,
+        edgecolor="black",
+        linewidth=0.5,
+    )
+
+    x = np.linspace(edges[0], edges[-1], 500)
+
+    comp_pdfs = [
+        weights[k] * norm.pdf(x, loc=0.0, scale=sigmas[k])
+        for k in range(2)
+    ]
+    mixture_pdf = comp_pdfs[0] + comp_pdfs[1]
+
+    plt.plot(x, mixture_pdf, label="mixture", linewidth=2)
+    plt.plot(x, comp_pdfs[0], linestyle="--",
+             label=f"comp 1 (σ={sigmas[0]:.3f})")
+    plt.plot(x, comp_pdfs[1], linestyle="--",
+             label=f"comp 2 (σ={sigmas[1]:.3f})")
+
+    ax = plt.gca()
+    ax.axvline(0, color="black", linewidth=1)
+
+    ax.text(
+        0.98, 0.95,
+        f"PEP(0) = {pep0:.3f}",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=12,
+        bbox=dict(facecolor="white", alpha=0.6, edgecolor="none"),
+    )
+
+    plt.legend()
+    plt.xlabel("fit_rt - rt")
+    plt.ylabel("density")
+    plt.title(f"RT Residuals After Empirical Alignment {feat}")
+    plt.tight_layout()
+
+    if results_folder is not None:
+        plt.savefig(
+            results_folder + f"/rt_residuals_p{feat}.png",
+            dpi=600,
+            bbox_inches="tight",
+        )
+
+    else:
+        plt.close()
+
+    return pep0
+
 
 def cdf_data(rt_diffs,limit=3):
     """
