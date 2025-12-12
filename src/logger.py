@@ -53,11 +53,11 @@ def log_exceptions(func):
         try:
             return func(*args, **kwargs)
         except Exception:
-            rename_results_folder(config)
             if config.error_already_handled:
                 return "handled_exit"
             else:
                 logging.getLogger("appLogger").error("Unhandled exception", exc_info=True)
+                rename_results_folder(config)
                 return "failed"
     return wrapper
 

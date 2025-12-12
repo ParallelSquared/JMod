@@ -13,11 +13,11 @@ def send_raise_to_TK(error_text):
         config = importlib.import_module("src.config")
 
     config.error_already_handled = True
-    
-    rename_results_folder(config)
 
     logging.getLogger("appLogger").error(error_text)
     logging.getLogger("appLogger").error("runERROR: Run Exited\n")
+
+    rename_results_folder(config)
 
     if config.ran_from_GUI is True:
         config.GUI_result_queue.put(f"errorGUI_{error_text}")
