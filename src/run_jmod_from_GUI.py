@@ -86,6 +86,9 @@ class JModGUI(ThemedTk):
         except Exception:
             pass 
 
+        #for tk dir handling modified so it doesnt try to open presets folder after it has been opened
+        self.last_opened_dir = None
+
 
 
         """
@@ -457,7 +460,7 @@ class JModGUI(ThemedTk):
         if hasattr(self, "show_info_window") and self.show_info_window.winfo_exists():
             self.show_info_window.destroy()
         self.show_info_window = tk.Toplevel(self)
-        self.show_info_window.title("Information Links")
+        self.show_info_window.title("Info")
         self.show_info_window.geometry("200x150")
         center_on_parent(self.show_info_window, self)
 
@@ -558,11 +561,12 @@ class JModGUI(ThemedTk):
         Open filedialog for mzML
         Button: Browse button for mzML
         """
-        files = filedialog.askopenfilenames(title="Select .mzML or .d Files", filetypes=[("Mass Spec Files", "*.mzML *.d")])
+        files = filedialog.askopenfilenames(title="Select .mzML or .d Files", filetypes=[("Mass Spec Files", "*.mzML *.d")], initialdir=self.last_opened_dir)
         if files:
             for file in files:
                 if file not in self.file_dropdown.files:
                     self.file_dropdown.add_files([file])
+                    self.last_opened_dir = os.path.dirname(file)
 
     def select_tsv(self):
         """
@@ -570,11 +574,12 @@ class JModGUI(ThemedTk):
         Button: Browse button for specLib
         """
         file_path = filedialog.askopenfilename(
-            title="Select .tsv File", filetypes=[("TSV files", "*.tsv")]
+            title="Select .tsv File", filetypes=[("TSV files", "*.tsv")], initialdir=self.last_opened_dir
         )
         if file_path:
             self.tsv_entry.delete(0, tk.END)
             self.tsv_entry.insert(0, file_path)
+            self.last_opened_dir = os.path.dirname(file_path)
 
 
 
@@ -1240,9 +1245,10 @@ class JModGUI(ThemedTk):
         Select an output folder for searches
         Button: Browse button for Output Folder
         """
-        folder_selected = filedialog.askdirectory()
+        folder_selected = filedialog.askdirectory(initialdir=self.last_opened_dir)
         if folder_selected:
             self.output_folder_var.set(folder_selected)
+            self.last_opened_folder = folder_selected
 
     def disable_buttons(self):
         """While JMod runs, disable run and queue related buttons"""
