@@ -698,7 +698,11 @@ def empirical_fit(output_df,results_folder=None):
         cor_filter = np.logical_and.reduce(
             [output_df[feat] > np.percentile(output_df[feat], feature_percentile)
              for feat in [
-                 "hyperscore",
+                 "scribe_score"]
+             ]
+        )
+        """
+        #,
                  "frag_cosines_p",
                  "frag_cosines_p",
                  "manhattan_distances",
@@ -712,6 +716,7 @@ def empirical_fit(output_df,results_folder=None):
                  "med_frag_error",
              ]]
         )
+        """
 
         f = lowess_fit(output_df.lib_rt[cor_filter],
                        output_df.rt[cor_filter],
