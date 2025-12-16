@@ -14,16 +14,6 @@ from src.models.spec_lib.spec_lib import python_lib_to_diann_df
 from src.utils.io.load_files import Spectrum
 
 
-def print_column_dtype(df: pl.DataFrame, col_name: str):
-    """Prints the Polars dtype and a sample value for a specified column."""
-    if col_name in df.columns:
-        print(f"Column '{col_name}' dtype in Polars: {df[col_name].dtype}")
-        # Show first non-null value for context
-        sample_value = df[col_name].drop_nulls().head(1).to_list()
-        print(f"Sample value (before conversion): {sample_value}")
-    else:
-        print(f"Column '{col_name}' not found in DataFrame.")
-
 def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10):
     # Get tag plex
     if mass_tag is not None:
@@ -105,7 +95,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         min_isotope_err=0, # Changing these to look at other isotopes will require increasing report_PSMs due to
         max_isotope_err=0, # degenerate matches
         wide_window=True, # Uses window values instead of precursor masses
-        chimera=True, # False, do not iteratively remove peaks
+        chimera=False, # False, do not iteratively remove peaks
         annotate_matches=True, # Add fragment annotation
         min_matched_peaks=3,
         max_fragment_charge=2,
@@ -117,6 +107,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     rust_specs = []
     # TODO this should probably be done in chunks if it becomes a bottleneck
     for spec in tqdm(dia_spectra.ms2scans):
+        print(spec.id, spec.prec_mz, spec.ms1window)
         rust_specs += [spec.to_rust_spectrum()]
 
     #rust_specs = rust_specs[15000:16000]
@@ -136,6 +127,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
             hits = batch_hits
         else:
             hits.extend(batch_hits)
+            print(batch_hits)
 
     # Make Polars dataframe
     logger.info("Building results dataframe")
@@ -264,7 +256,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
             'seq',
             'z'
         ])
-        .map_elements(spectral_angle_polars_udf, return_dtype=pl.Float32)
+        .map_elements(spectral_angle_polars_udf, return_dtype=pl.Float64)
         .alias('spectral_contrast_angle')
     )
 
@@ -317,8 +309,8 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
 
         # Cast to NumPy arrays for fast calculation
         # A_raw will be 0.0 if the ion was observed but is NOT in the library keys.
-        A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
-        B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
+        A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float64)
+        B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float64)
 
         # Check for zero vectors AFTER alignment
         sum_A_raw = np.sum(A_raw)
@@ -355,7 +347,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
             'seq',  # Modified sequence column
             'z',  # Charge column (renamed from 'charge')
         ])
-        .map_elements(scribe_score_polars_udf, return_dtype=pl.Float32)
+        .map_elements(scribe_score_polars_udf, return_dtype=pl.Float64)
         .alias('scribe_score')  # Renamed column
     )
 
@@ -478,8 +470,8 @@ def calculate_spectral_contrast_angle(row, fragment_library_map):
     # 4. Limit ions to just those in the library
     all_keys = set(library_vec.keys())
 
-    A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
-    B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
+    A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float64)
+    B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float64)
 
     # 5. Apply Power Transformation (P=0.5)
     A_pow = np.sqrt(A_raw)
@@ -607,7 +599,7 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFr
     # 5. Grab library rts based on reconstructed seq (Polars map_dict)
     df = df.with_columns(
         pl.col("seq")
-          .map_elements(map_rt_wrapper, return_dtype=pl.Float32) # Use Float32 for RTs
+          .map_elements(map_rt_wrapper, return_dtype=pl.Float64) # Use Float32 for RTs
           .alias("lib_rt")
     )
 

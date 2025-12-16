@@ -88,11 +88,11 @@ class Spectrum:
         return(np.array([self.mz,self.intens]))
 
     def to_rust_spectrum(self):
-        proton_mass = 1.0072764
+        #proton_mass = 1.0072764
         rs = ps.core.Spectrum(id=self.id,
                               file_id=0, # placeholder
                               scan_start_time=self.RT,
-                              mz_array=[mz - proton_mass for mz in self.mz],
+                              mz_array=self.mz,#[mz - proton_mass for mz in self.mz],
                               intensity_array=self.intens,
                               precursors=[
                                   ps.core.Precursor(self.prec_mz,
