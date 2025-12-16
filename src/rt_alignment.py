@@ -771,7 +771,7 @@ def empirical_fit(output_df,results_folder=None):
         )
 
         # new + existing stopping criteria
-        if (pep0 >= 0.95 or
+        if (pep0 >= 0.99 or
                 outside_ratio < 0.05 or
                 (cor_filter.sum() - bad_IDs.sum()) < 800):
             break
