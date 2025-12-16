@@ -46,8 +46,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         .alias("Modifications")
     )
 
-    print(pl_lib)
-
     # Convert to rust-compatible peptide objects
     pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
 
@@ -60,21 +58,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
 
     rev_map = {round(mod_dict[m], 4): m for m in observed_mods}  # Allows us to lookup mods by mass despite float error
 
-    # Create indexed database
-    db = ps.IndexedDatabase.from_peptides(  # TODO pass parameters as parameters
-        peptides=rust_peps,
-        bucket_size=4096,
-        ion_kinds=["b", "y"],
-        min_ion_index=2,
-        generate_decoys=False,
-        decoy_tag="rev_",
-        peptide_min_mass=0.0,
-        peptide_max_mass=5000.0,
-    )
-
-    print(db.debug_fragment_summary())
-
-    db = ps.IndexedDatabase.from_library(  # TODO pass parameters as parameters
+    db = ps.IndexedDatabase.from_library(
         library=pl_lib,
         bucket_size=4096,
         ion_kinds=["b", "y"],
@@ -84,8 +68,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         peptide_min_mass=0.0,
         peptide_max_mass=5000.0,
     )
-
-    print(db.debug_fragment_summary())
 
     # Create scorer
     # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are annotated as
@@ -107,7 +89,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     rust_specs = []
     # TODO this should probably be done in chunks if it becomes a bottleneck
     for spec in tqdm(dia_spectra.ms2scans):
-        print(spec.id, spec.prec_mz, spec.ms1window)
         rust_specs += [spec.to_rust_spectrum()]
 
     #rust_specs = rust_specs[15000:16000]
@@ -127,7 +108,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
             hits = batch_hits
         else:
             hits.extend(batch_hits)
-            print(batch_hits)
 
     # Make Polars dataframe
     logger.info("Building results dataframe")
@@ -353,9 +333,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
 
     # Back to pandas
     df = df.to_pandas()
-
-    has_rt_df = df[~df['lib_rt'].isna()]
-    print("has_rt " + str(len(has_rt_df)))
 
     ##########
     # This is a temporary solution to limit peptides to those inside the library
