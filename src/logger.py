@@ -2,6 +2,9 @@ import logging
 import logging.config
 import time
 import os
+import sys 
+import importlib
+from src.utils.gui_utils import rename_results_folder
 
 class ElapsedFormatter(logging.Formatter):
     def __init__(self, fmt=None, datefmt=None, style="%"):
@@ -35,12 +38,11 @@ def set_log_filepath(logfile_path):
     file_handler = logging.FileHandler(logfile_path, mode="a")
     file_handler.setLevel(logging.DEBUG)
     fmt = ElapsedFormatter("%(asctime)s - %(levelname)s - %(message)s")
-    fmt.start_time = start_time
+    fmt.start_time = start_time 
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 
-import sys 
-import importlib
+
 def log_exceptions(func):
     def wrapper(*args, **kwargs):
         if "src.config" in sys.modules:   #this weird import somehow solved an error
@@ -55,6 +57,7 @@ def log_exceptions(func):
                 return "handled_exit"
             else:
                 logging.getLogger("appLogger").error("Unhandled exception", exc_info=True)
+                rename_results_folder(config)
                 return "failed"
     return wrapper
 

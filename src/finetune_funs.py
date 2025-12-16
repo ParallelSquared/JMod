@@ -67,7 +67,7 @@ def create_model_data(grouped_df,seq_name = 'PeptideSequence', rt_name="RT"):
     # Split the data into training and testing sets
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.1, random_state=123)
     
-    logger.info(f"Training data size: {X_train.shape}, Test data size: {X_test.shape}")
+    logger.debug(f"Training data size: {X_train.shape}, Test data size: {X_test.shape}")
     
     return X_train, X_test, Y_train, Y_test
 
@@ -169,7 +169,7 @@ def load_existing_models(model_path):
                 # Try to load directly
                 model = keras.models.load_model(model_path + str(i), compile=False)
                 models.append(model)
-                logger.info(f"Successfully loaded model {i} directly")
+                logger.debug(f"Successfully loaded model {i} directly")
             except Exception as e:
                 if "File format not supported" in str(e):
                     logger.warning(f"Model {i} format not supported by Keras 3. Will try conversion.")
@@ -183,7 +183,7 @@ def load_existing_models(model_path):
     
     # If direct loading failed, try conversion
     if try_conversion or not models:
-        logger.info("Attempting to convert models to Keras 3-compatible format...")
+        logger.debug("Attempting to convert models to Keras 3-compatible format...")
         try:
             converted_paths = convert_models_to_keras3_format(model_path)
             
@@ -193,7 +193,7 @@ def load_existing_models(model_path):
                 try:
                     model = keras.models.load_model(path, compile=False)
                     models.append(model)
-                    logger.info(f"Successfully loaded converted model from {path}")
+                    logger.debug(f"Successfully loaded converted model from {path}")
                 except Exception as e:
                     logger.warning(f"Error loading converted model from {path}: {e}")
             
@@ -202,7 +202,7 @@ def load_existing_models(model_path):
                 logger.info("Successfully converted and loaded models. These will be used for future runs.")
         except Exception as e:
             logger.warning(f"Error during model conversion: {e}")
-    logger.info(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
+    logger.debug(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
     return models
 
 def train_models(models,train_data,results_folder=None):
@@ -214,6 +214,7 @@ def train_models(models,train_data,results_folder=None):
     # Compile and fine-tune each model with new data
     all_history = []
     for i, model in enumerate(models):
+        logger.info(f"Fitting Model {i+1} of {len(models)}")
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4), loss='mae')
         history = model.fit(np.array(X_train), Y_train, epochs=50, batch_size=24, validation_split=0.1, callbacks=[early_stopping],verbose=1)
         all_history.append(history)
@@ -221,10 +222,10 @@ def train_models(models,train_data,results_folder=None):
             try:
                 model.save(results_folder+f'/iRT_updated_model{i}')
             except:
-                from src.utils.gui_utils import send_raise_to_TK # TODO this throws the wrong error if directory does not exist
-                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+                from src.utils.gui_utils import send_raise_to_TK
+                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
                 raise ValueError("Path Length Limit Exceeded")
-    logger.info(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
+    logger.debug(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
     return models, all_history
 
 
@@ -290,37 +291,37 @@ def fine_tune_rt(grouped_df,
         for model in models:
             try:
                 # Before prediction:
-                logger.info(f"Attempting prediction with model of type {type(model).__name__}")
+                logger.debug(f"Attempting prediction with model of type {type(model).__name__}")
                 
                 if hasattr(model, 'predict'):
                     pred = model.predict(X_test_array)
-                    logger.info(f"Used predict() method, result type: {type(pred).__name__}")
+                    logger.debug(f"Used predict() method, result type: {type(pred).__name__}")
                 else:
                     # TFSMLayer objects are called directly
-                    logger.info(f"Calling model directly (TFSMLayer approach)")
+                    logger.debug(f"Calling model directly (TFSMLayer approach)")
                     pred = model(X_test_array)
-                    logger.info(f"Direct call result type: {type(pred).__name__}")
+                    logger.debug(f"Direct call result type: {type(pred).__name__}")
                     
                     # Extract data from tensor dictionary if needed
                     if isinstance(pred, dict):
-                        logger.info(f"Prediction is a dictionary with keys: {list(pred.keys())}")
+                        logger.debug(f"Prediction is a dictionary with keys: {list(pred.keys())}")
                         for key in pred:
                             value = pred[key]
-                            logger.info("Key '{key}' contains data of type {type(value).__name__}")
+                            logger.debug(f"Key '{key}' contains data of type {type(value).__name__}")
                             if hasattr(value, 'numpy'):
-                                logger.info(f"Converting TensorFlow tensor from key '{key}' to NumPy array")
+                                logger.debug(f"Converting TensorFlow tensor from key '{key}' to NumPy array")
                                 pred = value.numpy()
-                                logger.info(f"Shape after conversion: {pred.shape}")
+                                logger.debug(f"Shape after conversion: {pred.shape}")
                                 break
                     
                 # Add shape information
                 if hasattr(pred, 'shape'):
-                    logger.info(f"Prediction shape: {pred.shape}")
+                    logger.debug(f"Prediction shape: {pred.shape}")
                 else:
-                    logger.info(f"Prediction has no shape attribute, type: {type(pred)}")
+                    logger.debug(f"Prediction has no shape attribute, type: {type(pred)}")
                 
                 model_outputs.append(pred)
-                logger.info(f"Successfully added prediction to model_outputs")
+                logger.debug(f"Successfully added prediction to model_outputs")
             except Exception as e:
                 logger.warning(f"Error predicting with model: {e}")
                 logger.warning(f"Traceback: {traceback.format_exc()}")
@@ -339,20 +340,20 @@ def fine_tune_rt(grouped_df,
     logger.info(f"Number of model outputs collected: {len(model_outputs)}")
     for i, output in enumerate(model_outputs):
         if hasattr(output, 'shape'):
-            logger.info(f"Model output {i} type: {type(output).__name__} shape: {output.shape}")
+            logger.debug(f"Model output {i} type: {type(output).__name__} shape: {output.shape}")
         else:
-            logger.info(f"Model output {i} type: {type(output).__name__} no shape attribute")
+            logger.debug(f"Model output {i} type: {type(output).__name__} no shape attribute")
 
     if not model_outputs:
-        logger.info("No valid predictions from any model!")
+        logger.warning("No valid predictions from any model!")
     else:
         logger.info(f"Attempting to average {len(model_outputs)} model outputs")
 
-    logger.info(f"Original predictions shape: {orig_predictions.shape}")
-    logger.info(f"Y_test shape: {Y_test.shape}")
-    logger.info(f"Flattened predictions shape: {orig_predictions.flatten().shape}")
-    logger.info(f"First few values of predictions: {orig_predictions.flatten()[:5]}")
-    logger.info(f"First few values of Y_test: {Y_test[:5]}")
+    logger.debug(f"Original predictions shape: {orig_predictions.shape}")
+    logger.debug(f"Y_test shape: {Y_test.shape}")
+    logger.debug(f"Flattened predictions shape: {orig_predictions.flatten().shape}")
+    logger.debug(f"First few values of predictions: {orig_predictions.flatten()[:5]}")
+    logger.debug(f"First few values of Y_test: {Y_test[:5]}")
 
     loess_result = lowess(orig_predictions.flatten(), Y_test, frac=0.1)
     

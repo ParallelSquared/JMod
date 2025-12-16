@@ -17,6 +17,7 @@ from pyteomics import mass
 import re
 from src.utils.io.read_output import names
 import src.config as config
+import math
 
 from src.utils.misc_functions import createTolWindows, window_width, feature_list_mz, feature_list_rt, \
 hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim,np_pearson_cor
@@ -320,7 +321,7 @@ def hyperscore2(frags,frag_names_matched):
     num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
     num_y = sum(["y" in i for i in frag_names_matched if "iso" not in i])
     dp = np.sum([frags[i] for i in frag_names_matched if "iso" not in i])
-    return max(0,np.log(dp*np.math.factorial(num_b)*np.math.factorial(num_y))), num_b, num_y
+    return max(0,np.log(dp*math.factorial(num_b)*math.factorial(num_y))), num_b, num_y
     
 #@profile
 def get_features(
@@ -1468,420 +1469,420 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
         return output
 
 
-def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=False,ms1_mz=None,mz_func = np.array, # mz_func is calibration function - default is just keeping values the same,
-               ms1_spectra = None,
-               rt_tol = config.rt_tol,
-               ms1_tol = config.ms1_tol,
-               mz_tol = config.mz_tol):
-    #print("AAAAAAAAA")
-    spec_idx=dia_spec.scan_num
+# def fit_to_lib_decoy(dia_spec,library,rt_mz,all_keys,dino_features=None,rt_filter=False,ms1_mz=None,mz_func = np.array, # mz_func is calibration function - default is just keeping values the same,
+#                ms1_spectra = None,
+#                rt_tol = config.rt_tol,
+#                ms1_tol = config.ms1_tol,
+#                mz_tol = config.mz_tol):
+#     #print("AAAAAAAAA")
+#     spec_idx=dia_spec.scan_num
     
-    # mz_tol = config.mz_tol
-    # rt_tol = min(config.rt_tol,config.opt_rt_tol)
-    # ms1_tol = min(config.ms1_tol,config.opt_ms1_tol)
-    top_n=config.top_n
-    atleast_m=config.atleast_m
+#     # mz_tol = config.mz_tol
+#     # rt_tol = min(config.rt_tol,config.opt_rt_tol)
+#     # ms1_tol = min(config.ms1_tol,config.opt_ms1_tol)
+#     top_n=config.top_n
+#     atleast_m=config.atleast_m
 
-    spec = dia_spec#spectra.ms2scans[spec_idx]
-    dia_spectrum = np.stack(spec.peak_list(),1)
-    prec_mz = spec.prec_mz
-    prec_rt = spec.RT
-    # spec_idx = spec.id
+#     spec = dia_spec#spectra.ms2scans[spec_idx]
+#     dia_spectrum = np.stack(spec.peak_list(),1)
+#     prec_mz = spec.prec_mz
+#     prec_rt = spec.RT
+#     # spec_idx = spec.id
     
-    windowWidth = window_width(dia_spec)
+#     windowWidth = window_width(dia_spec)
     
-    if ms1_spectra is not None:
-        ms1_rt = np.array([i.RT for i in ms1_spectra])
-        closest_ms1_scan_idx = closest_ms1spec(prec_rt, ms1_rt)
-        ms1_spec = ms1_spectra[closest_ms1_scan_idx]
+#     if ms1_spectra is not None:
+#         ms1_rt = np.array([i.RT for i in ms1_spectra])
+#         closest_ms1_scan_idx = closest_ms1spec(prec_rt, ms1_rt)
+#         ms1_spec = ms1_spectra[closest_ms1_scan_idx]
     
     
     
-    lib_coefficients = []
+#     lib_coefficients = []
    
-    if ms1_mz:
-        _bool = np.abs(rt_mz[:,1]-ms1_mz)<ms1_tol
+#     if ms1_mz:
+#         _bool = np.abs(rt_mz[:,1]-ms1_mz)<ms1_tol
         
-    else:
-        if rt_filter:
-            _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
-        else:
-            _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
+#     else:
+#         if rt_filter:
+#             _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
+#         else:
+#             _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
             
-    window_idxs = np.where(_bool)[0]        
+#     window_idxs = np.where(_bool)[0]        
         
         
         
-    ### match lib spec to features
-    if dino_features is not None:
-        filtered_dino = feature_list_mz(feature_list_rt(dino_features,prec_rt,rt_tol=rt_tol),
-                                        prec_mz,windowWidth)
-        window_edges = createTolWindows(filtered_dino.mz, tolerance=ms1_tol)
-        window_idxs = window_idxs[np.where((np.searchsorted(window_edges,rt_mz[window_idxs,1])%2)==1)[0]]
+#     ### match lib spec to features
+#     if dino_features is not None:
+#         filtered_dino = feature_list_mz(feature_list_rt(dino_features,prec_rt,rt_tol=rt_tol),
+#                                         prec_mz,windowWidth)
+#         window_edges = createTolWindows(filtered_dino.mz, tolerance=ms1_tol)
+#         window_idxs = window_idxs[np.where((np.searchsorted(window_edges,rt_mz[window_idxs,1])%2)==1)[0]]
         
     
-    mass_window_candidates = [all_keys[i] for i in window_idxs]
-    candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
+#     mass_window_candidates = [all_keys[i] for i in window_idxs]
+#     candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
     
     
-    ###### Process dia spectrum 
+#     ###### Process dia spectrum 
     
-    # what are the first indices of peaks grouped by tolerance
-    merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
+#     # what are the first indices of peaks grouped by tolerance
+#     merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
     
-    # what are the first mz of these peak groups
-    merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
-    # print(merged_coords)
+#     # what are the first mz of these peak groups
+#     merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
+#     # print(merged_coords)
     
     
-    # NB - should we not sum the intensities?????
-    # merged_intensities = [np.mean(dia_spectrum[np.where(merged_coords_idxs==i)[0],1]) for i in np.unique(merged_coords_idxs)]
-    #merged_intensities = np.zeros(len((merged_coords_idxs)))
-    #for j,val in zip(merged_coords_idxs,dia_spectrum[:,1]):
-    #    merged_intensities[j]+=val
-    #merged_intensities = [np.mean(dia_spectrum[merged_coords_idxs==i,1]) for i in np.unique(merged_coords_idxs)]
-    #merged_intensities = merged_intensities[merged_intensities!=0]
-    merged_intensities = np.bincount(merged_coords_idxs, weights=dia_spectrum[:, 1])
-    merged_intensities = merged_intensities[merged_intensities != 0]
+#     # NB - should we not sum the intensities?????
+#     # merged_intensities = [np.mean(dia_spectrum[np.where(merged_coords_idxs==i)[0],1]) for i in np.unique(merged_coords_idxs)]
+#     #merged_intensities = np.zeros(len((merged_coords_idxs)))
+#     #for j,val in zip(merged_coords_idxs,dia_spectrum[:,1]):
+#     #    merged_intensities[j]+=val
+#     #merged_intensities = [np.mean(dia_spectrum[merged_coords_idxs==i,1]) for i in np.unique(merged_coords_idxs)]
+#     #merged_intensities = merged_intensities[merged_intensities!=0]
+#     merged_intensities = np.bincount(merged_coords_idxs, weights=dia_spectrum[:, 1])
+#     merged_intensities = merged_intensities[merged_intensities != 0]
     
-    #update spectrum to new values (note mz remains first in group as this will eventually be rounded)
-    dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
-    # print(dia_spectrum)
+#     #update spectrum to new values (note mz remains first in group as this will eventually be rounded)
+#     dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
+#     # print(dia_spectrum)
     
-    #get window edge positions each side of peaks in observed spectra (NB the tolerance is now about the first peak in the group not the middile)
-    centroid_breaks = np.concatenate((dia_spectrum[:,0]-mz_tol*dia_spectrum[:,0],dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0]))
-    centroid_breaks = np.sort(centroid_breaks)
-    bin_centers = np.mean(np.stack((centroid_breaks[::2],centroid_breaks[1::2]),1),1)
+#     #get window edge positions each side of peaks in observed spectra (NB the tolerance is now about the first peak in the group not the middile)
+#     centroid_breaks = np.concatenate((dia_spectrum[:,0]-mz_tol*dia_spectrum[:,0],dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0]))
+#     centroid_breaks = np.sort(centroid_breaks)
+#     bin_centers = np.mean(np.stack((centroid_breaks[::2],centroid_breaks[1::2]),1),1)
     
-    # lib_idx=0
-    # M = candidate_peaks[lib_idx]
-    ref_coords = [np.searchsorted(centroid_breaks,M[:,0]) for M in candidate_peaks]
-    top_ten = [np.searchsorted(centroid_breaks,M[np.argsort(-M[:,1])[0:min(top_n,M.shape[0])],0]) for M in candidate_peaks]
+#     # lib_idx=0
+#     # M = candidate_peaks[lib_idx]
+#     ref_coords = [np.searchsorted(centroid_breaks,M[:,0]) for M in candidate_peaks]
+#     top_ten = [np.searchsorted(centroid_breaks,M[np.argsort(-M[:,1])[0:min(top_n,M.shape[0])],0]) for M in candidate_peaks]
     
-    ## Filter precursors based on resp. MS1 peak
-    ms1_peak = ~np.isnan([closest_peak_diff(mz,ms1_spec.mz) for mz in rt_mz[window_idxs,1]])
+#     ## Filter precursors based on resp. MS1 peak
+#     ms1_peak = ~np.isnan([closest_peak_diff(mz,ms1_spec.mz) for mz in rt_mz[window_idxs,1]])
      
     
-    # does the top ten peaks fall between centroid breaks? i.e. odd numbers (%2==1), 
-    # ref_peaks_in_dia = [i for i in range(len(candidate_peaks)) if len([a for a in top_ten[i] if a%2 ==1])>atleast_m]
-    # print(ref_peaks_in_dia)
-    all_norm_intensities = [M[:,1]/sum(M[:,1]) for M in candidate_peaks]
-    # ref_peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_intensities[i][(ref_coords[i]%2)==1])>0.5 and np.sum(top_ten[i]%2)>atleast_m]
-    ref_peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_intensities[i][(ref_coords[i]%2)==1])>0.5 and np.sum(top_ten[i]%2)>atleast_m and ms1_peak[i]]
-    # print(ref_peaks_in_dia)
+#     # does the top ten peaks fall between centroid breaks? i.e. odd numbers (%2==1), 
+#     # ref_peaks_in_dia = [i for i in range(len(candidate_peaks)) if len([a for a in top_ten[i] if a%2 ==1])>atleast_m]
+#     # print(ref_peaks_in_dia)
+#     all_norm_intensities = [M[:,1]/sum(M[:,1]) for M in candidate_peaks]
+#     # ref_peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_intensities[i][(ref_coords[i]%2)==1])>0.5 and np.sum(top_ten[i]%2)>atleast_m]
+#     ref_peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_intensities[i][(ref_coords[i]%2)==1])>0.5 and np.sum(top_ten[i]%2)>atleast_m and ms1_peak[i]]
+#     # print(ref_peaks_in_dia)
     
-    prop_ref_peaks_in_dia = [len([a for a in top_ten[i] if a%2 ==1])/candidate_peaks[i].shape[0] for i in range(len(candidate_peaks))]
+#     prop_ref_peaks_in_dia = [len([a for a in top_ten[i] if a%2 ==1])/candidate_peaks[i].shape[0] for i in range(len(candidate_peaks))]
     
-    # print(len(ref_peaks_in_dia))
+#     # print(len(ref_peaks_in_dia))
     
-    # filter database further to those that match the required num peaks
-    ref_pep_cand_loc = [ref_coords[i] for i in ref_peaks_in_dia]
-    ref_pep_cand_list = [candidate_peaks[i] for i in ref_peaks_in_dia]
-    # ref_pep_cand = [candidate_lib[i]["seq"] for i in ref_peaks_in_dia] # Nb this is modified seq!!
-    ref_pep_cand = [mass_window_candidates[i] for i in ref_peaks_in_dia] # Nb this is modified seq!!
+#     # filter database further to those that match the required num peaks
+#     ref_pep_cand_loc = [ref_coords[i] for i in ref_peaks_in_dia]
+#     ref_pep_cand_list = [candidate_peaks[i] for i in ref_peaks_in_dia]
+#     # ref_pep_cand = [candidate_lib[i]["seq"] for i in ref_peaks_in_dia] # Nb this is modified seq!!
+#     ref_pep_cand = [mass_window_candidates[i] for i in ref_peaks_in_dia] # Nb this is modified seq!!
     
-    norm_intensities = [M[:,1]/sum(M[:,1]) for M in ref_pep_cand_list]
+#     norm_intensities = [M[:,1]/sum(M[:,1]) for M in ref_pep_cand_list]
 
 
-    ########## Update
-    # lib peaks that match
-    lib_peaks_matched = [j%2==1 for j in ref_pep_cand_loc]
+#     ########## Update
+#     # lib peaks that match
+#     lib_peaks_matched = [j%2==1 for j in ref_pep_cand_loc]
     
-    # name these something different so can be accessed later
-    ref_spec_row_indices_split = [np.int32(((i[j]+1)/2)-1) for i,j in zip(ref_pep_cand_loc,lib_peaks_matched)] # NB these are floats
-    num_lib_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched]) #f1
-    ref_spec_col_indices_split = [np.array([idx]*i) for idx,i in zip(range(len(ref_pep_cand)),num_lib_peaks_matched)] 
-    ref_spec_values_split = [ints[i] for ints,i in zip(norm_intensities,lib_peaks_matched)]
-    
-    
+#     # name these something different so can be accessed later
+#     ref_spec_row_indices_split = [np.int32(((i[j]+1)/2)-1) for i,j in zip(ref_pep_cand_loc,lib_peaks_matched)] # NB these are floats
+#     num_lib_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched]) #f1
+#     ref_spec_col_indices_split = [np.array([idx]*i) for idx,i in zip(range(len(ref_pep_cand)),num_lib_peaks_matched)] 
+#     ref_spec_values_split = [ints[i] for ints,i in zip(norm_intensities,lib_peaks_matched)]
     
     
-    ### Generate eqivalent Decoy spectra
     
-    mass_window_decoy_candidates = [("Decoy_"+i[0],i[1]) for i in mass_window_candidates] 
-    converted_seqs = [change_seq(i[0]) for i in mass_window_candidates]
-    decoy_mz = np.array([mass.fast_mass(i, charge=j[1]) for i,j in zip(converted_seqs, mass_window_candidates)])
-    converted_frags = [convert_frags(i[0], library[i]["frags"]) for i in mass_window_candidates]
-    candidate_decoy_peaks = [frag_to_peak(i) for i in converted_frags]
     
-    ## Decoy equiv
-    decoy_coords = [np.searchsorted(centroid_breaks,M[:,0]) for M in candidate_decoy_peaks]
-    top_ten_decoy = [np.searchsorted(centroid_breaks,M[np.argsort(-M[:,1])[0:min(top_n,M.shape[0])],0]) for M in candidate_decoy_peaks]
-    # decoy_peaks_in_dia = [i for i in range(len(candidate_decoy_peaks)) if len([a for a in top_ten_decoy[i] if a%2 ==1])>atleast_m]
-    all_norm_decoy_intensities = [M[:,1]/sum(M[:,1]) for M in candidate_decoy_peaks]
-    decoy_ms1_peak = ~np.isnan([closest_peak_diff(mz,ms1_spec.mz) for mz in decoy_mz])
-    decoy_peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_decoy_intensities[i][(decoy_coords[i]%2)==1])>0.5 and np.sum(top_ten_decoy[i]%2)>atleast_m and decoy_ms1_peak[i]]
+#     ### Generate eqivalent Decoy spectra
     
-    decoy_pep_cand_loc = [decoy_coords[i] for i in decoy_peaks_in_dia]
-    decoy_pep_cand_list = [candidate_decoy_peaks[i] for i in decoy_peaks_in_dia]
-    decoy_pep_cand = [mass_window_decoy_candidates[i] for i in decoy_peaks_in_dia] # Nb this is modified seq!!
+#     mass_window_decoy_candidates = [("Decoy_"+i[0],i[1]) for i in mass_window_candidates] 
+#     converted_seqs = [change_seq(i[0]) for i in mass_window_candidates]
+#     decoy_mz = np.array([mass.fast_mass(i, charge=j[1]) for i,j in zip(converted_seqs, mass_window_candidates)])
+#     converted_frags = [convert_frags(i[0], library[i]["frags"]) for i in mass_window_candidates]
+#     candidate_decoy_peaks = [frag_to_peak(i) for i in converted_frags]
     
-    norm_decoy_intensities = [M[:,1]/sum(M[:,1]) for M in decoy_pep_cand_list]
+#     ## Decoy equiv
+#     decoy_coords = [np.searchsorted(centroid_breaks,M[:,0]) for M in candidate_decoy_peaks]
+#     top_ten_decoy = [np.searchsorted(centroid_breaks,M[np.argsort(-M[:,1])[0:min(top_n,M.shape[0])],0]) for M in candidate_decoy_peaks]
+#     # decoy_peaks_in_dia = [i for i in range(len(candidate_decoy_peaks)) if len([a for a in top_ten_decoy[i] if a%2 ==1])>atleast_m]
+#     all_norm_decoy_intensities = [M[:,1]/sum(M[:,1]) for M in candidate_decoy_peaks]
+#     decoy_ms1_peak = ~np.isnan([closest_peak_diff(mz,ms1_spec.mz) for mz in decoy_mz])
+#     decoy_peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_decoy_intensities[i][(decoy_coords[i]%2)==1])>0.5 and np.sum(top_ten_decoy[i]%2)>atleast_m and decoy_ms1_peak[i]]
     
-    decoy_lib_peaks_matched = [j%2==1 for j in decoy_pep_cand_loc]
+#     decoy_pep_cand_loc = [decoy_coords[i] for i in decoy_peaks_in_dia]
+#     decoy_pep_cand_list = [candidate_decoy_peaks[i] for i in decoy_peaks_in_dia]
+#     decoy_pep_cand = [mass_window_decoy_candidates[i] for i in decoy_peaks_in_dia] # Nb this is modified seq!!
     
-    decoy_spec_row_indices_split = [np.int32(((i[j]+1)/2)-1) for i,j in zip(decoy_pep_cand_loc,decoy_lib_peaks_matched)] # NB these are floats
-    num_decoy_peaks_matched = np.array([np.sum(i) for i in decoy_lib_peaks_matched]) #f1
-    decoy_spec_col_indices_split = [np.array([idx]*i,dtype=int) for idx,i in zip(range(len(decoy_pep_cand)),num_decoy_peaks_matched)] 
-    decoy_spec_values_split = [ints[i] for ints,i in zip(norm_decoy_intensities,decoy_lib_peaks_matched)]
+#     norm_decoy_intensities = [M[:,1]/sum(M[:,1]) for M in decoy_pep_cand_list]
     
-    frag_errors = []
-    frag_mz = []
-    decoy_frag_errors = []
-    decoy_frag_mz = []
+#     decoy_lib_peaks_matched = [j%2==1 for j in decoy_pep_cand_loc]
     
-    if len(ref_spec_row_indices_split)>0 and len(ref_spec_col_indices_split)>0 and len(ref_spec_values_split)>0:
+#     decoy_spec_row_indices_split = [np.int32(((i[j]+1)/2)-1) for i,j in zip(decoy_pep_cand_loc,decoy_lib_peaks_matched)] # NB these are floats
+#     num_decoy_peaks_matched = np.array([np.sum(i) for i in decoy_lib_peaks_matched]) #f1
+#     decoy_spec_col_indices_split = [np.array([idx]*i,dtype=int) for idx,i in zip(range(len(decoy_pep_cand)),num_decoy_peaks_matched)] 
+#     decoy_spec_values_split = [ints[i] for ints,i in zip(norm_decoy_intensities,decoy_lib_peaks_matched)]
+    
+#     frag_errors = []
+#     frag_mz = []
+#     decoy_frag_errors = []
+#     decoy_frag_mz = []
+    
+#     if len(ref_spec_row_indices_split)>0 and len(ref_spec_col_indices_split)>0 and len(ref_spec_values_split)>0:
         
-        #### concatenate the matrix values
-        ref_spec_row_indices = np.concatenate(ref_spec_row_indices_split)
-        ref_spec_col_indices = np.concatenate(ref_spec_col_indices_split)
-        ref_spec_values = np.concatenate(ref_spec_values_split)
+#         #### concatenate the matrix values
+#         ref_spec_row_indices = np.concatenate(ref_spec_row_indices_split)
+#         ref_spec_col_indices = np.concatenate(ref_spec_col_indices_split)
+#         ref_spec_values = np.concatenate(ref_spec_values_split)
         
-        frag_errors = [np.array(bin_centers[ref_spec_row_indices_split[i]]-ref_pep_cand_list[i][:,0][lib_peaks_matched[i]])/bin_centers[ref_spec_row_indices_split[i]] for i in range(len(lib_peaks_matched))]
-        frag_mz = [ref_pep_cand_list[i][:,0][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
+#         frag_errors = [np.array(bin_centers[ref_spec_row_indices_split[i]]-ref_pep_cand_list[i][:,0][lib_peaks_matched[i]])/bin_centers[ref_spec_row_indices_split[i]] for i in range(len(lib_peaks_matched))]
+#         frag_mz = [ref_pep_cand_list[i][:,0][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
         
         
-        if len(decoy_spec_row_indices_split)>0:
-            decoy_spec_row_indices = np.concatenate(decoy_spec_row_indices_split)
-            decoy_spec_col_indices = np.concatenate(decoy_spec_col_indices_split)+max(ref_spec_col_indices)+1
-            decoy_spec_values = np.concatenate(decoy_spec_values_split)
-            decoy_frag_errors = [np.array(bin_centers[decoy_spec_row_indices_split[i]]-decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]])/bin_centers[decoy_spec_row_indices_split[i]] for i in range(len(decoy_lib_peaks_matched))]
-            decoy_frag_mz = [decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
+#         if len(decoy_spec_row_indices_split)>0:
+#             decoy_spec_row_indices = np.concatenate(decoy_spec_row_indices_split)
+#             decoy_spec_col_indices = np.concatenate(decoy_spec_col_indices_split)+max(ref_spec_col_indices)+1
+#             decoy_spec_values = np.concatenate(decoy_spec_values_split)
+#             decoy_frag_errors = [np.array(bin_centers[decoy_spec_row_indices_split[i]]-decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]])/bin_centers[decoy_spec_row_indices_split[i]] for i in range(len(decoy_lib_peaks_matched))]
+#             decoy_frag_mz = [decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
             
-        else:
-            decoy_spec_row_indices=np.array([],dtype=int)
-            decoy_spec_col_indices=np.array([],dtype=int)
-            decoy_spec_values=np.array([],dtype=int)
+#         else:
+#             decoy_spec_row_indices=np.array([],dtype=int)
+#             decoy_spec_col_indices=np.array([],dtype=int)
+#             decoy_spec_values=np.array([],dtype=int)
         
-        # what peaks from the spectrum are matched by library peps
-        # unique_row_idxs = [int(i) for i in set(np.concatenate([ref_spec_row_indices,decoy_spec_row_indices]))]
-        # unique_row_idxs.sort()
-        unique_row_idxs = np.unique(np.concatenate((ref_spec_row_indices,decoy_spec_row_indices)))
-        unique_row_idxs = np.array(np.sort(unique_row_idxs),dtype=int)
+#         # what peaks from the spectrum are matched by library peps
+#         # unique_row_idxs = [int(i) for i in set(np.concatenate([ref_spec_row_indices,decoy_spec_row_indices]))]
+#         # unique_row_idxs.sort()
+#         unique_row_idxs = np.unique(np.concatenate((ref_spec_row_indices,decoy_spec_row_indices)))
+#         unique_row_idxs = np.array(np.sort(unique_row_idxs),dtype=int)
         
-        dia_spec_int = dia_spectrum[unique_row_idxs,1]
+#         dia_spec_int = dia_spectrum[unique_row_idxs,1]
         
-        # add another term to penalise additional lib peaks
-        dia_spec_int = np.append(dia_spec_int,[0]) 
-        # find peaks that are bot matched in dia spectrum
-        ref_peaks_not_in_dia = np.array([idx for loc_list in ref_pep_cand_loc for idx in range(len(loc_list)) if loc_list[idx]%2==0])
-        # get col indices (will just be one for each)
-        not_dia_col_indices = np.arange(len(ref_pep_cand))
-        num_rows = max(unique_row_idxs)
-        # row indices always the last row (num peaks+1)
-        not_dia_row_indices = [num_rows+1]*len(not_dia_col_indices)
-        # sum peak intensities not in dia spectrum
-        not_dia_values = np.array([np.sum([norm_intensities[idx][peak_idx] for peak_idx in range(len(norm_intensities[idx])) if ref_pep_cand_loc[idx][peak_idx]%2==0])
-                                  for idx in range(len(norm_intensities))])
+#         # add another term to penalise additional lib peaks
+#         dia_spec_int = np.append(dia_spec_int,[0]) 
+#         # find peaks that are bot matched in dia spectrum
+#         ref_peaks_not_in_dia = np.array([idx for loc_list in ref_pep_cand_loc for idx in range(len(loc_list)) if loc_list[idx]%2==0])
+#         # get col indices (will just be one for each)
+#         not_dia_col_indices = np.arange(len(ref_pep_cand))
+#         num_rows = max(unique_row_idxs)
+#         # row indices always the last row (num peaks+1)
+#         not_dia_row_indices = [num_rows+1]*len(not_dia_col_indices)
+#         # sum peak intensities not in dia spectrum
+#         not_dia_values = np.array([np.sum([norm_intensities[idx][peak_idx] for peak_idx in range(len(norm_intensities[idx])) if ref_pep_cand_loc[idx][peak_idx]%2==0])
+#                                   for idx in range(len(norm_intensities))])
     
-        ref_sparse_row_indices = np.append(ref_spec_row_indices,not_dia_row_indices)
-        ref_sparse_col_indices = np.append(ref_spec_col_indices,not_dia_col_indices)
-        ref_sparse_values = np.append(ref_spec_values,not_dia_values)
+#         ref_sparse_row_indices = np.append(ref_spec_row_indices,not_dia_row_indices)
+#         ref_sparse_col_indices = np.append(ref_spec_col_indices,not_dia_col_indices)
+#         ref_sparse_values = np.append(ref_spec_values,not_dia_values)
         
-        ### Decoy
-        decoy_peaks_not_in_dia = np.array([idx for loc_list in decoy_pep_cand_loc for idx in range(len(loc_list)) if loc_list[idx]%2==0])
-        decoy_not_dia_col_indices = np.arange(len(decoy_pep_cand))
-        num_rows = max(unique_row_idxs)
-        decoy_not_dia_row_indices = [num_rows+1]*len(decoy_not_dia_col_indices)
-        decoy_not_dia_values = np.array([np.sum([norm_decoy_intensities[idx][peak_idx] for peak_idx in range(len(norm_decoy_intensities[idx])) if decoy_pep_cand_loc[idx][peak_idx]%2==0])
-                                  for idx in range(len(norm_decoy_intensities))])
+#         ### Decoy
+#         decoy_peaks_not_in_dia = np.array([idx for loc_list in decoy_pep_cand_loc for idx in range(len(loc_list)) if loc_list[idx]%2==0])
+#         decoy_not_dia_col_indices = np.arange(len(decoy_pep_cand))
+#         num_rows = max(unique_row_idxs)
+#         decoy_not_dia_row_indices = [num_rows+1]*len(decoy_not_dia_col_indices)
+#         decoy_not_dia_values = np.array([np.sum([norm_decoy_intensities[idx][peak_idx] for peak_idx in range(len(norm_decoy_intensities[idx])) if decoy_pep_cand_loc[idx][peak_idx]%2==0])
+#                                   for idx in range(len(norm_decoy_intensities))])
     
-        decoy_sparse_row_indices = np.append(decoy_spec_row_indices,decoy_not_dia_row_indices)
-        decoy_sparse_col_indices = np.append(decoy_spec_col_indices,decoy_not_dia_col_indices+max(ref_spec_col_indices)+1)
-        decoy_sparse_values = np.append(decoy_spec_values,decoy_not_dia_values)
+#         decoy_sparse_row_indices = np.append(decoy_spec_row_indices,decoy_not_dia_row_indices)
+#         decoy_sparse_col_indices = np.append(decoy_spec_col_indices,decoy_not_dia_col_indices+max(ref_spec_col_indices)+1)
+#         decoy_sparse_values = np.append(decoy_spec_values,decoy_not_dia_values)
         
         
-        sparse_row_indices = np.concatenate((ref_sparse_row_indices,decoy_sparse_row_indices))
-        sparse_col_indices = np.concatenate((ref_sparse_col_indices,decoy_sparse_col_indices))
-        sparse_values = np.concatenate((ref_sparse_values,decoy_sparse_values))
+#         sparse_row_indices = np.concatenate((ref_sparse_row_indices,decoy_sparse_row_indices))
+#         sparse_col_indices = np.concatenate((ref_sparse_col_indices,decoy_sparse_col_indices))
+#         sparse_values = np.concatenate((ref_sparse_values,decoy_sparse_values))
         
-        # some dia peaks are not matched and are therefore ignored
-        # below ranks the rows by number therefore removing missing rows
-        sparse_row_indices = stats.rankdata(sparse_row_indices,method="dense").astype(int)-1
+#         # some dia peaks are not matched and are therefore ignored
+#         # below ranks the rows by number therefore removing missing rows
+#         sparse_row_indices = stats.rankdata(sparse_row_indices,method="dense").astype(int)-1
         
-        # Generate sparse matrix from data
-        sparse_lib_matrix = sparse.coo_matrix((sparse_values,(sparse_row_indices,sparse_col_indices)))
+#         # Generate sparse matrix from data
+#         sparse_lib_matrix = sparse.coo_matrix((sparse_values,(sparse_row_indices,sparse_col_indices)))
 
-        # Fit lib spectra to observed spectra
-        fit_results = sparse_nnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
-        lib_coefficients = fit_results['x']
+#         # Fit lib spectra to observed spectra
+#         fit_results = sparse_nnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
+#         lib_coefficients = fit_results['x']
         
         
         
-        ####################################
-        ### features 
-        frac_lib_intensity = [np.sum(i) for i in ref_spec_values_split] # all ints sum to 1 so these give frac
-        tic = np.sum(dia_spectrum[:,1])
-        frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in ref_spec_row_indices_split]
-        # mz tol
-        if ms1_spectra is not None:
-            rel_error = np.array([closest_peak_diff(mz,ms1_spec.mz) for mz in rt_mz[window_idxs[ref_peaks_in_dia],1]])
-        elif dino_features is not None:
-            rel_error = ms1_error(np.array(filtered_dino.mz), rt_mz[window_idxs[ref_peaks_in_dia],1], tol=ms1_tol)
-        else:
-            rel_error = np.zeros(len(ref_peaks_in_dia))
-        rt_error = prec_rt-rt_mz[window_idxs[ref_peaks_in_dia],0]
+#         ####################################
+#         ### features 
+#         frac_lib_intensity = [np.sum(i) for i in ref_spec_values_split] # all ints sum to 1 so these give frac
+#         tic = np.sum(dia_spectrum[:,1])
+#         frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in ref_spec_row_indices_split]
+#         # mz tol
+#         if ms1_spectra is not None:
+#             rel_error = np.array([closest_peak_diff(mz,ms1_spec.mz) for mz in rt_mz[window_idxs[ref_peaks_in_dia],1]])
+#         elif dino_features is not None:
+#             rel_error = ms1_error(np.array(filtered_dino.mz), rt_mz[window_idxs[ref_peaks_in_dia],1], tol=ms1_tol)
+#         else:
+#             rel_error = np.zeros(len(ref_peaks_in_dia))
+#         rt_error = prec_rt-rt_mz[window_idxs[ref_peaks_in_dia],0]
         
-        frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
-        predicted_spec = np.squeeze(sparse_lib_matrix*lib_coefficients)[:-1]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r2all = np_pearson_cor(dia_spec_int[:-1],predicted_spec).statistic
+#         frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
+#         predicted_spec = np.squeeze(sparse_lib_matrix*lib_coefficients)[:-1]
+#         with warnings.catch_warnings():
+#             warnings.simplefilter("ignore")
+#             r2all = np_pearson_cor(dia_spec_int[:-1],predicted_spec).statistic
         
-            r2_lib_spec = [np_pearson_cor(i,dia_spectrum[j,1]).statistic for i,j in zip(ref_spec_values_split,ref_spec_row_indices_split)]
+#             r2_lib_spec = [np_pearson_cor(i,dia_spectrum[j,1]).statistic for i,j in zip(ref_spec_values_split,ref_spec_row_indices_split)]
         
-        single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
-        peaks_not_shared = [np.array([[dia_spectrum[i,1],j] for i,j in zip(dia,lib) if i in single_matched_rows]) for dia,lib in zip(ref_spec_row_indices_split,ref_spec_values_split)]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r2_unique = [np_pearson_cor(*i.T).statistic if i.shape[0]>1 else 0 for i in peaks_not_shared ]
-        frac_unique_pred = [np.divide(*np.sum(i,axis=0)[::-1])*c if i.shape[0]>0 else 0 for i,c in zip(peaks_not_shared,lib_coefficients)] #frac of int matched by unique peaks pred by unique peaks
+#         single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
+#         peaks_not_shared = [np.array([[dia_spectrum[i,1],j] for i,j in zip(dia,lib) if i in single_matched_rows]) for dia,lib in zip(ref_spec_row_indices_split,ref_spec_values_split)]
+#         with warnings.catch_warnings():
+#             warnings.simplefilter("ignore")
+#             r2_unique = [np_pearson_cor(*i.T).statistic if i.shape[0]>1 else 0 for i in peaks_not_shared ]
+#         frac_unique_pred = [np.divide(*np.sum(i,axis=0)[::-1])*c if i.shape[0]>0 else 0 for i,c in zip(peaks_not_shared,lib_coefficients)] #frac of int matched by unique peaks pred by unique peaks
         
-        frac_dia_intensity_pred = [(i*c)/j for i,j,c in zip(frac_lib_intensity,frac_dia_intensity,lib_coefficients)]
+#         frac_dia_intensity_pred = [(i*c)/j for i,j,c in zip(frac_lib_intensity,frac_dia_intensity,lib_coefficients)]
         
-        #### stack spectrum features
-        r2all = np.ones_like(num_lib_peaks_matched)*r2all
-        frac_int_matched = np.ones_like(num_lib_peaks_matched)*frac_int_matched
-        frac_int_pred = (np.ones_like(num_lib_peaks_matched)*np.sum(predicted_spec))/tic
-        frac_int_matched_pred = (np.ones_like(num_lib_peaks_matched)*np.sum(predicted_spec))/np.sum(dia_spec_int)
-        large_coeff_indices = np.where(np.array(lib_coefficients)>1)[0] # identify large coeffs
-        large_coeff_matched_peaks = np.unique(np.concatenate(([(ref_spec_row_indices_split+decoy_spec_row_indices_split)[i] for i in large_coeff_indices]))) # select the peaks matched to these
-        large_coeff_int_pred = np.sum([np.sum((ref_spec_values_split+decoy_spec_values_split)[i])*list(lib_coefficients)[i] for i in large_coeff_indices]) # sum the intensity predicted
-        large_coeff_int_matched = np.sum(dia_spectrum[large_coeff_matched_peaks,1]) # sum the intensity matched
-        ## Note: some predictions over-shoot the matched peak so we overestimate this value
-        ## Q: Should we report different values for coeffs < 1??
-        frac_int_matched_pred_sigcoeff = (np.ones_like(num_lib_peaks_matched)*large_coeff_int_pred)/large_coeff_int_matched # create vals for all peaks
-        
-        
-        subset_row_indices = np.unique(sparse_row_indices[np.where(np.isin(sparse_col_indices,large_coeff_indices))])
-        subset_row_indices = np.delete(subset_row_indices,np.where(subset_row_indices==max(subset_row_indices))[0][0])
-        large_coeffs = np.squeeze(lib_coefficients) # get the coeffs
-        large_coeffs[large_coeffs<1] = 0 # set those <1 to 0
-        scaled_matrix = np.multiply(sparse_lib_matrix.toarray(),large_coeffs)#scale the matrix
-        subset_pred_spec = np.sum(scaled_matrix,1)
-        subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
-        large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
-        
-        hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]))
-        longest_y_ions = [longest_y(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
-        features = np.stack([num_lib_peaks_matched,
-                              frac_lib_intensity,
-                              frac_dia_intensity,
-                              rel_error,
-                              rt_error,
-                              frac_int_matched,
-                              frac_int_pred,
-                              r2all,
-                              r2_lib_spec,
-                              r2_unique,
-                              frac_unique_pred,
-                              frac_dia_intensity_pred,
-                              hyperscores,
-                              b_counts,
-                              y_counts,
-                              longest_y_ions,
-                              frac_int_matched_pred,
-                              frac_int_matched_pred_sigcoeff,
-                              large_coeff_cosine
-                                ],-1)
+#         #### stack spectrum features
+#         r2all = np.ones_like(num_lib_peaks_matched)*r2all
+#         frac_int_matched = np.ones_like(num_lib_peaks_matched)*frac_int_matched
+#         frac_int_pred = (np.ones_like(num_lib_peaks_matched)*np.sum(predicted_spec))/tic
+#         frac_int_matched_pred = (np.ones_like(num_lib_peaks_matched)*np.sum(predicted_spec))/np.sum(dia_spec_int)
+#         large_coeff_indices = np.where(np.array(lib_coefficients)>1)[0] # identify large coeffs
+#         large_coeff_matched_peaks = np.unique(np.concatenate(([(ref_spec_row_indices_split+decoy_spec_row_indices_split)[i] for i in large_coeff_indices]))) # select the peaks matched to these
+#         large_coeff_int_pred = np.sum([np.sum((ref_spec_values_split+decoy_spec_values_split)[i])*list(lib_coefficients)[i] for i in large_coeff_indices]) # sum the intensity predicted
+#         large_coeff_int_matched = np.sum(dia_spectrum[large_coeff_matched_peaks,1]) # sum the intensity matched
+#         ## Note: some predictions over-shoot the matched peak so we overestimate this value
+#         ## Q: Should we report different values for coeffs < 1??
+#         frac_int_matched_pred_sigcoeff = (np.ones_like(num_lib_peaks_matched)*large_coeff_int_pred)/large_coeff_int_matched # create vals for all peaks
         
         
-        ####################################
-        ####################################
-        ### DECOY features 
+#         subset_row_indices = np.unique(sparse_row_indices[np.where(np.isin(sparse_col_indices,large_coeff_indices))])
+#         subset_row_indices = np.delete(subset_row_indices,np.where(subset_row_indices==max(subset_row_indices))[0][0])
+#         large_coeffs = np.squeeze(lib_coefficients) # get the coeffs
+#         large_coeffs[large_coeffs<1] = 0 # set those <1 to 0
+#         scaled_matrix = np.multiply(sparse_lib_matrix.toarray(),large_coeffs)#scale the matrix
+#         subset_pred_spec = np.sum(scaled_matrix,1)
+#         subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
+#         large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
         
-        frac_lib_intensity = [np.sum(i) for i in decoy_spec_values_split] # all ints sum to 1 so these give frac
-        tic = np.sum(dia_spectrum[:,1])
-        frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in decoy_spec_row_indices_split]
-        # mz tol
-        if ms1_spectra is not None:
-            rel_error = np.array([closest_peak_diff(mz,ms1_spec.mz) for mz in rt_mz[window_idxs[decoy_peaks_in_dia],1]])
-        elif dino_features is not None:
-            rel_error = ms1_error(np.array(filtered_dino.mz), mz_func(np.array(decoy_mz)[decoy_peaks_in_dia]), tol=ms1_tol)
-        else:
-            rel_error = np.zeros(len(decoy_peaks_in_dia))
-        rt_error = prec_rt-rt_mz[window_idxs[decoy_peaks_in_dia],0] #NB this is not a true reflection of rt
+#         hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]))
+#         longest_y_ions = [longest_y(library[i]["frags"],j) for i,j in zip(ref_pep_cand,lib_peaks_matched)]
+#         features = np.stack([num_lib_peaks_matched,
+#                               frac_lib_intensity,
+#                               frac_dia_intensity,
+#                               rel_error,
+#                               rt_error,
+#                               frac_int_matched,
+#                               frac_int_pred,
+#                               r2all,
+#                               r2_lib_spec,
+#                               r2_unique,
+#                               frac_unique_pred,
+#                               frac_dia_intensity_pred,
+#                               hyperscores,
+#                               b_counts,
+#                               y_counts,
+#                               longest_y_ions,
+#                               frac_int_matched_pred,
+#                               frac_int_matched_pred_sigcoeff,
+#                               large_coeff_cosine
+#                                 ],-1)
         
-        frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
-        predicted_spec = np.squeeze(sparse_lib_matrix*lib_coefficients)[:-1]
         
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+#         ####################################
+#         ####################################
+#         ### DECOY features 
+        
+#         frac_lib_intensity = [np.sum(i) for i in decoy_spec_values_split] # all ints sum to 1 so these give frac
+#         tic = np.sum(dia_spectrum[:,1])
+#         frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in decoy_spec_row_indices_split]
+#         # mz tol
+#         if ms1_spectra is not None:
+#             rel_error = np.array([closest_peak_diff(mz,ms1_spec.mz) for mz in rt_mz[window_idxs[decoy_peaks_in_dia],1]])
+#         elif dino_features is not None:
+#             rel_error = ms1_error(np.array(filtered_dino.mz), mz_func(np.array(decoy_mz)[decoy_peaks_in_dia]), tol=ms1_tol)
+#         else:
+#             rel_error = np.zeros(len(decoy_peaks_in_dia))
+#         rt_error = prec_rt-rt_mz[window_idxs[decoy_peaks_in_dia],0] #NB this is not a true reflection of rt
+        
+#         frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
+#         predicted_spec = np.squeeze(sparse_lib_matrix*lib_coefficients)[:-1]
+        
+#         with warnings.catch_warnings():
+#             warnings.simplefilter("ignore")
             
-            r2all = np_pearson_cor(dia_spec_int[:-1],predicted_spec).statistic
-            r2_lib_spec = [np_pearson_cor(i,dia_spectrum[j,1]).statistic for i,j in zip(decoy_spec_values_split,decoy_spec_row_indices_split)]
+#             r2all = np_pearson_cor(dia_spec_int[:-1],predicted_spec).statistic
+#             r2_lib_spec = [np_pearson_cor(i,dia_spectrum[j,1]).statistic for i,j in zip(decoy_spec_values_split,decoy_spec_row_indices_split)]
         
-        single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
-        peaks_not_shared = [np.array([[dia_spectrum[i,1],j] for i,j in zip(dia,lib) if i in single_matched_rows]) for dia,lib in zip(decoy_spec_row_indices_split,decoy_spec_values_split)]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r2_unique = [np_pearson_cor(*i.T).statistic if i.shape[0]>1 else 0 for i in peaks_not_shared ]
-        frac_unique_pred = [np.divide(*np.sum(i,axis=0)[::-1])*c if i.shape[0]>0 else 0 for i,c in zip(peaks_not_shared,lib_coefficients)] #frac of int matched by unique peaks pred by unique peaks
+#         single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
+#         peaks_not_shared = [np.array([[dia_spectrum[i,1],j] for i,j in zip(dia,lib) if i in single_matched_rows]) for dia,lib in zip(decoy_spec_row_indices_split,decoy_spec_values_split)]
+#         with warnings.catch_warnings():
+#             warnings.simplefilter("ignore")
+#             r2_unique = [np_pearson_cor(*i.T).statistic if i.shape[0]>1 else 0 for i in peaks_not_shared ]
+#         frac_unique_pred = [np.divide(*np.sum(i,axis=0)[::-1])*c if i.shape[0]>0 else 0 for i,c in zip(peaks_not_shared,lib_coefficients)] #frac of int matched by unique peaks pred by unique peaks
         
-        frac_dia_intensity_pred = [(i*c)/j for i,j,c in zip(frac_lib_intensity,frac_dia_intensity,lib_coefficients)]
+#         frac_dia_intensity_pred = [(i*c)/j for i,j,c in zip(frac_lib_intensity,frac_dia_intensity,lib_coefficients)]
         
-        #### stack spectrum features
-        r2all = np.ones_like(num_decoy_peaks_matched)*r2all
-        frac_int_matched = np.ones_like(num_decoy_peaks_matched)*frac_int_matched
-        frac_int_pred = (np.ones_like(num_decoy_peaks_matched)*np.sum(predicted_spec))/tic
-        frac_int_matched_pred = (np.ones_like(num_decoy_peaks_matched)*np.sum(predicted_spec))/np.sum(dia_spec_int)
-        large_coeff_indices = np.where(np.array(lib_coefficients)>1)[0] # identify large coeffs
-        large_coeff_matched_peaks = np.unique(np.concatenate(([(ref_spec_row_indices_split+decoy_spec_row_indices_split)[i] for i in large_coeff_indices]))) # select the peaks matched to these
-        large_coeff_int_pred = np.sum([np.sum((ref_spec_values_split+decoy_spec_values_split)[i])*list(lib_coefficients)[i] for i in large_coeff_indices]) # sum the intensity predicted
-        large_coeff_int_matched = np.sum(dia_spectrum[large_coeff_matched_peaks,1]) # sum the intensity matched
-        ## Note: some predictions over-shoot the matched peak so we overestimate this value
-        frac_int_matched_pred_sigcoeff = (np.ones_like(num_decoy_peaks_matched)*large_coeff_int_pred)/large_coeff_int_matched # create vals for all peaks
+#         #### stack spectrum features
+#         r2all = np.ones_like(num_decoy_peaks_matched)*r2all
+#         frac_int_matched = np.ones_like(num_decoy_peaks_matched)*frac_int_matched
+#         frac_int_pred = (np.ones_like(num_decoy_peaks_matched)*np.sum(predicted_spec))/tic
+#         frac_int_matched_pred = (np.ones_like(num_decoy_peaks_matched)*np.sum(predicted_spec))/np.sum(dia_spec_int)
+#         large_coeff_indices = np.where(np.array(lib_coefficients)>1)[0] # identify large coeffs
+#         large_coeff_matched_peaks = np.unique(np.concatenate(([(ref_spec_row_indices_split+decoy_spec_row_indices_split)[i] for i in large_coeff_indices]))) # select the peaks matched to these
+#         large_coeff_int_pred = np.sum([np.sum((ref_spec_values_split+decoy_spec_values_split)[i])*list(lib_coefficients)[i] for i in large_coeff_indices]) # sum the intensity predicted
+#         large_coeff_int_matched = np.sum(dia_spectrum[large_coeff_matched_peaks,1]) # sum the intensity matched
+#         ## Note: some predictions over-shoot the matched peak so we overestimate this value
+#         frac_int_matched_pred_sigcoeff = (np.ones_like(num_decoy_peaks_matched)*large_coeff_int_pred)/large_coeff_int_matched # create vals for all peaks
         
-        large_coeff_cosine = np.ones_like(num_decoy_peaks_matched)*subset_cosine
+#         large_coeff_cosine = np.ones_like(num_decoy_peaks_matched)*subset_cosine
                               
-        hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(i,j) for i,j in zip([converted_frags[k] for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]))
-        longest_y_ions = [longest_y(i,j) for i,j in zip([longest_y(converted_frags[k]) for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]
-        #print("TEST")
-        decoy_features = np.stack([num_decoy_peaks_matched,
-                              frac_lib_intensity,
-                              frac_dia_intensity,
-                              rel_error,
-                              rt_error,
-                              frac_int_matched,
-                              frac_int_pred,
-                              r2all,
-                              r2_lib_spec,
-                              r2_unique,
-                              frac_unique_pred,
-                              frac_dia_intensity_pred,
-                              hyperscores,
-                              b_counts,
-                              y_counts,
-                              longest_y_ions,
-                              frac_int_matched_pred,
-                              frac_int_matched_pred_sigcoeff,
-                              large_coeff_cosine
-                                ],-1)
+#         hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(i,j) for i,j in zip([converted_frags[k] for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]))
+#         longest_y_ions = [longest_y(i,j) for i,j in zip([longest_y(converted_frags[k]) for k in decoy_peaks_in_dia],decoy_lib_peaks_matched)]
+#         #print("TEST")
+#         decoy_features = np.stack([num_decoy_peaks_matched,
+#                               frac_lib_intensity,
+#                               frac_dia_intensity,
+#                               rel_error,
+#                               rt_error,
+#                               frac_int_matched,
+#                               frac_int_pred,
+#                               r2all,
+#                               r2_lib_spec,
+#                               r2_unique,
+#                               frac_unique_pred,
+#                               frac_dia_intensity_pred,
+#                               hyperscores,
+#                               b_counts,
+#                               y_counts,
+#                               longest_y_ions,
+#                               frac_int_matched_pred,
+#                               frac_int_matched_pred_sigcoeff,
+#                               large_coeff_cosine
+#                                 ],-1)
         
-        # all_features.append(features)
-        ####################################
-    #Select non-zero coeffs
-    # Note: many coeffs are non-zero but essentially zero!! Perhaps set less than 1e-7??
-    non_zero_coeffs = [c for c in lib_coefficients if c!=0]
-    non_zero_coeffs_idxs = [i for i,c in enumerate(lib_coefficients) if c!=0]
+#         # all_features.append(features)
+#         ####################################
+#     #Select non-zero coeffs
+#     # Note: many coeffs are non-zero but essentially zero!! Perhaps set less than 1e-7??
+#     non_zero_coeffs = [c for c in lib_coefficients if c!=0]
+#     non_zero_coeffs_idxs = [i for i,c in enumerate(lib_coefficients) if c!=0]
     
-    output = [[0,spec_idx,ms1_spec.scan_num,0,0,prec_mz,prec_rt,*np.zeros(len(names)-7)]]
+#     output = [[0,spec_idx,ms1_spec.scan_num,0,0,prec_mz,prec_rt,*np.zeros(len(names)-7)]]
     
-    if len(non_zero_coeffs)>0:
-        lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
-        decoy_spec_ids = [decoy_pep_cand[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[int(max(ref_sparse_col_indices))+1+i] != 0]
+#     if len(non_zero_coeffs)>0:
+#         lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
+#         decoy_spec_ids = [decoy_pep_cand[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[int(max(ref_sparse_col_indices))+1+i] != 0]
         
-        all_spec_ids = lib_spec_ids+decoy_spec_ids
-        output = [[non_zero_coeffs[i],
-                   spec_idx,
-                   all_spec_ids[i][0],
-                   all_spec_ids[i][1],
-                   prec_mz,
-                   prec_rt,
-                   *np.concatenate((features,decoy_features))[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
-        # output = [[non_zero_coeffs[i],spec_idx,lib_spec_ids[i][0],lib_spec_ids[i][1],prec_mz,prec_rt,*features[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
+#         all_spec_ids = lib_spec_ids+decoy_spec_ids
+#         output = [[non_zero_coeffs[i],
+#                    spec_idx,
+#                    all_spec_ids[i][0],
+#                    all_spec_ids[i][1],
+#                    prec_mz,
+#                    prec_rt,
+#                    *np.concatenate((features,decoy_features))[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
+#         # output = [[non_zero_coeffs[i],spec_idx,lib_spec_ids[i][0],lib_spec_ids[i][1],prec_mz,prec_rt,*features[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
     
-    return output
+#     return output
 
 
 def merge_spectrum_peaks(spec, mz_ppm):
@@ -1894,72 +1895,3 @@ def merge_spectrum_peaks(spec, mz_ppm):
     merged_intensities = merged_intensities[merged_intensities!=0]
     spec.mz = merged_coords
     spec.intens = merged_intensities
-
-class DummySpec:
-    def __init__(self, mz, intens):
-        self.mz=mz
-        self.intens=intens
-
-    def peak_list(self):
-        return(np.array([self.mz,self.intens]))
-    
-
-def test_merge_spectrum_peaks():
-    dia_spec = DummySpec(
-        mz=np.array([100.0, 100.01]), 
-        intens=np.array([10.0, 20.0])
-        )
-    mz_ppm = 1e-6
-    merge_spectrum_peaks(dia_spec, mz_ppm)
-    expected = np.array([
-        [100.0, 10.0],
-        [100.01, 20.0]
-        ])
-    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
-    assert np.all(output == expected), f"Expected {expected}, got {output}"
-
-    dia_spec = DummySpec(
-        mz=np.array([100.000, 100.0001]),
-        intens=np.array([10.0, 20.0])
-        )
-    mz_ppm = 1e-6
-    merge_spectrum_peaks(dia_spec, mz_ppm)
-    expected = np.array([
-        [100.0, 30.0]
-        ])
-    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
-    assert np.all(output == expected), f"Expected {expected}, got {output}"
-
-
-    dia_spec = DummySpec(
-        mz=np.array([100.000, 100.0001, 100.0002]),
-        intens=np.array([10.0, 20.0, 60.0])
-        )
-    mz_ppm = 1e-6
-    merge_spectrum_peaks(dia_spec, mz_ppm)
-    expected = np.array([[100.0, 30.0], [100.0001, 60.0]])
-    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
-    assert np.all(output == expected), f"Expected {expected}, got {output}"
-
-    dia_spec = DummySpec(
-        mz=np.array([]),
-        intens=np.array([])
-        )
-    mz_ppm = 1e-6
-    merge_spectrum_peaks(dia_spec, mz_ppm)
-    expected = np.array([]).reshape(0, 2)
-    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
-    assert np.all(output == expected), f"Expected {expected}, got {output}"
-
-    dia_spec = DummySpec(
-        mz=np.array([50.0, 60.0, 100.000, 100.0001, 200.0]),
-        intens=np.array([50, 60, 10.0, 20.0, 200])
-    )
-    mz_ppm = 1e-6
-    merge_spectrum_peaks(dia_spec, mz_ppm)
-    expected = np.array([[50.0, 50],[60.0, 60],[100.0, 30.0],[200.0, 200]])
-    output = np.array(dia_spec.peak_list(), dtype=np.float64).T
-    assert np.all(output == expected), f"Expected {expected}, got {output}"
-
-    print("Merge_Spectrum_Peaks Tests Passing")
-        

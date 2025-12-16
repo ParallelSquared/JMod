@@ -88,3 +88,4 @@ dependencies:
       - xgboost==1.7.3
       - ttkthemes==3.2.2
       - sv-ttk==2.6.1
+      - numba==0.61.2

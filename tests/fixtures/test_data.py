@@ -2,6 +2,7 @@
 Test data fixtures for JMod tests
 """
 import numpy as np
+import pandas as pd
 
 # Sample spectral library entry
 SAMPLE_LIBRARY_ENTRY = {

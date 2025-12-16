@@ -16,6 +16,7 @@ import src.config as config
 from src.spectral_fitting import fit_to_lib
 
 from scipy.interpolate import LSQUnivariateSpline as spline
+from scipy.stats import norm
 #from scipy.optimize import isotonic_regression
 from statistics import quantiles
 from src.utils.misc_functions import within_tol
@@ -100,134 +101,134 @@ def twostepfit(x,y,n_knots=2,z=None,k1=1):
     # plt.scatter(x,spl2(x),s=1)
     return spl2
 
-def threestepfit(x,y,n_knots=2,z=None,k1=1):
-    """
-    Get spline that maps x to y in 3 steps. Outliers are removed after each step
+# def threestepfit(x,y,n_knots=2,z=None,k1=1):
+#     """
+#     Get spline that maps x to y in 3 steps. Outliers are removed after each step
 
-    Parameters
-    ----------
-    x : array
-        Series of x values.
-    y : array
-        Series of x values.
-    n_knots : int, optional
-        How many knots in the spline. The default is 2.
-    z : array, optional
-        If present, attributes used to weight the spline fitting. The default is None.
-    k1 : int, optional
-        Degree of spline. The default is 1.
+#     Parameters
+#     ----------
+#     x : array
+#         Series of x values.
+#     y : array
+#         Series of x values.
+#     n_knots : int, optional
+#         How many knots in the spline. The default is 2.
+#     z : array, optional
+#         If present, attributes used to weight the spline fitting. The default is None.
+#     k1 : int, optional
+#         Degree of spline. The default is 1.
 
-    Returns
-    -------
-    spl2 : scipy.interpolate.UnivariateSpline
-        Spline mapping x to y.
+#     Returns
+#     -------
+#     spl2 : scipy.interpolate.UnivariateSpline
+#         Spline mapping x to y.
 
-    """
-    if z is None:
-        z= np.ones_like(x)
-    y_exists = np.isfinite(y)
-    x_exists = np.isfinite(x)*y_exists
-    x=np.array(x)[x_exists]
-    y=np.array(y)[x_exists]
-    z=np.array(z)[x_exists]
-    y_range = np.max(y)-np.min(y)
-    sorted_idxs = np.argsort(x)
-    sort_x = np.array(x)[sorted_idxs]
-    sort_y = np.array(y)[sorted_idxs]
-    sort_z = np.array(z)[sorted_idxs]
-    knots = quantiles(sort_x,n=n_knots)
-    spl = spline(sort_x,sort_y,knots,w=sort_z,k=1)
-    # poly = np.polyfit(sort_x, sort_y, w=sort_z, deg=5)
-    # sort_x+=np.arange(len(sort_x))*1e-7
-    # spl  = InterpolatedUnivariateSpline(sort_x,sort_y,w=np.log10(sort_z),k=5)
-    # plt.plot(sort_x,np.polyval(poly, sort_x))
-    # plt.scatter(x,y,s=1)
-    # plt.scatter(x,spl(x),s=1)
-    # find outliers and remove; points over 1/4 of the y range away from prediction
-    _bool = abs(spl(sort_x)-sort_y)<(y_range/4)
-    # knots = quantiles(sort_x,n=4)
-    spl2 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
-    # spl2 = UnivariateSpline(sort_x,sort_y)
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # plt.scatter(x,spl2(x),s=1)
+#     """
+#     if z is None:
+#         z= np.ones_like(x)
+#     y_exists = np.isfinite(y)
+#     x_exists = np.isfinite(x)*y_exists
+#     x=np.array(x)[x_exists]
+#     y=np.array(y)[x_exists]
+#     z=np.array(z)[x_exists]
+#     y_range = np.max(y)-np.min(y)
+#     sorted_idxs = np.argsort(x)
+#     sort_x = np.array(x)[sorted_idxs]
+#     sort_y = np.array(y)[sorted_idxs]
+#     sort_z = np.array(z)[sorted_idxs]
+#     knots = quantiles(sort_x,n=n_knots)
+#     spl = spline(sort_x,sort_y,knots,w=sort_z,k=1)
+#     # poly = np.polyfit(sort_x, sort_y, w=sort_z, deg=5)
+#     # sort_x+=np.arange(len(sort_x))*1e-7
+#     # spl  = InterpolatedUnivariateSpline(sort_x,sort_y,w=np.log10(sort_z),k=5)
+#     # plt.plot(sort_x,np.polyval(poly, sort_x))
+#     # plt.scatter(x,y,s=1)
+#     # plt.scatter(x,spl(x),s=1)
+#     # find outliers and remove; points over 1/4 of the y range away from prediction
+#     _bool = abs(spl(sort_x)-sort_y)<(y_range/4)
+#     # knots = quantiles(sort_x,n=4)
+#     spl2 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
+#     # spl2 = UnivariateSpline(sort_x,sort_y)
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # plt.scatter(x,spl2(x),s=1)
     
-    _bool = abs(spl2(sort_x)-sort_y)<(y_range/8)
+#     _bool = abs(spl2(sort_x)-sort_y)<(y_range/8)
     
-    # knots = quantiles(sort_x,n=n_knots)
-    spl3 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # plt.scatter(sort_x[_bool],spl3(sort_x[_bool]),s=1)
-    
-    return spl3
+#     # knots = quantiles(sort_x,n=n_knots)
+#     spl3 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # plt.scatter(sort_x[_bool],spl3(sort_x[_bool]),s=1)
+
+#     return spl3
 
 
 
-def initstepfit(x,y,n_knots=2,z=None,k1=1):
-    """
-    Get spline that maps x to y in 3 steps. Outliers are removed after each step.
-    SIinitial guess is a straight line from [min_x,min_] to [max_x,max_y]
-    
-    Parameters
-    ----------
-    x : array
-        Series of x values.
-    y : array
-        Series of x values.
-    n_knots : int, optional
-        How many knots in the spline. The default is 2.
-    z : array, optional
-        If present, attributes used to weight the spline fitting. The default is None.
-    k1 : int, optional
-        Degree of spline. The default is 1.
+# def initstepfit(x,y,n_knots=2,z=None,k1=1):
+#     """
+#     Get spline that maps x to y in 3 steps. Outliers are removed after each step.
+#     SIinitial guess is a straight line from [min_x,min_] to [max_x,max_y]
 
-    Returns
-    -------
-    spl2 : scipy.interpolate.UnivariateSpline
-        Spline mapping x to y.
+#     Parameters
+#     ----------
+#     x : array
+#         Series of x values.
+#     y : array
+#         Series of x values.
+#     n_knots : int, optional
+#         How many knots in the spline. The default is 2.
+#     z : array, optional
+#         If present, attributes used to weight the spline fitting. The default is None.
+#     k1 : int, optional
+#         Degree of spline. The default is 1.
 
-    """
-    ### like above but initial guess is just a straight line from [min_x,min_] to [max_x,max_y]
-    if z is None:
-        z= np.ones_like(x)
-    y_exists = np.isfinite(y)
-    x_exists = np.isfinite(x)*y_exists
-    x=np.array(x)[x_exists]
-    y=np.array(y)[x_exists]
-    z=np.array(z)[x_exists]
-    y_range = np.max(y)-np.min(y)
-    x_range = np.max(x)-np.min(x)
-    sorted_idxs = np.argsort(x)
-    sort_x = np.array(x)[sorted_idxs]
-    sort_y = np.array(y)[sorted_idxs]
-    sort_z = np.array(z)[sorted_idxs]
-    knots = quantiles(sort_x,n=n_knots)
-    # spl = spline(sort_x,sort_y,knots,w=sort_z,k=1)
-    # plt.scatter(x,y,s=1)
-    # plt.scatter(x,spl(x),s=1)
-    # plt.plot(x,((y_range/x_range)*x)+min(y)-((y_range/x_range)*min(x)))
-    _bool = np.abs((((y_range/x_range)*sort_x)+min(y)-((y_range/x_range)*min(x)))-sort_y)<(y_range/4)
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # find outliers and remove; points over 1/4 of the y range away from prediction
-    # _bool = np.abs(spl(sort_x)-sort_y)<(y_range/4)
-    # knots = quantiles(sort_x,n=4)
-    spl2 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
-    # spl2 = UnivariateSpline(sort_x,sort_y)
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # plt.scatter(x,spl2(x),s=1)
+#     Returns
+#     -------
+#     spl2 : scipy.interpolate.UnivariateSpline
+#         Spline mapping x to y.
+
+#     """
+#     ### like above but initial guess is just a straight line from [min_x,min_] to [max_x,max_y]
+#     if z is None:
+#         z= np.ones_like(x)
+#     y_exists = np.isfinite(y)
+#     x_exists = np.isfinite(x)*y_exists
+#     x=np.array(x)[x_exists]
+#     y=np.array(y)[x_exists]
+#     z=np.array(z)[x_exists]
+#     y_range = np.max(y)-np.min(y)
+#     x_range = np.max(x)-np.min(x)
+#     sorted_idxs = np.argsort(x)
+#     sort_x = np.array(x)[sorted_idxs]
+#     sort_y = np.array(y)[sorted_idxs]
+#     sort_z = np.array(z)[sorted_idxs]
+#     knots = quantiles(sort_x,n=n_knots)
+#     # spl = spline(sort_x,sort_y,knots,w=sort_z,k=1)
+#     # plt.scatter(x,y,s=1)
+#     # plt.scatter(x,spl(x),s=1)
+#     # plt.plot(x,((y_range/x_range)*x)+min(y)-((y_range/x_range)*min(x)))
+#     _bool = np.abs((((y_range/x_range)*sort_x)+min(y)-((y_range/x_range)*min(x)))-sort_y)<(y_range/4)
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # find outliers and remove; points over 1/4 of the y range away from prediction
+#     # _bool = np.abs(spl(sort_x)-sort_y)<(y_range/4)
+#     # knots = quantiles(sort_x,n=4)
+#     spl2 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
+#     # spl2 = UnivariateSpline(sort_x,sort_y)
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # plt.scatter(x,spl2(x),s=1)
+
+#     _bool = np.abs(spl2(sort_x)-sort_y)<(y_range/8)
     
-    _bool = np.abs(spl2(sort_x)-sort_y)<(y_range/8)
-    
-    # knots = quantiles(sort_x,n=n_knots)
-    spl3 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
-    # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
-    # plt.scatter(sort_x[_bool],spl3(sort_x[_bool]),s=1)
-    
-    return spl3
+#     # knots = quantiles(sort_x,n=n_knots)
+#     spl3 = spline(sort_x[_bool],sort_y[_bool],knots,w=sort_z[_bool])
+#     # plt.scatter(sort_x[_bool],sort_y[_bool],s=1)
+#     # plt.scatter(sort_x[_bool],spl3(sort_x[_bool]),s=1)
+
+#     return spl3
 
 
 
 def lowess_fit(x,y,frac=.2, it=3):
-    print(len(x))
+    
     """    
     Fit LOWESS regression line mapping x to y
     
@@ -262,377 +263,8 @@ def lowess_fit(x,y,frac=.2, it=3):
     return f
 
 
-def modal_lowess_fit(x, y, frac=0.2, grid_size=200):
-    """
-    Modal LOWESS-like smoother using local KDE to estimate mode(y | x).
-
-    Parameters
-    ----------
-    x : array-like
-    y : array-like
-    frac : float
-        Fraction of points to use in each local window (like LOWESS)
-    grid_size : int
-        Resolution of KDE evaluation for locating the mode.
-
-    Returns
-    -------
-    f : interp1d
-        Function mapping x -> modal-smoothed y.
-    """
-
-    from scipy.stats import gaussian_kde
-
-    x = np.asarray(x)
-    y = np.asarray(y)
-
-    # Sort for consistency
-    order = np.argsort(x)
-    x_sorted = x[order]
-    y_sorted = y[order]
-    n = len(x_sorted)
-
-    # Window size like LOWESS
-    window = int(np.ceil(frac * n))
-    if window < 5:
-        window = 5
-
-    modal_y = []
-
-    # For each x point, compute the local mode
-    for i in range(n):
-        # Determine window indices
-        start = max(0, i - window // 2)
-        end = min(n, i + window // 2)
-
-        x_win = x_sorted[start:end]
-        y_win = y_sorted[start:end]
-
-        # KDE on y-values only
-        kde = gaussian_kde(y_win)
-
-        # Make a grid for searching the mode
-        y_grid = np.linspace(np.min(y_win), np.max(y_win), grid_size)
-        density = kde(y_grid)
-
-        # Mode = y with highest density
-        y_mode = y_grid[np.argmax(density)]
-        modal_y.append(y_mode)
-
-    modal_y = np.asarray(modal_y)
-
-    # Build interpolation function
-    f = interp1d(
-        x_sorted,
-        modal_y,
-        bounds_error=False,
-        fill_value=(modal_y.min(), modal_y.max())
-    )
-
-    return f
-
-
-import numpy as np
-from scipy.stats import gaussian_kde
-from scipy.interpolate import interp1d
-from statsmodels.nonparametric.smoothers_lowess import lowess
-
-
-def automated_robust_modal_lowess(x, y,
-                                  local_frac=0.2,
-                                  grid_size=200,
-                                  post_smooth_frac=0.1):
-    """
-    Automated Modal LOWESS-like smoother with a post-processing step
-    to ensure smoothness and stability.
-
-    Parameters
-    ----------
-    x : array-like
-    y : array-like
-    local_frac : float
-        Fraction of points to use in each local window for mode estimation.
-        (Controls local density analysis).
-    kde_grid_size : int
-        Resolution of KDE evaluation for locating the mode.
-    post_smooth_frac : float
-        Fraction used for the final LOWESS smoothing step on the calculated modes.
-        (Controls final curve smoothness, typical value 0.1).
-
-    Returns
-    -------
-    f_interp : interp1d
-        Function mapping x -> modal-smoothed y.
-    """
-
-    x = np.asarray(x)
-    y = np.asarray(y)
-
-    # 1. Sort Data
-    order = np.argsort(x)
-    x_sorted = x[order]
-    y_sorted = y[order]
-    n = len(x_sorted)
-
-    # Calculate window size based on local_frac
-    window = int(np.ceil(local_frac * n))
-    if window < 5:
-        window = 5
-
-    modal_y = []
-
-    # 2. Local Mode Estimation
-    #    This step inherently resists outlier pull
-    for i in range(n):
-        # Determine window indices
-        start = max(0, i - window // 2)
-        end = min(n, i + window // 2)
-
-        y_win = y_sorted[start:end]
-
-        # KDE on y-values only (default bandwidth is automatically set)
-        kde = gaussian_kde(y_win)
-
-        # Make a grid for searching the mode
-        # Adding a small buffer for grid range improves stability near min/max
-        y_min, y_max = np.min(y_win), np.max(y_win)
-        y_range = y_max - y_min
-        y_grid = np.linspace(y_min - y_range * 0.05, y_max + y_range * 0.05, grid_size)
-
-        density = kde(y_grid)
-
-        # Mode = y with highest density
-        y_mode = y_grid[np.argmax(density)]
-        modal_y.append(y_mode)
-
-    modal_y = np.asarray(modal_y)
-
-    # 3. Post-Smoothing (Automated Noise Reduction)
-    #    Applying a non-robust LOWESS to the modes smooths the "gaps" (slopes)
-    #    between successive modal estimates.
-
-    # We use 'lowess' from statsmodels for the smoothing operation
-    # It returns a 2-column array (x, y_smoothed), so we take the 2nd column (index 1)
-    y_smoothed = lowess(
-        endog=modal_y,
-        exog=x_sorted,
-        frac=post_smooth_frac,  # Controls final smoothness
-        it=0,  # Turn off robustness (not needed on clean modal data)
-        delta=0.0  # Calculate at every point
-    )[:, 1]
-
-    # 4. Build Interpolation Function
-    f_interp = interp1d(
-        x_sorted,
-        y_smoothed,
-        bounds_error=False,
-        # Use the min/max of the smoothed values for boundary handling
-        fill_value=(y_smoothed.min(), y_smoothed.max())
-    )
-
-    return f_interp
-
-def fast_modal_lowess(x, y,
-                      local_frac=0.2,
-                      grid_size=100,
-                      anchors=200,
-                      post_smooth_frac=0.1):
-
-    x = np.asarray(x)
-    y = np.asarray(y)
-
-    # Sort
-    order = np.argsort(x)
-    x = x[order]
-    y = y[order]
-    n = len(x)
-
-    # window size
-    w = max(5, int(local_frac * n))
-
-    # choose anchor positions
-    anchor_idx = np.linspace(0, n - 1, anchors).astype(int)
-
-    modal_vals = np.zeros(len(anchor_idx))
-
-    # Silverman bandwidth (fixed)
-    bw = 1.06 * np.std(y) * n ** (-1 / 5)
-
-    from scipy.stats import norm
-
-    for k, i in enumerate(anchor_idx):
-
-        start = max(0, i - w // 2)
-        end = min(n, i + w // 2)
-        y_win = y[start:end]
-
-        y_min, y_max = y_win.min(), y_win.max()
-        y_range = y_max - y_min
-
-        # small grid
-        grid = np.linspace(y_min - 0.05 * y_range,
-                           y_max + 0.05 * y_range,
-                           grid_size)
-
-        # fast KDE
-        diff = (grid[None, :] - y_win[:, None]) / bw
-        density = norm.pdf(diff).sum(axis=0)
-
-        modal_vals[k] = grid[np.argmax(density)]
-
-    # interpolate modal values to full x-grid
-    modal_full = np.interp(x, x[anchor_idx], modal_vals)
-
-    # Post smooth
-    smooth = lowess(modal_full, x, frac=post_smooth_frac, it=3)[:, 1]
-
-    # Build interpolator
-    return interp1d(
-        x, smooth,
-        bounds_error=False,
-        fill_value=(smooth.min(), smooth.max())
-    )
-
-
-from sklearn.cluster import MeanShift
-
-def mean_shift_ridge_fit(x, y, bandwidth=None, quantile=0.2):
-    """
-    Extracts the dominant ridge in (x, y) using 2D mean-shift density ascent.
-
-    Returns an interp1d f(x) like lowess_fit.
-    """
-
-    # Combine into 2D points
-    pts = np.column_stack((x, y))
-
-    # Auto bandwidth if not given
-    if bandwidth is None:
-        from sklearn.neighbors import NearestNeighbors
-        nbrs = NearestNeighbors(n_neighbors=int(len(x) * quantile)).fit(pts)
-        dists, _ = nbrs.kneighbors(pts)
-        bandwidth = np.median(dists[:, -1])  # k-NN heuristic
-
-    # Run mean-shift clustering
-    ms = MeanShift(bandwidth=bandwidth, bin_seeding=True)
-    ms.fit(pts)
-    labels = ms.labels_
-
-    # Find the largest-density trajectory = largest cluster
-    largest_cluster = np.argmax(np.bincount(labels))
-    ridge_points = pts[labels == largest_cluster]
-
-    # Sort by x
-    ridge_points = ridge_points[np.argsort(ridge_points[:, 0])]
-
-    # Build interpolator
-    f = interp1d(
-        ridge_points[:, 0],
-        ridge_points[:, 1],
-        bounds_error=False,
-        fill_value=(ridge_points[:, 1].min(), ridge_points[:, 1].max())
-    )
-
-    return f
     
-from scipy.stats import norm
-def mean_shift_lowess(x, y,
-                      local_frac=0.2,
-                      anchors=300,
-                      bandwidth=None,
-                      max_iter=10,
-                      tol=1e-3,
-                      post_smooth_frac=0.1):
-    """
-    Fast 1D Mean-Shift LOWESS-like smoother.
-    Tracks the dominant ridge of the data (mode-following trend).
-
-    Parameters
-    ----------
-    x, y : array-like
-        Input data.
-    local_frac : float
-        Fraction of points used in each local window.
-    anchors : int
-        Number of mean-shift anchor evaluation points.
-    bandwidth : float or None
-        KDE bandwidth. If None, uses Silverman's rule.
-    max_iter : int
-        Max iterations for mean-shift.
-    tol : float
-        Convergence threshold.
-    post_smooth_frac : float
-        Final LOWESS smoothing fraction.
-
-    Returns
-    -------
-    f_interp : interp1d
-        Function mapping x → smoothed ridge curve.
-    """
-
-    x = np.asarray(x)
-    y = np.asarray(y)
-
-    # Sort by x
-    order = np.argsort(x)
-    x = x[order]
-    y = y[order]
-
-    n = len(x)
-    w = max(5, int(local_frac * n))
-
-    # Anchors: compute ridge only at these points → fast
-    anchor_idx = np.linspace(0, n - 1, anchors).astype(int)
-    anchor_x = x[anchor_idx]
-    result_y = np.zeros_like(anchor_x)
-
-    # Bandwidth: Silverman rule (global)
-    if bandwidth is None:
-        bw = 1.06 * np.std(y) * n ** (-1/5)
-        if bw <= 0:
-            bw = np.std(y[y > np.median(y)])  # fallback
-        bw = max(bw, 1e-6)
-    else:
-        bw = bandwidth
-
-    for k, idx in enumerate(anchor_idx):
-        # Local window around anchor
-        start = max(0, idx - w//2)
-        end = min(n, idx + w//2)
-        y_win = y[start:end]
-
-        # Initialize mean-shift position
-        y0 = np.median(y_win)
-
-        for _ in range(max_iter):
-            # Compute Gaussian weights
-            u = (y0 - y_win) / bw
-            wts = norm.pdf(u)
-
-            # Weighted mean update
-            y1 = np.sum(wts * y_win) / (np.sum(wts) + 1e-12)
-
-            # Check convergence
-            if abs(y1 - y0) < tol:
-                break
-
-            y0 = y1
-
-        result_y[k] = y0
-
-    # Interpolate anchor points back to full x-resolution
-    ridge = np.interp(x, anchor_x, result_y)
-
-    # Final smoothness pass (true LOWESS)
-    ridge_smooth = lowess(ridge, x, frac=post_smooth_frac, it=0)[:, 1]
-
-    return interp1d(
-        x, ridge_smooth,
-        bounds_error=False,
-        fill_value=(ridge_smooth.min(), ridge_smooth.max())
-    )
-
-
+    
 def closest_spec(dia_rt_mzwin, mz, rt):
     """
     Find which window is closest to the desired m/z and RT 
@@ -802,62 +434,65 @@ def fit_errors(errors,limit=10,percentile=.999):
 ##################################################################################################################################
 
 
-def fit_without_features(dia_spectra, librarySpectra):
+# def fit_without_features(dia_spectra, librarySpectra):
 
-    all_keys = list(librarySpectra)
-    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
+#     all_keys = list(librarySpectra)
+#     rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
     
-    # Adjust partitioning based on available data
-    totalIC = np.array([np.sum(i.intens) for i in dia_spectra.ms2scans])
-    total_scans = len(totalIC)
+#     # Adjust partitioning based on available data
+#     totalIC = np.array([np.sum(i.intens) for i in dia_spectra.ms2scans])
+#     total_scans = len(totalIC)
     
-    # Dynamically adjust number of partitions based on data size
-    num_partition = min(10, max(1, total_scans // 10))  # At least 1 partition, at most 10
+#     # Dynamically adjust number of partitions based on data size
+#     num_partition = min(10, max(1, total_scans // 10))  # At least 1 partition, at most 10
     
-    if num_partition > 0 and total_scans > 0:
-        # Calculate desired scans per partition
-        desired_per_partition = min(total_scans // num_partition, 
-                                   config.n_most_intense // num_partition)
+#     if num_partition > 0 and total_scans > 0:
+#         # Calculate desired scans per partition
+#         desired_per_partition = min(total_scans // num_partition,
+#                                    config.n_most_intense // num_partition)
         
-        split_size = max(1, int(np.ceil(total_scans/num_partition)))
-        split_tic = [totalIC[i*split_size:min(total_scans, (i+1)*split_size)] for i in range(num_partition)]
+#         split_size = max(1, int(np.ceil(total_scans/num_partition)))
+#         split_tic = [totalIC[i*split_size:min(total_scans, (i+1)*split_size)] for i in range(num_partition)]
         
-        # Only take as many as available in each partition
-        split_top_n = []
-        for idx, tics in enumerate(split_tic):
-            if len(tics) > 0:  # Only process non-empty partitions
-                # Take min of desired or available
-                n_to_take = min(len(tics), desired_per_partition)
-                if n_to_take > 0:
-                    split_top_n.append((np.argsort(-tics)+(idx*split_size))[:n_to_take])
+#         # Only take as many as available in each partition
+#         split_top_n = []
+#         for idx, tics in enumerate(split_tic):
+#             if len(tics) > 0:  # Only process non-empty partitions
+#                 # Take min of desired or available
+#                 n_to_take = min(len(tics), desired_per_partition)
+#                 if n_to_take > 0:
+#                     split_top_n.append((np.argsort(-tics)+(idx*split_size))[:n_to_take])
         
-        if split_top_n:  # If we have any results
-            top_n = np.concatenate(split_top_n)
-        else:
-            # Fallback if partitioning fails
-            top_n = np.random.choice(np.arange(total_scans), 
-                                    min(total_scans, config.n_most_intense), 
-                                    replace=False)
-    else:
-        # Fallback for very small datasets
-        top_n = np.random.choice(np.arange(total_scans), 
-                                min(total_scans, config.n_most_intense), 
-                                replace=False)
+#         if split_top_n:  # If we have any results
+#             top_n = np.concatenate(split_top_n)
+#         else:
+#             # Fallback if partitioning fails
+#             top_n = np.random.choice(np.arange(total_scans),
+#                                     min(total_scans, config.n_most_intense),
+#                                     replace=False)
+#     else:
+#         # Fallback for very small datasets
+#         top_n = np.random.choice(np.arange(total_scans),
+#                                 min(total_scans, config.n_most_intense),
+#                                 replace=False)
    
     
 
     
 
-    top_n_spectra = [dia_spectra.ms2scans[i] for i in top_n]
+#     top_n_spectra = [dia_spectra.ms2scans[i] for i in top_n]
 
 
 
+#     ### redefine "top_n_spectra" to evenly span Rt and m/z
+#     np.random.seed(0)
+#     #top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
     ### redefine "top_n_spectra" to evenly span Rt and m/z
     np.random.seed(0) #TODO check if global seed setting propogates to here by removing this line
     #top_n = np.random.choice(np.arange(len(ms2spectra)),config.n_most_intense,replace=False)
+
     
-    
-    fit_outputs=[]
+#     fit_outputs=[]
     
     frags = []
     for idx in tqdm.trange(len(top_n)):
@@ -876,7 +511,7 @@ def fit_without_features(dia_spectra, librarySpectra):
                                     )
             fit_outputs.append(fit_output)
     
-    return fit_outputs                                    
+#     return fit_outputs
 
 
 def fit_with_features(dia_spectra, librarySpectra, dino_features):
@@ -917,7 +552,13 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
     
     fit_outputs=[]
     frags = []
+    GUI_print_idxs = [int(((len(lf_spectra)-1)/10)*y) for y in range(1,11)]
     for idx in tqdm.trange(len(lf_spectra)):
+        if config.ran_from_GUI:
+            if idx in GUI_print_idxs:
+                frac_done = (GUI_print_idxs.index(idx)+1) * 10
+                logger.info(f"Initial Search - {frac_done}%")
+
         fit_output = fit_to_lib(dia_spectra.ms2scans[int(lf_spectra[idx])],
                                     library=librarySpectra,
                                     rt_mz=rt_mz,
@@ -926,12 +567,11 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
                                     rt_filter=False,
                                     ms1_mz=lf_mz[idx],
                                     ms1_spectra = dia_spectra.ms1scans,
-                                    frac_matched=.8,## NB: this may be selcting for smaller peptides
+                                    frac_matched=.8, ## NB: this may be selcting for smaller peptides
                                     rt_tol = config.rt_tol,
                                     ms1_tol = config.ms1_tol,
                                     mz_tol = config.mz_tol
                                     )
-        print(fit_output)
         fit_outputs.append(fit_output)
         
     top_n_spectra = [dia_spectra.ms2scans[i] for i in lf_spectra]
@@ -1049,139 +689,238 @@ def empirical_fit(output_df,results_folder=None):
         DESCRIPTION.
 
     """
-    
-    
-    
+
+    logger.info("")
     logger.info("Filtering IDs from initial search")
-    for feature_percentile in  range(20, 100, 5):
-    
-        ## empirically derived cutoffs
-        
-    
-        """                            
+
+    for feature_percentile in range(20, 80, 5):
+
         cor_filter = np.logical_and.reduce(
-                                            [output_df[feat]>np.percentile(output_df[feat],feature_percentile) for feat in ["hyperscore",
-                                                                                                      "frag_cosines_p",
-                                                                                                      "frag_cosines_p", #todo
-                                                                                                      "manhattan_distances",
-                                                                                                      ]]
-                                            +
-                                            [output_df[feat]<np.percentile(output_df[feat],100-feature_percentile) for feat in [
-                                                                                                              "scribe_scores",
-                                                                                                              "gof_stats",
-                                                                                                              "max_matched_residuals",
-                                                                                                           "med_frag_error"]]
-                                                                                                            )
-        """
-        poisson = output_df["poisson"].to_numpy()
-        hyperscore = output_df["hyperscore"].to_numpy()
-        spectral_angle = output_df["spectral_contrast_angle"].to_numpy()
-        scribe_score = output_df["scribe_score"].to_numpy()
-        thr_poisson = np.percentile(poisson[~np.isnan(poisson)], 100 - feature_percentile)
-        thr_hyperscore = np.percentile(hyperscore[~np.isnan(hyperscore)], feature_percentile)
-        thr_spectral_angle = np.percentile(spectral_angle[~np.isnan(spectral_angle)], feature_percentile)
-        thr_scribe_score = np.percentile(scribe_score[~np.isnan(scribe_score)], feature_percentile)
-        cor_filter = (poisson < thr_poisson) & (hyperscore > thr_hyperscore)
-        cor_filter = (poisson < thr_poisson)# & (hyperscore > thr_hyperscore)
-        #cor_filter = (hyperscore > thr_hyperscore)
-        #cor_filter = (spectral_angle > thr_spectral_angle) & (poisson < thr_poisson)
-        #cor_filter = (spectral_angle > thr_spectral_angle)
-        #cor_filter = (spectral_angle > thr_spectral_angle) & (hyperscore > thr_hyperscore)
-        #cor_filter = (scribe_score > thr_scribe_score)
+            [output_df[feat] > np.percentile(output_df[feat], feature_percentile)
+             for feat in [
+                 "hyperscore",
+                 "frag_cosines_p",
+                 "frag_cosines_p",
+                 "manhattan_distances",
+             ]]
+            +
+            [output_df[feat] < np.percentile(output_df[feat], 100 - feature_percentile)
+             for feat in [
+                 "scribe_scores",
+                 "gof_stats",
+                 "max_matched_residuals",
+                 "med_frag_error",
+             ]]
+        )
 
-        
-        
-        #f = automated_robust_modal_lowess(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.05, grid_size=200, post_smooth_frac=0.1)
-        f = fast_modal_lowess(output_df.lib_rt[cor_filter],output_df.rt[cor_filter],.05, grid_size=100, anchors=200, post_smooth_frac=0.1)
-        #f = mean_shift_lowess(output_df.lib_rt[cor_filter], output_df.rt[cor_filter], local_frac=0.05, max_iter=10, anchors=200,
-        #                      post_smooth_frac=0.1)
-        #f = lowess_fit(output_df.lib_rt[cor_filter], output_df.rt[cor_filter])
-
-        # 🔹 NEW: store aligned RT for this step for *all* rows
-        aligned_step = f(output_df["lib_rt"].to_numpy())
-        col_name = f"aligned_rt_p{feature_percentile}"
-        output_df[col_name] = aligned_step
+        f = lowess_fit(output_df.lib_rt[cor_filter],
+                       output_df.rt[cor_filter],
+                       .1)
 
         plt.subplots()
-        plt.scatter(output_df.lib_rt[cor_filter],output_df.rt[cor_filter], s=1)#, facecolors='none',)
-        plt.scatter(output_df.lib_rt[cor_filter],f(output_df.lib_rt[cor_filter]),s=1)#sadasd, facecolors='none',)
+        plt.scatter(output_df.lib_rt[cor_filter],
+                    output_df.rt[cor_filter], s=1)
+        plt.scatter(output_df.lib_rt[cor_filter],
+                    f(output_df.lib_rt[cor_filter]), s=1)
         plt.title(str(feature_percentile))
         if results_folder is not None:
-            plt.savefig(results_folder+f"/Percentile_{str(feature_percentile)}.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder + f"/Percentile_{feature_percentile}.png",
+                        dpi=600, bbox_inches="tight")
         plt.close()
-        
-        # plt.subplots()
-        # f = lowess_fit(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],.1)
-        # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],output_df.rt[cor_filter],s=1)
-        # plt.scatter(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter],
-        #             f(np.array([librarySpectra[i]["iRT"] for i in zip(output_df.seq,output_df.z)])[cor_filter]),s=1)
-        # plt.title(str(feature_percentile))
-        #plt.close()
-        
-        # r_filter =np.logical_and(output_df.last_aa=="R",cor_filter)
-        # fr = lowess_fit(output_rts[r_filter], output_df.rt[r_filter],.1)
-        # plt.subplots()
-        # plt.scatter(output_rts[r_filter],output_df.rt[r_filter],s=1)
-        # x = np.linspace(min(output_rts[r_filter]),max(output_rts[r_filter]),100)
-        # plt.scatter(x,fr(x),s=1)
-        # plt.title(str(feature_percentile))
-        #plt.close()
-        
-        
-        # k_filter =np.logical_and(output_df.last_aa=="K",cor_filter)
-        # fk = lowess_fit(output_rts[k_filter], output_df.rt[k_filter],.1)
-        # # plt.subplots()
-        # plt.scatter(output_rts[k_filter],output_df.rt[k_filter],s=1)
-        # x = np.linspace(min(output_rts[k_filter]),max(output_rts[k_filter]),100)
-        # plt.scatter(x,fk(x),s=1)
-        # plt.title(str(feature_percentile))
-        #plt.close()
-        
-     
-       
-        
-        first_rt_diffs = (f(output_df.lib_rt)-output_df.rt)
+
+        first_rt_diffs = f(output_df.lib_rt) - output_df.rt
+
         rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
-        first_rt_tolerance = 4*np.abs(rt_stddev)
-        # rt_mean, rt_stddev = stats.norm.fit(first_rt_diffs[cor_filter])
-        # vals,bins,_=plt.hist(first_rt_diffs[cor_filter],np.linspace(-10,10,100),density=True)
-        # plt.title(str(feature_percentile))
-        # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),gaussian(np.linspace(-first_rt_tolerance,first_rt_tolerance,100), rt_amplitude, rt_mean, rt_stddev))
-        # plt.plot(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),stats.norm.pdf(np.linspace(-first_rt_tolerance,first_rt_tolerance,100),loc= rt_mean, scale=rt_stddev))
-        
-        # plt.vlines([-first_rt_tolerance,first_rt_tolerance],[0]*2,[max(vals)]*2)
-        
-        bad_IDs  = (np.abs(first_rt_diffs)>np.min([first_rt_tolerance,np.ptp(output_df.rt)/5]))[cor_filter]
-        outside_ratio = sum(bad_IDs)/len(bad_IDs)
-        logger.info(f"Testing Percentile: {feature_percentile}, Ratio: {np.round(outside_ratio,4)}, #IDs: {sum(cor_filter)}")
-        if outside_ratio<.05 or (sum(cor_filter)-sum(bad_IDs)<800):
+        first_rt_tolerance = 4 * np.abs(rt_stddev)
+
+        bad_IDs = (
+                np.abs(first_rt_diffs) >
+                np.min([first_rt_tolerance, np.ptp(output_df.rt) / 5])
+        )[cor_filter]
+        outside_ratio = bad_IDs.sum() / len(bad_IDs)
+
+        # GMM on residuals from current filter
+        res = first_rt_diffs[cor_filter]
+        weights, sigmas = fit_zero_mean_gmm_1d(res, n_components=2)
+
+        order = np.argsort(sigmas)
+        sigmas = sigmas[order]
+        weights = weights[order]
+
+        num = weights * norm.pdf(0.0, loc=0.0, scale=sigmas)
+        pep0 = num[0] / num.sum()
+
+        # rt error + mixture plot, saved per percentile
+        if results_folder is not None:
+            plot_rt_residuals_mixture(
+                residuals=res,
+                feat=feature_percentile,
+                weights=weights,
+                sigmas=sigmas,
+                results_folder=results_folder
+            )
+
+        logger.info(
+            f"Testing Percentile: {feature_percentile}, "
+            f"Ratio: {outside_ratio:.4f}, #IDs: {cor_filter.sum()}, PEP(0): {pep0:.4f}"
+        )
+
+        # new + existing stopping criteria
+        if (pep0 >= 0.95 or
+                outside_ratio < 0.05 or
+                (cor_filter.sum() - bad_IDs.sum()) < 800):
             break
-    
-    logger.info(f"{feature_percentile} {np.round(outside_ratio,4)} {sum(cor_filter)}")
-            
-    
-    cor_filter = np.logical_and(cor_filter,np.abs(first_rt_diffs)<first_rt_tolerance)
-    # plt.scatter(output_rts[cor_filter],output_df.rt[cor_filter],s=1)
-    # plt.scatter(output_rts[cor_filter],f(output_rts[cor_filter]),s=1)
-    # plt.title(str(feature_percentile))
-    
-    # x = f(output_rts[cor_filter])-output_df.rt[cor_filter]
-    # x_d = np.linspace(-10,10,100)
-    # density = sum(stats.norm(xi).pdf(x_d) for xi in x)
-    # # plt.subplots()
-    # # plt.plot(x_d,density)
-    # # plt.title(str(feature_percentile))
-    # print(str(feature_percentile),min(density))
-    #plt.close()
 
+    logger.debug(f"{feature_percentile} {np.round(outside_ratio, 4)} {cor_filter.sum()}")
 
-    output_df.to_csv(results_folder + '/first_search_stepwise_rt.tsv', sep='\t', index=False)
-    
-    emp_rt_spl = lowess_fit(np.array(output_df.lib_rt)[cor_filter],np.array(output_df.rt)[cor_filter],.02)
-    #emp_rt_spl = automated_robust_modal_lowess(output_df.lib_rt[cor_filter], output_df.rt[cor_filter], .05, grid_size=200,
-    #                                  post_smooth_frac=0.1)
+    cor_filter = np.logical_and(
+        cor_filter,
+        np.abs(first_rt_diffs) < first_rt_tolerance
+    )
+
+    emp_rt_spl = lowess_fit(
+        np.array(output_df.lib_rt)[cor_filter],
+        np.array(output_df.rt)[cor_filter],
+        .02
+    )
 
     return cor_filter, emp_rt_spl
+
+
+def fit_zero_mean_gmm_1d(x, n_components=2, max_iter=200, tol=1e-6):
+    x = np.asarray(x, dtype=float)
+    x = x[~np.isnan(x)]
+    n = x.shape[0]
+
+    # init by splitting on |x| to define narrow and wide components
+    abs_x = np.abs(x)
+    split = np.median(abs_x)
+    resp = np.zeros((n, n_components))
+    resp[:, 0] = abs_x <= split
+    resp[:, 1] = abs_x > split
+    resp /= resp.sum(axis=1, keepdims=True)
+
+    weights = resp.mean(axis=0)
+    variances = np.array([
+        np.sum(resp[:, k] * x**2) / np.sum(resp[:, k])
+        for k in range(n_components)
+    ])
+    sigmas = np.sqrt(variances)
+
+    def log_likelihood():
+        pdfs = np.stack(
+            [weights[k] * norm.pdf(x, loc=0.0, scale=sigmas[k])
+             for k in range(n_components)],
+            axis=1,
+        )
+        return np.sum(np.log(pdfs.sum(axis=1) + 1e-300))
+
+    prev_ll = log_likelihood()
+
+    # iterate until convergence
+    for _ in range(max_iter):
+        pdfs = np.stack(
+            [weights[k] * norm.pdf(x, loc=0.0, scale=sigmas[k])
+             for k in range(n_components)],
+            axis=1,
+        )
+        denom = pdfs.sum(axis=1, keepdims=True) + 1e-300
+        resp = pdfs / denom
+
+        weights = resp.mean(axis=0)
+        variances = np.array([
+            np.sum(resp[:, k] * x**2) / np.sum(resp[:, k])
+            for k in range(n_components)
+        ])
+        sigmas = np.sqrt(variances)
+
+        ll = log_likelihood()
+        if abs(ll - prev_ll) < tol:
+            break
+        prev_ll = ll
+
+    return weights, sigmas
+
+
+def plot_rt_residuals_mixture(residuals,
+                              feat,
+                              weights=None,
+                              sigmas=None,
+                              results_folder=None):
+    """
+    Make the RT residual histogram + 2-comp zero-mean GMM overlay and PEP(0) text.
+    """
+    res = np.asarray(residuals, dtype=float)
+    res = res[~np.isnan(res)]
+
+    # sort so comp 0 is narrow
+    order = np.argsort(sigmas)
+    sigmas = sigmas[order]
+    weights = weights[order]
+
+    # posterior at x=0 for the narrow component
+    num = weights * norm.pdf(0.0, loc=0.0, scale=sigmas)
+    pep0 = num[0] / num.sum()
+
+    max_abs = np.percentile(np.abs(res), 99)
+    bins = np.linspace(-max_abs, max_abs, 80)
+
+    plt.figure(figsize=(6, 4))
+
+    counts, edges, _ = plt.hist(
+        res,
+        bins=bins,
+        density=True,
+        alpha=0.5,
+        edgecolor="black",
+        linewidth=0.5,
+    )
+
+    x = np.linspace(edges[0], edges[-1], 500)
+
+    comp_pdfs = [
+        weights[k] * norm.pdf(x, loc=0.0, scale=sigmas[k])
+        for k in range(2)
+    ]
+    mixture_pdf = comp_pdfs[0] + comp_pdfs[1]
+
+    plt.plot(x, mixture_pdf, label="mixture", linewidth=2)
+    plt.plot(x, comp_pdfs[0], linestyle="--",
+             label=f"comp 1 (σ={sigmas[0]:.3f})")
+    plt.plot(x, comp_pdfs[1], linestyle="--",
+             label=f"comp 2 (σ={sigmas[1]:.3f})")
+
+    ax = plt.gca()
+    ax.axvline(0, color="black", linewidth=1)
+
+    ax.text(
+        0.98, 0.95,
+        f"PEP(0) = {pep0:.3f}",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=12,
+        bbox=dict(facecolor="white", alpha=0.6, edgecolor="none"),
+    )
+
+    plt.legend()
+    plt.xlabel("fit_rt - rt")
+    plt.ylabel("density")
+    plt.title(f"RT Residuals After Empirical Alignment {feat}")
+    plt.tight_layout()
+
+    if results_folder is not None:
+        plt.savefig(
+            results_folder + f"/rt_residuals_p{feat}.png",
+            dpi=600,
+            bbox_inches="tight",
+        )
+
+    else:
+        plt.close()
+
+    return pep0
+
 
 def cdf_data(rt_diffs,limit=3):
     """
@@ -1277,8 +1016,6 @@ def alignment_plots(filtered_output,
         if results_folder is not None:
             plt.savefig(results_folder+"/RTdiff.png",dpi=600,bbox_inches="tight")
         
-        
-        
 
         ##plot mz rt alignment
         plt.subplots()
@@ -1290,7 +1027,6 @@ def alignment_plots(filtered_output,
         # plt.show()
         if results_folder is not None:
             plt.savefig(results_folder+"/MZrtfit.png",dpi=600,bbox_inches="tight")
-        
         
 
         ##plot mz alignment
@@ -1415,7 +1151,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     else:
         scans_per_cycle = 1
 
-    logger.info("Initial search")
+    logger.info("")
+    logger.info("Starting Initial Search")
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
     ms1spectra = dia_spectra.ms1scans
@@ -1478,6 +1215,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     if not config.args.use_emp_rt:
         ## filter for only a single channel for each
+        logger.info("")
         logger.info("Trying RT Prediction")
         seq_rt = {}
         for s,rt in zip(np.array(id_keys)[cor_filter],np.array(output_df.rt)[cor_filter]):
@@ -1578,7 +1316,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         diffs = np.array([(i-mz)/mz for i,mz in zip(feature_mzs,output_df.mz)])
     """
     diffs = output_df["relative_error_ms1"].to_numpy()
-    
+
 
     
     f_rt_mz = lowess_fit(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],.02)
@@ -1630,7 +1368,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     new_ms1_tol = np.abs(4*mz_stddev)
     logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
-    
+    logger.info("")
+
     
     if config.args.ms1_ppm!=0:
         logger.info(f"Using MS1 Tolerance provided: {config.args.ms1_ppm}ppm")
@@ -2170,7 +1909,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     
     #################################################################################
-
+    
     fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
     
     output_df, all_output_df, id_keys, feature_mzs =  process_prelim_search(fit_outputs,
@@ -2559,7 +2298,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
 
 
     new_ms1_tol = np.abs(4*mz_stddev)
-    logger.info(f"Optimized ms1 tolerance: {new_ms1_tol}")
+    logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
+    logger.info("")
     
     config.opt_ms1_tol  = new_ms1_tol
     

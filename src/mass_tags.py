@@ -15,11 +15,13 @@ import copy
 import json
 from pathlib import Path
 
-from src.iso_functions import split_frag_name, fragment_seq
+from src.iso_functions import fragment_seq
+from src.utils.parse_peptides import split_frag_name
 
 from src.utils.misc_functions import frag_to_peak, specific_frags
-from src.utils.parse_peptides import parse_peptide
+from src.utils.parse_peptides import parse_peptide, split_frag_name
 
+import logging
 from src.logger import logger
 """
 ## Load in the library
@@ -108,19 +110,19 @@ def read_json_to_massTag(mass_tags_dir,filename):
             masses = [mass.calculate_mass(compositions[channel_name]) for channel_name in compositions]
             delta_calcs = [current_mass - masses[0] for current_mass in masses]
             if round(masses[0], 3) != round(mass_tag_data['base_mass'], 3):
-                logger.warning(f"Calculated Base Mass: {round(masses[0], 3)}")
-                logger.warning(f"JSON Base Mass: {round(mass_tag_data['base_mass'], 3)}")
-                logger.warning("First mass composition mass does not match base mass in tag JSON")
+                logging.getLogger("GUI").warning(f"Calculated Base Mass: {round(masses[0], 3)}")
+                logging.getLogger("GUI").warning(f"JSON Base Mass: {round(mass_tag_data['base_mass'], 3)}")
+                logging.getLogger("GUI").warning("First mass composition mass does not match base mass in tag JSON")
                 return mass_tag_data['name']
             if [round(x, 3) for x in mass_tag_data['delta']] != [round(x, 3) for x in delta_calcs]:
-                logger.warning([round(x, 3) for x in mass_tag_data['delta']])
-                logger.warning([round(x, 3) for x in delta_calcs])
-                logger.warning("Deltas do not match mass compositions in tag JSON")
+                logging.getLogger("GUI").warning([round(x, 3) for x in mass_tag_data['delta']])
+                logging.getLogger("GUI").warning([round(x, 3) for x in delta_calcs])
+                logging.getLogger("GUI").warning("Deltas do not match mass compositions in tag JSON")
                 return mass_tag_data['name']
             if mass_tag_data['name'] != os.path.splitext(filename)[0]:
-                logger.warning(f"Tag name:  {mass_tag_data['name']}")
-                logger.warning(f"File name: {os.path.splitext(filename)[0]}")
-                logger.warning("Tag name does not match filename")
+                logging.getLogger("GUI").warning(f"Tag name:  {mass_tag_data['name']}")
+                logging.getLogger("GUI").warning(f"File name: {os.path.splitext(filename)[0]}")
+                logging.getLogger("GUI").warning("Tag name does not match filename")
                 return(mass_tag_data['name'])
             mass_tag = massTag(rules=mass_tag_data['rules'],
                         base_mass=mass_tag_data['base_mass'],
@@ -130,27 +132,14 @@ def read_json_to_massTag(mass_tags_dir,filename):
                         compositions=compositions)
             return mass_tag
         except AttributeError:
-            logger.warning("Compositions are not defined for tag")
+            logging.getLogger("GUI").warning("Compositions are not defined for tag")
             return mass_tag_data['name']
         except Exception as e:
-            logger.warning({e}) 
+            logging.getLogger("GUI").warning({e}) 
             return mass_tag_data['name']
     else:
         return None
                     
-
-## split up the fragment name (b/y)(-loss)(frag index)_charge
-def split_frag_name(ion_type):
-    frag_name,frag_z = ion_type.split("_")
-    loss_check = frag_name.split("-")
-    loss = ""
-    if len(loss_check)>1:
-        frag_name,loss = loss_check
-    frag_type = frag_name[0]
-    frag_idx = int(frag_name[1:])
-    
-    return frag_type,frag_idx,loss,frag_z 
-
 
 
 
@@ -302,35 +291,34 @@ def tag_library(library,tag=mTRAQ):
 
 # mTRAQ_lib = tag_library(library, tag=mTRAQ)
 
-available_tags = {}
-def refresh_tags():
-    available_tags.clear()
-    mass_tags_dir = Path(__file__).parent / "MassTags"
+def refresh_tags(mass_tags_dir=None): #set mass tags dir to none for testing purposes
+    available_tags = {}
+    if mass_tags_dir is None:
+        mass_tags_dir = Path(__file__).parent / "MassTags"
     subset_dir = mass_tags_dir / "Subsets"
     for directory in (mass_tags_dir, subset_dir):
         for filename in os.listdir(directory):
             if os.path.splitext(filename)[1].lower() == ".json":
                 mass_tag = read_json_to_massTag(directory, filename)
                 if type(mass_tag) == str:
-                    logger.warning(f"Unable to load mass tag from {filename}\n")  
+                    logging.getLogger("GUI").warning(f"Unable to load mass tag from {filename}\n")  
                 elif mass_tag:
                     available_tags[mass_tag.name] = mass_tag
+    return available_tags
 
-refresh_tags()
+available_tags = refresh_tags()
 
 
 
-# if config.args.mTRAQ:
-#     config.tag = mTRAQ
+def set_config_tag(available_tags, config_args_tag):
+    if config_args_tag in available_tags:
+        return available_tags[config_args_tag]
+    elif config_args_tag == "None":
+        return None
+    else:
+        from src.utils.gui_utils import send_raise_to_TK
+        send_raise_to_TK(f"Exception - Tag {config_args_tag} not in available tags")
+        raise Exception(f"Exception - Tag '{config_args_tag}' not in available tags:\n{list(available_tags.keys())}")
 
-# else: 
-#     config.tag = None
 
-if config.args.tag in available_tags:
-    config.tag = available_tags[config.args.tag]
-elif config.args.tag == "None":
-    config.tag = None
-else:
-    from src.utils.gui_utils import send_raise_to_TK
-    send_raise_to_TK("Exception - Incompatible Tag")
-    raise Exception("Incompatible Tag")
+config.tag = set_config_tag(available_tags, config.args.tag)

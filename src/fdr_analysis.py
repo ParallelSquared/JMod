@@ -26,8 +26,8 @@ import re
 import os
 import pandas as pd
 
-from src.trace_fns import ms1_cor#, ms1_cor_channels
-from src.ms1_cor_channels import ms1_cor_channels
+# from src.ms1_cor_channels import ms1_cor_channels
+import src.ms1_cor_channels as ms1_mod
 from src.utils.io.load_files import loadSpectra
 from src.models.spec_lib.spec_lib import loadSpecLib
 
@@ -37,6 +37,8 @@ from src.utils.misc_functions import unstring_floats
 from src import config
 from src.logger import logger
 from src.utils.misc_functions import p_result
+from src.mass_tags import massTag
+from pyteomics import mass
 
 
 
@@ -78,7 +80,9 @@ def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];
 
 def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     # X = fdc.iloc[:,6:-5]
+    fit_whole_MS1 = False
    
+    logger.info("")
     logger.info("Performing MS1 Quantitation") 
     
     fdc = dat[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
@@ -93,83 +97,108 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
         all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
 
     if mass_tag:
+        tag_to_use = mass_tag
+    else:
+        tag_to_use = massTag(rules="nK",
+                            base_mass=0.00,
+                            delta=[0],
+                            channel_names=["0"],
+                            name="no_tag",
+                            compositions=mass.Composition())
 
-        #fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
-        group_p_corrs,group_ms1_traces,group_ms2_traces,group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict = ms1_cor_channels(DIAspectra, 
-                                                                                                                                        fdc, 
-                                                                                                                                        dc, 
-                                                                                                                                        mz_ppm=mz_ppm, 
-                                                                                                                                        rt_tol = rt_tol,
-                                                                                                                                        tag=mass_tag,
-                                                                                                                                        timeplex=timeplex
-                                                                                                                                        )
-        
-        ## create dictionary  that links keys to data so we can match the order of "fdc"
-        
-        linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}
-        
-        p_corrs = [group_p_corrs[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-        ms1_traces = [group_ms1_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-        ms2_traces = [group_ms2_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-        iso_ratios = [group_iso_ratios[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-        extracted_keys = [group_keys[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+    (
+    group_p_corrs,
+    group_ms1_traces,
+    group_ms2_traces,
+    group_iso_ratios,
+    group_keys,
+    group_fitted,
+    new_output_dict,
+    fake_fdc_dict
+    ) = ms1_mod.ms1_cor_channels(DIAspectra, 
+                                fdc, 
+                                dc, 
+                                mz_ppm=mz_ppm, 
+                                rt_tol = rt_tol,
+                                tag=tag_to_use,
+                                timeplex=timeplex,
+                                num_iso = config.num_iso_ms1,
+                                num_iso_r = config.num_iso_r,
+                                additional_scans = config.additional_scans,
+                                fit_whole_MS1=fit_whole_MS1                                           
+                                )
+    
+    dat = process_ms1_quant(dat,
+                            fdc,
+                            all_keys,
+                            group_p_corrs,
+                            group_ms1_traces,
+                            group_ms2_traces,
+                            group_iso_ratios,
+                            group_keys,
+                            group_fitted,
+                            new_output_dict,
+                            fake_fdc_dict,
+                            fit_whole_MS1=fit_whole_MS1
+                            )
 
-        ## Fit mTRAQ
-        
+    return dat
+
+
+
+def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group_ms2_traces, group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict, fit_whole_MS1=False):
+    
+    ## create dictionary  that links keys to data so we can match the order of "fdc"
+    linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}
+    
+    p_corrs = [group_p_corrs[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+    ms1_traces = [group_ms1_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+    ms2_traces = [group_ms2_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+    iso_ratios = [group_iso_ratios[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+    extracted_keys = [group_keys[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
+
+    if fit_whole_MS1 is False:
         extracted_fitted = [group_fitted[linker_dict[key][0]][0][:,linker_dict[key][1]] for key in all_keys]
         extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in all_keys]
         extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in all_keys]
 
-
-
-
-        # # Fit Whole MS1
-
-        # ##TODO deal with fake_fdc_dict values make sure they get properly assigned
-
-        # all_fdc_idxs = list(set(key for ms1_spec_idx in new_output_dict.keys() for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys()))
-        # extracted_fitted_specs = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
-        # extracted_fitted_p = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
-        # for ms1_spec_idx in new_output_dict.keys():
-        #     for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys():
-        #         if key not in fake_fdc_dict.keys():
-        #             extracted_fitted_specs[key].append(ms1_spec_idx)
-        #             extracted_fitted_p[key].append(p_result(r_sq=np.nan, p=np.nan))
-
-        # extracted_fitted = []
-        # for fdc_idx in all_fdc_idxs:
-        #     if fdc_idx not in fake_fdc_dict.keys():
-        #         fdc_coeffs = []
-        #         for scan in extracted_fitted_specs[fdc_idx]:
-        #             fdc_coeffs.append(new_output_dict[scan]["mapped_pred_coeffs"][fdc_idx])
-                
-        #         extracted_fitted.append(np.array(fdc_coeffs))
-        
-        
-        fdc["plexfitMS1"] = [np.max(i) for i in extracted_fitted]
-        fdc["plexfitMS1_p"] = [j[np.argmax(i)].statistic  if type(j[np.argmax(i)])!=float else 0 for i,j in zip(extracted_fitted,extracted_fitted_p)]
-    
-        plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
-        plexfit_ps = [[i[k].statistic if type(i[k])!=float else 0 for k in j] for i,j in zip(extracted_fitted_p,plexfittrace_idxs)]
-        # fdc["plexfitMS1_new"] = [np.max(i) for i in plexfittrace]
-        fdc["plexfittrace"] = [";".join(map(str,i)) for i in plexfittrace] ###spec ids come from ms2_traces
-        fdc["plexfit_ps"] = [";".join(map(str,i)) for i in plexfit_ps]
-        
-        fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-        #fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
-        fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) if fdc.plexfittrace.iloc[idx] != '' else np.nan for idx in range(len(fdc))]
-
     else:
-        #fdc["untag_seq"] = fdc["seq"]
-        p_corrs, ms1_traces, ms2_traces, iso_ratios = ms1_cor(DIAspectra, 
-                                                                fdc, 
-                                                                dc, 
-                                                                mz_ppm=mz_ppm, 
-                                                                rt_tol = rt_tol,
-                                                                timeplex=timeplex)
+        ##TODO deal with fake_fdc_dict values make sure they get properly assigned
+        all_fdc_idxs = list(set(key for ms1_spec_idx in new_output_dict.keys() for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys()))
+        extracted_fitted_specs = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
+        extracted_fitted_p = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
+        for ms1_spec_idx in new_output_dict.keys():
+            for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys():
+                if key not in fake_fdc_dict.keys():
+                    extracted_fitted_specs[key].append(ms1_spec_idx)
+                    extracted_fitted_p[key].append(p_result(r_sq=np.nan, p=np.nan))
+
+        extracted_fitted = []
+        for fdc_idx in all_fdc_idxs:
+            if fdc_idx not in fake_fdc_dict.keys():
+                fdc_coeffs = []
+                for scan in extracted_fitted_specs[fdc_idx]:
+                    fdc_coeffs.append(new_output_dict[scan]["mapped_pred_coeffs"][fdc_idx])
+                
+                extracted_fitted.append(np.array(fdc_coeffs))
+    
+    
+    fdc["plexfitMS1"] = [np.max(i) for i in extracted_fitted]
+    fdc["plexfitMS1_p"] = [j[np.argmax(i)].statistic  if type(j[np.argmax(i)])!=float else 0 for i,j in zip(extracted_fitted,extracted_fitted_p)]
+
+    plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+    plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
+    plexfit_ps = [[i[k].statistic if type(i[k])!=float else 0 for k in j] for i,j in zip(extracted_fitted_p,plexfittrace_idxs)]
+    # fdc["plexfitMS1_new"] = [np.max(i) for i in plexfittrace]
+    fdc["plexfittrace"] = [";".join(map(str,i)) for i in plexfittrace] ###spec ids come from ms2_traces
+    fdc["plexfit_ps"] = [";".join(map(str,i)) for i in plexfit_ps]
+    
+    fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+    fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+    fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+    #fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
+    fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) if fdc.plexfittrace.iloc[idx] != '' else np.nan for idx in range(len(fdc))]
+       
 
 
     
@@ -356,7 +385,7 @@ class score_model():
             send_raise_to_TK("ValueError - Unsupported Model Type")
             raise ValueError("Unsupported model type")
         
-        logger.info(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
+        logger.debug(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
         
         kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = config.RANDOM_SEED)
         k_orders = [i for i in kf.split(X,y)]
@@ -553,7 +582,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     score_order = np.argsort(-output, kind='stable')
     orig_order = np.argsort(score_order, kind='stable')
     decoy_order = fdc["decoy"][score_order]
-    frac_decoy = np.cumsum(decoy_order)/np.arange(1,len(decoy_order)+1)
+    frac_decoy = np.cumsum(decoy_order)/np.cumsum(~decoy_order)
     # plt.plot(frac_decoy)
     T = output[score_order[np.searchsorted(frac_decoy,0.01)]]
     above_t = output>T
@@ -620,7 +649,8 @@ def log_df(df):
         logger.info(line)
 
 def compute_protein_FDR(df,results_folder=None):
-    logger.info("Computing Protein FDR\n")
+    logger.info("")
+    logger.info("Computing Protein FDR")
 
   
     df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)
@@ -632,7 +662,7 @@ def compute_protein_FDR(df,results_folder=None):
     df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False).reset_index(drop=True)
     df_seqchargeqvals["prot_rank"] = df_seqchargeqvals.index + 1  # Equivalent to row_number()
     df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["decoy"].cumsum()
-    df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["accum_decoys"] / df_seqchargeqvals["prot_rank"]
+    df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["accum_decoys"] / (~df_seqchargeqvals["decoy"]).cumsum()
     
     # Filter for non-decoy proteins and select distinct protein values
     df_seqchargeqvals_distinct = (
@@ -652,6 +682,7 @@ def compute_protein_FDR(df,results_folder=None):
         .reset_index(name="Precursor_IDs")
         .sort_values("channel")
     )    
+    logger.info("")
     logger.info("Number of precursors at 1% FDR:")
     logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
     log_df(df_counts_prec)
@@ -665,6 +696,7 @@ def compute_protein_FDR(df,results_folder=None):
         .reset_index(name="Protein_IDs")
         .sort_values("channel")
         )
+    logger.info("")
     logger.info("Number of proteins at 1% FDR:")
     logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
     log_df(df_counts_prots)
@@ -686,7 +718,8 @@ def compute_protein_FDR(df,results_folder=None):
     #         df["BestChannel_Protein_Qvalue"] = df.groupby(["file_name", "protein", "decoy"])["Protein_Qvalue"].transform("min")
 
     if config.args.plexDIA:
-        logger.info("\nAfter plexDIA identification propagation based on best channel Q-value:")
+        logger.info("")
+        logger.info("After plexDIA identification propagation based on best channel Q-value:")
         
         # Compute number of precursor IDs at 1% FDR
         df_counts_prec = (
@@ -699,6 +732,7 @@ def compute_protein_FDR(df,results_folder=None):
         )
         
         # Print precursor ID counts
+        logger.info("")
         logger.info("Number of precursors at 1% FDR (best channel):")
         logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
         log_df(df_counts_prec)
@@ -714,6 +748,7 @@ def compute_protein_FDR(df,results_folder=None):
         )
         
         # Print protein ID counts
+        logger.info("")
         logger.info("Number of proteins at 1% FDR (best channel):")
         logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
         log_df(df_counts_prots)
@@ -757,7 +792,7 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     result_df = df.copy()
     
     if verbose:
-        logger.info(f"Adding median-based features for {len(metric_columns)} metrics...")
+        logger.debug(f"Adding median-based features for {len(metric_columns)} metrics...")
     
     for metric_col in metric_columns:
         # Calculate median for each group
@@ -776,8 +811,8 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
         result_df[diff_col] = result_df[diff_col].fillna(mean_val)
         
         if verbose:
-            logger.info(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
-            logger.info(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
+            logger.debug(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
+            logger.debug(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
     
     return result_df
 
@@ -878,7 +913,8 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
     fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder)
 
-    logger.info("Saving Results to Folder")
+    logger.info("")
+    logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
     fdx_quant.to_csv(results_folder+"/all_IDs.csv",index=False)
     fdx_quant[np.logical_and(~fdx_quant["decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)

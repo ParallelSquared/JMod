@@ -12,13 +12,22 @@ This allows you to keep the main script in src/ while still running from root.
 
 import sys
 import os
+import multiprocessing
+import tqdm
+
+#Give tqdm somewhere to write to if running without a console (Pyinstaller Compiled)
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w')
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w')
 
 # Add src directory to Python path
 src_path = os.path.join(os.path.dirname(__file__), 'src')
 sys.path.insert(0, src_path)
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()  ###This must be the first line under if __name__ == "__main__" to not crash pyinstaller compiled JMod 
     from src import logger
-    # Import and run the main module
+    # Import and run the main modul
     from src.run_jmod_from_GUI import make_GUI
     make_GUI()

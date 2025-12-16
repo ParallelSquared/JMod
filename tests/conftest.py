@@ -8,9 +8,13 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 Alternative conftest.py that avoids the config import issue
 This approach modifies sys.argv before any imports
 """
+import os
+# Disable numba JIT compilation before any imports that might use numba
+# This must be set before importing any modules that use numba (e.g., ms1_cor_channels)
+os.environ['NUMBA_DISABLE_JIT'] = '1'
+
 import pytest
 import sys
-import os
 from unittest.mock import Mock, patch
 from src.logger import logger
 

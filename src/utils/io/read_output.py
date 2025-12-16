@@ -48,12 +48,12 @@ names = ["coeff", "spec_id", "Ms1_spec_id",
          "unique_obs_int",
          "file_name",
          "protein",
-         "manhattan_distances_nearby_max",
-         "max_matched_residuals_nearby_min",
-         "gof_stats_nearby_min",
-         "scribe_scores_nearby_min",
-         "n_scans",
-         "smoothness"
+         # "manhattan_distances_nearby_max",
+         # "max_matched_residuals_nearby_min",
+         # "gof_stats_nearby_min",
+         # "scribe_scores_nearby_min",
+         # "n_scans",
+         # "smoothness"
          ]
 
 dtypes  = {"coeff":np.float32,
@@ -96,12 +96,12 @@ dtypes  = {"coeff":np.float32,
             "obs_int":str,
             "file_name":str,
             "protein":str,
-            "manhattan_distances_nearby_max":np.float32,
-            "max_matched_residuals_nearby_min":np.float32,
-            "gof_stats_nearby_min":np.float32,
-            "scribe_scores_nearby_min":np.float32,
-            "n_scans":np.float32,
-            "smoothness":np.float32
+            # "manhattan_distances_nearby_max":np.float32,
+            # "max_matched_residuals_nearby_min":np.float32,
+            # "gof_stats_nearby_min":np.float32,
+            # "scribe_scores_nearby_min":np.float32,
+            # "n_scans":np.float32,
+            # "smoothness":np.float32
             }
 
 def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):

@@ -6,15 +6,15 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
 # Update imports to relative imports
-from src import config
+import src.config as config
 import numpy as np
 import os
 import time 
+import datetime
 import tqdm
 import pandas as pd
 import sys 
 import json
-import biosaur2
 
 from src.utils.io import load_files
 from src.utils.set_seeds import set_seeds
@@ -93,30 +93,39 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         use_feat = "Dino"
         dino_features = pd.read_csv(feature_path,delimiter="\t")
 
-    
-    ms2_align = "MS2align" if config.args.ms2_align else ""
-    results_folder_name = "_".join([spec_file_name,
-                                    lib_file_name+"Update130525",
-                                    f"{config.mz_ppm}ppm",
-                                    f"{config.atleast_m}m",
-                                    f"unmatch{config.unmatched_fit_type}",
-                                    f"DECOY{config.args.decoy}",
-                                    f"libfrac{config.args.lib_frac}",
-                                    *list(filter(None,[ms2_align,use_rt,use_feat,iso,tag,plexDIA,is_timeplex,dummy_val]))])
-    
-
-    results_folder_path = os.path.dirname(mzml_file) +"/" +results_folder_name
+    results_folder_name = spec_file_name + "_results" + "_" + dummy_val
+    results_folder_name = results_folder_name.rstrip("_")
 
     if config.args.output_folder is not None:
-        results_folder_path = config.args.output_folder +"/" +results_folder_name
+        os.makedirs(config.args.output_folder, exist_ok=True)
+        results_folder_path = os.path.join(config.args.output_folder, results_folder_name)
+    else:
+        results_folder_path = os.path.join(os.path.dirname(mzml_file), results_folder_name)
+
+    if os.path.exists(results_folder_path):
+        datestamp = str(datetime.datetime.now())
+        datestamp = datestamp.split()
+        datestamp = datestamp[0].replace("-", "_") + "_" + datestamp[1].split(".")[0].replace(":", "_")
+        results_folder_path = results_folder_path + "_" + datestamp
+
 
     if not os.path.exists(results_folder_path):
         try:
             os.mkdir(results_folder_path)
-        except:
+        except FileNotFoundError as e:
+            if not os.path.exists(os.path.dirname(results_folder_path)):
+                from src.utils.gui_utils import send_raise_to_TK
+                send_raise_to_TK(f"Error Creating Results Folder. Parent path does not exist.\nPath: {os.path.dirname(results_folder_path)}")
+                raise FileNotFoundError(f"Parent Path Does Not Exist - {os.path.dirname(results_folder_path)}")
+            if "[WinError 3]" in str(e) or "[WinError 206]" in str(e):
+                from src.utils.gui_utils import send_raise_to_TK
+                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+                raise ValueError("Path Length Limit Exceeded")
+        except Exception as e:
             from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
-            raise ValueError("Path Length Limit Exceeded")
+            send_raise_to_TK(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError: \n{str(e)}")
+            raise e
+
         
     if len(results_folder_path) >= 225:  ##if results path is long, check to make sure putting things in it wont break (i.e. windows with long paths enabled or different OS)
         try:
@@ -124,10 +133,15 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             with open(test_path, "w") as f:
                 f.write("test")
             os.remove(test_path)
-        except:
+        except FileNotFoundError as e:
+            if "[WinError 3]" in str(e) or "[WinError 206]" in str(e):
+                from src.utils.gui_utils import send_raise_to_TK
+                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+                raise ValueError("Path Length Limit Exceeded")
+        except Exception as e:
             from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
-            raise ValueError("Path Length Limit Exceeded")
+            send_raise_to_TK(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError:\n{str(e)}")
+            raise e
 
     
 
@@ -138,7 +152,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
     logfile_path = os.path.join(results_folder_path, "Log.log")
     set_log_filepath(logfile_path)
-
+    config.results_folder_path = results_folder_path
 
 
 
@@ -159,6 +173,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     # Log the configuration that will be used
     logger.info("Using configuration:")
     logger.info(config.args)
+    logger.info("")
 
 
     if config.args.use_features and os.path.exists(feature_path) and config.args.timeplex:
@@ -178,6 +193,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
     overall_start_time = time.time()
     # python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
+    logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
 
     
     ######################################################
@@ -226,7 +242,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # Find the tag object based on the tag name
         if config.args.tag in available_tags:
             config.tag = available_tags[config.args.tag]
-            logger.info(f"Using tag: {config.tag.name}")
+            logger.info(f"Using tag: {config.tag.name} - {config.tag.n_channels} channels")
             spectrumLibrary = tag_library(spectrumLibrary, config.tag)
             mass_tag = config.tag
         else:
@@ -298,19 +314,23 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
 
     if config.args.iso:
-        # spectrumLibrary = iso_f.iso_library(spectrumLibrary)
-        spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary)
+        # spectrumLibrary = iso_f.iso_library(spectrumLibrary,
+        #                                            tag=config.tag,
+        #                                            n_iso=config.num_iso_peaks)
+        spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
+                                                  tag=config.tag,
+                                                  n_iso=config.num_iso_peaks)
         
     # with open(results_folder_path+"/slib","wb") as dill_file:
     #     slib = dill.dump(spectrumLibrary,dill_file)   
       
     logger.info("Creating Decoy Library")
-    decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev")
+    decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev",tag=config.tag,n_iso=config.num_iso_peaks)
     for key in spectrumLibrary:
         spectrumLibrary[key]["top_n"]=np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
     for key in decoy_lib:
         decoy_lib[key]["top_n"]=np.argsort(-decoy_lib[key]["spectrum"][:,1])[:config.top_n]
-    logger.info("... Finished Decoy Library")
+    logger.info("Finished Decoy Library")
     
     
     ######################################################
@@ -332,7 +352,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
     ######################################################
     ### Start the search
-    logger.info("Starting Search")
+    logger.info("")
+    logger.info("Starting Main Search")
     # write dia spectra meta data
     ms2scans_info = [[i.prec_mz,i.RT,i.scan_num,*i.ms1window] for i in spectra_to_fit]
     ms2_info_path = results_folder_path+"/ms2scans.csv"
@@ -366,7 +387,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                             decoy_library=decoy_lib))
             
         long_outputs = [j for i in outputs for j in i]
-        logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
+        logger.debug(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         
         decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
         write_mode = "w" if batch_idx==0 else "a"
