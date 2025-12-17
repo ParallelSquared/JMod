@@ -737,8 +737,10 @@ def empirical_fit(output_df,results_folder=None):
         sigmas = sigmas[order]
         weights = weights[order]
 
-        num = weights * norm.pdf(0.0, loc=0.0, scale=sigmas)
-        pep0 = num[0] / num.sum()
+        k = 2.576 * sigmas[0]
+        p_in = 2.0 * norm.cdf(k / sigmas) - 1.0
+        num = weights * p_in
+        partial_posterior = num[0] / num.sum()
 
         # rt error + mixture plot, saved per percentile
         if results_folder is not None:
@@ -752,11 +754,11 @@ def empirical_fit(output_df,results_folder=None):
 
         logger.info(
             f"Testing Percentile: {feature_percentile}, "
-            f"Ratio: {outside_ratio:.4f}, #IDs: {cor_filter.sum()}, PEP(0): {pep0:.4f}"
+            f"Ratio: {outside_ratio:.4f}, #IDs: {cor_filter.sum()}, Partial Posterior: {partial_posterior:.4f}"
         )
 
         # new + existing stopping criteria
-        if (pep0 >= 0.99 or
+        if (partial_posterior <= 0.01 or
                 outside_ratio < 0.05 or
                 (cor_filter.sum() - bad_IDs.sum()) < 800):
             break
