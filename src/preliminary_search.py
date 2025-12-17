@@ -240,6 +240,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         .alias('spectral_contrast_angle')
     )
 
+    logger.info("Computing Scribe score")
     def scribe_score_polars_udf(r: dict) -> float:
         """
         Polars UDF to calculate the primary Scribe Score:
