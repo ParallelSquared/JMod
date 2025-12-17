@@ -36,7 +36,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
 
     # Construct polars df from python lib
     pl_lib = python_lib_to_diann_df(library_spectra)
-    pl_lib.write_csv('temp.tsv', separator='\t')
 
     # Add modification array to the polars dataframe
     pl_lib = pl_lib.with_columns(

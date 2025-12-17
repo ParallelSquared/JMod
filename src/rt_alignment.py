@@ -758,7 +758,7 @@ def empirical_fit(output_df,results_folder=None):
         )
 
         # new + existing stopping criteria
-        if (partial_posterior <= 0.01 or
+        if (partial_posterior >= 0.99 or
                 outside_ratio < 0.05 or
                 (cor_filter.sum() - bad_IDs.sum()) < 800):
             break
