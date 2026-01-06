@@ -24,6 +24,7 @@ from scipy import signal
 from scipy.optimize import curve_fit
 from scipy import stats
 from sklearn.metrics import auc
+from threadpoolctl import threadpool_limits
 import dill
 dill.settings['recurse'] = True
 import copy
@@ -366,9 +367,11 @@ def fit_gaussian(data,init_std=None,bin_n=50):
     
     if init_std is None:
         init_std = 2*np.subtract(*bin_edges[1::-1])
-    
-    fit_params, _ = curve_fit(gaussian, x_data, y_data, p0=[highest_peak_height, highest_peak_x, init_std])
-    
+
+    # Use single-threaded execution for reproducibility
+    with threadpool_limits(limits=1):
+        fit_params, _ = curve_fit(gaussian, x_data, y_data, p0=[highest_peak_height, highest_peak_x, init_std])
+
     return fit_params#, background
 
 
