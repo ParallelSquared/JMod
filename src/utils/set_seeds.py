@@ -6,6 +6,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 
 import numpy as np
 import random
+import tensorflow as tf
 
 def set_seeds(seed):
     """
@@ -27,3 +28,4 @@ def set_seeds(seed):
 
     np.random.seed(seed)
     random.seed(seed)
+    tf.random.set_seed(seed)
