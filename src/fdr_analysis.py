@@ -584,7 +584,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     decoy_order = fdc["decoy"][score_order]
     frac_decoy = np.cumsum(decoy_order)/np.cumsum(~decoy_order)
     # plt.plot(frac_decoy)
-    T = output[score_order[np.searchsorted(frac_decoy,0.01)]]
+    T = output[score_order[min(len(score_order)-1,np.searchsorted(frac_decoy,0.01))]]
     above_t = output>T
     fdc["PredVal"] = output
     fdc["Qvalue"] = frac_decoy[orig_order]
