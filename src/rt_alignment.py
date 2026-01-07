@@ -696,7 +696,7 @@ def empirical_fit(output_df,results_folder=None):
     logger.info("")
     logger.info("Filtering IDs from initial search")
 
-    for feature_percentile in range(20, 80, 5):
+    for feature_percentile in range(20, 100, 5):
 
         cor_filter = np.logical_and.reduce(
             [output_df[feat] > np.percentile(output_df[feat], feature_percentile)
@@ -740,7 +740,7 @@ def empirical_fit(output_df,results_folder=None):
         sigmas = sigmas[order]
         weights = weights[order]
 
-        k = 2.576 * sigmas[0]
+        k = 3.29 * sigmas[0] # middle 99.9%
         p_in = 2.0 * norm.cdf(k / sigmas) - 1.0
         num = weights * p_in
         partial_posterior = num[0] / num.sum()

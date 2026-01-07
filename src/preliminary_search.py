@@ -346,7 +346,10 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     df["__key"] = list(zip(df["seq"], df["z"].astype(int)))
     mask = df["__key"].map(valid_keys.__contains__)
 
-    df = df[mask].drop(columns="__key")
+    # Filter to valid keys and keep only maximum scribe_score per identification
+    df = df[mask]
+    df = df.loc[df.groupby("__key")["scribe_score"].idxmax()]
+    df = df.drop(columns="__key")
     ##########
 
     return df
