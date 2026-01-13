@@ -1201,6 +1201,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
     
     percentile = config.rt_percentile
+    #percentile = 0.99 QQQ
     
     limit=3 ## exlcude RT diffs larger than this (outliers)
     
@@ -1255,7 +1256,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
             # boundary = elbow_pred_x
             logger.info("Fine Tuned Library Chosen")
-            boundary = fit_errors(all_pred_diffs,limit,percentile)
+            # Fit 2-component zero-mean GMM to residuals
+            weights, sigmas = fit_zero_mean_gmm_1d(all_pred_diffs, n_components=2)
+            order = np.argsort(sigmas)
+            sigmas = sigmas[order]
+            boundary = norm.ppf(sigmas[0] * 4)
             rt_spl = pred_rt_spl
             all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
             all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
@@ -1266,7 +1271,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         else: ### empirical are better
             # boundary = elbow_emp_x
             logger.info("Empirical Library Chosen")
-            boundary = fit_errors(all_emp_diffs,limit,percentile)
+            # Fit 2-component zero-mean GMM to residuals
+            weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
+            order = np.argsort(sigmas)
+            sigmas = sigmas[order]
+            boundary = norm.ppf(sigmas[0] * 4)
             ## keep the library RTs and splines the same
             rt_spl = emp_rt_spl
         
@@ -1282,14 +1291,33 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         updatedLibrary = copy.deepcopy(librarySpectra)
         all_lib_keys = list(librarySpectra)
         rt_spl = emp_rt_spl
+
+        """
+        import os
+        config.opt_rt_tol = 0.69205
+        config.opt_ms1_tol = 2.404259e-6
+        with open(os.path.join(os.getcwd(), "rt_spl"), "rb") as f:
+            rt_spl = dill.load(f)
+        with open(os.path.join(os.getcwd(), "mz_func"), "rb") as f:
+            mz_func = dill.load(f)
+        """
+        #config.opt_rt_tol = 0.069205
+
+        emp_rt_spl = rt_spl
+
         all_emp_diffs = (emp_rt_spl(output_df.lib_rt)-np.array(output_df.rt))[cor_filter]
-        
+
         pred_data = pred_p = None
         emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
         emp_data = np.append(emp_data,limit)
         emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
         emp_cdf_auc = auc(emp_data,emp_p)
-        boundary = fit_errors(all_emp_diffs,limit,percentile)
+        # Fit 2-component zero-mean GMM to residuals
+        weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
+        order = np.argsort(sigmas)
+        sigmas = sigmas[order]
+        #boundary = norm.ppf((1 + percentile) / 2) * sigmas[0] QQQ
+        boundary = fit_errors(all_emp_diffs, limit, percentile)
     
     new_lib_rt = np.array([updatedLibrary[k]["iRT"] for k in id_keys])
     converted_rt = rt_spl([updatedLibrary[k]["iRT"] for k in id_keys])
@@ -1375,12 +1403,25 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         new_ms1_tol=np.abs(config.min_ms1_tol)
         
     config.opt_ms1_tol  = new_ms1_tol
-    
+
+
+    # ========== DEBUG OVERRIDE - REMOVE AFTER TESTING ==========
+    import os
+    config.opt_rt_tol = 0.69205
+    config.opt_ms1_tol = 2.404259e-6
+    with open(os.path.join(os.getcwd(), "rt_spl"), "rb") as f:
+        rt_spl = dill.load(f)
+    with open(os.path.join(os.getcwd(), "mz_func"), "rb") as f:
+        mz_func = dill.load(f)
+    logger.info("DEBUG: Overriding with hardcoded values - rt_tol=0.06970, ms1_tol=2.5045e-06, loaded rt_spl and mz_func")
+    # ========== END DEBUG OVERRIDE ==========
+
+
     # if ms2:
     #     new_ms2_tol = 5*ms2_stddev
     #     config.opt_ms2_tol  = new_ms2_tol
-    
-    
+
+
     ################################################################
     ########### Save the functions and Plot the alignment   ########
     ################################################################

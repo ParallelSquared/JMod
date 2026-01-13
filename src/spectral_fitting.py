@@ -648,10 +648,10 @@ def fit_to_lib2(dia_spec,
     ###### Process dia spectrum 
     
     # # what are the first indices of peaks grouped by tolerance
-    # merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
+    merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
     
     # # what are the first mz of these peak groups
-    # merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
+    merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
     # # print(merged_coords)
     
     
@@ -662,11 +662,13 @@ def fit_to_lib2(dia_spec,
     #     merged_intensities[j]+=val
     # #merged_intensities = [np.mean(dia_spectrum[merged_coords_idxs==i,1]) for i in np.unique(merged_coords_idxs)]
     # merged_intensities = merged_intensities[merged_intensities!=0]
+    merged_intensities = np.bincount(merged_coords_idxs, weights=dia_spectrum[:, 1])
+    merged_intensities = merged_intensities[merged_intensities != 0]
     
     # #update spectrum to new values (note mz remains first in group as this will eventually be rounded)
-    # if dia_spectrum.shape != np.array((merged_coords,merged_intensities)).transpose().shape:
-    #     print("Warning: Shapes dont match in fit_to_lib2")
-    # dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
+    if dia_spectrum.shape != np.array((merged_coords,merged_intensities)).transpose().shape:
+        print("Warning: Shapes dont match in fit_to_lib2")
+    dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
     # # print(dia_spectrum)
     
     #get window edge positions each side of peaks in observed spectra (NB the tolerance is now about the first peak in the group not the middile)
