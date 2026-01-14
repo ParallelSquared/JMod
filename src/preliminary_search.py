@@ -331,26 +331,14 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         .alias('scribe_score')  # Renamed column
     )
 
-    # Back to pandas
-    df = df.to_pandas()
+    # Filter to only peptides present in the library
+    valid_keys_df = pl.DataFrame({
+        "seq": [v["mod_seq"] for v in library_spectra.values()],
+        "z": [int(v["prec_z"]) for v in library_spectra.values()]
+    }).unique()
 
-    ##########
-    # This is a temporary solution to limit peptides to those inside the library
-    # Build valid (seq, charge) keys from the library once
-    valid_keys = {
-        (v["mod_seq"], v["prec_z"])
-        for v in library_spectra.values()
-    }
-
-    # Create tuple key per row and keep only those present in the library
-    df["__key"] = list(zip(df["seq"], df["z"].astype(int)))
-    mask = df["__key"].map(valid_keys.__contains__)
-
-    # Filter to valid keys and keep only maximum scribe_score per identification
-    df = df[mask]
-    df = df.loc[df.groupby("__key")["scribe_score"].idxmax()]
-    df = df.drop(columns="__key")
-    ##########
+    # Semi-join to keep only rows where (seq, z) exists in the library
+    df = df.join(valid_keys_df, on=["seq", "z"], how="semi")
 
     return df
 

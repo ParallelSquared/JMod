@@ -675,7 +675,7 @@ def process_prelim_search(fit_outputs,
 
     return output_df, all_output_df, id_keys, feature_mzs
 
-def empirical_fit(output_df,results_folder=None):
+def empirical_fit(output_df, results_folder=None):
     """
     Filter data by confidence then fit LOWESS to empirical RT
 
@@ -1159,10 +1159,24 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
     
 
+    # Run a preliminary search returning results at the PSM level
     import preliminary_search
     output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10)
+
+    # Calculate the elution width for
+    import elution_analysis
+    fwhm, elution_sd = elution_analysis.calculate_elution_width(output_df)
+    logger.info("Mean elution width: FWHM {fwhm:.4f}, SD {elution_sd:.4f}".format(fwhm=fwhm, elution_sd=elution_sd))
+
+    # Collapse to max scribe_score per peptide ion
+    output_df = output_df.sort("scribe_score", descending=True).unique(subset=["seq", "z"], keep="first")
+
+    # Convert to pandas for downstream processing
+    output_df = output_df.to_pandas()
+
     id_keys = list(zip(output_df["seq"], output_df["z"]))
 
+    #
     """
     if dino_features is None:
         fit_outputs = fit_without_features(dia_spectra, librarySpectra)
@@ -1194,14 +1208,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
 
 
-    cor_filter, emp_rt_spl = empirical_fit(output_df,results_folder=results_folder)
+    cor_filter, emp_rt_spl = empirical_fit(output_df, results_folder=results_folder)
         
     
     
     
     
     percentile = config.rt_percentile
-    #percentile = 0.99 QQQ
+    #percentile = 0.99
     
     limit=3 ## exlcude RT diffs larger than this (outliers)
     
@@ -1260,7 +1274,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             weights, sigmas = fit_zero_mean_gmm_1d(all_pred_diffs, n_components=2)
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
-            boundary = norm.ppf(sigmas[0] * 4)
+            # Combine elution width and GMM sigma, take 4th standard deviation
+            combined_sigma = np.sqrt(elution_sd**2 + sigmas[0]**2)
+            boundary = 4 * combined_sigma
             rt_spl = pred_rt_spl
             all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
             all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
@@ -1275,7 +1291,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
-            boundary = norm.ppf(sigmas[0] * 4)
+            # Combine elution width and GMM sigma, take 4th standard deviation
+            combined_sigma = np.sqrt(elution_sd**2 + sigmas[0]**2)
+            boundary = 4 * combined_sigma
             ## keep the library RTs and splines the same
             rt_spl = emp_rt_spl
         
@@ -1292,19 +1310,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         all_lib_keys = list(librarySpectra)
         rt_spl = emp_rt_spl
 
-        """
-        import os
-        config.opt_rt_tol = 0.69205
-        config.opt_ms1_tol = 2.404259e-6
-        with open(os.path.join(os.getcwd(), "rt_spl"), "rb") as f:
-            rt_spl = dill.load(f)
-        with open(os.path.join(os.getcwd(), "mz_func"), "rb") as f:
-            mz_func = dill.load(f)
-        """
-        #config.opt_rt_tol = 0.069205
-
-        emp_rt_spl = rt_spl
-
         all_emp_diffs = (emp_rt_spl(output_df.lib_rt)-np.array(output_df.rt))[cor_filter]
 
         pred_data = pred_p = None
@@ -1316,8 +1321,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
         order = np.argsort(sigmas)
         sigmas = sigmas[order]
-        #boundary = norm.ppf((1 + percentile) / 2) * sigmas[0] QQQ
-        boundary = fit_errors(all_emp_diffs, limit, percentile)
+        # Combine elution width and GMM sigma, take 4th standard deviation
+        combined_sigma = np.sqrt(elution_sd**2 + sigmas[0]**2)
+        boundary = 4 * combined_sigma
+        #boundary = fit_errors(all_emp_diffs, limit, percentile)
     
     new_lib_rt = np.array([updatedLibrary[k]["iRT"] for k in id_keys])
     converted_rt = rt_spl([updatedLibrary[k]["iRT"] for k in id_keys])
@@ -1387,13 +1394,13 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         new_rt_tol = config.args.rt_tol
     logger.info(f"Optimized RT tolerance: {new_rt_tol}")
     config.opt_rt_tol = np.abs(new_rt_tol)
-    
-    
+
+
     new_ms1_tol = np.abs(4*mz_stddev)
     logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
     logger.info("")
 
-    
+
     if config.args.ms1_ppm!=0:
         logger.info(f"Using MS1 Tolerance provided: {config.args.ms1_ppm}ppm")
         new_ms1_tol=np.abs(config.args.ms1_ppm*1e-6)
@@ -1401,26 +1408,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         logger.info(f"Exceeded minimum MS1 tolerance: {np.abs(config.min_ms1_tol)}")
         logger.info(f"Setting new MS1 tolerance: {np.abs(config.min_ms1_tol)}")
         new_ms1_tol=np.abs(config.min_ms1_tol)
-        
+
     config.opt_ms1_tol  = new_ms1_tol
-
-
-    # ========== DEBUG OVERRIDE - REMOVE AFTER TESTING ==========
-    import os
-    config.opt_rt_tol = 0.69205
-    config.opt_ms1_tol = 2.404259e-6
-    with open(os.path.join(os.getcwd(), "rt_spl"), "rb") as f:
-        rt_spl = dill.load(f)
-    with open(os.path.join(os.getcwd(), "mz_func"), "rb") as f:
-        mz_func = dill.load(f)
-    logger.info("DEBUG: Overriding with hardcoded values - rt_tol=0.06970, ms1_tol=2.5045e-06, loaded rt_spl and mz_func")
-    # ========== END DEBUG OVERRIDE ==========
-
-
-    # if ms2:
-    #     new_ms2_tol = 5*ms2_stddev
-    #     config.opt_ms2_tol  = new_ms2_tol
-
 
     ################################################################
     ########### Save the functions and Plot the alignment   ########
