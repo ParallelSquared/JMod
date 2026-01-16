@@ -1163,13 +1163,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     import preliminary_search
     output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10)
 
-    # Calculate the elution width for
+    # Calculate the elution width and add cluster_size column
     import elution_analysis
-    fwhm, elution_sd = elution_analysis.calculate_elution_width(output_df)
+    fwhm, elution_sd, output_df = elution_analysis.calculate_elution_width(output_df)
     logger.info("Mean elution width: FWHM {fwhm:.4f}, SD {elution_sd:.4f}".format(fwhm=fwhm, elution_sd=elution_sd))
 
-    # Collapse to max scribe_score per peptide ion
-    output_df = output_df.sort("scribe_score", descending=True).unique(subset=["seq", "z"], keep="first")
+    # Collapse to most intense MS1 per peptide ion
+    output_df = output_df.sort("closest_peak_intensity_ms1", descending=True).unique(subset=["seq", "z"], keep="first")
+    import polars as pl
+    output_df = output_df.filter(pl.col("cluster_size") >= 1)
 
     # Convert to pandas for downstream processing
     output_df = output_df.to_pandas()
@@ -1275,8 +1277,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
             # Combine elution width and GMM sigma, take 4th standard deviation
-            combined_sigma = np.sqrt(elution_sd**2 + sigmas[0]**2)
-            boundary = 4 * combined_sigma
+            boundary = 4 * sigmas[0] + 8 * elution_sd
             rt_spl = pred_rt_spl
             all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
             all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
@@ -1292,8 +1293,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
             # Combine elution width and GMM sigma, take 4th standard deviation
-            combined_sigma = np.sqrt(elution_sd**2 + sigmas[0]**2)
-            boundary = 4 * combined_sigma
+            boundary = 4 * sigmas[0] + 8 * elution_sd
             ## keep the library RTs and splines the same
             rt_spl = emp_rt_spl
         
@@ -1322,8 +1322,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         order = np.argsort(sigmas)
         sigmas = sigmas[order]
         # Combine elution width and GMM sigma, take 4th standard deviation
-        combined_sigma = np.sqrt(elution_sd**2 + sigmas[0]**2)
-        boundary = 4 * combined_sigma
+        boundary = 4 * sigmas[0] + 8 * elution_sd
         #boundary = fit_errors(all_emp_diffs, limit, percentile)
     
     new_lib_rt = np.array([updatedLibrary[k]["iRT"] for k in id_keys])

@@ -115,7 +115,7 @@ def _compute_scan_gap_mode(df: pl.DataFrame) -> int:
     return mode_gap
 
 
-def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float]:
+def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float, pl.DataFrame]:
     """
     Calculate FWHM and sigma of elution profile from PSM data.
 
@@ -124,8 +124,9 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float]:
     2. Creates modified peptide identifiers
     3. Auto-detects the MS duty cycle (scan gap mode)
     4. Clusters adjacent scans for each peptide
-    5. Centers and overlays all RT profiles
+    5. Centers and overlays all RT profiles (intensity-weighted)
     6. Fits a Gaussian to compute FWHM and sigma
+    7. Adds cluster_size column to the dataframe
 
     Args:
         df: Polars DataFrame with columns:
@@ -135,14 +136,16 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float]:
             - stripped_seq: Peptide sequence without modifications
             - modifications: Modification masses string
             - z: Charge state
+            - seq: Modified peptide sequence
+            - closest_peak_intensity_ms1: MS1 intensity for weighting
 
     Returns:
-        Tuple of (fwhm, sigma) in seconds
+        Tuple of (fwhm, sigma, df) where df has a new 'cluster_size' column
 
     Raises:
         ValueError: If required columns are missing or no valid clusters found
     """
-    required_cols = {'file_id', 'spec_name', 'rt', 'stripped_seq', 'modifications', 'z'}
+    required_cols = {'file_id', 'spec_name', 'rt', 'stripped_seq', 'modifications', 'z', 'seq', 'closest_peak_intensity_ms1'}
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
@@ -175,19 +178,30 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float]:
 
     # Step 4 & 5: Cluster adjacent scans and collect centered RTs
     centered_rts: list[float] = []
+    centered_intensities: list[float] = []
 
-    # Group by file_id, mod_peptide, and charge state
-    grouped = df.group_by(['file_id', 'mod_peptide', 'z']).agg([
+    # Track cluster sizes per (seq, z)
+    cluster_sizes: dict[tuple[str, int], int] = {}
+
+    # Group by file_id, seq, and charge state
+    grouped = df.group_by(['file_id', 'seq', 'z']).agg([
         pl.col('scan'),
-        pl.col('rt')
+        pl.col('rt'),
+        pl.col('closest_peak_intensity_ms1')
     ])
 
     for row in grouped.iter_rows(named=True):
         scans = row['scan']
         rts = row['rt']
+        intensities = row['closest_peak_intensity_ms1']
+        key = (row['seq'], row['z'])
 
         if len(scans) < 2:
+            cluster_sizes[key] = max(cluster_sizes.get(key, 0), 1)
             continue
+
+        # Create mapping from scan to intensity
+        scan_to_intensity = {s: i for s, i in zip(scans, intensities)}
 
         # Create list of (scan, rt) tuples
         scans_rts = list(zip(scans, rts))
@@ -197,20 +211,24 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float]:
 
         # Keep largest cluster
         largest_cluster = max(clusters, key=len)
+        cluster_sizes[key] = max(cluster_sizes.get(key, 0), len(largest_cluster))
 
         if len(largest_cluster) >= 2:
             cluster_rts = np.array([rt for _, rt in largest_cluster])
-            # Center the RTs and convert to seconds
+            cluster_ints = np.array([scan_to_intensity[scan] for scan, _ in largest_cluster])
+            # Center the RTs
             centered = (cluster_rts - np.mean(cluster_rts))
             centered_rts.extend(centered)
+            centered_intensities.extend(cluster_ints)
 
     if len(centered_rts) == 0:
         raise ValueError("No valid clusters found for FWHM calculation")
 
     centered_rts_arr = np.array(centered_rts)
+    centered_intensities_arr = np.array(centered_intensities)
 
-    # Step 6: Fit Gaussian to pooled distribution
-    hist, bin_edges = np.histogram(centered_rts_arr, bins=100, density=True)
+    # Step 6: Fit Gaussian to pooled distribution (intensity-weighted)
+    hist, bin_edges = np.histogram(centered_rts_arr, bins=100, weights=centered_intensities_arr, density=True)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
     try:
@@ -223,7 +241,14 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float]:
 
     fwhm = 2.355 * sigma
 
-    return fwhm, sigma
+    # Step 7: Add cluster_size column to dataframe
+    df = df.with_columns(
+        pl.struct(['seq', 'z'])
+        .map_elements(lambda r: cluster_sizes.get((r['seq'], r['z']), 0), return_dtype=pl.Int64)
+        .alias('cluster_size')
+    )
+
+    return fwhm, sigma, df
 
 
 if __name__ == '__main__':
