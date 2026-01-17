@@ -8,14 +8,9 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 
 from src.utils.io.read_output import get_large_prec
 
-from sklearn.model_selection import KFold,GroupKFold
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_curve,auc 
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.neural_network import MLPClassifier
-from sklearn import preprocessing
+import mokapot
 from scipy import stats
-import xgboost as xgb
+from sklearn.metrics import auc
 
 import numpy as np
 import matplotlib
@@ -249,392 +244,203 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
 
 
 
-class model_instance():
-    def __init__(self,model_type):
-        self.mode_type = model_type
-        
-    def predict(self,X):
-        pred = self.__predict_fn__(X)
-        #First column of pred is target probabilities and second column is decoys
-        #If for some reason there were no decoys in one of the training folds
-        #only a single column is returned. Handle this case...
-        if len(pred.shape)==2:
-            if pred.shape[1]==2:
-                output = pred[:,1]
-            else:
-                output = pred[:,0]
-        else:
-            output = pred
-        return output
-        
-        
-class score_model():
-    
-    def __init__(self,model_type,n_splits=5,folder=None):
-        self.model_type=model_type
-        self.n_splits = n_splits
-        self.folder = folder
-                
-    def run_model(self,X,y,sample_weight=None,groups=None):
-        # logger.info(f"{config.tree_max_depth}")
-        if self.model_type=="rf":
-            
-            ### Random Forest
-            def fit_model(X,y,sample_weight,idx=""):
-                    m = model_instance(model_type=self.model_type)
-                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=-1, random_state=config.RANDOM_SEED)
-                    m.model.fit(X,y,sample_weight=sample_weight)
-                    m.__predict_fn__ = m.model.predict_proba
-
-                    if self.folder:
-                        feature_importance = m.model.feature_importances_
-                        sorted_indices = np.argsort(feature_importance, kind='stable')
-                        sorted_features = np.array(X.columns)[sorted_indices]  
-                        sorted_importance = feature_importance[sorted_indices]  
-                    
-                        fig, ax = plt.subplots(figsize=(8, len(X.columns)*0.3))                    
-                        ax.barh(sorted_features, sorted_importance)
-                        ax.set_title("Feature Importance")
-                    
-                        # Save plot
-                        plt.savefig(self.folder + f"/RF{idx}_feature_importance.png", dpi=600, bbox_inches="tight")
-                        # For RF models, log feature importance
-                        plt.close(fig)
-                    return m
-                
-            # self.model = fit_model(X,y)
-            
-        
-        elif self.model_type=="lda":
-            
-            ## Linear Disriminant Analysis
-            def fit_model(X,y,sample_weight,idx=""):
-                    m = model_instance(model_type=self.model_type)
-                    m.model = LinearDiscriminantAnalysis()
-                    m.model.fit(X,y)
-                    m.__predict_fn__ = m.model.predict_proba
-                    return m
-                
-            # self.model = fit_model(X,y)
-            
-            
-        elif self.model_type == "xg":
-            
-            ## XGBoost
-            def fit_model(X,y,sample_weight,idx=""):
-                    m = model_instance(model_type=self.model_type)
-                    dTrain = xgb.DMatrix(X,y,weight=sample_weight)
-                    # param = {
-                    #     'max_depth': config.tree_max_depth, 
-                    #     'eta': .1, 
-                    #     'objective': 'binary:logistic',}
-                    param = {
-                        # 'max_depth': config.tree_max_depth, 
-                        # 'eta': .1, 
-                        # 'objective': 'binary:logistic',
-                        
-                        'objective': 'binary:logistic',  
-                         'eval_metric': 'aucpr',    
-                         'eta': 0.1,
-                         'max_depth': 10,          
-                         'subsample': 0.8,
-                         'colsample_bytree': 0.8,   
-                         'tree_method': 'hist',         
-                         'nthread': -1,                   
-                         'seed': config.RANDOM_SEED,
-                         'min_child_weight': .5
-                        }
-
-                    # param['nthread'] = 4
-                    # param['eval_metric'] = 'pre'
-                    
-                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=500)
-                    def xg_predict(X):
-                        X_convert = xgb.DMatrix(X)
-                        return m.model.predict(X_convert)
-                    m.__predict_fn__ = xg_predict
-                    
-                    if self.folder:
-                        plt.subplots()
-                        fi = m.model.get_score(importance_type="gain")
-                        plt.barh(X.columns,[fi[i] if i in fi else 0 for i in X.columns])
-                        plt.title("Feature Importance")
-                        plt.savefig(self.folder+f"/XGBoost{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
-                        plt.close()
-                    
-                    
-                    return m
-                
-            # self.model = fit_model(X,y)
-        
-            
-        elif self.model_type == "nn":
-            columns = X.columns
-            X = pd.DataFrame(preprocessing.StandardScaler().fit(X).transform(X),columns=columns)
-            ## Neural network
-            def fit_model(X,y,sample_weight,idx=""):
-                    m = model_instance(model_type=self.model_type)
-                    # m.model = MLPClassifier((32,16,8,4),activation="relu")
-                    m.model = MLPClassifier((20,20,4),activation="relu")
-                    m.model.fit(X,y)
-                    m.__predict_fn__ = m.model.predict_proba
-                    return m
-                
-        else:
-            from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK("ValueError - Unsupported Model Type")
-            raise ValueError("Unsupported model type")
-        
-        logger.debug(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
-        
-        kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = config.RANDOM_SEED)
-        k_orders = [i for i in kf.split(X,y)]
-        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders], ), kind='stable') # collapse test sets and get order
-
-        if groups is not None:
-            unique_groups = np.unique(groups)
-            if len(unique_groups) < 5:
-                logger.warning(f"Warning: Only {len(unique_groups)} unique groups for 5-fold CV. Using KFold instead.")
-                gfk = KFold(n_splits=5, shuffle=True, random_state=config.RANDOM_SEED)
-            else:
-                gfk = GroupKFold(n_splits=5)
-        
-            #k_orders = [i for i in kf.split(X,y)] old way
-            k_orders = [i for i in gfk.split(X, y, groups=groups)]
-            rev_order = np.argsort(np.concatenate([i[1] for i in k_orders]), kind='stable') # collapse test sets and get order
-            
-            # permutation = np.random.permutation(len(X))
-            # X_shuffled = X.iloc[permutation]
-            # y_shuffled = y[permutation]
-            # groups_shuffled = np.array(self.groups)[permutation]
-            # k_orders = [i for i in gfk.split(X_shuffled,y_shuffled,groups=groups_shuffled)]
-            # rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
-
-        if sample_weight is not None:
-            data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]],sample_weight[i[0]]] for i in k_orders] # put data into folds
-    
-        else:
-            data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]],None] for i in k_orders] # put data into folds
-        
-
-        self.models = []
-        self.predictions=[]
-        model_idx=0
-        for X_train, X_test, y_train, y_test,weights in tqdm.tqdm(data_splits):
-            m = fit_model(X_train,y_train,sample_weight=weights,idx=model_idx)
-            self.models.append(m)
-            self.predictions.append(m.predict(X_test))
-            model_idx+=1
-            
-        return np.concatenate(self.predictions)[rev_order]
-
-    
-    
-def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
+def score_precursors(fdc, model_type="rf", fdr_t=0.01, folder=None):
     """
+    Score PSMs using Mokapot's semi-supervised learning (Percolator algorithm).
+
     Parameters
     ----------
     fdc : pandas.DataFrame
-        All PSMs identified.
-    model_type : string [autogluon]
-                 Type of ML model used to discriminate targets and decoys.
-                 Only 'autogluon' is supported in this implementation.
+        All PSMs identified. Must include 'decoy', 'stripped_seq', 'protein',
+        and feature columns for rescoring.
+    model_type : string
+        Ignored (kept for API compatibility). Mokapot always uses Percolator SVM.
     fdr_t : float
-        False discovery rate threshold.
+        False discovery rate threshold (default 0.01).
     folder : str, optional
         Folder path for saving plots.
 
     Returns
     -------
     fdc : pandas.DataFrame
-        Updated dataframe with prediction values and Q-values.
+        Updated dataframe with PredVal and Qvalue columns added.
     """
+    logger.info("Scoring IDs with Mokapot")
 
-    assert model_type in ["lda", "rf", "xg"], 'model_type must be one of ["lda", "rf", "xg"]'
-    
-    logger.info("Scoring IDs")
-    
-    
-    ## We consider decoys and targets with v small coeffs to be from the null distributiom
-    _bool = np.logical_and(~fdc["decoy"],fdc.coeff>1)
-    
-    ## define our features and labels for the model
-    y = np.array(_bool,dtype=int)
-    
-    # exclude necessary columns
-    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
-                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
-                  'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
-                  "plexfittrace_ps_all",
-                  "unique_frag_mz", "untag_prec",
-                  "channels_matched",
-                  "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor","plexfitMS1","plexfitMS1_p","plex_Area", "untag_prec","channel","time_channel",
-                  "unique_frag_mz",
-                  "unique_obs_int",
-                  "file_name",
-                  "protein"]
-    X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
+    # Create working copy with required columns for Mokapot
+    df = fdc.copy()
+    df["target"] = ~df["decoy"]  # Mokapot expects target=True for targets
+    df["psm_id"] = df.index.astype(str)  # Unique identifier for merging results
 
-    # DEBUG: Check each column for infinity or very large values
-    #problem_columns = []
-    #for col in X.columns:
-    #    try:
-    #        # Check for infinity
-    #        if np.isinf(X[col]).any():
-    #            problem_columns.append(f"{col}: has infinity")
-    #            
-    #        # Check for very large values
-    #        max_val = X[col].max()
-    #        min_val = X[col].min()
-    #        if abs(max_val) > 1e30 or abs(min_val) > 1e30:
-    #            problem_columns.append(f"{col}: has extreme value (min={min_val}, max={max_val})")
-    #            
-    #        # Check for NaN
-    #        if np.isnan(X[col]).any():
-    #            problem_columns.append(f"{col}: has NaN")
-    #            
-    #    except Exception as e:
-    #        problem_columns.append(f"{col}: error checking - {str(e)}")
-    
-    #if problem_columns:
-    #    print("Problem columns detected:")
-    #    for prob in problem_columns:
-    #        print(f"  - {prob}")
-    #        
-    #    # Additional info about columns with infinity
-    #    for col in X.columns:
-    #        if np.isinf(X[col]).any():
-    #            inf_indices = np.where(np.isinf(X[col]))[0]
-    #            print(f"\nInfinity values in column '{col}' at indices: {inf_indices[:5]}...")
-    #            print(f"Example row with infinity in '{col}':")
-    #            print(X.iloc[inf_indices[0]].to_string())
-    #            
-    #            # Try to find the cause
-    #            if col in ['rt_error', 'sq_rt_error', 'mz_error', 'sq_mz_error']:
-    #                print(f"Original values for '{col.replace('sq_', '')}':")
-    #                if 'sq_rt_error' in col:
-    #                    print(fdc.loc[inf_indices[0], 'rt_error'])
-    #                elif 'sq_mz_error' in col:
-    #                    print(fdc.loc[inf_indices[0], 'mz_error'])
-    #            
-    #            break  # Just show one example to avoid overwhelming output
-    
-    # print(X.columns)
-    #print(f"Using {len(X.columns)} features for scoring:")
-    #for idx, feature in enumerate(X.columns):
-    #    print(f"{idx+1}. {feature}")
-    
-    X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
-        
-    sc_model = score_model(model_type,folder=folder)
-    pred = sc_model.run_model(X, y, groups=fdc.stripped_seq)
-    
-    model_name= model_type
+    # Columns to exclude from features (non-numeric or metadata columns)
+    drop_columns = {
+        'spec_id', 'Ms1_spec_id', 'seq', 'window_mz', 'frag_names', 'frag_errors',
+        'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 'untag_seq', 'decoy',
+        'all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals',
+        'all_ms1_iso3vals', 'all_ms1_iso4vals', 'all_ms1_iso5vals', 'all_ms1_iso6vals',
+        'all_ms1_iso7vals', 'plexfittrace', 'plexfit_ps', 'untag_prec',
+        'plexfittrace_spec_all', 'plexfittrace_all', 'plexfittrace_ps_all',
+        'unique_frag_mz', 'channels_matched', 'unique_obs_int', 'MS1_Int',
+        'MS1_Area', 'iso_cor', 'cosine', 'traceproduct', 'iso1_cor', 'iso2_cor',
+        'ms1_cor', 'plexfitMS1', 'plexfitMS1_p', 'plex_Area', 'channel',
+        'time_channel', 'file_name', 'protein', 'target', 'psm_id'
+    }
 
-    ####### make sure to not have these in the model (bc they are left out in decoys) #######
-       # "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps","plexfittrace_spec_all","plexfittrace_all","plexfittrace_ps_all","plex_Area","ms1_cor","traceproduct","iso_cor","MS1_Int","all_ms1_specs","MS1_Area"
-        
-    ###############################################################################################
-    ########################  Analysis the predictions    ######################################
-    
-    
-    
-    
-    if len(pred.shape)==2:
-        output = pred[:,1]
+    # Get initial feature columns (numeric only)
+    feature_cols = [c for c in df.columns if c not in drop_columns]
+
+    # Clean feature values and identify problematic columns
+    zero_var_cols = []
+    # Features with extreme ranges that benefit from log transformation
+    log_transform_cols = ['coeff', 'frac_int_uniq_pred', 'smoothness', 'hyperscore', 'frac_int_uniq']
+    # Debug/duplicate columns to exclude
+    exclude_cols = {'debug_window_value'}  # This is a duplicate of manhattan_distances
+
+    for col in feature_cols:
+        if df[col].dtype in [np.float64, np.float32, np.int64, np.int32]:
+            # Replace inf/nan with 0
+            df[col] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0)
+
+            # Check for zero variance (useless for discrimination)
+            col_std = df[col].std()
+            if col_std == 0 or np.isnan(col_std):
+                zero_var_cols.append(col)
+
+            # Log-transform features with extreme ranges (add 1 to handle zeros)
+            elif col in log_transform_cols and col in df.columns:
+                # Use log1p for positive values, handle negative values separately
+                if df[col].min() >= 0:
+                    df[col] = np.log1p(df[col])
+                else:
+                    # For features that can be negative, use signed log transform
+                    df[col] = np.sign(df[col]) * np.log1p(np.abs(df[col]))
+
+    # Remove zero-variance and excluded columns
+    cols_to_remove = set(zero_var_cols) | exclude_cols
+    if cols_to_remove:
+        logger.info(f"Removing {len(cols_to_remove)} problematic features: {sorted(cols_to_remove)}")
+        feature_cols = [c for c in feature_cols if c not in cols_to_remove]
+
+    logger.info(f"Using {len(feature_cols)} features for Mokapot scoring")
+
+    # Write out Mokapot input for debugging
+    debug_path = folder if folder else "."
+    df.to_csv(f"{debug_path}/mokapot_input.tsv", sep="\t", index=False)
+    with open(f"{debug_path}/mokapot_feature_cols.txt", "w") as f:
+        f.write("\n".join(feature_cols))
+    logger.info(f"Wrote Mokapot input to {debug_path}/mokapot_input.tsv")
+
+    # Create Mokapot dataset
+    psms = mokapot.LinearPsmDataset(
+        psms=df,
+        target_column="target",
+        spectrum_columns=["psm_id"],
+        peptide_column="stripped_seq",
+        protein_column="protein",
+        feature_columns=feature_cols,
+        copy_data=True
+    )
+
+    # Let Mokapot auto-select the best initial direction
+    # This allows it to find the feature that best separates targets from decoys
+    logger.info(f"Running Mokapot with {len(df)} PSMs ({df['target'].sum()} targets, {(~df['target']).sum()} decoys)")
+    logger.info(f"Features: {feature_cols}")
+
+    # Determine initial direction - prefer scribe_scores if available
+    # scribe_scores is the neural network prediction (lower is better = negative direction)
+    if "scribe_scores" in feature_cols:
+        initial_direction = "scribe_scores"
+        logger.info(f"Using initial direction: scribe_scores (lower is better)")
+    elif "scribe_score" in feature_cols:
+        initial_direction = "scribe_score"
+        logger.info(f"Using initial direction: scribe_score (lower is better)")
     else:
-        output = pred
-        
-        
-        
-    ## Use the scores to estimate the #IDs as 1% FDR
-    
-    fpr, tpr, _ = roc_curve(y, output)
-    # plt.subplots()
-    # plt.plot(fpr,tpr)
-    # print("AUC: ",np.round(auc(fpr,tpr),3))
-    
-    
-    
-    # ordered_scores = sorted(output)[::-1]
-    
-    ## note this is slow
-    ## count down to find optimal FDR but then just use every Nth score to get a nice plot
-    # fdr = []
-    # threshold = []
-    # interval = 1
-    # for idx,s in enumerate(tqdm.tqdm(ordered_scores)):
-    #     if idx%interval==0:
-    #         ## SCORES IN INCREASING ORDER
-    #         # fdr.append(np.sum(np.greater_equal(pred[~y.astype(bool),1],s))/np.sum(np.greater_equal(pred[:,1],s)))
-            
-    #         # Scores decreasing
-    #         val = np.sum(np.greater_equal(output[~y.astype(bool)],s))/np.sum(np.greater_equal(output,s))
-    #         fdr.append(val)
-    #         if val<.01:
-    #             # if threshold==[]:
-    #             threshold = [ordered_scores[idx-1],s]
-    #         else:
-    #             interval=10
-    
-    
-    ## FASTER VERSION OF ABOVE
-    score_order = np.argsort(-output, kind='stable')
-    orig_order = np.argsort(score_order, kind='stable')
-    decoy_order = fdc["decoy"][score_order]
-    frac_decoy = np.cumsum(decoy_order)/np.cumsum(~decoy_order)
-    # plt.plot(frac_decoy)
-    T = output[score_order[min(len(score_order)-1,np.searchsorted(frac_decoy,0.01))]]
-    above_t = output>T
-    fdc["PredVal"] = output
-    fdc["Qvalue"] = frac_decoy[orig_order]
-    
-    if folder:
-        
-        plt.subplots()
-        y_log=False
-        vals,bins,_ = plt.hist(output,50,log=y_log,label="All")
-        plt.hist(output[y.astype(bool)],bins,alpha=.5,log=y_log,label="Targets")
-        plt.hist(output[~y.astype(bool)],bins,alpha=.5,log=y_log,label="Decoys")
-        plt.legend()
-        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
-        plt.vlines(T,0,max(vals))
-        plt.savefig(folder+"/ModelScore.png",dpi=600,bbox_inches="tight")
-        
-        
-        
-        feat = 'rt_error'
-        func = np.array#np.log10#
-        plt.subplots()
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
-        # plt.hist([],[])
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="Low Scoring")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.decoy]]),bins,alpha=.5,label="Decoy")
-        plt.xlabel(feat)
-        plt.ylabel("Frequency")
-        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
-        plt.legend()
-        plt.savefig(folder+"/RT_error.png",dpi=600,bbox_inches="tight")
-        
-                
-        feat = 'mz_error'
-        func = np.array#np.log10#
-        plt.subplots()
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
-        # plt.hist([],[])
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="Low Scoring")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.decoy]]),bins,alpha=.5,label="Decoy")
-        plt.xlabel(feat)
-        plt.ylabel("Frequency")
-        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
-        plt.legend()
-        plt.savefig(folder+"/mz_error.png",dpi=600,bbox_inches="tight")
+        initial_direction = None
+        logger.info("No scribe_score found, letting Mokapot auto-select direction")
 
-        plt.close("all")
-    
+    # Run Mokapot with Percolator model
+    # brew() returns (models, scores) where scores is list of numpy arrays
+    # Use 5 folds to match original RF, max_iter=10 for convergence
+    # Use train_fdr=0.05 to be more permissive (similar to coeff > 1 approach)
+    model = mokapot.PercolatorModel(
+        direction=initial_direction,
+        train_fdr=0.05,  # More permissive than 0.01 to include more positive examples
+        max_iter=15,
+    )
+    models, scores = mokapot.brew([psms], model=model, folds=5)
+
+    # Calculate q-values using TDC (target-decoy competition)
+    # This bypasses mokapot's assign_confidence which has issues with PEP calculation
+    mokapot_scores = scores[0]
+    targets = df["target"].values
+
+    # Log score statistics
+    logger.info(f"Score range: [{mokapot_scores.min():.4f}, {mokapot_scores.max():.4f}]")
+    logger.info(f"Mean target score: {mokapot_scores[targets].mean():.4f}")
+    logger.info(f"Mean decoy score: {mokapot_scores[~targets].mean():.4f}")
+
+    # Sort by score (descending - higher is better)
+    score_order = np.argsort(-mokapot_scores)
+    sorted_targets = targets[score_order]
+
+    # Calculate FDR using standard TDC: FDR = decoys / targets
+    cumsum_decoys = np.cumsum(~sorted_targets)
+    cumsum_targets = np.cumsum(sorted_targets)
+    cumsum_targets_safe = np.maximum(cumsum_targets, 1)  # Avoid division by zero
+    fdr = cumsum_decoys / cumsum_targets_safe
+
+    # Convert FDR to q-values (minimum FDR at this score or better)
+    qvalues_sorted = np.minimum.accumulate(fdr[::-1])[::-1]
+
+    # Map back to original order
+    orig_order = np.argsort(score_order)
+    qvalues = qvalues_sorted[orig_order]
+
+    # Assign scores and q-values back to original dataframe
+    fdc["PredVal"] = mokapot_scores
+    fdc["Qvalue"] = qvalues
+
+    logger.info(f"Mokapot complete: {(fdc['Qvalue'] < 0.01).sum()} PSMs at 1% FDR")
+
+    # Generate diagnostic plots
+    if folder:
+        _plot_score_distributions(fdc, folder)
+
     return fdc
+
+
+def _plot_score_distributions(fdc, folder):
+    """Generate diagnostic plots for score distributions."""
+    output = fdc["PredVal"].values
+    above_t = fdc["Qvalue"] <= 0.01
+
+    # Score distribution plot
+    plt.figure()
+    vals, bins, _ = plt.hist(output, 50, label="All")
+    plt.hist(output[~fdc["decoy"]], bins, alpha=0.5, label="Targets")
+    plt.hist(output[fdc["decoy"]], bins, alpha=0.5, label="Decoys")
+    plt.legend()
+    plt.title(f"Mokapot Score Distribution")
+    if vals.max() > 0:
+        plt.vlines(output[above_t].min() if above_t.any() else 0, 0, vals.max(), colors='r', linestyles='dashed')
+    plt.savefig(folder + "/ModelScore.png", dpi=600, bbox_inches="tight")
+    plt.close()
+
+    # RT and m/z error plots
+    for feat in ['rt_error', 'mz_error']:
+        if feat not in fdc.columns:
+            continue
+        plt.figure()
+        vals, bins, _ = plt.hist(fdc[feat].values, 40, label="All")
+        plt.hist(fdc.loc[above_t, feat].values, bins, alpha=0.5, label="1% FDR")
+        plt.hist(fdc.loc[~above_t & ~fdc["decoy"], feat].values, bins, alpha=0.5, label="Low Scoring")
+        plt.hist(fdc.loc[fdc["decoy"], feat].values, bins, alpha=0.5, label="Decoy")
+        plt.xlabel(feat)
+        plt.ylabel("Frequency")
+        plt.title(f"Mokapot - {feat}")
+        plt.legend()
+        plt.savefig(folder + f"/{feat}.png", dpi=600, bbox_inches="tight")
+        plt.close()
 
 
 def log_df(df):

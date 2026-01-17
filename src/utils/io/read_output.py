@@ -51,7 +51,7 @@ names = ["coeff", "spec_id", "Ms1_spec_id",
          # "manhattan_distances_nearby_max",
          # "max_matched_residuals_nearby_min",
          # "gof_stats_nearby_min",
-         # "scribe_scores_nearby_min",
+         # "scribe_scores_nearby_max",
          # "n_scans",
          # "smoothness"
          ]
@@ -99,7 +99,7 @@ dtypes  = {"coeff":np.float32,
             # "manhattan_distances_nearby_max":np.float32,
             # "max_matched_residuals_nearby_min":np.float32,
             # "gof_stats_nearby_min":np.float32,
-            # "scribe_scores_nearby_min":np.float32,
+            # "scribe_scores_nearby_max":np.float32,
             # "n_scans":np.float32,
             # "smoothness":np.float32
             }
@@ -356,7 +356,7 @@ def get_large_prec(file,
     decoy_coeffs_lf = find_extrema_in_nearby_scans(
         decoy_coeffs_lf,
         ["manhattan_distances", "max_matched_residuals", "gof_stats", "scribe_scores"],
-        [True, False, False, False],
+        [True, False, False, False],  # scribe_scores: False because lower = better (raw squared error)
         n_scans=2)
 
     # Convert to Pandas for external function calls

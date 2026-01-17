@@ -1,6 +1,11 @@
 # No [build-system], no [project] -> uv won't try to build your code.
 # It will only create a venv and install these dependencies.
 
+[project]
+name = "jmod"
+version = "0.0.0"
+requires-python = ">=3.11,<3.12"
+
 [tool.uv]
 managed = true
 default-groups = ["deps"]
@@ -43,6 +48,7 @@ deps = [
   "xgboost",
   "statsmodels",
   "joblib",
+  "mokapot @ file:///Users/danielgeiszler/PycharmProjects/mokapot",
 
   # Optimization / math extras
   "cvxopt",
