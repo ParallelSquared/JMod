@@ -458,5 +458,76 @@ def fine_tune_rt(grouped_df,
                 plt.close()
             except Exception as e:
                 logger.warning(f"Error creating fine-tuned model plot: {e}")
-        
+
     return data_split, models, model_to_obs
+
+
+def predict_decoy_rts(decoy_library, models, convertor):
+    """
+    Predict RTs for decoy peptides using CNN models and calibrate to observed scale.
+
+    Decoys have shuffled/reversed sequences that differ from their parent targets.
+    This function predicts where those sequences would elute based on their
+    actual amino acid composition, giving decoys independent RT values.
+
+    Parameters
+    ----------
+    decoy_library : dict
+        Decoy library with shuffled sequences in entry["seq"]
+    models : list
+        List of CNN models returned from fine_tune_rt()
+    convertor : callable
+        LOWESS calibration function (model_to_obs) from fine_tune_rt()
+
+    Returns
+    -------
+    dict
+        Updated decoy_library with predicted iRT values
+    """
+    logger.info("Predicting RTs for decoy sequences")
+
+    all_decoy_keys = list(decoy_library)
+
+    # Encode decoy sequences (these are the SHUFFLED sequences)
+    decoy_seqs_encoded = [one_hot_encode_sequence(decoy_library[key]["seq"])
+                         for key in all_decoy_keys]
+
+    # Get ensemble predictions from all models
+    model_outputs = []
+    decoy_seqs_array = np.array(decoy_seqs_encoded)
+
+    for model in models:
+        try:
+            if hasattr(model, 'predict'):
+                pred = model.predict(decoy_seqs_array)
+            else:
+                # TFSMLayer objects are called directly
+                pred = model(decoy_seqs_array)
+                if isinstance(pred, dict):
+                    for key in pred:
+                        if hasattr(pred[key], 'numpy'):
+                            pred = pred[key].numpy()
+                            break
+
+            if hasattr(pred, 'numpy'):
+                pred = pred.numpy()
+
+            model_outputs.append(pred)
+        except Exception as e:
+            logger.warning(f"Error predicting decoy RTs with model: {e}")
+
+    if not model_outputs:
+        logger.warning("No valid predictions for decoys, keeping inherited RTs")
+        return decoy_library
+
+    # Average predictions and calibrate to observed scale
+    raw_predictions = np.mean(model_outputs, axis=0).flatten()
+    calibrated_rts = convertor(raw_predictions)
+
+    # Update decoy library iRT values
+    for key, rt in zip(all_decoy_keys, calibrated_rts):
+        decoy_library[key]["iRT"] = rt
+
+    logger.info(f"Updated iRT values for {len(all_decoy_keys)} decoys")
+
+    return decoy_library

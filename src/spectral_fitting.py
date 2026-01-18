@@ -604,7 +604,8 @@ def fit_to_lib2(dia_spec,
                ms1_spectra = None,
                return_frags = False,
                decoy=False,
-               decoy_library=None):
+               decoy_library=None,
+               decoy_rt=None):
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
@@ -972,7 +973,12 @@ def fit_to_lib2(dia_spec,
         
         ####################################
         if decoy:
-            decoy_features = get_features(np.stack([rt_mz[window_idxs[decoy_peaks_in_dia],0],decoy_mz[decoy_peaks_in_dia]],1),
+            # Use decoy's own predicted RT if available, otherwise fall back to target RT
+            if decoy_rt is not None:
+                decoy_rt_values = decoy_rt[window_idxs[decoy_peaks_in_dia]]
+            else:
+                decoy_rt_values = rt_mz[window_idxs[decoy_peaks_in_dia], 0]
+            decoy_features = get_features(np.stack([decoy_rt_values, decoy_mz[decoy_peaks_in_dia]], 1),
                                           decoy_spec_values_split,
                                             decoy_spec_row_indices_split,
                                             decoy_spec_col_indices_split,

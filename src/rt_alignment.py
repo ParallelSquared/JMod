@@ -1100,7 +1100,7 @@ def cdf_plots(emp_data,emp_p,percentile,boundary,pred_data=None,pred_p=None,resu
         
         plt.close("all")
 
-def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None):
+def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None, return_rt_models=False):
     """
     Perform a preliminary search of the specrta to align the library mz and RT values
 
@@ -1120,16 +1120,22 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         If provided, where to save the logs/figures. The default is None.
     ms2 : bool, optional
         (Not active) Whether to align at MS2 level. The default is False.
+    return_rt_models : bool, optional
+        If True, also return CNN models and calibrator for decoy RT prediction.
+        The default is False.
 
     Returns
     -------
-    (rt_spl, mz_func), updatedLibrary
-    
+    (rt_spl, mz_func), updatedLibrary[, (models, convertor)]
+
         rt_spl: Spline fitting library retention time to observed values
-        
+
         mz_func: Function that aligns library precuror m/z to observed values
-        
+
         updatedLibrary: Copy of the library with updated Retention time if fine-tuning
+
+        models, convertor: (Optional, if return_rt_models=True) CNN models and
+            LOWESS calibration function for predicting decoy RTs
         
 
     """
@@ -1267,35 +1273,27 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         all_lib_keys = list(librarySpectra)
         
         
-        ###### Check if fine-tuning iproves alignment
-        
-        if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
-            # boundary = elbow_pred_x
-            logger.info("Fine Tuned Library Chosen")
-            # Fit 2-component zero-mean GMM to residuals
-            weights, sigmas = fit_zero_mean_gmm_1d(all_pred_diffs, n_components=2)
-            order = np.argsort(sigmas)
-            sigmas = sigmas[order]
-            # Combine elution width and GMM sigma, take 4th standard deviation
-            boundary = 4 * sigmas[0] + 8 * elution_sd
-            rt_spl = pred_rt_spl
-            all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
-            all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
-            
-            for key,rt in zip(all_lib_keys,all_new_lib_rts):
-                updatedLibrary[key]["iRT"] = rt
-                
-        else: ### empirical are better
-            # boundary = elbow_emp_x
-            logger.info("Empirical Library Chosen")
-            # Fit 2-component zero-mean GMM to residuals
-            weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
-            order = np.argsort(sigmas)
-            sigmas = sigmas[order]
-            # Combine elution width and GMM sigma, take 4th standard deviation
-            boundary = 4 * sigmas[0] + 8 * elution_sd
-            ## keep the library RTs and splines the same
-            rt_spl = emp_rt_spl
+        ###### Always use predictions for both targets and decoys
+        ###### (comparison kept for logging/tracking)
+
+        if pred_cdf_auc > emp_cdf_auc:
+            logger.info("Fine Tuned Library Chosen (predictions better than empirical)")
+        else:
+            logger.info(f"Fine Tuned Library Chosen (predictions used by default; empirical AUC={emp_cdf_auc:.4f} vs pred AUC={pred_cdf_auc:.4f})")
+
+        # Always use predictions
+        # Fit 2-component zero-mean GMM to residuals
+        weights, sigmas = fit_zero_mean_gmm_1d(all_pred_diffs, n_components=2)
+        order = np.argsort(sigmas)
+        sigmas = sigmas[order]
+        # Combine elution width and GMM sigma, take 4th standard deviation
+        boundary = 4 * sigmas[0] + 8 * elution_sd
+        rt_spl = pred_rt_spl
+        all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
+        all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
+
+        for key,rt in zip(all_lib_keys,all_new_lib_rts):
+            updatedLibrary[key]["iRT"] = rt
         
         
         
@@ -1582,6 +1580,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # if ms2:
     #     return (rt_spl, mz_func, ms2_func), updatedLibrary
     # else:
+    if return_rt_models and not config.args.use_emp_rt:
+        # Return models and convertor for decoy RT prediction
+        return (rt_spl, mz_func), updatedLibrary, (models, convertor)
     return (rt_spl, mz_func), updatedLibrary
 
 ###################################################################################################
