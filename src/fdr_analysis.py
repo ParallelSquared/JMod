@@ -455,15 +455,12 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     logger.info("Scoring IDs")
     
     
-    ## We consider decoys and targets with v small coeffs to be from the null distributiom
-    _bool = np.logical_and(~fdc["decoy"],fdc.coeff>1)
-    
-    ## define our features and labels for the model
-    y = np.array(_bool,dtype=int)
+    ## Only decoys are negatives - all targets are positives
+    y = (~fdc["decoy"]).astype(int).values
     
     # exclude necessary columns
-    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
-                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
+    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq',
+                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals',
                   'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
                   "plexfittrace_ps_all",
                   "unique_frag_mz", "untag_prec",
@@ -472,7 +469,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "unique_frag_mz",
                   "unique_obs_int",
                   "file_name",
-                  "protein"]
+                  "protein",
+                  "window_id"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
 
     # DEBUG: Check each column for infinity or very large values
