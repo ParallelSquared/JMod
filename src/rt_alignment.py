@@ -1287,7 +1287,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         order = np.argsort(sigmas)
         sigmas = sigmas[order]
         # Combine elution width and GMM sigma, take 4th standard deviation
-        boundary = 4 * sigmas[0] + 8 * elution_sd
+        boundary = 4 * sigmas[0] + 4 * elution_sd
         rt_spl = pred_rt_spl
         all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
         all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
@@ -1320,7 +1320,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         order = np.argsort(sigmas)
         sigmas = sigmas[order]
         # Combine elution width and GMM sigma, take 4th standard deviation
-        boundary = 4 * sigmas[0] + 8 * elution_sd
+        boundary = 4 * sigmas[0] + 4 * elution_sd
         #boundary = fit_errors(all_emp_diffs, limit, percentile)
     
     new_lib_rt = np.array([updatedLibrary[k]["iRT"] for k in id_keys])
