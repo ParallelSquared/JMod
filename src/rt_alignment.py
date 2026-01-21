@@ -1176,8 +1176,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
     # Collapse to most intense MS1 per peptide ion
     output_df = output_df.sort("closest_peak_intensity_ms1", descending=True).unique(subset=["seq", "z"], keep="first")
-    import polars as pl
-    output_df = output_df.filter(pl.col("cluster_size") >= 1)
 
     # Convert to pandas for downstream processing
     output_df = output_df.to_pandas()

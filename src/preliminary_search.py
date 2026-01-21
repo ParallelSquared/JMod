@@ -17,8 +17,7 @@ from src.utils.io.load_files import Spectrum
 def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10):
     # Get tag plex
     if mass_tag is not None:
-        if mass_tag.channel_names is not None:
-            plex = len(mass_tag.channel_names)
+        plex = len(mass_tag.channel_names)
     else:
         plex = 1
 
@@ -80,7 +79,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         annotate_matches=True, # Add fragment annotation
         min_matched_peaks=3,
         max_fragment_charge=2,
-        report_psms=5*plex
+        report_psms=1*plex
     )
 
     # Convert spectra into a Rust-friendly format
