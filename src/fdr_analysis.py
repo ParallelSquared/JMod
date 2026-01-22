@@ -455,11 +455,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     logger.info("Scoring IDs")
     
     
-    ## We consider decoys and targets with v small coeffs to be from the null distributiom
-    _bool = np.logical_and(~fdc["decoy"],fdc.coeff>1)
-    
-    ## define our features and labels for the model
-    y = np.array(_bool,dtype=int)
+    ## Only decoys are negatives - all targets are positives
+    y = np.array(~fdc["decoy"], dtype=int)
     
     # exclude necessary columns
     drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
@@ -582,7 +579,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     score_order = np.argsort(-output, kind='stable')
     orig_order = np.argsort(score_order, kind='stable')
     decoy_order = fdc["decoy"][score_order]
-    frac_decoy = np.cumsum(decoy_order)/np.cumsum(~decoy_order)
+    frac_decoy = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order)  # Unbiased FDR estimator: (1+d)/t
+    frac_decoy = np.minimum.accumulate(frac_decoy[::-1])[::-1]  # Monotonize: q-value = min of downstream q-values
     # plt.plot(frac_decoy)
     T = output[score_order[min(len(score_order)-1,np.searchsorted(frac_decoy,0.01))]]
     above_t = output>T
@@ -662,7 +660,8 @@ def compute_protein_FDR(df,results_folder=None):
     df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False).reset_index(drop=True)
     df_seqchargeqvals["prot_rank"] = df_seqchargeqvals.index + 1  # Equivalent to row_number()
     df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["decoy"].cumsum()
-    df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["accum_decoys"] / (~df_seqchargeqvals["decoy"]).cumsum()
+    df_seqchargeqvals["Protein_Qvalue"] = (1 + df_seqchargeqvals["accum_decoys"]) / (~df_seqchargeqvals["decoy"]).cumsum()  # Unbiased FDR estimator: (1+d)/t
+    df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["Protein_Qvalue"].iloc[::-1].cummin().iloc[::-1]  # Monotonize: q-value = min of downstream q-values
     
     # Filter for non-decoy proteins and select distinct protein values
     df_seqchargeqvals_distinct = (
