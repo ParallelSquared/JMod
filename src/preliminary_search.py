@@ -157,6 +157,15 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
     # Calculate spectral angle
     fragment_library_map = create_fragment_library_map(library_spectra)
 
+    # Filter to only peptides present in the library (before computing expensive scores)
+    valid_keys_df = pl.DataFrame({
+        "seq": [v["mod_seq"] for v in library_spectra.values()],
+        "z": [int(v["prec_z"]) for v in library_spectra.values()]
+    }).unique()
+
+    # Semi-join to keep only rows where (seq, z) exists in the library
+    df = df.join(valid_keys_df, on=["seq", "z"], how="semi")
+
     logger.info("Computing spectral angle")
     # Define the Polars UDF closure to capture the fragment_library_map
     def spectral_angle_polars_udf(r: dict) -> float:
@@ -247,16 +256,17 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         """
         seq = r['seq']  # Modified sequence string
         z = r['z']  # Charge
-        ms2_intensity = r['ms2_intensity']
 
-        if seq is None or z is None or ms2_intensity is None or ms2_intensity == 0.0:
-            # Return a definite low score if key data is missing or spectrum is empty
+        if seq is None or z is None:
+            # Return a definite low score if key data is missing
+            logger.debug(f"Scribe error: Missing data - seq={seq}, z={z}")
             return -999.0
 
-            # 1. Get the library fragment vector for the peptide (using TUPLE KEY)
+        # 1. Get the library fragment vector for the peptide (using TUPLE KEY)
         library_key = (seq, z)
         library_vec = fragment_library_map.get(library_key)
         if not library_vec:
+            logger.debug(f"Scribe error: Library key not found - {library_key}")
             return -999.0
 
         # 2. Access observed fragment data directly (no string parsing needed!)
@@ -297,6 +307,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         sum_B_raw = np.sum(B_raw)
 
         if sum_A_raw == 0.0 or sum_B_raw == 0.0:
+            logger.debug(f"Scribe error: No fragment overlap - seq={seq}, z={z}, sum_A={sum_A_raw}, sum_B={sum_B_raw}, n_library_keys={len(all_keys)}, n_observed_keys={len(observed_vec)}")
             return -999.0
 
         # 6. Normalization (to sum to 1) and Square Root Transformation
@@ -323,22 +334,69 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
             'frag_kinds',
             'frag_fragment_ordinals',
             'frag_intensities',
-            'ms2_intensity',
-            'seq',  # Modified sequence column
-            'z',  # Charge column (renamed from 'charge')
+            'seq',
+            'z',
         ])
         .map_elements(scribe_score_polars_udf, return_dtype=pl.Float64)
-        .alias('scribe_score')  # Renamed column
+        .alias('scribe_score')
     )
 
-    # Filter to only peptides present in the library
-    valid_keys_df = pl.DataFrame({
-        "seq": [v["mod_seq"] for v in library_spectra.values()],
-        "z": [int(v["prec_z"]) for v in library_spectra.values()]
-    }).unique()
+    logger.info("Computing matched library intensity percentage")
+    def matched_lib_intensity_pct_udf(r: dict) -> float:
+        """
+        Calculate the percentage of library intensity covered by matched fragments.
 
-    # Semi-join to keep only rows where (seq, z) exists in the library
-    df = df.join(valid_keys_df, on=["seq", "z"], how="semi")
+        Returns: (sum of library intensities for matched fragments) / (sum of all library intensities) * 100
+        """
+        seq = r['seq']
+        z = r['z']
+
+        if seq is None or z is None:
+            return -999.0
+
+        library_key = (seq, z)
+        library_vec = fragment_library_map.get(library_key)
+        if not library_vec:
+            return -999.0
+
+        # Get observed fragments
+        charges = r['frag_charges']
+        kinds_raw = r['frag_kinds']
+        ordinals = r['frag_fragment_ordinals']
+        intensities = r['frag_intensities']
+
+        if not (len(charges) == len(kinds_raw) == len(ordinals) == len(intensities)):
+            return -999.0
+
+        # Build observed fragment keys (only those with non-zero intensity)
+        observed_keys = set()
+        for c, k, o, i in zip(charges, kinds_raw, ordinals, intensities):
+            if i > 0:
+                key = (k.upper(), o, c)
+                observed_keys.add(key)
+
+        # Calculate matched library intensity
+        matched_lib_intensity = sum(library_vec[k] for k in library_vec.keys() if k in observed_keys)
+        total_lib_intensity = sum(library_vec.values())
+
+        if total_lib_intensity <= 0:
+            return -999.0
+
+        return (matched_lib_intensity / total_lib_intensity) * 100
+
+    # Apply the matched library intensity percentage UDF
+    df = df.with_columns(
+        pl.struct([
+            'frag_charges',
+            'frag_kinds',
+            'frag_fragment_ordinals',
+            'frag_intensities',
+            'seq',
+            'z',
+        ])
+        .map_elements(matched_lib_intensity_pct_udf, return_dtype=pl.Float64)
+        .alias('matched_lib_pct')
+    )
 
     return df
 

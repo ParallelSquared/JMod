@@ -701,8 +701,8 @@ def empirical_fit(output_df, results_folder=None):
         cor_filter = np.logical_and.reduce(
             [output_df[feat] > np.percentile(output_df[feat], feature_percentile)
              for feat in [
-                 "scribe_score"
-                ]
+                "scribe_score"
+             ]
              ]
         )
 
@@ -890,7 +890,7 @@ def plot_rt_residuals_mixture(residuals,
 
     ax.text(
         0.98, 0.95,
-        f"PEP(0) = {pep0:.3f}",
+        f"PEP(0) = {pep0:.3f}", #TODO THIS IS NOT THE RIGHT VALUE
         transform=ax.transAxes,
         ha="right",
         va="top",

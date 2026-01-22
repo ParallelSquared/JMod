@@ -174,7 +174,7 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float, pl.DataFram
 
     # Step 3: Compute scan gap mode (auto-detect MS duty cycle)
     scan_gap_mode = _compute_scan_gap_mode(df)
-    max_scan_gap = scan_gap_mode + 5
+    max_scan_gap = scan_gap_mode + 1  # Double the duty cycle to tolerate missing a scan
 
     # Step 4 & 5: Cluster adjacent scans and collect centered RTs
     centered_rts: list[float] = []
