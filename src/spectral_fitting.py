@@ -24,6 +24,64 @@ hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim,np_pearson_
 from src.utils.parse_peptides import change_seq, convert_frags
 from src.models.spec_lib.spec_lib import frag_to_peak
 
+
+def huber_nnls_irls(A, b, max_iter=1, tol=1e-4):
+    """
+    Solve non-negative least squares with Huber loss via IRLS.
+
+    NNLS solves: min ||Ax - b||² subject to x >= 0
+    where:
+        A: (n_peaks, n_candidates) - library spectra matrix
+        b: (n_peaks,) - observed intensities
+        x: (n_candidates,) - coefficients for each library spectrum
+
+    Args:
+        A: Sparse library matrix (n_peaks x n_candidates)
+        b: Observed intensities (n_peaks,)
+        max_iter: Maximum IRLS iterations
+        tol: Convergence tolerance
+
+    Returns:
+        dict with 'x': coefficients (n_candidates,)
+    """
+    # Convert to CSR for efficient matrix-vector multiplication
+    A_csr = A.tocsr()
+    n_peaks = A_csr.shape[0]
+
+    # Initial solve with uniform weights
+    weights = np.ones(n_peaks)
+    x = sparse_nnls.lsqnonneg(A, b, {"show_progress": False})['x']
+
+    for i in range(max_iter):
+        # Compute residuals: A @ x gives (n_peaks,) when x is (n_candidates,)
+        # Use .dot() and ravel() to ensure 1D output
+        predicted = A_csr.dot(x).ravel()
+        residuals = predicted - b
+
+        # Auto-tune delta: 1.345 * MAD (robust scale estimate)
+        mad = np.median(np.abs(residuals - np.median(residuals)))
+        delta = 1.345 * mad if mad > 0 else 1.0
+
+        # Update Huber weights (n_peaks,)
+        abs_r = np.abs(residuals)
+        new_weights = np.where(abs_r <= delta, 1.0, delta / abs_r)
+
+        # Check convergence
+        if np.max(np.abs(new_weights - weights)) < tol:
+            break
+        weights = new_weights
+
+        # Weighted NNLS: apply sqrt(weights) to both A and b
+        # W is diagonal (n_peaks x n_peaks), so W @ A is (n_peaks x n_candidates)
+        sqrt_w = np.sqrt(weights)
+        A_weighted = sparse.diags(sqrt_w) @ A_csr
+        b_weighted = sqrt_w * b
+
+        x = sparse_nnls.lsqnonneg(A_weighted, b_weighted, {"show_progress": False})['x']
+
+    return {'x': x}
+
+
 def get_closest_ms1(prec_rt,ms1_spectra):
     ms1_rt = np.array([i.RT for i in ms1_spectra])
     closest_ms1_scan_idx = closest_ms1spec(prec_rt, ms1_rt)
@@ -929,13 +987,13 @@ def fit_to_lib2(dia_spec,
         dia_spec_int = dia_spectrum[unique_row_idxs,1]
         
         # add another term to penalise additional lib peaks
-        dia_spec_int = np.append(dia_spec_int,[0]*(sparse_lib_matrix.shape[0]-dia_spec_int.shape[0])) 
-        
-        # Fit lib spectra to observed spectra
-        fit_results = sparse_nnls.lsqnonneg(sparse_lib_matrix,dia_spec_int,{"show_progress":False})
+        dia_spec_int = np.append(dia_spec_int,[0]*(sparse_lib_matrix.shape[0]-dia_spec_int.shape[0]))
+
+        # Fit lib spectra to observed spectra (Huber loss via IRLS)
+        fit_results = huber_nnls_irls(sparse_lib_matrix, dia_spec_int)
         lib_coefficients = fit_results['x']
-        
-        
+
+
         ####################################
         features = get_features(rt_mz[window_idxs[ref_peaks_in_dia]],
                                 ref_spec_values_split,
