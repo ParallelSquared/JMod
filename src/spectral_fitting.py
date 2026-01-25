@@ -453,7 +453,11 @@ def get_features(
     # mz tol
     rel_error = ms1_error#np.zeros(len(ref_peaks_in_dia))
     rt_error = prec_rt-rt_mz[:,0]
-    
+    # Binary flag: 1 if RT error was clipped, 0 otherwise
+    rt_clipped = (np.abs(rt_error) > config.opt_rt_tol).astype(float)
+    # Cap RT error at tolerance for symmetric target-decoy treatment
+    rt_error = np.clip(rt_error, -config.opt_rt_tol, config.opt_rt_tol)
+
     frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
     predicted_spec = np.squeeze(sparse_lib_matrix*lib_coefficients)[:-1]
     
@@ -516,6 +520,7 @@ def get_features(
                           frac_dia_intensity,
                           rel_error,
                           rt_error,
+                          rt_clipped,
                           frac_int_matched,
                           frac_int_pred,
                           r2all,
@@ -667,7 +672,9 @@ def fit_to_lib2(dia_spec,
                ms1_spectra = None,
                return_frags = False,
                decoy=False,
-               decoy_library=None):
+               decoy_library=None,
+               decoy_rt=None,
+               window_id=None):
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
@@ -1035,7 +1042,12 @@ def fit_to_lib2(dia_spec,
         
         ####################################
         if decoy:
-            decoy_features = get_features(np.stack([rt_mz[window_idxs[decoy_peaks_in_dia],0],decoy_mz[decoy_peaks_in_dia]],1),
+            # Use decoy's own predicted RT if available, otherwise fall back to target RT
+            if decoy_rt is not None:
+                decoy_rt_values = decoy_rt[window_idxs[decoy_peaks_in_dia]]
+            else:
+                decoy_rt_values = rt_mz[window_idxs[decoy_peaks_in_dia], 0]
+            decoy_features = get_features(np.stack([decoy_rt_values, decoy_mz[decoy_peaks_in_dia]], 1),
                                           decoy_spec_values_split,
                                             decoy_spec_row_indices_split,
                                             decoy_spec_col_indices_split,
@@ -1120,11 +1132,12 @@ def fit_to_lib2(dia_spec,
                        *all_features[j],
                        *all_ms2_frags[j],
                        config.args.mzml,
-                       library[(re.sub("Decoy_","",all_spec_ids[i][0]),all_spec_ids[i][1],all_spec_ids[i][2])][config.protein_column] if return_prot else "NA" ]
+                       library[(re.sub("Decoy_","",all_spec_ids[i][0]),all_spec_ids[i][1],all_spec_ids[i][2])][config.protein_column] if return_prot else "NA",
+                       window_id if window_id is not None else "target"]
                        for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
         
         else:
-            
+
             output = [[non_zero_coeffs[i],
                        spec_idx,
                        ms1_spec.scan_num,
@@ -1135,7 +1148,8 @@ def fit_to_lib2(dia_spec,
                        *all_features[j],
                        *all_ms2_frags[j],
                        config.args.mzml,
-                       library[(re.sub("Decoy_","",all_spec_ids[i][0]),all_spec_ids[i][1])][config.protein_column] if return_prot else "NA" ]
+                       library[(re.sub("Decoy_","",all_spec_ids[i][0]),all_spec_ids[i][1])][config.protein_column] if return_prot else "NA",
+                       window_id if window_id is not None else "target"]
                        for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
             
         # lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
@@ -1376,7 +1390,11 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
         else:
             rel_error = np.zeros(len(ref_peaks_in_dia))
         rt_error = prec_rt-rt_mz[window_idxs[ref_peaks_in_dia],0]
-        
+        # Binary flag: 1 if RT error was clipped, 0 otherwise
+        rt_clipped = (np.abs(rt_error) > config.opt_rt_tol).astype(float)
+        # Cap RT error at tolerance for symmetric target-decoy treatment
+        rt_error = np.clip(rt_error, -config.opt_rt_tol, config.opt_rt_tol)
+
         frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
         predicted_spec = np.squeeze(sparse_lib_matrix*lib_coefficients)[:-1]
         # print(len(dia_spec_int),len(predicted_spec))
@@ -1463,6 +1481,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
                             frac_dia_intensity,
                             rel_error,
                             rt_error,
+                            rt_clipped,
                             frac_int_matched,
                             frac_int_pred,
                             r2all,

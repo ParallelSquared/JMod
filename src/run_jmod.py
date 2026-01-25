@@ -25,6 +25,7 @@ from src.utils.misc_functions import write_to_csv
 from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
+from src.finetune_funs import predict_decoy_rts
 
 from src.logger import logger, set_log_filepath, log_exceptions
 import logging
@@ -280,9 +281,13 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.concatenate(rt_mz)
         spectrumLibrary = plex_lib
+        rt_models_data = None  # Decoy RT prediction not supported for timeplex
     else:
-        funcs,spectrumLibrary = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
-                                        ms2=config.args.ms2_align, mass_tag=mass_tag)
+        # Request RT models for decoy prediction
+        mzrt_result = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
+                              ms2=config.args.ms2_align, mass_tag=mass_tag, return_rt_models=True)
+        funcs, spectrumLibrary = mzrt_result[0], mzrt_result[1]
+        rt_models_data = mzrt_result[2] if len(mzrt_result) > 2 else None
         rt_spl,mz_func = funcs[:2]
         # rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()]) # TODO QQQXXX Input should have at least 1 dimension, got scalar array(-16.) instead
@@ -331,8 +336,22 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     for key in decoy_lib:
         decoy_lib[key]["top_n"]=np.argsort(-decoy_lib[key]["spectrum"][:,1])[:config.top_n]
     logger.info("Finished Decoy Library")
-    
-    
+
+    # Predict decoy RTs using CNN on shuffled sequences
+    if rt_models_data is not None and not config.args.use_emp_rt:
+        models, convertor = rt_models_data
+        decoy_lib = predict_decoy_rts(decoy_lib, models, convertor)
+        # Create decoy RT array (parallel to rt_mz) for scoring with decoy's own predicted RT
+        decoy_rt = np.array([rt_spl(decoy_lib[key]["iRT"]) for key in all_keys])
+        # Create decoy_rt_mz for dual-window search (uses decoy RTs for window filtering)
+        decoy_rt_mz = np.array([[decoy_rt[i], rt_mz[i, 1]] for i in range(len(all_keys))])
+    else:
+        logger.info("Skipping decoy RT prediction (empirical mode or no models available)")
+        # Decoys use same RT as targets (original behavior)
+        decoy_rt = None
+        decoy_rt_mz = None
+
+
     ######################################################
     ### Write search params to file
     param_file = results_folder_path + "/params.txt"
@@ -371,8 +390,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         
         outputs= []
         for dia_spec in tqdm.tqdm(batch_spectra):
-            
-            outputs.append(fit_to_lib2(dia_spec,
+            # Search 1: Target RT window (filter by target predicted RTs)
+            results1 = fit_to_lib2(dia_spec,
                             library=spectrumLibrary,
                             rt_mz=rt_mz,
                             all_keys=all_keys,
@@ -384,7 +403,30 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                             ms1_spectra=DIAspectra.ms1scans,
                             return_frags=False,
                             decoy=True,
-                            decoy_library=decoy_lib))
+                            decoy_library=decoy_lib,
+                            decoy_rt=decoy_rt,
+                            window_id="target")
+
+            # Search 2: Decoy RT window (filter by decoy predicted RTs)
+            if decoy_rt_mz is not None:
+                results2 = fit_to_lib2(dia_spec,
+                                library=spectrumLibrary,
+                                rt_mz=decoy_rt_mz,  # Use decoy RTs for window filtering
+                                all_keys=all_keys,
+                                dino_features=None,
+                                rt_filter=True,
+                                rt_tol = config.opt_rt_tol,
+                                ms1_tol = config.opt_ms1_tol,
+                                mz_tol = config.mz_tol,
+                                ms1_spectra=DIAspectra.ms1scans,
+                                return_frags=False,
+                                decoy=True,
+                                decoy_library=decoy_lib,
+                                decoy_rt=decoy_rt,
+                                window_id="decoy")
+                outputs.append(results1 + results2)
+            else:
+                outputs.append(results1)
             
         long_outputs = [j for i in outputs for j in i]
         logger.debug(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")

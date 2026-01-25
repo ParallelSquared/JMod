@@ -18,6 +18,7 @@ names = ["coeff", "spec_id", "Ms1_spec_id",
          "frac_dia_int",
          "mz_error",
          "rt_error",
+         "rt_clipped",
          "frac_int_matched",
          "frac_int_pred",
          "spec_r2",
@@ -48,6 +49,7 @@ names = ["coeff", "spec_id", "Ms1_spec_id",
          "unique_obs_int",
          "file_name",
          "protein",
+         "window_id",
          # "manhattan_distances_nearby_max",
          # "max_matched_residuals_nearby_min",
          # "gof_stats_nearby_min",
@@ -68,6 +70,7 @@ dtypes  = {"coeff":np.float32,
             "frac_dia_int":np.float32,
             "mz_error":np.float32,
             "rt_error":np.float32,
+            "rt_clipped":np.float32,
             "frac_int_matched":np.float32,
             "frac_int_pred":np.float32,
             "spec_r2":np.float32,
@@ -96,6 +99,7 @@ dtypes  = {"coeff":np.float32,
             "obs_int":str,
             "file_name":str,
             "protein":str,
+            "window_id":str,
             # "manhattan_distances_nearby_max":np.float32,
             # "max_matched_residuals_nearby_min":np.float32,
             # "gof_stats_nearby_min":np.float32,
@@ -111,6 +115,10 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
     For each precursor, finds the minimum or maximum value of a specified column from
     nearby scans (N scans before and N scans after by retention time) relative to
     the scan with the highest coefficient.
+
+    With dual-window search: calculates nearby values within each window separately,
+    then aggregates across windows (min of mins for find_max=False, max of maxes for
+    find_max=True).
 
     Parameters
     ----------
@@ -129,26 +137,33 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
         The original dataframe with new '{column_name}_nearby_{max|min}' columns.
     """
 
-    group_cols = ['seq', 'z'] + (['time_channel'] if 'time_channel' in df.columns else [])
+    # Base group columns (peptide identity)
+    # Use collect_schema().names() to avoid PerformanceWarning on LazyFrame
+    col_names = df.collect_schema().names()
+    base_group_cols = ['seq', 'z'] + (['time_channel'] if 'time_channel' in col_names else [])
 
-    # 1. Use Expression to calculate n_scans (group length)
+    # For nearby calculation, also group by window_id if present
+    has_window_id = 'window_id' in col_names
+    window_group_cols = base_group_cols + (['window_id'] if has_window_id else [])
+
+    # 1. Use Expression to calculate n_scans (group length) - within window
     df = df.with_columns(
-        pl.len().over(group_cols).alias("n_scans")
+        pl.len().over(window_group_cols).alias("n_scans")
     )
 
-    # 2. FIX: Get the 0-indexed rank as an integer (subtracting 1)
+    # 2. FIX: Get the 0-indexed rank as an integer (subtracting 1) - within window
     df = df.with_columns(
-        (pl.col("rt").rank(method="ordinal", descending=False).over(group_cols) - 1)
+        (pl.col("rt").rank(method="ordinal", descending=False).over(window_group_cols) - 1)
         .cast(pl.Int32)
         .alias("rt_rank")
     )
 
-    # 3. Find the rank of the row with the maximum 'coeff' within each group
+    # 3. Find the rank of the row with the maximum 'coeff' within each window group
     df = df.with_columns(
         pl.col("rt_rank")
         .sort_by(pl.col("coeff"), descending=True)
         .first()
-        .over(group_cols)
+        .over(window_group_cols)
         .alias("max_coeff_rank")
     )
 
@@ -158,8 +173,9 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
     for column_name, find_max in zip(column_names, find_max_list):
         method = 'max' if find_max else 'min'
         nearby_col = f"{column_name}_nearby_{method}"
+        window_nearby_col = f"{column_name}_window_nearby_{method}"
 
-        # 4. Filter values to the n_scans window and calculate the extrema
+        # 4. Filter values to the n_scans window and calculate the extrema within each window
         window_values_expr = (
             pl.when(
                 (pl.col("rt_rank") >= (pl.col("max_coeff_rank") - n_scans)) &
@@ -169,12 +185,26 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
             .otherwise(None)
         )
 
-        extrema_expr = (
+        # Calculate nearby extrema within each window
+        window_extrema_expr = (
             window_values_expr
-            .pipe(lambda expr: getattr(expr, method)().over(group_cols))
-            .alias(nearby_col)
+            .pipe(lambda expr: getattr(expr, method)().over(window_group_cols))
+            .alias(window_nearby_col)
         )
-        new_cols.append(extrema_expr)
+        df = df.with_columns(window_extrema_expr)
+
+        # 5. If dual windows, aggregate across windows (use same method for consistency)
+        if has_window_id:
+            # Aggregate across windows: min of mins or max of maxes
+            final_extrema_expr = (
+                getattr(pl.col(window_nearby_col), method)().over(base_group_cols)
+                .alias(nearby_col)
+            )
+        else:
+            # No dual windows, just rename
+            final_extrema_expr = pl.col(window_nearby_col).alias(nearby_col)
+
+        new_cols.append(final_extrema_expr)
 
         # Keep the debug expression for the first column only
         if debug_col_name is None:
@@ -183,7 +213,15 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
                 window_values_expr.alias("debug_window_value")
             )
 
-    return df.with_columns(new_cols).drop(["rt_rank", "max_coeff_rank"])
+    # Add final columns and clean up
+    df = df.with_columns(new_cols)
+
+    # Drop intermediate columns
+    cols_to_drop = ["rt_rank", "max_coeff_rank"]
+    if has_window_id:
+        cols_to_drop += [f"{col}_window_nearby_{'max' if fm else 'min'}"
+                        for col, fm in zip(column_names, find_max_list)]
+    return df.drop(cols_to_drop)
 
 
 def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_columns=None):
@@ -212,7 +250,9 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
     # 1. Determine grouping columns
     if group_columns is None:
         group_cols = ['seq', 'z']
-        if 'time_channel' in df.columns:
+        # Use collect_schema().names() to avoid PerformanceWarning on LazyFrame
+        col_names = df.collect_schema().names()
+        if 'time_channel' in col_names:
             group_cols.append('time_channel')
     else:
         group_cols = group_columns
