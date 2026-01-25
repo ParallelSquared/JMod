@@ -479,23 +479,28 @@ def get_features(
     frac_int_pred = (np.ones_like(num_lib_peaks_matched)*np.sum(predicted_spec))/tic
     frac_int_matched_pred = (np.ones_like(num_lib_peaks_matched)*np.sum(predicted_spec))/np.sum(dia_spec_int)
     large_coeff_indices = np.where(np.array(lib_coefficients)>1)[0] # identify large coeffs
-    large_coeff_matched_peaks = np.unique(np.concatenate(([all_row_indices[i] for i in large_coeff_indices]))) # select the peaks matched to these
-    large_coeff_int_pred = np.sum([np.sum(all_values[i])*list(lib_coefficients)[i] for i in large_coeff_indices]) # sum the intensity predicted
-    large_coeff_int_matched = np.sum(dia_spectrum[large_coeff_matched_peaks,1]) # sum the intensity matched
-    ## Note: some predictions over-shoot the matched peak so we overestimate this value
-    ## Q: Should we report different values for coeffs < 1??
-    frac_int_matched_pred_sigcoeff = (np.ones_like(num_lib_peaks_matched)*large_coeff_int_pred)/large_coeff_int_matched # create vals for all peaks
-    
-            
-    subset_row_indices = np.unique(sparse_row_indices[np.where(np.isin(sparse_col_indices,large_coeff_indices))])
-    subset_row_indices = np.delete(subset_row_indices,np.where(subset_row_indices==max(subset_row_indices))[0][0])
-    large_coeffs = np.squeeze(lib_coefficients) # get the coeffs
-    large_coeffs[large_coeffs<1] = 0 # set those <1 to 0
-    scaled_matrix = np.multiply(sparse_lib_matrix.toarray(),large_coeffs)#scale the matrix
-    subset_pred_spec = np.sum(scaled_matrix,1)
-    subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
-    large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
-    
+
+    if len(large_coeff_indices) == 0: # Guards against spectra where no peptides have coeff > 1
+        frac_int_matched_pred_sigcoeff = np.zeros_like(num_lib_peaks_matched)
+        large_coeff_cosine = np.zeros_like(num_lib_peaks_matched)
+
+    else: # standard execution
+        large_coeff_matched_peaks = np.unique(np.concatenate(([all_row_indices[i] for i in large_coeff_indices]))) # select the peaks matched to these
+        large_coeff_int_pred = np.sum([np.sum(all_values[i])*list(lib_coefficients)[i] for i in large_coeff_indices]) # sum the intensity predicted
+        large_coeff_int_matched = np.sum(dia_spectrum[large_coeff_matched_peaks,1]) # sum the intensity matched
+        ## Note: some predictions over-shoot the matched peak so we overestimate this value
+        ## Q: Should we report different values for coeffs < 1??
+        frac_int_matched_pred_sigcoeff = (np.ones_like(num_lib_peaks_matched)*large_coeff_int_pred)/large_coeff_int_matched # create vals for all peaks
+
+        subset_row_indices = np.unique(sparse_row_indices[np.where(np.isin(sparse_col_indices,large_coeff_indices))])
+        subset_row_indices = np.delete(subset_row_indices,np.where(subset_row_indices==max(subset_row_indices))[0][0])
+        large_coeffs = np.squeeze(lib_coefficients) # get the coeffs
+        large_coeffs[large_coeffs<1] = 0 # set those <1 to 0
+        scaled_matrix = np.multiply(sparse_lib_matrix.toarray(),large_coeffs)#scale the matrix
+        subset_pred_spec = np.sum(scaled_matrix,1)
+        subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
+        large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
+
     if len(prec_frags)>0 and len(list(prec_frags)[0])==len(lib_peaks_matched[0]):
         hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]))
         longest_y_ions = [longest_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
