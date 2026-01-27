@@ -274,7 +274,7 @@ def loadSpecLib(lib_file):
     logger.info("Loading Library...")
     python_lib_file = lib_file+"_pythonlib"
     if not os.path.exists(python_lib_file):
-        logger.debug("Loading Library... from file")
+        logger.info("Loading Library... from file")
         if lib_ext=="blib":
             spec_lib = load_blib(lib_file)
         else:
@@ -283,12 +283,11 @@ def loadSpecLib(lib_file):
         with open(python_lib_file,"wb") as write_file:
             pickle.dump(spec_lib, write_file)
     else:
-        logger.debug("Loading Library... from pickle")
+        logger.info("Loading Library... from pickle")
         with open(python_lib_file,"rb") as read_file:
             spec_lib = pickle.load(read_file)
     
     logger.info(f"Loaded {len(spec_lib)} library precursors")
-    logger.debug("finished")
     return spec_lib
 
 
