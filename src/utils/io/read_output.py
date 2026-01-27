@@ -129,7 +129,7 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
         The original dataframe with new '{column_name}_nearby_{max|min}' columns.
     """
 
-    group_cols = ['seq', 'z'] + (['time_channel'] if 'time_channel' in df.columns else [])
+    group_cols = ['seq', 'z'] + (['time_channel'] if 'time_channel' in df.collect_schema().names() else [])
 
     # 1. Use Expression to calculate n_scans (group length)
     df = df.with_columns(
@@ -212,7 +212,7 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
     # 1. Determine grouping columns
     if group_columns is None:
         group_cols = ['seq', 'z']
-        if 'time_channel' in df.columns:
+        if 'time_channel' in df.collect_schema().names():
             group_cols.append('time_channel')
     else:
         group_cols = group_columns
