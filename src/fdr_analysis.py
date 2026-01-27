@@ -819,7 +819,7 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     
     return result_df
 
-def process_data(file,spectra,library,mass_tag=None,timeplex=False):
+def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
     
     results_folder = os.path.dirname(file)
     mz_ppm = config.opt_ms1_tol
@@ -835,8 +835,12 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False):
     fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
 
     # Handle untag_seq
-    if mass_tag:
+    if mass_tag and SILAC:
+        fdc["untag_seq"] = [re.sub(f"(\({SILAC}\))?","",re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide)) for peptide in fdc["seq"]]
+    elif mass_tag:
         fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
+    elif SILAC:
+        fdc["untag_seq"] = [re.sub(f"(\({SILAC}\))?","",peptide) for peptide in fdc["seq"]]
     else:
         fdc["untag_seq"] = fdc["seq"]
     #print(fdc.columns)  # Ensure 'seq' is in fdc

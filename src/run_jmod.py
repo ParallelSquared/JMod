@@ -15,6 +15,7 @@ import tqdm
 import pandas as pd
 import sys 
 import json
+import dill
 
 from src.utils.io import load_files
 from src.utils.set_seeds import set_seeds
@@ -238,6 +239,25 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     # rt_mz = np.array([[rtSpl(i["iRT"]), i["prec_mz"]] for i in spectrumLibrary.values()])
     # rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in spectrumLibrary.values()])
     
+    if config.args.SILAC:
+        # Find the tag object based on the tag name
+        if config.args.SILAC in available_tags:
+            config.SILAC = available_tags[config.args.SILAC]
+            logger.info(f"Using SILAC: {config.SILAC.name} - {config.SILAC.n_channels} channels")
+            spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
+            SILAC = config.SILAC
+        else:
+            if config.args.SILAC != "None":
+                from src.utils.gui_utils import send_raise_to_TK
+                send_raise_to_TK(f"Error: SILAC '{config.args.SILAC}' not found in available_tags.")
+                logger.error(f"Available tags: {list(available_tags.keys())}")
+                raise ValueError("Tag Not Found")
+            SILAC = None
+            config.SILAC = None
+    else:
+        mass_tag = None
+        config.tag = None
+        
     if config.args.tag:
         # Find the tag object based on the tag name
         if config.args.tag in available_tags:
@@ -256,7 +276,10 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     else:
         mass_tag = None
         config.tag = None
-
+    
+    with open(results_folder_path+"/slib","wb") as dill_file:
+        dill.dump(spectrumLibrary,dill_file)   
+      
     if config.args.timeplex:
         ## now ooutputs library as we finetune RT
         # With this:
@@ -282,7 +305,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary = plex_lib
     else:
         funcs,spectrumLibrary = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
-                                        ms2=config.args.ms2_align, mass_tag=mass_tag)
+                                        ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC)
         rt_spl,mz_func = funcs[:2]
         # rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()]) # TODO QQQXXX Input should have at least 1 dimension, got scalar array(-16.) instead
@@ -399,5 +422,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                  spectra=DIAspectra,
                  library=spectrumLibrary,
                  mass_tag=mass_tag,
+                 SILAC=config.args.SILAC,
                  timeplex=config.args.timeplex)
     # """

@@ -260,7 +260,7 @@ def fine_tune_rt(grouped_df,
     if tag is None:
         model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_LF_09182024_")
         
-    elif tag.name=="mTRAQ":
+    elif "mTRAQ" in tag.name:
         model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_mTRAQ_09182024_")
         
     elif "diethyl" in tag.name:
@@ -271,6 +271,7 @@ def fine_tune_rt(grouped_df,
         
     else:
         from src.utils.gui_utils import send_raise_to_TK
+        logger.info(f"Tag Name: {tag.name}")
         send_raise_to_TK("ValueError - Unknown Label")
         raise ValueError("Unknown label")
         

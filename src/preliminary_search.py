@@ -14,7 +14,7 @@ from src.models.spec_lib.spec_lib import python_lib_to_diann_df
 from src.utils.io.load_files import Spectrum
 
 
-def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10):
+def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=10):
     # Get tag plex
     if mass_tag is not None:
         if mass_tag.channel_names is not None:
@@ -23,13 +23,18 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, ms1_ppm_error=20, 
         plex = 1
 
     # Construct modification dict to convert names to masses
-    # Start with mass tag
+    # Start with SILAC
     if mass_tag is not None:
         mod_dict = {'-'.join([mass_tag.name, mass_tag.channel_names[i]]): # construct channel names
                         mass_tag.mass + mass_tag.delta[i] # construct channel masses
                     for i in range(len(mass_tag.channel_names))}
     else:
         mod_dict = {}
+    
+    if SILAC is not None:
+        mod_dict.update({'-'.join([SILAC.name, SILAC.channel_names[i]]): # construct channel names
+                        SILAC.mass + SILAC.delta[i] # construct channel masses
+                    for i in range(len(SILAC.channel_names))})
 
     # Add all of the other supported modifications
     mod_dict.update(diann_mods)

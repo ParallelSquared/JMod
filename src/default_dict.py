@@ -271,6 +271,17 @@ default_dict = {
         'special_upload': lambda handle, handles: (int(handles['num_timeplex'].get()) > 1 or handles['tag'].get() != "None"),
         'values': 'any'
     },
+    'SILAC': {
+        'flags': ('--SILAC',),
+        'default': None,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'use_emp_rt': {
         'flags': ('--use_emp_rt',),
         'default': False,

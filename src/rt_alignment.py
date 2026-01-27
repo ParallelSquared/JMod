@@ -1100,7 +1100,7 @@ def cdf_plots(emp_data,emp_p,percentile,boundary,pred_data=None,pred_p=None,resu
         
         plt.close("all")
 
-def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None):
+def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None, SILAC=None):
     """
     Perform a preliminary search of the specrta to align the library mz and RT values
 
@@ -1161,7 +1161,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
     # Run a preliminary search returning results at the PSM level
     import preliminary_search
-    output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, ms1_ppm_error=20, ms2_ppm_error=10)
+    output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=10)
 
     # Calculate the elution width and add cluster_size column
     import elution_analysis

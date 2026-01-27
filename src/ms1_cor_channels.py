@@ -192,7 +192,7 @@ def ms1_cor_channels(all_spectra,
     return all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict
 
 # @profile
-def get_seqs_and_mzs(fdc_group, timeplex, tag, key):
+def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC):
     """
     Retrieve sequences, m/z values, charge, retention time, and scan information 
     for a given precursor group, optionally including timeplex channels.
@@ -240,6 +240,25 @@ def get_seqs_and_mzs(fdc_group, timeplex, tag, key):
     top_ms1_spec_idx = list(tag_group["Ms1_spec_id"])[largest_id]
     prec_rt = list(tag_group["rt"])[largest_id]
     
+    if tag.name != "no_tag" and SILAC:
+        
+        #### !!! TO DO - This will not work if either no H/L channel observed
+        ### which seqs contain SILAC mod
+        heavy_channel = np.array([SILAC in i for i in prec_seqs])
+        channel_dict = {}
+        
+        if sum(~heavy_channel)>0:
+            ## non SILAC
+            channel_dict_L = get_other_channels((prec_seqs.iloc[largest_id],prec_z), prec_mzs.iloc[largest_id], tag)
+            
+        
+        ## SILAC
+        
+        prec_seqs,prec_mzs = tuple(zip(*channel_dict.values()))
+        
+    if tag.name != "no_tag":
+        channel_dict = get_other_channels((prec_seqs.iloc[largest_id],prec_z), prec_mzs.iloc[largest_id], tag)
+        prec_seqs,prec_mzs = tuple(zip(*channel_dict.values()))
     if tag.name != "no_tag":
         channel_dict = get_other_channels((prec_seqs.iloc[largest_id],prec_z), prec_mzs.iloc[largest_id], tag)
         prec_seqs,prec_mzs = tuple(zip(*channel_dict.values()))
