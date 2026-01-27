@@ -211,7 +211,11 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     # fdc["iso1_cor"] = [i[1] for i in p_corrs]
     # fdc["iso2_cor"] = [i[2] for i in p_corrs]
     
-    fdc["traceproduct"] = np.log10(fdc["ms1_cor"]*fdc["iso1_cor"]*fdc["iso2_cor"]+1e-6)
+    # Rescale correlations from [-1,1] to [0,1] before computing product
+    _ms1_cor_scaled = (fdc["ms1_cor"] + 1) / 2
+    _iso1_cor_scaled = (fdc["iso1_cor"] + 1) / 2
+    _iso2_cor_scaled = (fdc["iso2_cor"] + 1) / 2
+    fdc["traceproduct"] = np.log10(_ms1_cor_scaled * _iso1_cor_scaled * _iso2_cor_scaled + 1e-6)
     
     # fdc["MS1_is1cor"] = [stats.pearsonr(list(i[0].values())[:10], list(i[1].values())[:10]).statistic for i in ms1_traces]
     
