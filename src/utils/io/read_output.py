@@ -153,7 +153,6 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
     )
 
     new_cols = []
-    debug_col_name = None
 
     for column_name, find_max in zip(column_names, find_max_list):
         method = 'max' if find_max else 'min'
@@ -175,13 +174,6 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
             .alias(nearby_col)
         )
         new_cols.append(extrema_expr)
-
-        # Keep the debug expression for the first column only
-        if debug_col_name is None:
-            debug_col_name = nearby_col
-            df = df.with_columns(
-                window_values_expr.alias("debug_window_value")
-            )
 
     return df.with_columns(new_cols).drop(["rt_rank", "max_coeff_rank"])
 
