@@ -255,8 +255,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             SILAC = None
             config.SILAC = None
     else:
-        mass_tag = None
-        config.tag = None
+        SILAC = None
+        config.SILAC = None
         
     if config.args.tag:
         # Find the tag object based on the tag name
@@ -422,6 +422,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                  spectra=DIAspectra,
                  library=spectrumLibrary,
                  mass_tag=mass_tag,
-                 SILAC=config.args.SILAC,
+                 SILAC=SILAC,
                  timeplex=config.args.timeplex)
     # """

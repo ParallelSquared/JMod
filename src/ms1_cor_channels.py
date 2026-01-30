@@ -2,6 +2,7 @@ import numpy as np
 import re
 import sys
 import os
+from itertools import product
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import src.config as config 
@@ -36,6 +37,7 @@ def ms1_cor_channels(all_spectra,
                      mz_ppm,
                      rt_tol,
                      tag=None,
+                     SILAC=None,
                      timeplex=False,
                      num_iso = None,
                      num_iso_r = None,
@@ -109,7 +111,7 @@ def ms1_cor_channels(all_spectra,
                 frac_done = (GUI_print_idxs.index(fdc_group_idx)+1) * 10
                 logger.info(f"Fitting - {frac_done}%")
 
-        prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key)
+        prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC)
         all_scans, spectra_subset = minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width)
 
         ms1_traces, coeff_traces, is_traces, all_pearson, iso_ratios = ([] for _ in range(5))
@@ -209,7 +211,8 @@ def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC):
         The key identifying the group in fdc_group:
         - (seq, z) if not timeplex
         - (seq, z, time_channel) if timeplex
-
+    SILAC : massTag
+        A massTag instance
     Returns
     -------
     prec_seqs : tuple of str
@@ -229,9 +232,9 @@ def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC):
     """
 
     tag_group = fdc_group.get_group(key)
-    prec_mzs = tag_group["mz"]
-    prec_seqs = tag_group["seq"]
-    prec_z = key[1]
+    group_prec_mzs = tag_group["mz"]
+    group_prec_seqs = tag_group["seq"]
+    group_prec_z = key[1]
     if timeplex:
         time_channel = key[2]
     else:
@@ -240,35 +243,23 @@ def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC):
     top_ms1_spec_idx = list(tag_group["Ms1_spec_id"])[largest_id]
     prec_rt = list(tag_group["rt"])[largest_id]
     
-    if tag.name != "no_tag" and SILAC:
+    if (tag.name != "no_tag" and SILAC is not None):
         
-        #### !!! TO DO - This will not work if either no H/L channel observed
-        ### which seqs contain SILAC mod
-        heavy_channel = np.array([SILAC in i for i in prec_seqs])
-        channel_dict = {}
-        
-        if sum(~heavy_channel)>0:
-            ## non SILAC
-            channel_dict_L = get_other_channels((prec_seqs.iloc[largest_id],prec_z), prec_mzs.iloc[largest_id], tag)
-            
-        
-        ## SILAC
-        
-        prec_seqs,prec_mzs = tuple(zip(*channel_dict.values()))
-        
-    if tag.name != "no_tag":
-        channel_dict = get_other_channels((prec_seqs.iloc[largest_id],prec_z), prec_mzs.iloc[largest_id], tag)
-        prec_seqs,prec_mzs = tuple(zip(*channel_dict.values()))
-    if tag.name != "no_tag":
-        channel_dict = get_other_channels((prec_seqs.iloc[largest_id],prec_z), prec_mzs.iloc[largest_id], tag)
-        prec_seqs,prec_mzs = tuple(zip(*channel_dict.values()))
+        all_comb = get_other_channels((group_prec_seqs.iloc[largest_id],group_prec_z), group_prec_mzs.iloc[largest_id], [tag,SILAC])
+        prec_seqs,prec_mzs = tuple(zip(*all_comb))
+    elif tag.name != "no_tag":
+        all_comb = get_other_channels((group_prec_seqs.iloc[largest_id],group_prec_z), group_prec_mzs.iloc[largest_id], [tag])
+        prec_seqs,prec_mzs = tuple(zip(*all_comb))
+    elif SILAC is not None:
+        all_comb = get_other_channels((group_prec_seqs.iloc[largest_id],group_prec_z), group_prec_mzs.iloc[largest_id], [SILAC])
+        prec_seqs,prec_mzs = tuple(zip(*all_comb))
     else:
-        prec_seqs = (prec_seqs.iloc[largest_id],)
-        prec_mzs = (prec_mzs.iloc[largest_id],)
+        prec_seqs = (group_prec_seqs.iloc[largest_id],)
+        prec_mzs = (group_prec_mzs.iloc[largest_id],)
 
     largest_coeff_scans = list(tag_group["Ms1_spec_id"])
 
-    return prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel
+    return prec_seqs, prec_mzs, group_prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel
 
 def minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width): 
     """
@@ -902,7 +893,48 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
 
     
 
-def get_other_channels(prec,mz,tag):
+# def get_other_channels(prec,mz,tag):
+#     """
+#     Return the m/z and sequences for all channels of a given precursor.
+
+#     Parameters
+#     ----------
+#     prec : tuple
+#         A tuple (unstripped_seq, z) containing the peptide sequence (with tags) 
+#         and its charge state.
+#     mz : float
+#         The m/z value of the precursor in the current channel.
+#     tag : massTag
+#         A massTag instance.
+
+#     Returns
+#     -------
+#     channel_dict : dict
+#         A dictionary mapping each channel name (e.g. 'PSMtag_5plex-0') to a list:
+#         [unstripped_seq, float(mz)] for that channel.
+#     """
+    
+#     ## identify what channel the current prec is in
+#     channels = re.findall(rf"({tag.name}-\d+)",prec[0])
+#     num_tags = len(channels)
+#     assert len(set(channels))==1, f"{channels}"
+#     channel = channels[0]
+#     assert channel in tag.mass_dict
+#     channel_dict = {i:[] for i in tag.mass_dict}
+    
+#     for c in channel_dict:
+#         if c==channel:
+#             channel_dict[channel] = [prec[0],mz]
+#         else:
+#             c_seq = re.sub(channel,c,prec[0])
+#             c_mz = mz + (num_tags*(tag.mass_dict[c]-tag.mass_dict[channel])/prec[1])
+#             channel_dict[c] = [c_seq,c_mz]
+#     return channel_dict
+
+
+
+
+def get_other_channels(prec, mz, tags):
     """
     Return the m/z and sequences for all channels of a given precursor.
 
@@ -918,27 +950,44 @@ def get_other_channels(prec,mz,tag):
 
     Returns
     -------
-    channel_dict : dict
-        A dictionary mapping each channel name (e.g. 'PSMtag_5plex-0') to a list:
+    all_prec_comb : list
+        A list of tuples with each precursor-channel combination and their m/z:
         [unstripped_seq, float(mz)] for that channel.
     """
-    
+    ## check which tags are in use and update
+    tags = [tag for tag in tags if len(re.findall(rf"{tag.name}-(\d+)",prec[0]))]
     ## identify what channel the current prec is in
-    channels = re.findall(rf"({tag.name}-\d+)",prec[0])
-    num_tags = len(channels)
-    assert len(set(channels))==1, f"{channels}"
-    channel = channels[0]
-    assert channel in tag.mass_dict
-    channel_dict = {i:[] for i in tag.mass_dict}
+    all_channels = [re.findall(rf"{tag.name}-(\d+)",prec[0]) for tag in tags]
+    channels_top = tuple([i[0] for i in all_channels])
+    num_tags = [len(i) for i in all_channels]
     
-    for c in channel_dict:
-        if c==channel:
-            channel_dict[channel] = [prec[0],mz]
-        else:
-            c_seq = re.sub(channel,c,prec[0])
-            c_mz = mz + (num_tags*(tag.mass_dict[c]-tag.mass_dict[channel])/prec[1])
-            channel_dict[c] = [c_seq,c_mz]
-    return channel_dict
+    # Get all channel combinations (one channel per tag)
+    channel_options = [tag.channel_names for tag in tags]
+    all_combinations = list(product(*channel_options))
+    
+    all_prec_comb = []
+    for combination in all_combinations:
+        # break
+        # if channels==combination:
+        #     all_prec_comb.append([prec[0],mz])
+        # else:
+        last_channels = channels_top
+        new_seq = prec[0]
+        new_mz = mz
+        # For each tag, replace ALL occurrences with the same channel
+        for tag, channel, n, l in zip(tags, combination, num_tags, last_channels):
+            # break
+            # Pattern to match tag-channel combinations
+            pattern = rf'{tag.name}-\d+'
+            replacement = f'{tag.name}-{channel}'
+            new_seq = re.sub(pattern, replacement, new_seq)
+            
+            new_mz = new_mz + (n*(tag.mass_dict[tag.name+"-"+channel]-tag.mass_dict[tag.name+"-"+l])/prec[1])
+            # print(new_seq, combination,new_mz)
+        all_prec_comb.append([new_seq,new_mz])
+    
+    return all_prec_comb
+
 
 
 def get_ms1_peak(x,y,idx,additional_scans):

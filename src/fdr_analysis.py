@@ -78,7 +78,7 @@ def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];
 #     return fdc
 
 
-def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
+def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     # X = fdc.iloc[:,6:-5]
     fit_whole_MS1 = False
    
@@ -121,6 +121,7 @@ def ms1_quant(dat,lp,dc,mass_tag,DIAspectra,mz_ppm,rt_tol,timeplex=False):
                                 mz_ppm=mz_ppm, 
                                 rt_tol = rt_tol,
                                 tag=tag_to_use,
+                                SILAC=SILAC,
                                 timeplex=timeplex,
                                 num_iso = config.num_iso_ms1,
                                 num_iso_r = config.num_iso_r,
@@ -246,7 +247,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     existing_cols = [col for col in selected_cols if col in fdc.columns]
     
     # Perform the merge safely
-    dat = dat.merge(fdc[["untag_prec", "channel"] + existing_cols], how="left", on=["untag_prec", "channel"]).fillna(0)
+    dat = dat.merge(fdc[["untag_prec", "channel","silac_channel"] + existing_cols], how="left", on=["untag_prec", "channel","silac_channel"]).fillna(0)
 
 
     return dat
@@ -470,6 +471,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "unique_frag_mz", "untag_prec",
                   "channels_matched",
                   "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor","plexfitMS1","plexfitMS1_p","plex_Area", "untag_prec","channel","time_channel",
+                  "silac_channel",
                   "unique_frag_mz",
                   "unique_obs_int",
                   "file_name",
@@ -655,7 +657,7 @@ def compute_protein_FDR(df,results_folder=None):
     logger.info("Computing Protein FDR")
 
   
-    df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)
+    df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)+ df["silac_channel"].astype(str)
     df_seqchargeqvals = df[df["Qvalue"] < 0.01].copy().reset_index(drop=True) #filter
     df_seqchargeqvals["maxPredval"] = df_seqchargeqvals.groupby(["protein", "decoy"])["PredVal"].transform("max")
     df_seqchargeqvals = df_seqchargeqvals.drop_duplicates(subset=["protein", "decoy"]).reset_index(drop=True)
@@ -680,7 +682,7 @@ def compute_protein_FDR(df,results_folder=None):
     df_counts_prec = (
         df[(df["decoy"] == False) & (df["Qvalue"] < 0.01)]
         .drop_duplicates(subset=["run_chan", "untag_prec"])
-        .groupby(["file_name", "channel"])
+        .groupby(["file_name", "channel", "silac_channel"])
         .size()
         .reset_index(name="Precursor_IDs")
         .sort_values("channel")
@@ -694,7 +696,7 @@ def compute_protein_FDR(df,results_folder=None):
     df_counts_prots = (
         df[(df["Protein_Qvalue"] < 0.01) & (df["decoy"] == False) & (df["Qvalue"] < 0.01)]
         .drop_duplicates(subset=["run_chan", "protein"])
-        .groupby(["run_chan","channel"])
+        .groupby(["file_name", "channel", "silac_channel"])
         .size()
         .reset_index(name="Protein_IDs")
         .sort_values("channel")
@@ -728,7 +730,7 @@ def compute_protein_FDR(df,results_folder=None):
         df_counts_prec = (
             df[(df["decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
             .drop_duplicates(subset=["run_chan", "untag_prec"])
-            .groupby(["file_name", "channel"])
+            .groupby(["file_name", "channel", "silac_channel"])
             .size()
             .reset_index(name="Precursor_IDs")
             .sort_values("channel")
@@ -744,7 +746,7 @@ def compute_protein_FDR(df,results_folder=None):
         df_counts_prots = (
             df[(df["Protein_Qvalue"] < 0.01) & (df["decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
             .drop_duplicates(subset=["run_chan", "protein"])
-            .groupby(["run_chan", "channel"])
+            .groupby(["file_name", "channel", "silac_channel"])
             .size()
             .reset_index(name="Protein_IDs")
             .sort_values("channel")
@@ -836,11 +838,11 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
 
     # Handle untag_seq
     if mass_tag and SILAC:
-        fdc["untag_seq"] = [re.sub(f"(\({SILAC}\))?","",re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide)) for peptide in fdc["seq"]]
+        fdc["untag_seq"] = [re.sub(f"(\({SILAC.name}-\d+\))?","",re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide)) for peptide in fdc["seq"]]
     elif mass_tag:
         fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
     elif SILAC:
-        fdc["untag_seq"] = [re.sub(f"(\({SILAC}\))?","",peptide) for peptide in fdc["seq"]]
+        fdc["untag_seq"] = [re.sub(f"(\({SILAC.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
     else:
         fdc["untag_seq"] = fdc["seq"]
     #print(fdc.columns)  # Ensure 'seq' is in fdc
@@ -876,7 +878,13 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
 
     else: 
         fdc["channel"] = 0 #if LF
-
+        
+    if SILAC is not None:
+        silac_channel = [re.findall(f"{SILAC.name}-(\d+)",i) for i in fdc.seq]
+        fdc["silac_channel"] = [int(i[0]) if len(i)>0 else "NA" for i in silac_channel]
+    else:
+        fdc["silac_channel"] = "NA"
+        
     #this was previously in ms1_quant function.. we need it for the target/decoy classification
     frag_errors = [unstring_floats(mz) for mz in fdc.frag_errors]
     median  = np.median(np.concatenate([i for i in frag_errors]))
@@ -891,7 +899,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
     
     fin = score_precursors(fdx_toscore,config.score_model,config.fdr_threshold,folder=results_folder)
     new_columns = [col for col in fin.columns if col not in fdc.columns and col not in ["untag_prec", "channel"]]
-    fdx = fdc.merge(fin[["untag_prec", "channel"] + new_columns], how="left", on=["untag_prec", "channel"])
+    fdx = fdc.merge(fin[["untag_prec", "channel","silac_channel"] + new_columns], how="left", on=["untag_prec", "channel","silac_channel"])
 
     ##fill NA's appropriately
     fdx['PredVal'] = fdx['PredVal'].fillna(0)  
@@ -910,7 +918,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
 
     
-    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, spectra, mz_ppm, rt_tol, timeplex)
+    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, timeplex)
 
 
     fdx_quant["last_aa"] = [i[-1] for i in fdx_quant["stripped_seq"]]

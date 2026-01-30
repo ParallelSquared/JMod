@@ -620,11 +620,14 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFr
         .alias("modification_names")
     )
 
-    # 4. Reconstruct modified peptide sequence string (Polars struct UDF)
+    # # 4. Reconstruct modified peptide sequence string (Polars struct UDF)
+    # df = df.with_columns(
+    #     pl.struct(["stripped_seq", "modification_names"])
+    #     .map_elements(mod_array_to_peptide_wrapper, return_dtype=pl.Utf8)
+    #     .alias("seq")
+    # )
     df = df.with_columns(
-        pl.struct(["stripped_seq", "modification_names"])
-        .map_elements(mod_array_to_peptide_wrapper, return_dtype=pl.Utf8)
-        .alias("seq")
+        df["modified_peptide"].alias("seq")
     )
 
     # 5. Grab library rts based on reconstructed seq (Polars map_dict)
