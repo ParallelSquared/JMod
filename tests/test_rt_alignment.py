@@ -296,7 +296,7 @@ class TestEmpiricalFit:
             "hyperscore": np.random.rand(N),
             "frag_cosines_p": np.random.rand(N),
             "manhattan_distances": np.random.rand(N),
-            "scribe_scores": np.random.rand(N),
+            "scribe_score": np.random.rand(N),
             "gof_stats": np.random.rand(N),
             "max_matched_residuals": np.random.rand(N),
             "med_frag_error": np.random.rand(N),
@@ -321,7 +321,7 @@ class TestEmpiricalFit:
                 raise
 
         # Basic type and behavior assertions
-        assert isinstance(cor_filter, np.ndarray)
+        assert hasattr(cor_filter, 'dtype')  # works for both ndarray and Series
         assert cor_filter.dtype == bool
         assert callable(emp_rt_spl)
         assert os.path.exists(self.test_results_dir)
