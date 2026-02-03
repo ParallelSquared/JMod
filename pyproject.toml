@@ -81,3 +81,20 @@ deps = [
   "tensorboard-data-server",
   "tensorflow-io-gcs-filesystem",
 ]
+
+[tool.coverage.run]
+omit = [
+    "src/run_jmod_from_GUI.py",
+    "src/utils/gui_utils.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]

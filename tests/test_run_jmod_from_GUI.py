@@ -1,10 +1,25 @@
 import pytest
-from src.run_jmod_from_GUI import make_GUI, JModGUI, run_main_process
 import builtins
 import multiprocessing
-import pytest
 from unittest.mock import patch, MagicMock
 
+# Check if tkinter is functional
+_tkinter_available = False
+try:
+    import tkinter as tk
+    root = tk.Tk()
+    root.destroy()
+    _tkinter_available = True
+except Exception:
+    pass
+
+if _tkinter_available:
+    from src.run_jmod_from_GUI import make_GUI, JModGUI
+
+from src.run_jmod_from_GUI import run_main_process
+
+
+@pytest.mark.skipif(not _tkinter_available, reason="Tkinter not available")
 class Test_make_GUI():
 
     def test_make_GUI(self):
