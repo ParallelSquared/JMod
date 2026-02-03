@@ -327,7 +327,7 @@ def iso_library_multi(library,tag,n_iso):
 #     return mass.calculate_mass(seq_comp,charge=charge)
 
 
-def precursor_isotopes(sequence,charge,tag,n_isotopes=2, decoys=True):
+def precursor_isotopes(sequence,charge,tags,n_isotopes=2, decoys=True):
     """
     Return a list of brainpy theoretical peak objects: Peak(p.mz, p.intensity, p.charge)
 
@@ -357,19 +357,22 @@ def precursor_isotopes(sequence,charge,tag,n_isotopes=2, decoys=True):
     
     seq_comp = get_seq_comp(split_seq, "M", neutral_loss=None)
     
-    if tag:
-        pattern_tag = re.compile(rf"\(({tag.name}.*?)\)")
-        pattern_channel = re.compile(rf"{tag.name}-(\d+)")
-
-        tags = [t for aa in split_seq for t in pattern_tag.findall(aa)]
-        if tag.channel_comp is not None and len(tags)>0:
-                tag_comp = reduce(lambda x, y: x + y, [tag.channel_comp[pattern_channel.findall(t)[0]] for t in tags])
-                seq_comp+=tag_comp
+    if tags:
+        for tag in tags:
+            if tag is not None:
+                pattern_tag = re.compile(rf"\(({tag.name}.*?)\)")
+                pattern_channel = re.compile(rf"{tag.name}-(\d+)")
+        
+                matched_tags = [t for aa in split_seq for t in pattern_tag.findall(aa)]
+                if tag.channel_comp is not None and len(matched_tags)>0:
+                        tag_comp = reduce(lambda x, y: x + y, [tag.channel_comp[pattern_channel.findall(t)[0]] for t in matched_tags])
+                        seq_comp+=tag_comp
             
     
     isotopes = isotopic_variants(seq_comp,
                                  npeaks=n_isotopes,
                                  charge = int(charge))
+    
     
     return isotopes 
 

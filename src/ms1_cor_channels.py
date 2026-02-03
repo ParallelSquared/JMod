@@ -125,7 +125,7 @@ def ms1_cor_channels(all_spectra,
             interp_func = build_ms2_interpolator(ms2_vals)
             interp_funcs.append(interp_func)
 
-            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, tag, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func)   
+            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, [tag,SILAC], all_scans, prec_mz, mz_ppm, spectra_subset, interp_func)   
             group_iso.append(isotopes)
 
             ## use monoiso ms1 prec mz to find the elution ms1 peak
@@ -382,8 +382,8 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
     return ms2_vals, highest_ranked_spec, channel_key
 
 
-def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tag, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func):
-    isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tags, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func):
+    isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tags)
     all_isotope_traces = get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset)
     all_ms2_vals = fill_scan_values(all_scans, interp_func, all_isotope_traces[0])
 
@@ -478,7 +478,7 @@ def get_trace_int_numba(spec_mz, spec_intens, mz_array, rtol, base):
     return vals_to_return
 
 
-def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag):
+def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tags):
     """
     Gets a list of brainpy theoretical peak isotopes for a precursor
 
@@ -507,7 +507,7 @@ def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag):
     isotopes[0] == prec_mz
 
     """
-    isotopes = iso.precursor_isotopes(prec_seq,prec_z,tag,num_iso, decoys=False)
+    isotopes = iso.precursor_isotopes(prec_seq,prec_z,tags,num_iso, decoys=False)
 
     delta_mz = prec_mz-isotopes[0].mz
     for i in isotopes:
