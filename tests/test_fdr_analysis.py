@@ -106,7 +106,8 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                                                      "frag_errors": [[1.0, 2.0], [2.0, 3.0]],
                                                      "frac_lib_int": [1, 1],
                                                      "file_name": ["f", "f"],
-                                                     "time_channel": [0, 0]
+                                                     "time_channel": [0, 0],
+                                                     "silac_channel": ["NA", "NA"]
                                                  }),
                                                  None))
 
@@ -114,6 +115,7 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                         lambda *args, **kwargs: pd.DataFrame({
                             "untag_prec": ["AAAA_2", "BBBB_2"],
                             "channel": [0, 0],
+                            "silac_channel": ["NA", "NA"],
                             "PredVal": [0.5, 0.7],
                             "Qvalue": [0.01, 0.02],
                         }))
@@ -150,6 +152,7 @@ def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
     df = pd.DataFrame({
         "file_name": ["A", "A"],
         "channel": [1, 1],
+        "silac_channel": [0, 0],
         "Qvalue": [0.005, 0.005],
         "PredVal": [0.9, 0.8],
         "decoy": [False, True],

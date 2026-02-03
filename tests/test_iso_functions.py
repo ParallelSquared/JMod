@@ -192,7 +192,7 @@ class Test_precursor_isotopes():
         self.compare_outputs(output, expected_output)
 
     def test_decoy_peptide_decoys_off(self):
-        with pytest.raises(PyteomicsError, match="Unknown label: ecoy_M"):
+        with pytest.raises(PyteomicsError, match="No information for ecoy_M"):
             precursor_isotopes("Decoy_MEATSTICK", 2, None, 2, decoys=False)
 
     def test_tag_channel_comp_is_none(self):
