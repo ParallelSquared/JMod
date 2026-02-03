@@ -406,7 +406,6 @@ def scribe_score_polars_udf(r: dict, fragment_library_map: dict) -> float:
     sum_B_raw = np.sum(B_raw)
 
     if sum_A_raw == 0.0 or sum_B_raw == 0.0:
-        logger.debug(f"Scribe error: No fragment overlap - seq={seq}, z={z}, sum_A={sum_A_raw}, sum_B={sum_B_raw}, n_library_keys={len(all_keys)}, n_observed_keys={len(observed_vec)}")
         return -999.0
 
     # 6. Normalization (to sum to 1) and Square Root Transformation
