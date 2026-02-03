@@ -191,7 +191,10 @@ class JModGUI(ThemedTk):
         self.file_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         self.mzml_button = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=self.select_mzml)
         self.mzml_button.grid(row=0, column=2, padx=10, pady=10)
-
+        # Add a "Clear All" button
+        # self.clear_button = ttk.Button(self.input_frame, text="Clear All", command=lambda: self.file_dropdown.clear_all())
+        # self.clear_button.grid(row=0, column=3, padx=10, pady=10)
+    
         # Speclib file input
         self.tsv_label = ttk.Label(self.input_frame, text="Spectral Library:")
         self.tsv_label.grid(row=1, column=0, padx=10, pady=10, sticky="e")
@@ -567,6 +570,7 @@ class JModGUI(ThemedTk):
                 if file not in self.file_dropdown.files:
                     self.file_dropdown.add_files([file])
                     self.last_opened_dir = os.path.dirname(file)
+    
 
     def select_tsv(self):
         """
@@ -1866,6 +1870,12 @@ class FileListDropdown(tk.Frame):
 
     def remove_file(self, idx):
         del self.files[idx]
+        self.update_button_label()
+        if self.expanded:
+            self.refresh_list()
+            
+    def clear_all(self):
+        self.files = []
         self.update_button_label()
         if self.expanded:
             self.refresh_list()
