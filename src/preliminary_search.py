@@ -622,12 +622,10 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFr
         .alias("modification_names")
     )
 
-    # Get modified peptide sequence string
-    df = df.with_columns(
-        df["modified_peptide"].alias("seq")
-    )
+    # Rename modified_peptide to seq
+    df = df.rename({"modified_peptide": "seq"})
 
-    # Grab library rts based on reconstructed seq
+    # Grab library rts based on seq
     df = df.with_columns(
         pl.col("seq")
           .map_elements(map_rt_wrapper, return_dtype=pl.Float64)
