@@ -64,37 +64,60 @@ class DummySpectrum():
     
 class Test_get_other_channels():
 
-    def compare_outputs(self, output_dict, channel_dict):
-        assert output_dict.keys() == channel_dict.keys()
-        output_seqs = [item[0] for item in output_dict.values()]
-        output_mzs = np.array([item[1] for item in output_dict.values()])
-        channel_seqs = [item[0] for item in channel_dict.values()]
-        channel_mzs = np.array([item[1] for item in channel_dict.values()])
-        assert output_seqs == channel_seqs
-        np.testing.assert_array_almost_equal(output_mzs, channel_mzs, decimal=6)
+    def compare_outputs(self, expected_list, actual_list):
+        """Compare expected and actual lists of [seq, mz] pairs."""
+        assert len(expected_list) == len(actual_list), f"Length mismatch: {len(expected_list)} vs {len(actual_list)}"
+        expected_seqs = [item[0] for item in expected_list]
+        expected_mzs = np.array([item[1] for item in expected_list])
+        actual_seqs = [item[0] for item in actual_list]
+        actual_mzs = np.array([item[1] for item in actual_list])
+        assert expected_seqs == actual_seqs, f"Sequences mismatch: {expected_seqs} vs {actual_seqs}"
+        np.testing.assert_array_almost_equal(expected_mzs, actual_mzs, decimal=6)
 
     def test_one_tag(self):
-        channel_dict = get_other_channels(('A(PSMtag_5plex-0)AAAADLANR', 2.0), 626.31433, read_json_to_massTag("src/MassTags", "PSMtag_5plex.json"))
-        output_dict = {'PSMtag_5plex-0': ['A(PSMtag_5plex-0)AAAADLANR', 626.31433], 'PSMtag_5plex-4': ['A(PSMtag_5plex-4)AAAADLANR', 628.3198080300001], 'PSMtag_5plex-8': ['A(PSMtag_5plex-8)AAAADLANR', 630.32774935], 'PSMtag_5plex-12': ['A(PSMtag_5plex-12)AAAADLANR', 632.331299055], 'PSMtag_5plex-16': ['A(PSMtag_5plex-16)AAAADLANR', 634.33361711]}
-        self.compare_outputs(output_dict, channel_dict)
+        result = get_other_channels(('A(PSMtag_5plex-0)AAAADLANR', 2.0), 626.31433, [read_json_to_massTag("src/MassTags", "PSMtag_5plex.json")])
+        expected = [
+            ['A(PSMtag_5plex-0)AAAADLANR', 626.31433],
+            ['A(PSMtag_5plex-4)AAAADLANR', 628.3198080300001],
+            ['A(PSMtag_5plex-8)AAAADLANR', 630.32774935],
+            ['A(PSMtag_5plex-12)AAAADLANR', 632.331299055],
+            ['A(PSMtag_5plex-16)AAAADLANR', 634.33361711]
+        ]
+        self.compare_outputs(expected, result)
 
     def test_two_tags(self):
-        channel_dict = get_other_channels(('A(PSMtag_5plex-0)AAAADLANR(PSMtag_5plex-0)', 2.0), 780.372376195, read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json"))
-        output_dict = {'PSMtag_5plex-0': ['A(PSMtag_5plex-0)AAAADLANR(PSMtag_5plex-0)', 780.372376195], 'PSMtag_5plex-4': ['A(PSMtag_5plex-4)AAAADLANR(PSMtag_5plex-4)', 784.38333225104], 'PSMtag_5plex-8': ['A(PSMtag_5plex-8)AAAADLANR(PSMtag_5plex-8)', 788.3992148974], 'PSMtag_5plex-12': ['A(PSMtag_5plex-12)AAAADLANR(PSMtag_5plex-12)', 792.4063143042], 'PSMtag_5plex-16': ['A(PSMtag_5plex-16)AAAADLANR(PSMtag_5plex-16)', 796.41095041584]}
-        self.compare_outputs(output_dict, channel_dict)
+        result = get_other_channels(('A(PSMtag_5plex-0)AAAADLANR(PSMtag_5plex-0)', 2.0), 780.372376195, [read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")])
+        expected = [
+            ['A(PSMtag_5plex-0)AAAADLANR(PSMtag_5plex-0)', 780.372376195],
+            ['A(PSMtag_5plex-4)AAAADLANR(PSMtag_5plex-4)', 784.38333225104],
+            ['A(PSMtag_5plex-8)AAAADLANR(PSMtag_5plex-8)', 788.3992148974],
+            ['A(PSMtag_5plex-12)AAAADLANR(PSMtag_5plex-12)', 792.4063143042],
+            ['A(PSMtag_5plex-16)AAAADLANR(PSMtag_5plex-16)', 796.41095041584]
+        ]
+        self.compare_outputs(expected, result)
 
     def test_unimod_with_channel_name(self):
-        channel_dict = get_other_channels(('A(PSMtag_5plex-4)AAAAC(UniMod:4)DLANR', 2.0), 708.4005400300001, read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json"))
-        output_dict = {'PSMtag_5plex-0': ['A(PSMtag_5plex-0)AAAAC(UniMod:4)DLANR', 706.3950620019801], 'PSMtag_5plex-4': ['A(PSMtag_5plex-4)AAAAC(UniMod:4)DLANR', 708.4005400300001], 'PSMtag_5plex-8': ['A(PSMtag_5plex-8)AAAAC(UniMod:4)DLANR', 710.4084813531802], 'PSMtag_5plex-12': ['A(PSMtag_5plex-12)AAAAC(UniMod:4)DLANR', 712.4120310565801], 'PSMtag_5plex-16': ['A(PSMtag_5plex-16)AAAAC(UniMod:4)DLANR', 714.4143491124001]}
-        self.compare_outputs(output_dict, channel_dict)
+        result = get_other_channels(('A(PSMtag_5plex-4)AAAAC(UniMod:4)DLANR', 2.0), 708.4005400300001, [read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")])
+        expected = [
+            ['A(PSMtag_5plex-0)AAAAC(UniMod:4)DLANR', 706.3950620019801],
+            ['A(PSMtag_5plex-4)AAAAC(UniMod:4)DLANR', 708.4005400300001],
+            ['A(PSMtag_5plex-8)AAAAC(UniMod:4)DLANR', 710.4084813531802],
+            ['A(PSMtag_5plex-12)AAAAC(UniMod:4)DLANR', 712.4120310565801],
+            ['A(PSMtag_5plex-16)AAAAC(UniMod:4)DLANR', 714.4143491124001]
+        ]
+        self.compare_outputs(expected, result)
 
     def test_two_channels(self):
-        with pytest.raises(AssertionError):
-            channel_dict = get_other_channels(('A(PSMtag_5plex-4)AAAADLANR(PSMtag_5plex-0)', 2.0), 780.372376195, read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json"))
-    
+        # Test with mismatched channels - the function now handles this without raising
+        # It should return results where all tag occurrences get the same channel
+        result = get_other_channels(('A(PSMtag_5plex-4)AAAADLANR(PSMtag_5plex-0)', 2.0), 780.372376195, [read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")])
+        # Function now returns 5 channel combinations (replacing ALL tag occurrences with same channel)
+        assert len(result) == 5
+
     def test_channel_not_in_tag(self):
-        with pytest.raises(AssertionError):
-            channel_dict = get_other_channels(('A(PSMtag_5plex-2)AAAADLANR', 2.0), 780.372376195, read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json"))
+        # Test with invalid channel - now raises KeyError instead of AssertionError
+        with pytest.raises(KeyError):
+            get_other_channels(('A(PSMtag_5plex-2)AAAADLANR', 2.0), 780.372376195, [read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")])
 
     
 
@@ -140,10 +163,10 @@ class Test_get_seqs_and_mzs():
    
 
     def test_plexDIA(self):
-    
-        prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(self.get_fdc_group(), False, read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json"), ('AAAAADLANR', 2.0))
+
+        prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(self.get_fdc_group(), False, read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json"), ('AAAAADLANR', 2.0), None)
         x = [prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel]
-        output_seqs = ('A(PSMtag_5plex-0)AAAADLANR', 'A(PSMtag_5plex-4)AAAADLANR', 'A(PSMtag_5plex-8)AAAADLANR', 'A(PSMtag_5plex-12)AAAADLANR', 'A(PSMtag_5plex-16)AAAADLANR') 
+        output_seqs = ('A(PSMtag_5plex-0)AAAADLANR', 'A(PSMtag_5plex-4)AAAADLANR', 'A(PSMtag_5plex-8)AAAADLANR', 'A(PSMtag_5plex-12)AAAADLANR', 'A(PSMtag_5plex-16)AAAADLANR')
         output_mzs = (500.1230309454, 502.12850897342, 504.13645029659995, 506.14, 508.14231805582)
         output_z = 2.0
         output_rt = 18.0
@@ -154,7 +177,7 @@ class Test_get_seqs_and_mzs():
         self.compare_outputs(x, y)
 
     def test_plexDIA_timeplex(self):
-        prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(self.get_fdc_group(add_timeplex=[1, 2, 1, 1, 1, 1]), True, read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json"), ('AAAAADLANR', 2.0, 1))
+        prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(self.get_fdc_group(add_timeplex=[1, 2, 1, 1, 1, 1]), True, read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json"), ('AAAAADLANR', 2.0, 1), None)
         x = [prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel]
         output_seqs = ('A(PSMtag_5plex-0)AAAADLANR', 'A(PSMtag_5plex-4)AAAADLANR', 'A(PSMtag_5plex-8)AAAADLANR', 'A(PSMtag_5plex-12)AAAADLANR', 'A(PSMtag_5plex-16)AAAADLANR') 
         output_mzs = (500.1230309454, 502.12850897342, 504.13645029659995, 506.14, 508.14231805582)
@@ -1756,12 +1779,13 @@ class Test_ms1_cor_channels():
         mz_ppm = 1e-6
         rt_tol = 0.05
         tag = read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")
+        SILAC = None
         timeplex = False
         num_iso = 6
         num_iso_r = 2
         additional_scans = 0
 
-        all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict = ms1_cor_channels(all_spectra, filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag,timeplex, num_iso, num_iso_r, additional_scans)
+        all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict = ms1_cor_channels(all_spectra, filtered_decoy_coeffs, decoy_coeffs, mz_ppm, rt_tol, tag, SILAC, timeplex, num_iso, num_iso_r, additional_scans)
 
         assert list(decoy_coeffs["untag_seq"]) == ['AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'PEPTIDEK']
         assert list(decoy_coeffs["untag_prec"]) == ['AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_3', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'PEPTIDEK_2']
@@ -1874,12 +1898,13 @@ class Test_ms1_cor_channels():
         mz_ppm = 1e-6
         rt_tol = 0.05
         tag = read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")
+        SILAC = None
         timeplex = True
         num_iso = 6
         num_iso_r = 2
         additional_scans = 0
 
-        all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict = ms1_cor_channels(all_spectra, filtered_decoy_coeffs,decoy_coeffs,mz_ppm,rt_tol,tag,timeplex, num_iso, num_iso_r, additional_scans)
+        all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict = ms1_cor_channels(all_spectra, filtered_decoy_coeffs, decoy_coeffs, mz_ppm, rt_tol, tag, SILAC, timeplex, num_iso, num_iso_r, additional_scans)
 
         assert list(decoy_coeffs["untag_seq"]) == ['AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'PEPTIDEK']
         assert list(decoy_coeffs["untag_prec"]) == ['AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_3', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'PEPTIDEK_2']
