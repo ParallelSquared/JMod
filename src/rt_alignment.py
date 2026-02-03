@@ -1160,11 +1160,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     
 
     # Run a preliminary search returning results at the PSM level
-    import preliminary_search
+    import src.preliminary_search as preliminary_search
     output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=10)
 
     # Calculate the elution width and add cluster_size column
-    import elution_analysis
+    import src.elution_analysis as elution_analysis
     fwhm, elution_sd, output_df = elution_analysis.calculate_elution_width(output_df)
     logger.info("Mean elution width: FWHM {fwhm:.4f}, SD {elution_sd:.4f}".format(fwhm=fwhm, elution_sd=elution_sd))
 
