@@ -385,29 +385,37 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ## process in batches
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
-    # start_time = time.time()
+
+    # Use resilient fitter with hang detection
+    from src.utils.resilient_fitter import ResilientFitter
+    static_kwargs = {
+        'library': spectrumLibrary,
+        'rt_mz': rt_mz,
+        'all_keys': all_keys,
+        'dino_features': None,
+        'rt_filter': True,
+        'rt_tol': config.opt_rt_tol,
+        'ms1_tol': config.opt_ms1_tol,
+        'mz_tol': config.mz_tol,
+        'ms1_spectra': DIAspectra.ms1scans,
+        'return_frags': False,
+        'decoy': True,
+        'decoy_library': decoy_lib
+    }
+    fitter = ResilientFitter(fit_to_lib2, static_kwargs, timeout=30)
+
     for batch_idx in range(num_batches):
         start_time = time.time()
         batch_spectra = spectra_to_fit[batch_idx*num_per_batch:(batch_idx+1)*num_per_batch]
-        
+
         logger.info(f"Fitting batch {batch_idx+1} of {num_batches}")
-        
+
         outputs= []
-        for dia_spec in tqdm.tqdm(batch_spectra):
-            
-            outputs.append(fit_to_lib2(dia_spec,
-                            library=spectrumLibrary,
-                            rt_mz=rt_mz,
-                            all_keys=all_keys,
-                            dino_features=None,
-                            rt_filter=True,
-                            rt_tol = config.opt_rt_tol,
-                            ms1_tol = config.opt_ms1_tol,
-                            mz_tol = config.mz_tol,
-                            ms1_spectra=DIAspectra.ms1scans,
-                            return_frags=False,
-                            decoy=True,
-                            decoy_library=decoy_lib))
+
+        for i, dia_spec in enumerate(tqdm.tqdm(batch_spectra)):
+            result = fitter.fit(dia_spec, idx=batch_idx*num_per_batch + i)
+            if result:
+                outputs.append(result)
             
         long_outputs = [j for i in outputs for j in i]
         logger.debug(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
@@ -415,8 +423,12 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
         write_mode = "w" if batch_idx==0 else "a"
         write_to_csv(long_outputs, decoylib_search_path, write_mode)
-    
 
+    # Clean up fitter subprocess and log stats
+    stats = fitter.get_stats()
+    if stats['hangs_recovered'] > 0:
+        logger.warning(f"Recovered from {stats['hangs_recovered']} hang(s) during fitting")
+    fitter.shutdown()
 
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
