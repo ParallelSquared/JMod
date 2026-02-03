@@ -46,25 +46,63 @@ def test_scale_rt_basic():
     assert np.isclose(np.max(scaled), 1.0)
     assert np.all(np.diff(scaled) > 0)
 
-def test_fine_tune_rt_runs():
-    df = pd.DataFrame({
-        "Stripped.Sequence": ["ACD", "FGH", "IKL"],
-        "RT": [0.1, 0.2, 0.3]
-    })
+class TestFineTuneRT:
+    """Tests for fine_tune_rt function with different tag types."""
 
-    class Tag:
-        name = "mTRAQ"
-    
-    # Run fine_tune_rt
-    result = fine_tune_rt(df, qc_plots=False, tag=Tag())
+    @pytest.fixture
+    def sample_df(self):
+        """Minimal DataFrame for testing."""
+        return pd.DataFrame({
+            "Stripped.Sequence": ["ACD", "FGH", "IKL"],
+            "RT": [0.1, 0.2, 0.3]
+        })
 
-    assert isinstance(result, tuple)
-    assert len(result) == 3
+    def _verify_result(self, result):
+        """Common assertions for fine_tune_rt results."""
+        assert isinstance(result, tuple)
+        assert len(result) == 3
 
-    data_split, models, model_to_obs = result
-    assert isinstance(data_split, tuple)
-    assert len(data_split) == 4
-    sample_input = np.array([0.1, 0.2])
-    output = model_to_obs(sample_input)
-    assert isinstance(output, np.ndarray)
-    assert output.shape == sample_input.shape
+        data_split, models, model_to_obs = result
+        assert isinstance(data_split, tuple)
+        assert len(data_split) == 4
+        sample_input = np.array([0.1, 0.2])
+        output = model_to_obs(sample_input)
+        assert isinstance(output, np.ndarray)
+        assert output.shape == sample_input.shape
+
+    def test_fine_tune_rt_mTRAQ_tag(self, sample_df):
+        """Test fine_tune_rt with mTRAQ tag."""
+        class Tag:
+            name = "mTRAQ"
+
+        result = fine_tune_rt(sample_df, qc_plots=False, tag=Tag())
+        self._verify_result(result)
+
+    def test_fine_tune_rt_diethyl_tag(self, sample_df):
+        """Test fine_tune_rt with diethyl tag."""
+        class Tag:
+            name = "diethyl_light"
+
+        result = fine_tune_rt(sample_df, qc_plots=False, tag=Tag())
+        self._verify_result(result)
+
+    def test_fine_tune_rt_PSMtag(self, sample_df):
+        """Test fine_tune_rt with PSMtag."""
+        class Tag:
+            name = "PSMtag_5plex"
+
+        result = fine_tune_rt(sample_df, qc_plots=False, tag=Tag())
+        self._verify_result(result)
+
+    def test_fine_tune_rt_no_tag(self, sample_df):
+        """Test fine_tune_rt with tag=None (label-free)."""
+        result = fine_tune_rt(sample_df, qc_plots=False, tag=None)
+        self._verify_result(result)
+
+    def test_fine_tune_rt_unknown_tag_raises(self, sample_df):
+        """Test fine_tune_rt raises ValueError for unknown tag."""
+        class Tag:
+            name = "unknown_tag_xyz"
+
+        with pytest.raises(ValueError, match="Unknown label"):
+            fine_tune_rt(sample_df, qc_plots=False, tag=Tag())

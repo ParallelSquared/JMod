@@ -4,7 +4,7 @@ import os
 import types
 import pytest
 
-from src.fdr_analysis import score_precursors, score_model, add_median_based_features, process_data, compute_protein_FDR
+from src.fdr_analysis import score_precursors, score_model, add_median_based_features, process_data, compute_protein_FDR, log_df
 
 def test_score_model_minimal_fixed():
     # 12 samples, 2 classes
@@ -165,3 +165,27 @@ def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
     assert isinstance(out, pd.DataFrame)
     assert "Protein_Qvalue" in out.columns  # main thing it produces
     assert out.shape[0] == 2  # still same number of rows
+
+
+def test_log_df_smoke():
+    """Smoke test for log_df function - just verify it runs without error."""
+    df = pd.DataFrame({
+        "file_name": ["sample1_001", "sample1_002", "sample2_001"],
+        "metric1": [1.0, 2.0, 3.0],
+        "metric2": [4.0, 5.0, 6.0],
+    })
+
+    # log_df should run without raising exceptions
+    # It just logs to the logger, so we verify it doesn't crash
+    log_df(df)
+
+
+def test_log_df_multiple_files():
+    """Test log_df with multiple different file prefixes."""
+    df = pd.DataFrame({
+        "file_name": ["fileA_01", "fileA_02", "fileB_01", "fileC_01"],
+        "value": [10, 20, 30, 40],
+    })
+
+    # Should handle multiple unique file prefixes
+    log_df(df)

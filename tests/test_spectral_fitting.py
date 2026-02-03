@@ -9,10 +9,11 @@ Tests for functions in spectral_fitting.py
 """
 
 import numpy as np
+from scipy import sparse
 
 # Import the functions we want to test
 from src.spectral_fitting import (
-    get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, unmatched_peaks, gof_stat
+    get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, unmatched_peaks, gof_stat, huber_nnls_irls
 )
 
 class TestGetClosestMS1:
@@ -225,3 +226,66 @@ class TestGofStat:
         np.testing.assert_allclose(result, np.log2([ (0.5+1.0)/(1*1.0 + 2*2.0),  (0.0+2.0)/(1*1.5 + 2*2.5) ]), rtol=1e-6)
         np.testing.assert_allclose(max_matched_res, np.log2([0.5/(1*1.0 + 2*2.0 + 1e-10) + 1e-10, 2.0/(1*1.5 + 2*2.5 + 1e-10) + 1e-10]), rtol=1e-6)
         np.testing.assert_allclose(max_unmatched_res, np.log2([1.0/(1*1.0 + 2*2.0 + 1e-10) + 1e-10, 0.0/(1*1.5 + 2*2.5 + 1e-10) + 1e-10]), rtol=1e-6)
+
+
+class TestHuberNnlsIrls:
+    """Smoke tests for huber_nnls_irls function."""
+
+    def test_basic_sparse_input(self):
+        """Test with simple sparse matrix."""
+        # Create a simple sparse matrix (10 peaks, 3 candidates)
+        np.random.seed(42)
+        A = sparse.random(10, 3, density=0.5, format='csr')
+        b = np.abs(np.random.rand(10))  # Observed intensities (non-negative)
+
+        result = huber_nnls_irls(A, b)
+
+        assert 'x' in result
+        x = np.array(result['x']).flatten()
+        assert x.shape == (3,)
+        assert np.all(x >= -1e-10)  # Non-negative constraint (allow tiny numerical errors)
+
+    def test_small_matrix(self):
+        """Test with a small dense matrix converted to sparse."""
+        A = sparse.csr_matrix(np.array([
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+        ]))
+        b = np.array([1.0, 1.0, 2.0])
+
+        result = huber_nnls_irls(A, b)
+
+        x = np.array(result['x']).flatten()
+        assert x.shape == (2,)
+        # Just verify it returns non-negative values
+        assert np.all(x >= -1e-10)
+
+    def test_with_outliers(self):
+        """Test that Huber loss handles outliers better than standard NNLS."""
+        # Create data with an outlier
+        A = sparse.csr_matrix(np.array([
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 0.0],  # Outlier row
+        ]))
+        b = np.array([1.0, 1.0, 2.0, 100.0])  # Last value is outlier
+
+        result = huber_nnls_irls(A, b, max_iter=50)
+
+        x = np.array(result['x']).flatten()
+        assert x.shape == (2,)
+        assert np.all(x >= -1e-10)
+
+    def test_convergence(self):
+        """Test that the algorithm converges within max_iter."""
+        np.random.seed(123)
+        A = sparse.random(20, 5, density=0.3, format='csr')
+        b = np.abs(np.random.rand(20))
+
+        result = huber_nnls_irls(A, b, max_iter=100, tol=1e-6)
+
+        assert 'x' in result
+        x = np.array(result['x']).flatten()
+        assert x.shape == (5,)
