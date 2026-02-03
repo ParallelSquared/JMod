@@ -95,6 +95,7 @@ opt_rt_tol = rt_tol # set as default to start
 opt_ms1_tol = ms1_tol 
 opt_im_tol = im_tol
 
+max_num_prelim_search = 1e5
 
 
 # protein_column = 'protein_name'
