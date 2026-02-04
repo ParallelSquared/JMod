@@ -764,7 +764,7 @@ def plot_rt_residuals_mixture(residuals,
     plt.legend()
     plt.xlabel("fit_rt - rt")
     plt.ylabel("density")
-    plt.title(f"RT Residuals After Empirical Alignment {feat}")
+    plt.title(f"RT Residuals After Alignment {feat}")
     plt.tight_layout()
 
     if results_folder is not None:
@@ -1139,6 +1139,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             weights, sigmas = fit_zero_mean_gmm_1d(all_pred_diffs, n_components=2)
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
+            
+            plot_rt_residuals_mixture(
+                residuals=all_pred_diffs,
+                feat="- Fine Tuned Final",
+                weights=weights,
+                sigmas=sigmas,
+                results_folder=results_folder
+            )
+            
             # Combine elution width and GMM sigma, take 4th standard deviation
             boundary = 4 * sigmas[0] + 8 * elution_sd
             rt_spl = pred_rt_spl
@@ -1155,6 +1164,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
+            
+            plot_rt_residuals_mixture(
+                residuals=all_emp_diffs,
+                feat="- Empirical Final",
+                weights=weights,
+                sigmas=sigmas,
+                results_folder=results_folder
+            )
+            
             # Combine elution width and GMM sigma, take 4th standard deviation
             boundary = 4 * sigmas[0] + 8 * elution_sd
             ## keep the library RTs and splines the same
@@ -1182,6 +1200,13 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         emp_cdf_auc = auc(emp_data,emp_p)
         # Fit 2-component zero-mean GMM to residuals
         weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
+        plot_rt_residuals_mixture(
+            residuals=all_emp_diffs,
+            feat="- Empirical Final",
+            weights=weights,
+            sigmas=sigmas,
+            results_folder=results_folder
+        )
         order = np.argsort(sigmas)
         sigmas = sigmas[order]
         # Combine elution width and GMM sigma, take 4th standard deviation
