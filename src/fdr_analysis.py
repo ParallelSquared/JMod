@@ -867,14 +867,16 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
     if timeplex:
         if mass_tag:
             tag_name = mass_tag.name
-            fdc["channel"] = [str(int(t))+"_"+re.findall(f"{tag_name}-(\d+)",i)[0] for i,t in zip(fdc.seq,fdc.time_channel)]
+            tag_channel = [re.findall(f"{tag_name}-(\d+)",i) for i in fdc.seq]
+            fdc["channel"] = [str(int(t))+"_"+i[0] if len(i)>0 else str(int(t)) for i,t in zip(tag_channel,fdc.time_channel)]
         else:
             fdc["channel"] = fdc["time_channel"]
             
     elif mass_tag:
         tag_name = mass_tag.name
         ## mTRAQ label
-        fdc["channel"] = [int(re.findall(f"{tag_name}-(\d+)",i)[0]) for i in fdc.seq]
+        tag_channel = [re.findall(f"{tag_name}-(\d+)",i) for i in fdc.seq]
+        fdc["channel"] = [int(i[0]) if len(i)>0 else "NA" for i in tag_channel]
 
     else: 
         fdc["channel"] = 0 #if LF
