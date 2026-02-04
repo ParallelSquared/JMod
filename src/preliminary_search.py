@@ -122,6 +122,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
     # 2. Vectorized Calculation of Theoretical m/z (using Polars UDF)
     # The UDF will run the Python function but is integrated into Polars' execution engine.
+    logger.info("Calculating theoretical m/z")
     df = df.with_columns(
         pl.struct(['sequence', 'modifications', 'charge'])
         .map_elements(calculate_theo_mz_udf, return_dtype=pl.Float64)
@@ -130,6 +131,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
     # 3. MS1 Lookup (The non-vectorized bottleneck, handled in a dedicated function)
     # Convert Polars DF to Python lists, run the loop, and convert result back to Polars.
+    logger.info("Looking up MS1 data")
     ms1_data_list = lookup_ms1_data_list(df, dia_spectra)
     ms1_df = pl.DataFrame(ms1_data_list)
 
@@ -158,9 +160,11 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     lib_rts = {v['mod_seq'] : v['iRT'] for v in library_spectra.values()}
 
     # Adapt the dataframe to the format expected downstream
+    logger.info("Adapting output dataframe")
     df = adapt_output_df(df, lib_rts, rev_map)
 
     # Calculate spectral angle
+    logger.info("Creating fragment library map")
     fragment_library_map = create_fragment_library_map(library_spectra)
 
     # Filter to only peptides present in the library (before computing expensive scores)
