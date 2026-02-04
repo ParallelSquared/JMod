@@ -182,15 +182,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
         logger.info("Dinosaur feature file not found, running biosaur2")
 
-
-    logger.info(f"Results will be saved to {results_folder_path}")
-
-    
-    # logger.info(config.args.tag)
-    
-    # stop
-    
-    
     
     overall_start_time = time.time()
     # python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
@@ -277,9 +268,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         mass_tag = None
         config.tag = None
     
+    logger.info("Serializing spectrum library to disk")
     with open(results_folder_path+"/slib","wb") as dill_file:
-        dill.dump(spectrumLibrary,dill_file)   
-      
+        dill.dump(spectrumLibrary,dill_file)
+    logger.info("Spectrum library serialized")
+
     if config.args.timeplex:
         ## now ooutputs library as we finetune RT
         # With this:
