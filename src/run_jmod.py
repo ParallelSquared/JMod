@@ -418,7 +418,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 outputs.append(result)
             
         long_outputs = [j for i in outputs for j in i]
-        logger.debug(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
+        logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         
         decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
         write_mode = "w" if batch_idx==0 else "a"
