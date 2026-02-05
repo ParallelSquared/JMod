@@ -14,6 +14,7 @@ import numpy as np
 import copy
 import json
 from pathlib import Path
+import itertools
 
 from src.iso_functions import fragment_seq
 from src.utils.parse_peptides import split_frag_name
@@ -288,6 +289,126 @@ def tag_library(library,tag=mTRAQ):
             
         
     return new_lib
+
+
+def tag_library2(library,tag,var_tags = False):
+    """
+    
+
+    Parameters
+    ----------
+    library : dict
+        Spectral library
+    tag : Tag
+        Curerntly works for mTRAQ, defined above.
+
+    Returns
+    -------
+    New dictionary with copy of each precursor for each channel.
+
+    """
+    logger.info(f"Generating tagged library with tag: {tag.name}")
+    
+    new_lib = {}
+    
+
+    for key in tqdm.tqdm(library):
+
+        peptide = key[0]
+        peptide = "".join(peptide)
+        # split_peptide = re.findall("([A-Z](?:\(.*?\))?)",peptide)
+        split_peptide = parse_peptide(peptide)
+        
+        
+        
+        
+        ### Qs: 
+        ## Can we have multiple tags on the same AA?
+        ## How do mods effect abilty to tag?
+        ## DIANN puts the n terminus tag before the 1st AA; What is the appropriate nomenclature?
+        
+        all_tag_pos, tags_per_position = get_tag_pos(split_peptide, tag.rules)
+        
+        ## use to get number of tags per frag
+        
+        num_tags_n = np.cumsum(tags_per_position,dtype=int)
+        num_tags_c = np.cumsum(tags_per_position[::-1],dtype=int)
+          
+        # Generate all possible tag combinations
+        # Each position can have any of the available tags
+        num_positions = len(all_tag_pos)
+        num_channels = len(tag.channel_names)
+        
+        if var_tags:
+            possible_tag_combinations = list(itertools.product(range(num_channels), repeat=num_positions))
+        else:
+            possible_tag_combinations = [[i] * num_positions for i in range(num_channels)]
+            
+            
+        
+        for tag_combination in possible_tag_combinations:
+            # break
+            lib_entry  = copy.deepcopy(library[key])
+            
+            split_peptide_tagged = split_peptide.copy()
+            total_tag_masses = 0
+            
+            tag_mass_per_position = np.array([0.0 for i in tags_per_position])
+            
+            for tag_idx,tag_channel_idx in enumerate(tag_combination):
+                tag_pos = all_tag_pos[tag_idx]
+                tag_name_c = f"{tag.name}-{tag.channel_names[tag_channel_idx]}"
+                split_peptide_tagged[tag_pos]+="("+tag_name_c+")"
+                
+                tag_mass_c = tag.mass_dict[tag_name_c]
+                total_tag_masses += tag_mass_c 
+                
+                tag_mass_per_position[tag_pos]+=tag_mass_c
+            
+            tag_mass_n = np.cumsum(tag_mass_per_position)
+            tag_mass_c = np.cumsum(tag_mass_per_position[::-1])
+            
+            new_seq = "".join(split_peptide_tagged)
+            
+            lib_entry["mod_seq"] = new_seq
+            lib_entry["prec_mz"] += total_tag_masses / lib_entry["prec_z"]
+            
+            
+            
+            
+            ## create list of fragments and their properties without tags
+            blank_frags = []
+            frags = lib_entry["frags"]
+            for frag in frags:
+                # break
+                
+                
+                frag_type,frag_idx,loss,frag_z = split_frag_name(frag)
+                
+                assert int(frag_idx)<len(split_peptide_tagged)
+                
+                if frag_type in 'abc':
+                    frags[frag][0]+= tag_mass_n[frag_idx-1]/int(frag_z)
+                elif frag_type in 'xyz':
+                    frags[frag][0]+= tag_mass_c[frag_idx-1]/int(frag_z)
+                else:
+                    from src.utils.gui_utils import send_raise_to_TK
+                    send_raise_to_TK("ValueError - Invalid Ion Type")
+                    raise(ValueError("Invalid ion type"))
+                        
+                    
+            lib_entry["spectrum"],lib_entry["ordered_frags"] = frag_to_peak(lib_entry["frags"],return_frags=True)
+             
+            if "spec_frags" in library[key]:
+                lib_entry["spec_frags"] = specific_frags(lib_entry["frags"])
+                
+            
+            
+            new_lib[new_seq,key[1]] = lib_entry
+        
+    return new_lib
+
+
 
 # mTRAQ_lib = tag_library(library, tag=mTRAQ)
 
