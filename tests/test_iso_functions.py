@@ -117,7 +117,7 @@ class Test_precursor_isotopes():
         self.compare_outputs(output, expected_output)
 
     def test_untag_seq_with_tag(self):
-        output = precursor_isotopes("PEPTIDEK", 2, self.tag, 2)
+        output = precursor_isotopes("PEPTIDEK", 2, [self.tag], 2)
         expected_output = [Peak(mz=464.734740, intensity=0.676096, charge=2), Peak(mz=465.236229, intensity=0.323904, charge=2)]
         self.compare_outputs(output, expected_output)
 
@@ -127,23 +127,23 @@ class Test_precursor_isotopes():
         self.compare_outputs(output, expected_output)
 
     def test_one_tag(self):
-        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 2, self.tag, 2)
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 2, [self.tag], 2)
         expected_output = [Peak(mz=618.792786, intensity=0.593806, charge=2), Peak(mz=619.294302, intensity=0.406194, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_two_tags(self):
-        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-0)", 2, self.tag, 2)
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-0)", 2, [self.tag], 2)
         expected_output = [Peak(mz=772.850832, intensity=0.529374, charge=2), Peak(mz=773.352363, intensity=0.470626, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_different_channel(self):
-        output = precursor_isotopes("P(PSMtag_5plex-4)EPTIDEK", 2, self.tag, 2)
+        output = precursor_isotopes("P(PSMtag_5plex-4)EPTIDEK", 2, [self.tag], 2)
         expected_output = [Peak(mz=620.798264, intensity=0.601670, charge=2), Peak(mz=621.299775, intensity=0.398330, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_absent_channel(self):
         with pytest.raises(KeyError) as exc_info:
-            precursor_isotopes("P(PSMtag_5plex-2)EPTIDEK", 2, self.tag, 2)
+            precursor_isotopes("P(PSMtag_5plex-2)EPTIDEK", 2, [self.tag], 2)
         assert "'2'" in str(exc_info.value)
 
     def test_stripped_seq_z3(self):
@@ -152,32 +152,32 @@ class Test_precursor_isotopes():
         self.compare_outputs(output, expected_output)
 
     def test_one_tag_z3(self):
-        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 3, self.tag, 2)
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 3, [self.tag], 2)
         expected_output = [Peak(mz=412.864283, intensity=0.593806, charge=3), Peak(mz=413.198627, intensity=0.406194, charge=3)]
         self.compare_outputs(output, expected_output)
 
     def test_two_different_tags(self):
-        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-4)", 3, self.tag, 2)
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-4)", 3, [self.tag], 2)
         expected_output = [Peak(mz=516.906632, intensity=0.535615, charge=3), Peak(mz=517.240984, intensity=0.464385, charge=3)]
         self.compare_outputs(output, expected_output)
 
     def test_phosphorylation(self):
-        output = precursor_isotopes("PEPT(Unimod:21)IDEK", 2, self.tag, 2)
+        output = precursor_isotopes("PEPT(Unimod:21)IDEK", 2, [self.tag], 2)
         expected_output = [Peak(mz=504.717905, intensity=0.675522, charge=2), Peak(mz=505.219396, intensity=0.324478, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_mod_and_tag(self):
-        output = precursor_isotopes("PEPT(Unimod:21)IDEK(PSMtag_5plex-0)", 2, self.tag, 2)
+        output = precursor_isotopes("PEPT(Unimod:21)IDEK(PSMtag_5plex-0)", 2, [self.tag], 2)
         expected_output = [Peak(mz=658.775951, intensity=0.593363, charge=2), Peak(mz=659.277469, intensity=0.406637, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_tag_before_mod(self):
-        output = precursor_isotopes("PEPT(PSMtag_5plex-0)(Unimod:21)IDEK", 2, self.tag, 2)
+        output = precursor_isotopes("PEPT(PSMtag_5plex-0)(Unimod:21)IDEK", 2, [self.tag], 2)
         expected_output = [Peak(mz=658.775951, intensity=0.593363, charge=2), Peak(mz=659.277469, intensity=0.406637, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_mod_before_tag(self):
-        output = precursor_isotopes("PEPT(Unimod:21)(PSMtag_5plex-0)IDEK", 2, self.tag, 2)
+        output = precursor_isotopes("PEPT(Unimod:21)(PSMtag_5plex-0)IDEK", 2, [self.tag], 2)
         expected_output = [Peak(mz=658.775951, intensity=0.593363, charge=2), Peak(mz=659.277469, intensity=0.406637, charge=2)]
         self.compare_outputs(output, expected_output)
 
@@ -196,7 +196,7 @@ class Test_precursor_isotopes():
             precursor_isotopes("Decoy_PEPTIDEK", 2, None, 2, decoys=False)
 
     def test_tag_channel_comp_is_none(self):
-        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 2, self.tag_no_comps, 2)
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 2, [self.tag_no_comps], 2)
         expected_output = [Peak(mz=464.734740, intensity=0.676096, charge=2), Peak(mz=465.236229, intensity=0.323904, charge=2)]
         self.compare_outputs(output, expected_output)
 

@@ -11,8 +11,11 @@ import queue
 from src.logger import logger
 
 
-def _worker_init(in_q, out_q, fit_func, static_kwargs):
+def _worker_init(in_q, out_q, fit_func, static_kwargs, config_json=None):
     """Worker process loop - receives spectra, runs fits, returns results."""
+    if config_json:
+        import src.config as config_module
+        config_module.load_config_from_json(config_json)
     while True:
         try:
             item = in_q.get()
@@ -33,16 +36,18 @@ class ResilientFitter:
     and respawns it, then retries the fit once.
     """
 
-    def __init__(self, fit_func, static_kwargs, timeout=30):
+    def __init__(self, fit_func, static_kwargs, timeout=30, config_json=None):
         """
         Args:
             fit_func: The fitting function (e.g., fit_to_lib2)
             static_kwargs: Dict of arguments that don't change per spectrum
             timeout: Seconds before considering a fit hung
+            config_json: Path to JSON config file to load in subprocess
         """
         self.fit_func = fit_func
         self.static_kwargs = static_kwargs
         self.timeout = timeout
+        self.config_json = config_json
         self.in_q = None
         self.out_q = None
         self.worker = None
@@ -59,7 +64,7 @@ class ResilientFitter:
         self.out_q = mp.Queue()
         self.worker = Process(
             target=_worker_init,
-            args=(self.in_q, self.out_q, self.fit_func, self.static_kwargs),
+            args=(self.in_q, self.out_q, self.fit_func, self.static_kwargs, self.config_json),
             daemon=True
         )
         self.worker.start()

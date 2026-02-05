@@ -395,7 +395,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         'decoy': True,
         'decoy_library': decoy_lib
     }
-    fitter = ResilientFitter(fit_to_lib2, static_kwargs, timeout=30)
+    fitter = ResilientFitter(fit_to_lib2, static_kwargs, timeout=30,
+                             config_json=config.args.config_json)
 
     for batch_idx in range(num_batches):
         start_time = time.time()

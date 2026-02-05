@@ -877,7 +877,7 @@ class Test_compute_isotopes():
         num_iso = 6
         tag = self.tag
 
-        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, [tag])
         expected = [Peak(mz=464.734740, intensity=0.600835, charge=2), Peak(mz=465.236229, intensity=0.287848, charge=2), Peak(mz=465.737521, intensity=0.087264, charge=2), Peak(mz=466.238790, intensity=0.019787, charge=2), Peak(mz=466.740027, intensity=0.003680, charge=2), Peak(mz=467.241248, intensity=0.000586, charge=2)]
         self.compare_outputs(isotopes, expected)
 
@@ -888,7 +888,7 @@ class Test_compute_isotopes():
         num_iso = 6
         tag = self.tag
 
-        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, [tag])
         expected = [Peak(mz=618.792786, intensity=0.487119, charge=2), Peak(mz=619.294302, intensity=0.333215, charge=2), Peak(mz=619.795684, intensity=0.131298, charge=2), Peak(mz=620.297017, intensity=0.037846, charge=2), Peak(mz=620.798315, intensity=0.008791, charge=2), Peak(mz=621.299592, intensity=0.001731, charge=2)]
         self.compare_outputs(isotopes, expected)
 
@@ -899,7 +899,7 @@ class Test_compute_isotopes():
         num_iso = 6
         tag = self.tag
 
-        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, [tag])
         expected = [Peak(mz=772.850832, intensity=0.395076, charge=2), Peak(mz=773.352363, intensity=0.351233, charge=2), Peak(mz=773.853795, intensity=0.172197, charge=2), Peak(mz=774.355175, intensity=0.060560, charge=2), Peak(mz=774.856520, intensity=0.016947, charge=2), Peak(mz=775.357839, intensity=0.003987, charge=2)]
         self.compare_outputs(isotopes, expected)
 
@@ -910,7 +910,7 @@ class Test_compute_isotopes():
         num_iso = 6
         tag = self.tag
 
-        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, [tag])
         expected = [Peak(mz=812.833998, intensity=0.392212, charge=2), Peak(mz=813.335530, intensity=0.349179, charge=2), Peak(mz=813.836951, intensity=0.173805, charge=2), Peak(mz=814.338319, intensity=0.062487, charge=2), Peak(mz=814.839653, intensity=0.017961, charge=2), Peak(mz=815.340962, intensity=0.004355, charge=2)]
         self.compare_outputs(isotopes, expected)
 
@@ -921,13 +921,13 @@ class Test_compute_isotopes():
         num_iso = 2
         tag = self.tag
 
-        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, [tag])
         expected = [Peak(mz=310.158919, intensity=0.676096, charge=3), Peak(mz=310.493245, intensity=0.323904, charge=3)]
         self.compare_outputs(isotopes, expected)
 
     def test_fake_channel(self):
         with pytest.raises(KeyError) as exc_info:
-            compute_isotopes("P(PSMtag_5plex-2)EPTIDEK", 100, 2, 2, self.tag)
+            compute_isotopes("P(PSMtag_5plex-2)EPTIDEK", 100, 2, 2, [self.tag])
         assert "'2'" in str(exc_info.value)
 
     def test_fake_tag_name(self):
@@ -937,7 +937,7 @@ class Test_compute_isotopes():
         num_iso = 6
         tag = self.tag
 
-        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, [tag])
         expected = [Peak(mz=464.734740, intensity=0.600835, charge=2), Peak(mz=465.236229, intensity=0.287848, charge=2), Peak(mz=465.737521, intensity=0.087264, charge=2), Peak(mz=466.238790, intensity=0.019787, charge=2), Peak(mz=466.740027, intensity=0.003680, charge=2), Peak(mz=467.241248, intensity=0.000586, charge=2)]
         self.compare_outputs(isotopes, expected)
 
@@ -948,7 +948,7 @@ class Test_compute_isotopes():
         num_iso = 6
         tag = self.tag_no_comp
 
-        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, [tag])
         expected = [Peak(mz=618.792786, intensity=0.600835, charge=2), Peak(mz=619.294302, intensity=0.287848, charge=2), Peak(mz=619.795684, intensity=0.087264, charge=2), Peak(mz=620.297017, intensity=0.019787, charge=2), Peak(mz=620.798315, intensity=0.003680, charge=2), Peak(mz=621.299592, intensity=0.000586, charge=2)]
         self.compare_outputs(isotopes, expected)
 
@@ -959,7 +959,7 @@ class Test_compute_isotopes():
         num_iso = 6
         tag = self.tag_no_comp
 
-        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, [tag])
         expected = [Peak(mz=618.792786, intensity=0.600835, charge=2), Peak(mz=619.294302, intensity=0.287848, charge=2), Peak(mz=619.795684, intensity=0.087264, charge=2), Peak(mz=620.297017, intensity=0.019787, charge=2), Peak(mz=620.798315, intensity=0.003680, charge=2), Peak(mz=621.299592, intensity=0.000586, charge=2)]
         self.compare_outputs(isotopes, expected)
 
@@ -970,7 +970,7 @@ class Test_compute_isotopes():
         num_iso = 2
         tag = self.tag
 
-        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tag)
+        isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, [tag])
         expected = [Peak(mz=620.798264, intensity=0.601670, charge=2), Peak(mz=621.299775, intensity=0.398330, charge=2)]
         self.compare_outputs(isotopes, expected)
 
