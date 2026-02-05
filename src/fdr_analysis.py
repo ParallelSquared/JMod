@@ -883,7 +883,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
         
     if SILAC is not None:
         silac_channel = [re.findall(f"{SILAC.name}-(\d+)",i) for i in fdc.seq]
-        fdc["silac_channel"] = [int(i[0]) if len(i)>0 else "NA" for i in silac_channel]
+        fdc["silac_channel"] = [int(i[0]) if len(i)>0 else np.nan for i in silac_channel]
     else:
         fdc["silac_channel"] = "NA"
         
