@@ -267,11 +267,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     else:
         mass_tag = None
         config.tag = None
-    
-    logger.info("Serializing spectrum library to disk")
-    with open(results_folder_path+"/slib","wb") as dill_file:
-        dill.dump(spectrumLibrary,dill_file)
-    logger.info("Spectrum library serialized")
 
     if config.args.timeplex:
         ## now ooutputs library as we finetune RT
@@ -336,10 +331,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
                                                   tag=config.tag,
                                                   n_iso=config.num_iso_peaks)
-        
-    # with open(results_folder_path+"/slib","wb") as dill_file:
-    #     slib = dill.dump(spectrumLibrary,dill_file)   
-      
+
     logger.info("Creating Decoy Library")
     decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev",tag=config.tag,n_iso=config.num_iso_peaks)
     for key in spectrumLibrary:
