@@ -407,20 +407,36 @@ def python_lib_to_diann_df(python_lib: dict) -> pl.DataFrame:
         protein_name  -> ProteinName
         genes         -> Genes
     """
-    rows = []
+    # Pre-allocate column lists (much more memory efficient than list of dicts)
+    prec_mz_col = []
+    mod_seq_col = []
+    prec_z_col = []
+    rt_col = []
+    seq_col = []
+    ionmob_col = []
+    protid_col = []
+    protein_group_col = []
+    protein_name_col = []
+    genes_col = []
+    frag_type_col = []
+    frag_num_col = []
+    frag_loss_col = []
+    frag_charge_col = []
+    frag_mz_col = []
+    frag_intensity_col = []
 
     for (modpep, prec_charge), entry in python_lib.items():
         # precursor-level fields (with safe .get so it doesn't explode)
-        prec_mz        = entry.get("prec_mz")
-        mod_seq        = entry.get("mod_seq", modpep)
-        prec_z         = entry.get("prec_z", prec_charge)
-        iRT            = entry.get("iRT")
-        seq            = entry.get("seq")
-        ionmob         = entry.get("IonMob")
-        protein_group  = entry.get("protein_group")
-        protein_name   = entry.get("protein_name")
-        genes          = entry.get("genes")
-        protid         = entry.get("UniprotID")
+        prec_mz = entry.get("prec_mz")
+        mod_seq = entry.get("mod_seq", modpep)
+        prec_z = entry.get("prec_z", prec_charge)
+        iRT = entry.get("iRT")
+        seq = entry.get("seq")
+        ionmob = entry.get("IonMob")
+        protein_group = entry.get("protein_group")
+        protein_name = entry.get("protein_name")
+        genes = entry.get("genes")
+        protid = entry.get("UniprotID")
 
         frags = entry.get("frags", {})
 
@@ -429,55 +445,45 @@ def python_lib_to_diann_df(python_lib: dict) -> pl.DataFrame:
 
             # For no-loss case, DIA-NN often uses "noloss" or empty string;
             # we can't distinguish original, so choose one convention:
-            frag_loss_col = frag_loss if frag_loss != "" else "noloss"
+            loss_val = frag_loss if frag_loss != "" else "noloss"
 
-            row = {
-                # precursor-level (using *DIA-NN* names)
-                "PrecursorMz":      float(prec_mz) if prec_mz is not None else None,
-                "ModifiedPeptide":  mod_seq,
-                "PrecursorCharge":  int(prec_z) if prec_z is not None else None,
-                "RT":  float(iRT) if iRT is not None else None,
-                "StrippedPeptide":  seq,
-                "IonMobility":      float(ionmob) if ionmob is not None else None,
-                "ProteinID":        protid,
-                "ProteinGroup":     protein_group,
-                "ProteinName":      protein_name,
-                "Genes":            genes,
+            # Append to each column list
+            prec_mz_col.append(float(prec_mz) if prec_mz is not None else None)
+            mod_seq_col.append(mod_seq)
+            prec_z_col.append(int(prec_z) if prec_z is not None else None)
+            rt_col.append(float(iRT) if iRT is not None else None)
+            seq_col.append(seq)
+            ionmob_col.append(float(ionmob) if ionmob is not None else None)
+            protid_col.append(protid)
+            protein_group_col.append(protein_group)
+            protein_name_col.append(protein_name)
+            genes_col.append(genes)
+            frag_type_col.append(frag_type)
+            frag_num_col.append(frag_num)
+            frag_loss_col.append(loss_val)
+            frag_charge_col.append(frag_charge)
+            frag_mz_col.append(float(frag_mz))
+            frag_intensity_col.append(float(frag_intensity))
 
-                # fragment-level
-                "FragmentType":     frag_type,
-                "FragmentSeriesNumber":   frag_num,
-                "FragmentLossType": frag_loss_col,
-                "FragmentCharge":   frag_charge,
-                "FragmentMz":       float(frag_mz),
-                "RelativeIntensity": float(frag_intensity),
-            }
-
-            rows.append(row)
-
-    df = pl.DataFrame(rows)
-
-    # Optional: enforce a stable column order
-    desired_order = [
-        "ModifiedPeptide",
-        "StrippedPeptide",
-        "PrecursorCharge",
-        "RT",
-        "IonMobility",
-        "PrecursorMz",
-        "FragmentMz",
-        "RelativeIntensity",
-        "FragmentType",
-        "FragmentCharge",
-        "FragmentSeriesNumber",
-        "FragmentLossType",
-        "ProteinID",
-        "ProteinGroup",
-        "ProteinName",
-        "Genes"
-    ]
-    existing_cols = [c for c in desired_order if c in df.columns]
-    df = df.select(existing_cols)
+    # Create DataFrame from columns (much more efficient than list of dicts)
+    df = pl.DataFrame({
+        "ModifiedPeptide": mod_seq_col,
+        "StrippedPeptide": seq_col,
+        "PrecursorCharge": prec_z_col,
+        "RT": rt_col,
+        "IonMobility": ionmob_col,
+        "PrecursorMz": prec_mz_col,
+        "FragmentMz": frag_mz_col,
+        "RelativeIntensity": frag_intensity_col,
+        "FragmentType": frag_type_col,
+        "FragmentCharge": frag_charge_col,
+        "FragmentSeriesNumber": frag_num_col,
+        "FragmentLossType": frag_loss_col,
+        "ProteinID": protid_col,
+        "ProteinGroup": protein_group_col,
+        "ProteinName": protein_name_col,
+        "Genes": genes_col,
+    })
 
     return df
 
