@@ -10,6 +10,7 @@ import numpy as np
 
 import warnings
 import ptinnls as sparse_nnls
+from sklearn.linear_model import Lasso
 
 from scipy import stats
 from scipy import sparse
@@ -23,6 +24,36 @@ from src.utils.misc_functions import createTolWindows, window_width, feature_lis
 hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim,np_pearson_cor
 from src.utils.parse_peptides import change_seq, convert_frags
 from src.models.spec_lib.spec_lib import frag_to_peak
+
+
+def _lasso_nnls(A, b, sample_weight=None):
+    """
+    NNLS via sklearn Lasso with near-zero L1 penalty, positive=True.
+
+    Args:
+        A: Sparse matrix (n_peaks x n_candidates), will be converted to CSR
+        b: 1D array of observed intensities
+        sample_weight: Optional per-sample weights for weighted least squares
+
+    Returns:
+        1D numpy array of non-negative coefficients
+    """
+    A_csr = A.tocsr() if not sparse.issparse(A) or A.format != 'csr' else A
+
+    # Normalize b so tol is scale-independent across spectra
+    s = np.max(np.abs(b)) or 1.0
+
+    model = Lasso(
+        alpha=1e-10 / s,
+        positive=True,
+        fit_intercept=False,
+        selection='random',
+        tol=1e-4,
+        max_iter=10000,
+        random_state=42,
+    )
+    model.fit(A_csr, b / s, sample_weight=sample_weight)
+    return model.coef_ * s
 
 
 def huber_nnls_irls(A, b, max_iter=1, tol=1e-4):
@@ -44,17 +75,14 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4):
     Returns:
         dict with 'x': coefficients (n_candidates,)
     """
-    # Convert to CSR for efficient matrix-vector multiplication
-    A_csr = A.tocsr()
+    A_csr = A.tocsr() if sparse.issparse(A) else sparse.csr_matrix(A)
     n_peaks = A_csr.shape[0]
 
     # Initial solve with uniform weights
     weights = np.ones(n_peaks)
-    x = sparse_nnls.lsqnonneg(A, b, {"show_progress": False})['x']
+    x = _lasso_nnls(A_csr, b)
 
     for i in range(max_iter):
-        # Compute residuals: A @ x gives (n_peaks,) when x is (n_candidates,)
-        # Use .dot() and ravel() to ensure 1D output
         predicted = A_csr.dot(x).ravel()
         residuals = predicted - b
 
@@ -64,20 +92,16 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4):
 
         # Update Huber weights (n_peaks,)
         abs_r = np.abs(residuals)
-        new_weights = np.where(abs_r <= delta, 1.0, delta / abs_r)
+        new_weights = np.ones(n_peaks)
+        mask = abs_r > delta
+        new_weights[mask] = delta / abs_r[mask]
 
         # Check convergence
         if np.max(np.abs(new_weights - weights)) < tol:
             break
         weights = new_weights
 
-        # Weighted NNLS: apply sqrt(weights) to both A and b
-        # W is diagonal (n_peaks x n_peaks), so W @ A is (n_peaks x n_candidates)
-        sqrt_w = np.sqrt(weights)
-        A_weighted = sparse.diags(sqrt_w) @ A_csr
-        b_weighted = sqrt_w * b
-
-        x = sparse_nnls.lsqnonneg(A_weighted, b_weighted, {"show_progress": False})['x']
+        x = _lasso_nnls(A_csr, b, sample_weight=weights)
 
     return {'x': x}
 
