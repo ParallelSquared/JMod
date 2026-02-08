@@ -1050,19 +1050,6 @@ def fit_to_lib2(dia_spec,
         fit_results = huber_nnls_irls(sparse_lib_matrix, dia_spec_int)
         lib_coefficients = fit_results['x']
 
-        # Diagnostic: log intensity, residuals, and weights for every spectrum
-        if output_folder is not None:
-            predicted = sparse_lib_matrix.dot(lib_coefficients).ravel()
-            residuals = predicted - dia_spec_int
-            fit_weights = fit_results['weights']
-            import os
-            diag_path = os.path.join(output_folder, "intensity_vs_residual.tsv")
-            write_header = not os.path.exists(diag_path)
-            with open(diag_path, "a") as f:
-                if write_header:
-                    f.write("spec_idx\tintensity\tmu_hat\tresidual\tweight\n")
-                for obs, pred, res, w in zip(dia_spec_int, predicted, residuals, fit_weights):
-                    f.write(f"{spec_idx}\t{obs}\t{pred}\t{res}\t{w}\n")
 
         ####################################
         features = get_features(rt_mz[window_idxs[ref_peaks_in_dia]],
