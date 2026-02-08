@@ -26,7 +26,7 @@ from src.utils.parse_peptides import change_seq, convert_frags
 from src.models.spec_lib.spec_lib import frag_to_peak
 
 
-def _lasso_nnls(A, b, sample_weight=None):
+def _lasso_nnls(A, b, scale=None, sample_weight=None):
     """
     NNLS via sklearn Lasso with near-zero L1 penalty, positive=True.
 
@@ -44,7 +44,7 @@ def _lasso_nnls(A, b, sample_weight=None):
     s = np.max(np.abs(b)) or 1.0
 
     model = Lasso(
-        alpha=1e-10 / s,
+        alpha=(1e-10 / s) * scale,
         positive=True,
         fit_intercept=False,
         selection='random',
@@ -58,50 +58,28 @@ def _lasso_nnls(A, b, sample_weight=None):
 
 def huber_nnls_irls(A, b, max_iter=1, tol=1e-4):
     """
-    Solve non-negative least squares with Huber loss via IRLS.
+    Variance-weighted NNLS with warm-start.
 
-    NNLS solves: min ||Ax - b||² subject to x >= 0
-    where:
-        A: (n_peaks, n_candidates) - library spectra matrix
-        b: (n_peaks,) - observed intensities
-        x: (n_candidates,) - coefficients for each library spectrum
+    First pass: unweighted NNLS.
+    Second pass: weighted by 1/(mu_hat_norm + eps_norm)^2 in normalized space,
+    warm-started from first-pass coefficients.
 
     Args:
         A: Sparse library matrix (n_peaks x n_candidates)
         b: Observed intensities (n_peaks,)
-        max_iter: Maximum IRLS iterations
-        tol: Convergence tolerance
+        max_iter: Maximum IRLS iterations (unused, kept for interface compatibility)
+        tol: Convergence tolerance (unused, kept for interface compatibility)
 
     Returns:
         dict with 'x': coefficients (n_candidates,)
     """
     A_csr = A.tocsr() if sparse.issparse(A) else sparse.csr_matrix(A)
-    n_peaks = A_csr.shape[0]
 
-    # Initial solve with uniform weights
-    weights = np.ones(n_peaks)
-    x = _lasso_nnls(A_csr, b)
+    # Precision weights: Var(residual) proportional to (I + 1), mean-normalized
+    weights = 1.0 / (b + 1.0)
+    weights *= weights.size / weights.sum()
 
-    for i in range(max_iter):
-        predicted = A_csr.dot(x).ravel()
-        residuals = predicted - b
-
-        # Auto-tune delta: 1.345 * MAD (robust scale estimate)
-        mad = np.median(np.abs(residuals - np.median(residuals)))
-        delta = 1.345 * mad if mad > 0 else 1.0
-
-        # Update Huber weights (n_peaks,)
-        abs_r = np.abs(residuals)
-        new_weights = np.ones(n_peaks)
-        mask = abs_r > delta
-        new_weights[mask] = delta / abs_r[mask]
-
-        # Check convergence
-        if np.max(np.abs(new_weights - weights)) < tol:
-            break
-        weights = new_weights
-
-        x = _lasso_nnls(A_csr, b, sample_weight=weights)
+    x = _lasso_nnls(A_csr, b, scale=scale_factor, sample_weight=weights)
 
     return {'x': x}
 
@@ -1022,6 +1000,18 @@ def fit_to_lib2(dia_spec,
         fit_results = huber_nnls_irls(sparse_lib_matrix, dia_spec_int)
         lib_coefficients = fit_results['x']
 
+        # Diagnostic: log predicted (mu_hat) vs residual for every 100th spectrum
+        if spec_idx % 100 == 0:
+            predicted = sparse_lib_matrix.dot(lib_coefficients).ravel()
+            residuals = predicted - dia_spec_int
+            import os
+            diag_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "intensity_vs_residual.tsv")
+            write_header = not os.path.exists(diag_path)
+            with open(diag_path, "a") as f:
+                if write_header:
+                    f.write("spec_idx\tintensity\tmu_hat\tresidual\n")
+                for obs, pred, res in zip(dia_spec_int, predicted, residuals):
+                    f.write(f"{spec_idx}\t{obs}\t{pred}\t{res}\n")
 
         ####################################
         features = get_features(rt_mz[window_idxs[ref_peaks_in_dia]],

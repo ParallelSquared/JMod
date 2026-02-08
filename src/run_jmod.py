@@ -268,10 +268,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         mass_tag = None
         config.tag = None
     
-    logger.info("Serializing spectrum library to disk")
-    with open(results_folder_path+"/slib","wb") as dill_file:
-        dill.dump(spectrumLibrary,dill_file)
-    logger.info("Spectrum library serialized")
 
     if config.args.timeplex:
         ## now ooutputs library as we finetune RT
