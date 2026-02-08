@@ -26,7 +26,7 @@ from src.utils.parse_peptides import change_seq, convert_frags
 from src.models.spec_lib.spec_lib import frag_to_peak
 
 
-def _lasso_nnls(A, b, scale=None, sample_weight=None):
+def _lasso_nnls(A, b, sample_weight=None):
     """
     NNLS via sklearn Lasso with near-zero L1 penalty, positive=True.
 
@@ -44,7 +44,7 @@ def _lasso_nnls(A, b, scale=None, sample_weight=None):
     s = np.max(np.abs(b)) or 1.0
 
     model = Lasso(
-        alpha=(1e-10 / s) * scale,
+        alpha=1e-10 / s,
         positive=True,
         fit_intercept=False,
         selection='random',
@@ -56,32 +56,81 @@ def _lasso_nnls(A, b, scale=None, sample_weight=None):
     return model.coef_ * s
 
 
-def huber_nnls_irls(A, b, max_iter=1, tol=1e-4):
+def huber_nnls_irls(A, b, max_iter=1, tol=1e-4,
+                    tau_low=0.05, tau_mid=0.5, tau_high=1.0):
     """
-    Variance-weighted NNLS with warm-start.
+    Asymmetric IRLS-weighted NNLS with tiered residual penalties.
 
     First pass: unweighted NNLS.
-    Second pass: weighted by 1/(mu_hat_norm + eps_norm)^2 in normalized space,
-    warm-started from first-pass coefficients.
+    Subsequent passes: weights based on residual direction and peak presence:
+      - Over-prediction at zeros (false signal):  tau_high (hardest penalty)
+      - Over-prediction at observed peaks:         tau_mid  (moderate)
+      - Under-prediction at observed peaks:        tau_low  (most forgiving)
+      - Under-prediction at zeros / no residual:   1.0      (neutral)
 
     Args:
         A: Sparse library matrix (n_peaks x n_candidates)
         b: Observed intensities (n_peaks,)
-        max_iter: Maximum IRLS iterations (unused, kept for interface compatibility)
-        tol: Convergence tolerance (unused, kept for interface compatibility)
+        max_iter: Maximum IRLS iterations
+        tol: Convergence tolerance on weight changes
+        tau_low: Weight for under-prediction at observed peaks
+        tau_mid: Weight for over-prediction at observed peaks
+        tau_high: Weight for over-prediction at zero peaks (false predictions)
 
     Returns:
-        dict with 'x': coefficients (n_candidates,)
+        dict with 'x': coefficients, 'weights': final sample weights
     """
     A_csr = A.tocsr() if sparse.issparse(A) else sparse.csr_matrix(A)
+    n_peaks = A_csr.shape[0]
 
-    # Precision weights: Var(residual) proportional to (I + 1), mean-normalized
-    weights = 1.0 / (b + 1.0)
-    weights *= weights.size / weights.sum()
+    # Normalize b so tol is scale-independent
+    s = float(np.max(np.abs(b)) or 1.0)
+    y = b / s
 
-    x = _lasso_nnls(A_csr, b, scale=scale_factor, sample_weight=weights)
+    model = Lasso(
+        alpha=1e-10 / s,
+        positive=True,
+        fit_intercept=False,
+        selection='random',
+        tol=1e-4,
+        max_iter=10000,
+        random_state=42,
+        warm_start=True,
+    )
 
-    return {'x': x}
+    # Initial solve with uniform weights
+    weights = np.ones(n_peaks)
+    model.fit(A_csr, y, sample_weight=weights)
+
+    for _ in range(max_iter):
+        x = model.coef_ * s
+        predicted = A_csr.dot(x).ravel()
+        residuals = predicted - b
+
+        new_weights = np.ones(n_peaks)
+
+        # Tier 3: under-prediction at observed peaks (least penalty)
+        under_pred = (residuals < 0) & (b > 0)
+        new_weights[under_pred] = tau_low
+
+        # Tier 2: over-prediction at observed peaks (moderate)
+        over_pred = (residuals > 0) & (b > 0)
+        new_weights[over_pred] = tau_mid
+
+        # Tier 1: over-prediction at zeros (hardest penalty)
+        false_pred = (residuals > 0) & (b == 0)
+        new_weights[false_pred] = tau_high
+
+        # Check convergence
+        if np.max(np.abs(new_weights - weights)) < tol:
+            break
+        weights = new_weights
+        weights *= weights.size / weights.sum()
+
+        # Warm-started from previous coefficients
+        model.fit(A_csr, y, sample_weight=weights)
+
+    return {'x': model.coef_ * s, 'weights': weights}
 
 
 def get_closest_ms1(prec_rt,ms1_spectra):
@@ -669,7 +718,8 @@ def fit_to_lib2(dia_spec,
                ms1_spectra = None,
                return_frags = False,
                decoy=False,
-               decoy_library=None):
+               decoy_library=None,
+               output_folder=None):
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
@@ -1000,18 +1050,19 @@ def fit_to_lib2(dia_spec,
         fit_results = huber_nnls_irls(sparse_lib_matrix, dia_spec_int)
         lib_coefficients = fit_results['x']
 
-        # Diagnostic: log predicted (mu_hat) vs residual for every 100th spectrum
-        if spec_idx % 100 == 0:
+        # Diagnostic: log intensity, residuals, and weights for every spectrum
+        if output_folder is not None:
             predicted = sparse_lib_matrix.dot(lib_coefficients).ravel()
             residuals = predicted - dia_spec_int
+            fit_weights = fit_results['weights']
             import os
-            diag_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "intensity_vs_residual.tsv")
+            diag_path = os.path.join(output_folder, "intensity_vs_residual.tsv")
             write_header = not os.path.exists(diag_path)
             with open(diag_path, "a") as f:
                 if write_header:
-                    f.write("spec_idx\tintensity\tmu_hat\tresidual\n")
-                for obs, pred, res in zip(dia_spec_int, predicted, residuals):
-                    f.write(f"{spec_idx}\t{obs}\t{pred}\t{res}\n")
+                    f.write("spec_idx\tintensity\tmu_hat\tresidual\tweight\n")
+                for obs, pred, res, w in zip(dia_spec_int, predicted, residuals, fit_weights):
+                    f.write(f"{spec_idx}\t{obs}\t{pred}\t{res}\t{w}\n")
 
         ####################################
         features = get_features(rt_mz[window_idxs[ref_peaks_in_dia]],
