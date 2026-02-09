@@ -56,26 +56,25 @@ def _lasso_nnls(A, b, sample_weight=None):
     return model.coef_ * s
 
 
-def huber_nnls_irls(A, b, max_iter=1, tol=1e-4,
-                    tau_low=0.05, tau_mid=0.5, tau_high=1.0):
+def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
     """
-    Asymmetric IRLS-weighted NNLS with tiered residual penalties.
+    Asymmetric IRLS-weighted NNLS with Tukey biweight on under-predicted peaks.
 
     First pass: unweighted NNLS.
-    Subsequent passes: weights based on residual direction and peak presence:
-      - Over-prediction at zeros (false signal):  tau_high (hardest penalty)
-      - Over-prediction at observed peaks:         tau_mid  (moderate)
-      - Under-prediction at observed peaks:        tau_low  (most forgiving)
-      - Under-prediction at zeros / no residual:   1.0      (neutral)
+    Subsequent passes:
+      - Under-prediction at observed peaks (residuals < 0, b > 0):
+        Tukey bisquare weights — smoothly downweights large under-predictions,
+        completely rejects beyond c * MAD. This is forgiving because other
+        peptides in the mixture can explain the extra observed signal.
+      - All other peaks: weight = 1.0 (full penalty for over-prediction
+        and false signal at zeros).
 
     Args:
         A: Sparse library matrix (n_peaks x n_candidates)
         b: Observed intensities (n_peaks,)
         max_iter: Maximum IRLS iterations
         tol: Convergence tolerance on weight changes
-        tau_low: Weight for under-prediction at observed peaks
-        tau_mid: Weight for over-prediction at observed peaks
-        tau_high: Weight for over-prediction at zero peaks (false predictions)
+        c: Tukey biweight tuning constant (multiples of MAD)
 
     Returns:
         dict with 'x': coefficients, 'weights': final sample weights
@@ -102,24 +101,41 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4,
     weights = np.ones(n_peaks)
     model.fit(A_csr, y, sample_weight=weights)
 
+    x = model.coef_ * s
+    residuals = A_csr.dot(x).ravel() - b
+
+    # Compute cutoff from over-predicted observed peaks, apply to under-predicted
+    over_pred = (residuals > 0) & (b > 0)
+    if np.any(over_pred):
+        abs_r_over = np.abs(residuals[over_pred])
+        mad = np.median(np.abs(abs_r_over - np.median(abs_r_over)))
+        cutoff = c * (mad / 0.6745) if mad > 0 else 1.0
+    else:
+        cutoff = 1.0
+
     for _ in range(max_iter):
         x = model.coef_ * s
-        predicted = A_csr.dot(x).ravel()
-        residuals = predicted - b
+        residuals = A_csr.dot(x).ravel() - b
 
         new_weights = np.ones(n_peaks)
 
-        # Tier 3: under-prediction at observed peaks (least penalty)
-        under_pred = (residuals < 0) & (b > 0)
-        new_weights[under_pred] = tau_low
-
-        # Tier 2: over-prediction at observed peaks (moderate)
+        # Huber on over-predicted observed peaks
         over_pred = (residuals > 0) & (b > 0)
-        new_weights[over_pred] = tau_mid
+        if np.any(over_pred):
+            abs_r = np.abs(residuals[over_pred])
+            mask = abs_r > cutoff
+            huber_w = np.ones(np.sum(over_pred))
+            huber_w[mask] = cutoff / abs_r[mask]
+            new_weights[over_pred] = huber_w
 
-        # Tier 1: over-prediction at zeros (hardest penalty)
-        false_pred = (residuals > 0) & (b == 0)
-        new_weights[false_pred] = tau_high
+        # Tukey biweight on under-predicted observed peaks
+        under_pred = (residuals < 0) & (b > 0)
+        if np.any(under_pred):
+            abs_r = np.abs(residuals[under_pred])
+            u = abs_r / cutoff
+            # Bisquare: (1 - u²)² for |u| <= 1, 0 otherwise
+            biweight = np.where(u <= 1.0, (1.0 - u**2)**2, 0.0)
+            new_weights[under_pred] = biweight
 
         # Check convergence
         if np.max(np.abs(new_weights - weights)) < tol:
