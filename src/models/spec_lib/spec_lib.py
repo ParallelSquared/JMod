@@ -292,28 +292,42 @@ def loadSpecLib(lib_file):
 
 
 # TODO add a test for this, make sure decoys are being generated correctly
+import multiprocessing
+
+def _decoy_worker(args):
+    """Worker function for parallel decoy generation."""
+    seq, frags, rules, tag, n_iso, use_iso = args
+    new_seq = change_seq(seq, rules)
+    new_frags = convert_frags(seq, frags, rules)
+    if use_iso:
+        spectrum, ordered_frags = gen_isotopes_dict(new_seq, new_frags, tag, n_iso)
+    else:
+        spectrum, ordered_frags = frag_to_peak(new_frags, return_frags=True)
+    return new_seq, new_frags, spectrum, ordered_frags
+
+
 def create_decoy_lib(library,rules,tag,n_iso):
     ## keep keys the same but change seq, mz and frags
     for key in library:
         library[key]["parent_key"] = key
 
-    decoy_lib =copy.deepcopy(library) # create copy so we do not change the original
-    
-    for key in tqdm.tqdm(decoy_lib):
+    decoy_lib = {key: dict(entry) for key, entry in library.items()}
+
+    all_keys = list(decoy_lib.keys())
+    use_iso = config.args.iso
+    worker_args = [(key[0], decoy_lib[key]["frags"], rules, tag, n_iso, use_iso)
+                   for key in all_keys]
+
+    with multiprocessing.Pool() as p:
+        results = list(tqdm.tqdm(p.imap(_decoy_worker, worker_args), total=len(all_keys)))
+
+    for key, (new_seq, new_frags, spectrum, ordered_frags) in zip(all_keys, results):
         entry = decoy_lib[key]
-        entry["seq"] = change_seq(key[0],rules)
-        #!!! To change;
-        # if config.args.decoy=="rev": ## this will have the same mz as many correct matches and therefore a really good ms1 isotope corr
-        #     entry["prec_mz"] -= config.decoy_mz_offset
-            
-        entry["frags"] = convert_frags(key[0], entry["frags"],rules)
-        
-        if config.args.iso:
-            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(entry["seq"], entry["frags"], tag, n_iso)
-        else:
-            entry["spectrum"], entry["ordered_frags"] = frag_to_peak(entry["frags"],return_frags=True)
-            
-            
+        entry["seq"] = new_seq
+        entry["frags"] = new_frags
+        entry["spectrum"] = spectrum
+        entry["ordered_frags"] = ordered_frags
+
     return decoy_lib
             
             
