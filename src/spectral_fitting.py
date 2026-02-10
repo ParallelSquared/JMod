@@ -44,13 +44,13 @@ def _lasso_nnls(A, b, sample_weight=None):
     s = np.max(np.abs(b)) or 1.0
 
     model = Lasso(
-        alpha=1e-10 / s,
+        alpha=1e-5 / s,
         positive=True,
         fit_intercept=False,
         selection='random',
-        tol=1e-4,
-        max_iter=10000,
         random_state=42,
+        tol=1e-4,
+        max_iter=20000,
     )
     model.fit(A_csr, b / s, sample_weight=sample_weight)
     return model.coef_ * s
@@ -86,20 +86,26 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
     s = float(np.max(np.abs(b)) or 1.0)
     y = b / s
 
+    # Data-driven regularization
+    alpha_max = np.max(np.abs(A_csr.T.dot(y))) / n_peaks
+    alpha = alpha_max * 1e-4
+
     model = Lasso(
-        alpha=1e-10 / s,
+        #alpha=1e-5 / s,
+        alpha=alpha,
         positive=True,
         fit_intercept=False,
         selection='random',
-        tol=1e-4,
-        max_iter=10000,
         random_state=42,
+        tol=1e-3,
+        max_iter=20000,
         warm_start=True,
     )
 
     # Initial solve with uniform weights
     weights = np.ones(n_peaks)
     model.fit(A_csr, y, sample_weight=weights)
+    initial_n_iter = model.n_iter_
 
     x = model.coef_ * s
     residuals = A_csr.dot(x).ravel() - b
@@ -119,15 +125,6 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
 
         new_weights = np.ones(n_peaks)
 
-        # Huber on over-predicted observed peaks
-        over_pred = (residuals > 0) & (b > 0)
-        if np.any(over_pred):
-            abs_r = np.abs(residuals[over_pred])
-            mask = abs_r > cutoff
-            huber_w = np.ones(np.sum(over_pred))
-            huber_w[mask] = cutoff / abs_r[mask]
-            new_weights[over_pred] = huber_w
-
         # Tukey biweight on under-predicted observed peaks
         under_pred = (residuals < 0) & (b > 0)
         if np.any(under_pred):
@@ -146,7 +143,9 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
         # Warm-started from previous coefficients
         model.fit(A_csr, y, sample_weight=weights)
 
-    return {'x': model.coef_ * s, 'weights': weights}
+    return {'x': model.coef_ * s, 'weights': weights,
+            'initial_n_iter': initial_n_iter, 'robust_n_iter': model.n_iter_,
+            'alpha_max': alpha_max}
 
 
 def get_closest_ms1(prec_rt,ms1_spectra):
@@ -1065,6 +1064,10 @@ def fit_to_lib2(dia_spec,
         # Fit lib spectra to observed spectra (Huber loss via IRLS)
         fit_results = huber_nnls_irls(sparse_lib_matrix, dia_spec_int)
         lib_coefficients = fit_results['x']
+
+        if output_folder is not None:
+            with open(output_folder + "/fitting_iterations.tsv", "a") as f:
+                f.write(f"{spec_idx}\t{sparse_lib_matrix.shape[1]}\t{fit_results['initial_n_iter']}\t{fit_results['robust_n_iter']}\t{fit_results['alpha_max']}\n")
 
 
         ####################################
