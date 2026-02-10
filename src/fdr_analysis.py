@@ -876,7 +876,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
         tag_name = mass_tag.name
         ## mTRAQ label
         tag_channel = [re.findall(f"{tag_name}-(\d+)",i) for i in fdc.seq]
-        fdc["channel"] = [int(i[0]) if len(i)>0 else "NA" for i in tag_channel]
+        fdc["channel"] = [int(i[0]) if len(i)>0 else np.nan for i in tag_channel]
 
     else: 
         fdc["channel"] = 0 #if LF
@@ -885,7 +885,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
         silac_channel = [re.findall(f"{SILAC.name}-(\d+)",i) for i in fdc.seq]
         fdc["silac_channel"] = [int(i[0]) if len(i)>0 else np.nan for i in silac_channel]
     else:
-        fdc["silac_channel"] = "NA"
+        fdc["silac_channel"] = np.nan 
         
     #this was previously in ms1_quant function.. we need it for the target/decoy classification
     frag_errors = [unstring_floats(mz) for mz in fdc.frag_errors]
@@ -939,5 +939,5 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","decoy","Qvalue", "Protein_Qvalue","PredVal",
                        "protein",'BestChannel_Qvalue', 'plex_Area', 'seq', 'silac_channel', 'untag_seq']
-    parquet_columns = [i for i in parquet_columns if i in fdx.columns]
+    parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/all_IDs_filtered.parquet")
