@@ -1155,6 +1155,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
             # failing because you're trying to read in the entire thing --> need to chunk it
 
+            logger.info("Processing library retention times in batches")
             batch_size = 100000
             preds = []
 
