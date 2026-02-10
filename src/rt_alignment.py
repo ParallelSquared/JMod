@@ -1152,8 +1152,20 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             boundary = 4 * sigmas[0] + 8 * elution_sd
             rt_spl = pred_rt_spl
             all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
-            all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
-            
+
+            # failing because you're trying to read in the entire thing --> need to chunk it
+
+            batch_size = 100000
+            preds = []
+
+            for i in range(0, len(all_lib_seqs), batch_size):
+                batch = np.array(all_lib_seqs[i:i+batch_size])
+                batch_preds = np.mean([model.predict(batch) for model in models], axis=0)
+                preds.append(batch_preds)
+
+            all_new_lib_rts = convertor(np.concatenate(preds).flatten())
+            # all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
+
             for key,rt in zip(all_lib_keys,all_new_lib_rts):
                 updatedLibrary[key]["iRT"] = rt
                 

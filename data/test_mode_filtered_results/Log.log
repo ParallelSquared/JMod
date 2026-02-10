@@ -1,0 +1,127 @@
+00:00:05 - DEBUG - Namespace(mzml='data/test_mode_filtered.mzML', diaPASEF=False, speclib='data/filtered_library.tsv', use_rt=True, use_features=True, atleast_m=3, threads=10, ppm=10, output_folder=None, ms2_align=False, timeplex=False, num_timeplex=0, iso=False, unmatched='c', decoy='rev', mTRAQ=False, tag='None', num_iso=2, pp_file='', timspeak_file='', lib_frac=0.5, dummy_value=None, plexDIA=False, SILAC=None, use_emp_rt=False, unfiltered_quant=True, score_lib_frac=0.5, user_rt_tol=False, rt_tol=0.5, initial_percentile=50, user_percentile=False, no_ms1_req=True, ms1_ppm=0, config_json=None, test_mode=True, test_rt_min=0.0, test_rt_max=60.0, test_mz_min=0.0, test_mz_max=800.0)
+00:00:05 - INFO - Using configuration:
+00:00:05 - INFO - Namespace(mzml='data/test_mode_filtered.mzML', diaPASEF=False, speclib='data/filtered_library.tsv', use_rt=True, use_features=True, atleast_m=3, threads=10, ppm=10, output_folder=None, ms2_align=False, timeplex=False, num_timeplex=0, iso=False, unmatched='c', decoy='rev', mTRAQ=False, tag='None', num_iso=2, pp_file='', timspeak_file='', lib_frac=0.5, dummy_value=None, plexDIA=False, SILAC=None, use_emp_rt=False, unfiltered_quant=True, score_lib_frac=0.5, user_rt_tol=False, rt_tol=0.5, initial_percentile=50, user_percentile=False, no_ms1_req=True, ms1_ppm=0, config_json=None, test_mode=True, test_rt_min=0.0, test_rt_max=60.0, test_mz_min=0.0, test_mz_max=800.0)
+00:00:05 - INFO - 
+00:00:05 - INFO - Results will be saved to /Users/eunicekoo/Downloads/jmod_home/jmod_dev/data/test_mode_filtered_results
+00:00:05 - INFO - Loading Library...
+00:00:05 - INFO - Loading Library... from pickle
+00:00:05 - INFO - Loaded 10829 library precursors
+00:00:05 - INFO - Loading Spectra...
+00:00:05 - INFO - Loading Spectra... from pickle
+00:00:05 - INFO - Loaded 388 MS1 spectra
+00:00:05 - INFO - Loaded 459 MS2 spectra
+00:00:05 - INFO - finished
+00:00:05 - INFO - Running in test mode with RT range: 0.0-60.0, m/z range: 0.0-800.0
+00:00:05 - INFO - Selected 459 out of 459 MS2 scans for test mode
+00:00:05 - INFO - Pre-filtered library to 10829 out of 10829 entries for test mode
+00:00:05 - INFO - Serializing spectrum library to disk
+00:00:07 - INFO - Spectrum library serialized
+00:00:07 - INFO - 
+00:00:07 - INFO - Starting Initial Search
+00:00:08 - INFO - Converting spectra
+00:00:08 - INFO - Searching spectra in chunks
+00:00:08 - INFO - Building results dataframe
+00:00:08 - INFO - Calculating theoretical m/z
+00:00:08 - INFO - Looking up MS1 data
+00:00:08 - INFO - Adapting output dataframe
+00:00:08 - INFO - Creating fragment library map
+00:00:09 - INFO - Computing spectral angle
+00:00:09 - INFO - Computing Scribe score
+00:00:09 - INFO - Computing matched library intensity percentage
+00:00:09 - INFO - Mean elution width: FWHM 0.2583, SD 0.1097
+00:00:09 - INFO - 
+00:00:09 - INFO - Filtering IDs from initial search
+00:00:10 - INFO - Testing Percentile: 20, Ratio: 0.0687, #IDs: 582, Partial Posterior: 0.6040
+00:00:10 - DEBUG - 20 0.0687 582
+00:00:10 - INFO - 
+00:00:10 - INFO - Trying RT Prediction
+00:00:10 - INFO - 549 peptides considered for fine tuning
+00:00:10 - DEBUG - /Users/eunicekoo/Downloads/jmod_home/jmod_dev/src
+00:00:10 - DEBUG - Training data size: (494, 30, 20), Test data size: (55, 30, 20)
+00:00:10 - DEBUG - Successfully loaded model 0 directly
+00:00:10 - DEBUG - Successfully loaded model 1 directly
+00:00:11 - DEBUG - Successfully loaded model 2 directly
+00:00:11 - DEBUG - Returning 3 models of types: ['Sequential', 'Sequential', 'Sequential']
+00:00:11 - INFO - Loaded 3 models
+00:00:11 - DEBUG - Attempting prediction with model of type Sequential
+00:00:11 - DEBUG - Used predict() method, result type: ndarray
+00:00:11 - DEBUG - Prediction shape: (55, 1)
+00:00:11 - DEBUG - Successfully added prediction to model_outputs
+00:00:11 - DEBUG - Attempting prediction with model of type Sequential
+00:00:11 - DEBUG - Used predict() method, result type: ndarray
+00:00:11 - DEBUG - Prediction shape: (55, 1)
+00:00:11 - DEBUG - Successfully added prediction to model_outputs
+00:00:11 - DEBUG - Attempting prediction with model of type Sequential
+00:00:11 - DEBUG - Used predict() method, result type: ndarray
+00:00:11 - DEBUG - Prediction shape: (55, 1)
+00:00:11 - DEBUG - Successfully added prediction to model_outputs
+00:00:11 - INFO - Number of model outputs collected: 3
+00:00:11 - DEBUG - Model output 0 type: ndarray shape: (55, 1)
+00:00:11 - DEBUG - Model output 1 type: ndarray shape: (55, 1)
+00:00:11 - DEBUG - Model output 2 type: ndarray shape: (55, 1)
+00:00:11 - INFO - Attempting to average 3 model outputs
+00:00:11 - DEBUG - Original predictions shape: (55, 1)
+00:00:11 - DEBUG - Y_test shape: (55,)
+00:00:11 - DEBUG - Flattened predictions shape: (55,)
+00:00:11 - DEBUG - First few values of predictions: [49.932636 51.7126   39.810093 35.877575 54.11833 ]
+00:00:11 - DEBUG - First few values of Y_test: [47.78215408 46.29262543 43.27785492 41.98868179 46.94453049]
+00:00:11 - INFO - Not enough IDs for fine tuning
+00:00:11 - INFO - Using base model for predictions
+00:00:13 - INFO - Empirical Library Chosen
+00:00:13 - INFO - Optimized RT tolerance: 1.7607616300361846
+00:00:13 - INFO - Optimized MS1 tolerance: 4.230288891487971e-06
+00:00:13 - INFO - 
+00:00:15 - INFO - Creating Decoy Library
+00:00:16 - INFO - Finished Decoy Library
+00:00:16 - INFO - 
+00:00:16 - INFO - Starting Main Search
+00:00:20 - INFO - Fitting batch 1 of 10
+00:00:21 - INFO - Fit 46 spectra in 0 mins and 2 sec
+00:00:21 - INFO - Fitting batch 2 of 10
+00:00:23 - INFO - Fit 46 spectra in 0 mins and 2 sec
+00:00:23 - INFO - Fitting batch 3 of 10
+00:00:24 - INFO - Fit 46 spectra in 0 mins and 1 sec
+00:00:24 - INFO - Fitting batch 4 of 10
+00:00:25 - INFO - Fit 46 spectra in 0 mins and 1 sec
+00:00:25 - INFO - Fitting batch 5 of 10
+00:00:26 - INFO - Fit 46 spectra in 0 mins and 1 sec
+00:00:26 - INFO - Fitting batch 6 of 10
+00:00:27 - INFO - Fit 46 spectra in 0 mins and 1 sec
+00:00:27 - INFO - Fitting batch 7 of 10
+00:00:28 - INFO - Fit 46 spectra in 0 mins and 1 sec
+00:00:28 - INFO - Fitting batch 8 of 10
+00:00:29 - INFO - Fit 46 spectra in 0 mins and 1 sec
+00:00:29 - INFO - Fitting batch 9 of 10
+00:00:30 - INFO - Fit 46 spectra in 0 mins and 1 sec
+00:00:30 - INFO - Fitting batch 10 of 10
+00:00:31 - INFO - Fit 45 spectra in 0 mins and 1 sec
+00:00:32 - DEBUG - Adding median-based features for 4 metrics...
+00:00:32 - DEBUG -   Added diff_gof_stats_from_median (mean for NA values: nan)
+00:00:32 - DEBUG -   Summary stats: min=nan, max=nan, mean=nan
+00:00:32 - DEBUG -   Added diff_scribe_scores_from_median (mean for NA values: nan)
+00:00:32 - DEBUG -   Summary stats: min=nan, max=nan, mean=nan
+00:00:32 - DEBUG -   Added diff_max_matched_residuals_from_median (mean for NA values: nan)
+00:00:32 - DEBUG -   Summary stats: min=nan, max=nan, mean=nan
+00:00:32 - DEBUG -   Added diff_manhattan_distances_from_median (mean for NA values: nan)
+00:00:32 - DEBUG -   Summary stats: min=nan, max=nan, mean=nan
+00:00:32 - INFO - Scoring IDs
+00:00:32 - DEBUG - Total samples: 1992, Positive: 1428, Negative: 564
+00:00:36 - INFO - 
+00:00:36 - INFO - Performing MS1 Quantitation
+00:00:36 - INFO - Fitting Precursors Individually
+00:00:38 - INFO - 
+00:00:38 - INFO - Computing Protein FDR
+00:00:38 - INFO - 
+00:00:38 - INFO - Number of precursors at 1% FDR:
+00:00:38 - INFO - All Channels:963
+00:00:38 - INFO - File: data/test_mode_filtered.mzML
+00:00:38 - INFO -  channel silac_channel  Precursor_IDs
+00:00:38 - INFO -        0            NA            963
+00:00:38 - INFO - 
+00:00:38 - INFO - Number of proteins at 1% FDR:
+00:00:38 - INFO - All Channels:707
+00:00:38 - INFO - File: data/test_mode_filtered.mzML
+00:00:38 - INFO -  channel silac_channel  Protein_IDs
+00:00:38 - INFO -        0            NA          707
+00:00:38 - INFO - 
+00:00:38 - INFO - Saving Results to Folder - /Users/eunicekoo/Downloads/jmod_home/jmod_dev/data/test_mode_filtered_results
