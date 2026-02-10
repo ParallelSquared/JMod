@@ -10,7 +10,7 @@ import numpy as np
 
 import warnings
 import ptinnls as sparse_nnls
-from sklearn.linear_model import Lasso
+from sklearn.linear_model import ElasticNet, Lasso
 
 from scipy import stats
 from scipy import sparse
@@ -90,9 +90,18 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
     alpha_max = np.max(np.abs(A_csr.T.dot(y))) / n_peaks
     alpha = alpha_max * 1e-4
 
-    model = Lasso(
-        #alpha=1e-5 / s,
+    # Data-driven l1_ratio from max pairwise column correlation
+    gram = (A_csr.T @ A_csr).toarray()
+    norms = np.sqrt(np.diag(gram))
+    norms[norms == 0] = 1
+    corr = gram / np.outer(norms, norms)
+    np.fill_diagonal(corr, 0)
+    max_corr = np.max(np.abs(corr))
+    l1_ratio = max(1 - max_corr ** 2, 0.1)
+
+    model = ElasticNet(
         alpha=alpha,
+        l1_ratio=l1_ratio,
         positive=True,
         fit_intercept=False,
         selection='random',
@@ -145,7 +154,7 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
 
     return {'x': model.coef_ * s, 'weights': weights,
             'initial_n_iter': initial_n_iter, 'robust_n_iter': model.n_iter_,
-            'alpha_max': alpha_max}
+            'alpha_max': alpha_max, 'l1_ratio': l1_ratio}
 
 
 def get_closest_ms1(prec_rt,ms1_spectra):
@@ -1068,6 +1077,15 @@ def fit_to_lib2(dia_spec,
         if output_folder is not None:
             with open(output_folder + "/fitting_iterations.tsv", "a") as f:
                 f.write(f"{spec_idx}\t{sparse_lib_matrix.shape[1]}\t{fit_results['initial_n_iter']}\t{fit_results['robust_n_iter']}\t{fit_results['alpha_max']}\n")
+            n_candidates = sparse_lib_matrix.shape[1]
+            n_nonzero = int(np.sum(lib_coefficients > 1))
+            import os
+            diag_path = output_folder + "/elasticnet_diag.tsv"
+            write_header = not os.path.exists(diag_path)
+            with open(diag_path, "a") as f:
+                if write_header:
+                    f.write("spec_idx\tn_candidates\tn_coeff_gt_1\talpha_max\tl1_ratio\n")
+                f.write(f"{spec_idx}\t{n_candidates}\t{n_nonzero}\t{fit_results['alpha_max']}\t{fit_results['l1_ratio']}\n")
 
 
         ####################################
