@@ -1156,15 +1156,32 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             # failing because you're trying to read in the entire thing --> need to chunk it
 
             logger.info("Processing library retention times in batches")
-            batch_size = 100000
-            preds = []
+            n = len(all_lib_seqs)
+            all_new_lib_rts = np.empty(n, dtype=np.float32)
 
-            for i in range(0, len(all_lib_seqs), batch_size):
-                batch = np.array(all_lib_seqs[i:i+batch_size])
-                batch_preds = np.mean([model.predict(batch) for model in models], axis=0)
-                preds.append(batch_preds)
+            batch_size = 50000
+            start = 0
 
-            all_new_lib_rts = convertor(np.concatenate(preds).flatten())
+            for i in range(0, n, batch_size):
+                end = min(i + batch_size, n)
+                batch = np.array(all_lib_seqs[i:end])
+                batch_preds = np.mean([model.predict(batch) for model in models], axis=0).flatten()
+                all_new_lib_rts[i:end] = convertor(batch_preds)
+
+                converted = convertor(batch_preds)
+
+                all_new_lib_rts[start:start + len(converted)] = converted
+                start += len(converted)
+
+                del batch, batch_preds, converted
+
+
+            # for i in range(0, len(all_lib_seqs), batch_size):
+            #     batch = np.array(all_lib_seqs[i:i+batch_size])
+            #     batch_preds = np.mean([model.predict(batch) for model in models], axis=0)
+            #     preds.append(batch_preds)
+
+            # all_new_lib_rts = convertor(np.concatenate(preds).flatten())
             # all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
 
             for key,rt in zip(all_lib_keys,all_new_lib_rts):

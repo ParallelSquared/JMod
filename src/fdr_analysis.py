@@ -83,7 +83,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     fit_whole_MS1 = False
    
     logger.info("")
-    logger.info("Performing MS1 Quantitation") 
+    logger.info("Performing MS1 Quantitation")
     
     fdc = dat[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
     

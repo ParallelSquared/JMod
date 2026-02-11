@@ -1172,6 +1172,11 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
     prec_mz = spec.prec_mz
     prec_rt = spec.RT
     # spec_idx = spec.id
+
+    # alphaDIA --> references to config/params
+    # mokapot (looking at what other people do)
+    # >10 --> check
+    # get a couple categories of understanding of config. problems to see how we can approach this
     
     windowWidth = window_width(dia_spec)
     
