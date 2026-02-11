@@ -318,8 +318,10 @@ def create_decoy_lib(library,rules,tag,n_iso):
     worker_args = [(key[0], decoy_lib[key]["frags"], rules, tag, n_iso, use_iso)
                    for key in all_keys]
 
-    with multiprocessing.Pool() as p:
-        results = list(tqdm.tqdm(p.imap(_decoy_worker, worker_args), total=len(all_keys)))
+    p = multiprocessing.Pool()
+    results = list(tqdm.tqdm(p.imap(_decoy_worker, worker_args), total=len(all_keys)))
+    p.close()
+    p.join()
 
     for key, (new_seq, new_frags, spectrum, ordered_frags) in zip(all_keys, results):
         entry = decoy_lib[key]

@@ -307,8 +307,10 @@ def iso_library_multi(library,tag,n_iso):
     all_frags = [new_library[i]["frags"] for i in new_library]
     all_tag = [tag for _ in all_keys]
     all_iso = [n_iso for _ in all_keys]
-    with multiprocessing.Pool() as p:
-        iso_out = p.starmap(gen_isotopes_dict,tqdm.tqdm(zip(all_seqs,all_frags,all_tag,all_iso),total=len(all_seqs)))
+    p = multiprocessing.Pool()
+    iso_out = p.starmap(gen_isotopes_dict,tqdm.tqdm(zip(all_seqs,all_frags,all_tag,all_iso),total=len(all_seqs)))
+    p.close()
+    p.join()
     for key,out in zip(all_keys,iso_out):
         new_library[key]["spectrum"],new_library[key]["ordered_frags"] = out
         
