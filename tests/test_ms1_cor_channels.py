@@ -278,7 +278,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178])
         obs_peaks_expected = [
@@ -287,8 +287,7 @@ class Test_fit_channel_isotopes_numba():
         1.11746745e-01, 5.84092183e-02, 1.50447987e-02, 2.53279439e-03,
         2.31840837e-01, 1.12255727e-01, 2.66465614e-02, 4.12707684e-03,
         4.06397816e-02, 1.78536870e-02, 3.87731585e-03, 5.48307292e-04,
-        5.67691894e-05, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
-        0.00000000e+00, 0.00000000e+00
+        5.67691894e-05
         ]
         fit_matrix_expected = np.array([
         [0.54715664, 0., 0., 0., 0.],
@@ -311,12 +310,7 @@ class Test_fit_channel_isotopes_numba():
         [0., 0., 0., 0., 0.28560516],
         [0., 0., 0., 0., 0.06202536],
         [0., 0., 0., 0., 0.00877126],
-        [0., 0., 0., 0., 0.00090814],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.]
+        [0., 0., 0., 0., 0.00090814]
         ])
 
         np.testing.assert_array_almost_equal(pred_coeff, pred_coeff_expected, decimal=6)
@@ -332,7 +326,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178])
         obs_peaks_expected = [
@@ -341,8 +335,7 @@ class Test_fit_channel_isotopes_numba():
         1.11746745e-01, 5.84092183e-02, 1.50447987e-02, 2.53279439e-03,
         2.31840837e-01, 1.12255727e-01, 2.66465614e-02, 4.12707684e-03,
         4.06397816e-02, 1.78536870e-02, 3.87731585e-03, 5.48307292e-04,
-        5.67691894e-05, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
-        0.00000000e+00, 0.00000000e+00
+        5.67691894e-05
         ]
         fit_matrix_expected = np.array([
         [0.54715664, 0., 0., 0., 0.],
@@ -365,12 +358,7 @@ class Test_fit_channel_isotopes_numba():
         [0., 0., 0., 0., 0.28560516],
         [0., 0., 0., 0., 0.06202536],
         [0., 0., 0., 0., 0.00877126],
-        [0., 0., 0., 0., 0.00090814],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.]
+        [0., 0., 0., 0., 0.00090814]
         ])
 
         np.testing.assert_array_almost_equal(pred_coeff, pred_coeff_expected, decimal=6)
@@ -389,7 +377,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178])
         obs_peaks_expected = [
@@ -398,8 +386,7 @@ class Test_fit_channel_isotopes_numba():
         1.11746745e-01, 5.84092183e-02, 1.50447987e-02, 2.53279439e-03,
         2.31840837e-01, 1.12255727e-01, 2.66465614e-02, 4.12707684e-03,
         4.06397816e-02, 1.78536870e-02, 3.87731585e-03, 5.48307292e-04,
-        5.67691894e-05, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
-        0.00000000e+00, 0.00000000e+00
+        5.67691894e-05
         ]
         fit_matrix_expected = np.array([
         [0.54715664, 0., 0., 0., 0.],
@@ -422,12 +409,7 @@ class Test_fit_channel_isotopes_numba():
         [0., 0., 0., 0., 0.28560516],
         [0., 0., 0., 0., 0.06202536],
         [0., 0., 0., 0., 0.00877126],
-        [0., 0., 0., 0., 0.00090814],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.]
+        [0., 0., 0., 0., 0.00090814]
         ])
 
         np.testing.assert_array_almost_equal(pred_coeff, pred_coeff_expected, decimal=6)
@@ -443,10 +425,10 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0, 0, 0, 0, 0])
-        obs_peaks_expected = [0, 0, 0, 0, 0]
+        obs_peaks_expected = np.array([0., 0., 0., 0., 0.])
         fit_matrix_expected = np.array([
             [0.99965425, 0., 0., 0., 0.],
             [0., 0.99975006, 0., 0., 0.],
@@ -454,10 +436,6 @@ class Test_fit_channel_isotopes_numba():
             [0., 0., 0., 0.99988029, 0.],
             [0., 0., 0., 0., 0.99992152]
         ])
-
-        ## These are what fit mTRAQ isotopes returned
-        # obs_peaks_expected = []  
-        # fit_matrix_expected = []
 
         np.testing.assert_array_almost_equal(pred_coeff, pred_coeff_expected, decimal=6)
         np.testing.assert_array_almost_equal(obs_peaks, obs_peaks_expected, decimal=6)
@@ -472,14 +450,14 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
-        pred_coeff_expected = np.array([0.08964466, 0.18621283, 0.14516634, 0.30031454, 0.05187122])
+        pred_coeff_expected = np.array([0.08962608, 0.18608864, 0.14512517, 0.3000596, 0.05187078])
         obs_peaks_expected = [
             6.84074722e-02, 1.23539665e-02, 1.42774404e-01, 2.23791245e-02,
             1.11746745e-01, 1.50447987e-02, 2.31840837e-01, 2.66465614e-02,
-            4.06397816e-02, 3.87731585e-03, 5.67691894e-05, 0.00000000e+00,
-            0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00
+            4.06397816e-02, 3.87731585e-03, 5.67691894e-05,
+            0., 0., 0., 0., 0.
         ]
         fit_matrix_expected = np.array([
             [0.54715664, 0., 0., 0., 0.],
@@ -513,13 +491,13 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
-        pred_coeff_expected = np.array([0.1250243, 0.24985216, 0.0, 0.0, 0.0])
+        pred_coeff_expected = np.array([0.12502356, 0.0, 0.0, 0.0, 0.0])
         obs_peaks_expected = [
-            0.06840747, 0.04145907, 0.01235397, 0.00241256, 
-            0.1427744, 0.08056485, 0.02237912, 0.0, 0.0,
-            0.0, 0.0, 0.0      
+            0.06840747, 0.04145907, 0.01235397, 0.00241256,
+            0.1427744, 0.08056485, 0.02237912,
+            0., 0., 0., 0.
         ]
         fit_matrix_expected = np.array([
             [0.54715664,  0.0,        0.0,         0.0,         0.0       ],
@@ -529,7 +507,6 @@ class Test_fit_channel_isotopes_numba():
             [0.00277757,  0.5696012,  0.0,         0.0,         0.0       ],
             [0.0,         0.32219866, 0.0,         0.0,         0.0       ],
             [0.0,         0.08949963, 0.0,         0.0,         0.0       ],
-            [0.0,         0.0,        0.0,         0.0,         0.0       ],
             [0.0,         0.01845057, 0.0,         0.0,         0.0       ],
             [0.0,         0.0,        0.99982422,  0.0,         0.0       ],
             [0.0,         0.0,        0.0,         0.99988029,  0.0       ],
@@ -1418,7 +1395,7 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         p_result_expected = PearsonRResult(statistic=1.0, pvalue=0.0)
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178])
         obs_peaks_expected = [
@@ -1427,8 +1404,7 @@ class Test_fit_isotopes_and_score():
         1.11746745e-01, 5.84092183e-02, 1.50447987e-02, 2.53279439e-03,
         2.31840837e-01, 1.12255727e-01, 2.66465614e-02, 4.12707684e-03,
         4.06397816e-02, 1.78536870e-02, 3.87731585e-03, 5.48307292e-04,
-        5.67691894e-05, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
-        0.00000000e+00, 0.00000000e+00
+        5.67691894e-05
         ]
         fit_matrix_expected = np.array([
         [0.54715664, 0., 0., 0., 0.],
@@ -1451,12 +1427,7 @@ class Test_fit_isotopes_and_score():
         [0., 0., 0., 0., 0.28560516],
         [0., 0., 0., 0., 0.06202536],
         [0., 0., 0., 0., 0.00877126],
-        [0., 0., 0., 0., 0.00090814],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.],
-        [0., 0., 0., 0., 0.]
+        [0., 0., 0., 0., 0.00090814]
         ])
 
         np.testing.assert_array_almost_equal(pred_coeff, pred_coeff_expected, decimal=6)
@@ -1486,7 +1457,7 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         p_result_expected = PearsonRResult(statistic=1.0, pvalue=0.0)
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178])
 
@@ -1516,8 +1487,8 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
-        p_result_expected = PearsonRResult(statistic=0.71961104232076, pvalue=3.4203284732692296e-05)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        p_result_expected = PearsonRResult(statistic=0.5597027590389125, pvalue=0.00833109068420046)
         assert np.allclose([fit_cor.statistic, fit_cor.pvalue], [p_result_expected.statistic, p_result_expected.pvalue])
 
     def test_no_intensity_matched(self):
@@ -1542,9 +1513,8 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
-        p_result_expected = PearsonRResult(statistic=np.nan, pvalue=1)
-        assert np.allclose([fit_cor.statistic, fit_cor.pvalue], [p_result_expected.statistic, p_result_expected.pvalue], equal_nan=True)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        assert np.isnan(fit_cor.statistic)
 
 class Test_ms1_cor_channels():
 
@@ -1797,89 +1767,28 @@ class Test_ms1_cor_channels():
         all_coeff_out = [[{101: np.nan, 111: 150.0, 121: 250.0, 131: 250.0, 141: 150.0}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: 250.0, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}]]
         all_iso_out = [[[PearsonRResult(statistic=0.7867351937891747, pvalue=0.06337297444937429), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [1500.0, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=np.nan, pvalue=1), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=np.nan, pvalue=1), [0.39507620528511905, 0.3512325726627763, 0.17219722005062268, 0.0605595509130631, 0.01694736169978692, 0.00398708938863182], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.414363030153363, 0.35013680485679677, 0.16318127391223858, 0.05455887818878705, 0.014514399295965628, 0.0032456135928489605], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.46904177829954585, 0.33582135179986045, 0.13973706503559785, 0.04266923603080598, 0.010525047187108276, 0.00220552164708163], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5039089626278065, 0.32440260823695743, 0.12557265897855013, 0.03602764939007652, 0.008411800357601374, 0.001676320409008026], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5211244218188595, 0.3200080979442071, 0.11805483136401036, 0.03227415201992785, 0.007176930251734072, 0.0013615666012610549], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]]]  
         all_group_keys_out = [[('A(PSMtag_5plex-0)AAAADLANR', 2), ('A(PSMtag_5plex-4)AAAADLANR', 2), ('A(PSMtag_5plex-8)AAAADLANR', 2), ('A(PSMtag_5plex-12)AAAADLANR', 2), ('A(PSMtag_5plex-16)AAAADLANR', 2)], [('A(PSMtag_5plex-0)AAAADLANR', 3), ('A(PSMtag_5plex-4)AAAADLANR', 3), ('A(PSMtag_5plex-8)AAAADLANR', 3), ('A(PSMtag_5plex-12)AAAADLANR', 3), ('A(PSMtag_5plex-16)AAAADLANR', 3)], [('P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-0)', 2), ('P(PSMtag_5plex-4)EPTIDEK(PSMtag_5plex-4)', 2), ('P(PSMtag_5plex-8)EPTIDEK(PSMtag_5plex-8)', 2), ('P(PSMtag_5plex-12)EPTIDEK(PSMtag_5plex-12)', 2), ('P(PSMtag_5plex-16)EPTIDEK(PSMtag_5plex-16)', 2)]]
-        all_fitted_out = [[np.array([[1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ],
-       [1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ],
-       [1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ],
-       [1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ],
-       [1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ]]), [np.array([1500.,    0.,    0.,    0.,    0.,    0.]), np.array([1500.,    0.,    0.,    0.,    0.,    0.]), np.array([1500.,    0.,    0.,    0.,    0.,    0.]), np.array([1500.,    0.,    0.,    0.,    0.,    0.]), np.array([1500.,    0.,    0.,    0.,    0.,    0.])], [np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]]), np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],    
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]]), np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],    
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]]), np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],    
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]]), np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],    
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]])], [PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273), PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273), PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273), PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273), PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273)], np.array([101, 111, 121, 131, 141])], [np.array([[0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.]]), [np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.])], [np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]])], [PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1)], np.array([101, 111, 121, 131, 141])], [np.array([[0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.]]), [np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.])], [np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]])], [PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1)], np.array([101, 111, 121, 131, 141])]]
+        # Helper arrays for expected fitted output
+        _zeros5x5 = np.zeros((5, 5))
+        _mono_mat = np.array([[0.49102466, 0., 0., 0., 0.],
+                              [0.50897534, 0., 0., 0., 0.],
+                              [0., 1., 0., 0., 0.],
+                              [0., 0., 1., 0., 0.],
+                              [0., 0., 0., 1., 0.],
+                              [0., 0., 0., 0., 1.]])
+        _mono_obs = np.array([1500., 0., 0., 0., 0., 0.])
+        _ident5 = np.eye(5)
+        _zeros5 = np.zeros(5)
+        _signal_group = [_zeros5x5,
+            [_mono_obs] * 5,
+            [_mono_mat] * 5,
+            [PearsonRResult(statistic=np.nan, pvalue=1)] * 5,
+            np.array([101, 111, 121, 131, 141])]
+        _empty_group = [_zeros5x5,
+            [_zeros5] * 5,
+            [_ident5] * 5,
+            [PearsonRResult(statistic=np.nan, pvalue=1)] * 5,
+            np.array([101, 111, 121, 131, 141])]
+        all_fitted_out = [_signal_group, _empty_group, _empty_group]
         new_output_dict_out = {}
         fake_fdc_dict_out = {}
         self.compare_pearsons(all_group_pearson, group_pearson_out)
@@ -1916,113 +1825,28 @@ class Test_ms1_cor_channels():
         all_coeff_out = [[{101: np.nan, 111: 150.0, 121: 100.0005, 131: 100.0005, 141: 150.0}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: 88.88944444444445, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}]]
         all_iso_out = [[[PearsonRResult(statistic=np.nan, pvalue=1), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=0.7867351937891747, pvalue=0.06337297444937429), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [1500.0, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=np.nan, pvalue=1), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=np.nan, pvalue=1), [0.39507620528511905, 0.3512325726627763, 0.17219722005062268, 0.0605595509130631, 0.01694736169978692, 0.00398708938863182], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.414363030153363, 0.35013680485679677, 0.16318127391223858, 0.05455887818878705, 0.014514399295965628, 0.0032456135928489605], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.46904177829954585, 0.33582135179986045, 0.13973706503559785, 0.04266923603080598, 0.010525047187108276, 0.00220552164708163], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5039089626278065, 0.32440260823695743, 0.12557265897855013, 0.03602764939007652, 0.008411800357601374, 0.001676320409008026], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5211244218188595, 0.3200080979442071, 0.11805483136401036, 0.03227415201992785, 0.007176930251734072, 0.0013615666012610549], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]]]
         all_group_keys_out = [[('A(PSMtag_5plex-0)AAAADLANR', 2, 1), ('A(PSMtag_5plex-4)AAAADLANR', 2, 1), ('A(PSMtag_5plex-8)AAAADLANR', 2, 1), ('A(PSMtag_5plex-12)AAAADLANR', 2, 1), ('A(PSMtag_5plex-16)AAAADLANR', 2, 1)], [('A(PSMtag_5plex-0)AAAADLANR', 2, 2), ('A(PSMtag_5plex-4)AAAADLANR', 2, 2), ('A(PSMtag_5plex-8)AAAADLANR', 2, 2), ('A(PSMtag_5plex-12)AAAADLANR', 2, 2), ('A(PSMtag_5plex-16)AAAADLANR', 2, 2)], [('A(PSMtag_5plex-0)AAAADLANR', 3, 1), ('A(PSMtag_5plex-4)AAAADLANR', 3, 1), ('A(PSMtag_5plex-8)AAAADLANR', 3, 1), ('A(PSMtag_5plex-12)AAAADLANR', 3, 1), ('A(PSMtag_5plex-16)AAAADLANR', 3, 1)], [('P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-0)', 2, 1), ('P(PSMtag_5plex-4)EPTIDEK(PSMtag_5plex-4)', 2, 1), ('P(PSMtag_5plex-8)EPTIDEK(PSMtag_5plex-8)', 2, 1), ('P(PSMtag_5plex-12)EPTIDEK(PSMtag_5plex-12)', 2, 1), ('P(PSMtag_5plex-16)EPTIDEK(PSMtag_5plex-16)', 2, 1)]]
-        all_fitted_out = [[np.array([[0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.]]), [np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.])], [np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]])], [PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1)], np.array([101, 111, 121, 131, 141])], [np.array([[1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ],
-       [1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ],
-       [1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ],
-       [1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ],
-       [1472.59946548,    0.        ,    0.        ,    0.        ,
-           0.        ]]), [np.array([1500.,    0.,    0.,    0.,    0.,    0.]), np.array([1500.,    0.,    0.,    0.,    0.,    0.]), np.array([1500.,    0.,    0.,    0.,    0.,    0.]), np.array([1500.,    0.,    0.,    0.,    0.,    0.]), np.array([1500.,    0.,    0.,    0.,    0.,    0.])], [np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]]), np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],    
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]]), np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],    
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]]), np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],    
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]]), np.array([[0.49102466, 0.        , 0.        , 0.        , 0.        ],    
-       [0.50897534, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 1.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 1.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 1.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 1.        ]])], [PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273), PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273), PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273), PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273), PearsonRResult(statistic=0.6152773434275145, pvalue=0.1935455906543273)], np.array([101, 111, 121, 131, 141])], [np.array([[0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.]]), [np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.])], [np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]])], [PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1)], np.array([101, 111, 121, 131, 141])], [np.array([[0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.],
-       [0., 0., 0., 0., 0.]]), [np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.]), np.array([0., 0., 0., 0., 0.])], [np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]]), np.array([[1., 0., 0., 0., 0.],
-       [0., 1., 0., 0., 0.],
-       [0., 0., 1., 0., 0.],
-       [0., 0., 0., 1., 0.],
-       [0., 0., 0., 0., 1.]])], [PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1), PearsonRResult(statistic=np.nan, pvalue=1)], np.array([101, 111, 121, 131, 141])]]
+        # Helper arrays for expected fitted output
+        _zeros5x5 = np.zeros((5, 5))
+        _mono_mat = np.array([[0.49102466, 0., 0., 0., 0.],
+                              [0.50897534, 0., 0., 0., 0.],
+                              [0., 1., 0., 0., 0.],
+                              [0., 0., 1., 0., 0.],
+                              [0., 0., 0., 1., 0.],
+                              [0., 0., 0., 0., 1.]])
+        _mono_obs = np.array([1500., 0., 0., 0., 0., 0.])
+        _ident5 = np.eye(5)
+        _zeros5 = np.zeros(5)
+        _signal_group = [_zeros5x5,
+            [_mono_obs] * 5,
+            [_mono_mat] * 5,
+            [PearsonRResult(statistic=np.nan, pvalue=1)] * 5,
+            np.array([101, 111, 121, 131, 141])]
+        _empty_group = [_zeros5x5,
+            [_zeros5] * 5,
+            [_ident5] * 5,
+            [PearsonRResult(statistic=np.nan, pvalue=1)] * 5,
+            np.array([101, 111, 121, 131, 141])]
+        all_fitted_out = [_empty_group, _signal_group, _empty_group, _empty_group]
         new_output_dict_out = {}
         fake_fdc_dict_out = {}
         self.compare_pearsons(all_group_pearson, group_pearson_out)

@@ -23,6 +23,7 @@ import numba as nb
 
 
 min_int = 1e-3
+import csv
 from src.logger import logger
 
 ## To enable fitting whole MS1 spectrum: in FDR analysis, set fit_whole_MS1 to true
@@ -95,6 +96,7 @@ def ms1_cor_channels(all_spectra,
         fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z"])
 
     all_ms1, all_coeff, all_iso, all_group_pearson, all_trace, all_fitted, all_group_keys, all_scans_len = ([] for _ in range(8))
+    diag_rows = []
 
     #these are for fit_whole_ms1
     ms1_spec_dict = {k: {"fdc_idx": [], "peak_mz": [], "rel_iso_int": [], "monoiso_groups": [], "MS1_spectra": None} for k in ms1_spec_idxs}
@@ -110,6 +112,9 @@ def ms1_cor_channels(all_spectra,
             if fdc_group_idx in GUI_print_idxs:
                 frac_done = (GUI_print_idxs.index(fdc_group_idx)+1) * 10
                 logger.info(f"Fitting - {frac_done}%")
+
+        tag_group = fdc_group.get_group(key)
+        group_protein = tag_group["protein"].iloc[0] if "protein" in tag_group.columns else ""
 
         prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC)
         all_scans, spectra_subset = minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width)
@@ -168,12 +173,26 @@ def ms1_cor_channels(all_spectra,
                                         #                                         )
 
         for ms1_spec_idx in scans_to_search:
-            pred_coeff, obs_peaks, fit_matrix, fit_cor = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+            pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
             group_pred.append(pred_coeff)
             group_obs_peaks.append(obs_peaks)
             group_matrices.append(fit_matrix)
             group_fit_cor.append(fit_cor)
-            
+
+            # Accumulate per-row diagnostics
+            if len(obs_peaks) > 0:
+                cooks_d, residuals = _compute_cooks_d(fit_matrix, obs_peaks, pred_coeff)
+                for row_i in range(len(obs_peaks)):
+                    ch_idx = int(np.argmax(fit_matrix[row_i, :]))
+                    ch_name = group_keys[ch_idx][0] if ch_idx < len(group_keys) else str(ch_idx)
+                    # Determine isotope index by matching mz to theoretical peaks
+                    iso_idx = -1
+                    if ch_idx < len(group_iso):
+                        diffs = [abs(kept_mz[row_i] - p.mz) for p in group_iso[ch_idx]]
+                        iso_idx = int(np.argmin(diffs))
+                    diag_rows.append((ms1_spec_idx, group_protein, ch_name, iso_idx,
+                                      obs_peaks[row_i], residuals[row_i], cooks_d[row_i]))
+
         # all_fitted.append(vals)
         all_fitted.append([np.array(group_pred),group_obs_peaks,group_matrices,group_fit_cor,scans_to_search])
         all_ms1.append(ms1_traces)
@@ -181,16 +200,22 @@ def ms1_cor_channels(all_spectra,
         all_iso.append(iso_ratios)
         all_group_pearson.append(all_pearson)
         all_group_keys.append(group_keys)
-        
+
         # break
         # all_pearson, ms1_traces, coeff_traces, iso_ratios
 
     new_output_dict = {}
     # if fit_whole_MS1:
     #     new_output_dict = fit_all_ms1_specs(ms1_spec_dict, new_output_dict, mz_ppm)
-        
 
-    
+    # Write diagnostics TSV
+    diag_path = os.path.join(os.getcwd(), "ms1_fit_diagnostics.tsv")
+    with open(diag_path, "w", newline="") as f:
+        w = csv.writer(f, delimiter="\t")
+        w.writerow(["scan_num", "protein", "channel", "isotope", "intensity", "residual", "cooks_d"])
+        w.writerows(diag_rows)
+    logger.info(f"Wrote MS1 fit diagnostics to {diag_path}")
+
     return all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict
 
 # @profile
@@ -638,8 +663,8 @@ def select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, windo
 
 def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm):
     spec = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
-               
-    pred_coeff, obs_peaks, fit_matrix = fit_channel_isotopes_numba(spec,group_iso,mz_ppm)
+
+    pred_coeff, obs_peaks, fit_matrix, kept_mz = fit_channel_isotopes_numba(spec,group_iso,mz_ppm)
 
     if len(obs_peaks)==0:
         fit_cor = np.nan
@@ -647,8 +672,8 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             fit_cor = np_pearson_cor(np.sum(fit_matrix*pred_coeff,1),obs_peaks)
-      
-    return pred_coeff, obs_peaks, fit_matrix, fit_cor
+
+    return pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz
 
 # def add_to_ms1_spec_dict(ms1_spec_dict, ms1_spectra, ms1_spec_idxs, group_iso, key, fdc_group, filtered_decoy_coeffs, tag, scans_to_search, fdc_group_idx, dummy_idx_list, fake_fdc_dict):
 #     """
@@ -1037,7 +1062,25 @@ def moving_average(x, w=4):
     return np.convolve(x, np.ones(w), 'same') / w
 
 
-def fit_channel_isotopes_numba(spec,all_iso,mz_ppm):
+def _compute_cooks_d(fit_matrix, obs_peaks, pred_coeff):
+    """Compute Cook's distance and residuals for each observation in the NNLS fit."""
+    n, p = fit_matrix.shape
+    predicted = fit_matrix @ pred_coeff
+    residuals = obs_peaks - predicted
+    if n <= p or np.sum(residuals**2) == 0:
+        return np.zeros(n), residuals
+    mse = np.sum(residuals**2) / (n - p)
+    try:
+        hat_diag = np.einsum('ij,ji->i', fit_matrix,
+                             np.linalg.pinv(fit_matrix.T @ fit_matrix) @ fit_matrix.T)
+        hat_diag = np.clip(hat_diag, 0, 1 - 1e-12)
+        cooks_d = (residuals**2 * hat_diag) / (p * mse * (1 - hat_diag)**2)
+    except np.linalg.LinAlgError:
+        cooks_d = np.zeros(n)
+    return cooks_d, residuals
+
+
+def fit_channel_isotopes_numba(spec, all_iso, mz_ppm):
     """
     Takes observed peaks fom spectra and expected peaks from from all_iso for one plex-group and builds a matrix to fit them
 
@@ -1051,25 +1094,26 @@ def fit_channel_isotopes_numba(spec,all_iso,mz_ppm):
         [Channel_1_Peak_1, Channel_1_Peak_2, ...]
         [Channel_2_Peak_1, Channel_2_Peak_2, ...]
         etc
-        ]    
+        ]
         where the peaks are brainpy theoretical peaks with p.mz, p.intensity, and p.charge
     mz_ppm : float
         MS1 ppm tolerance
-    
+
     Returns
     -------
     lib_coefficients : 1d numpy array
         An array containing the coefficient for each channel
     dia_spec_int : list of floats
-        A list containing all observed peak intensities (or padded 0s) in the spectrum that made it into the matrix
+        A list containing all observed peak intensities in the spectrum that made it into the matrix
     dense_matrix : 2d numpy array
         The matrix used for fitting
+    kept_mz : 1d numpy array
+        The m/z values of the kept rows
     Notes
     -------
     Spectra are matched within mz tolerance between observed (from spectrum) and theoretical (from all_iso) peaks.
-    A matrix is created with columns for each channel and rows for each peak. This corresponds to an observed set of peaks.
-    The rows and observed peaks are filtered to remove unmatched peaks and the matrix is fit with a dense NNLS fitting to minimize
-    the residuals of Matrix * Coeffs = Observed
+    A matrix is created with columns for each channel and rows for each observed peak. Only rows with both
+    observed signal and at least one library entry are kept. The matrix is fit with plain NNLS.
 
     """
 
@@ -1082,14 +1126,50 @@ def fit_channel_isotopes_numba(spec,all_iso,mz_ppm):
 
     dense_matrix, dia_spec_int = get_matrix_to_fit_numba(ms1_iso_patterns, group_lengths, dia_spectrum, len(all_iso), mz_ppm)
 
-    nonzero_mask = np.any(dense_matrix != 0, axis=1)
-    nonzero_mask[-len(all_iso):] = True
-    dense_matrix = dense_matrix[nonzero_mask, :]
-    dia_spec_int = dia_spec_int[nonzero_mask]
+    # Replicate the spectrum windowing from get_matrix_to_fit_numba to get mz values
+    mz_full = dia_spectrum[:, 0]
+    lo = np.searchsorted(mz_full, ms1_iso_patterns[:, :, 0].min() - 1, side="right")
+    hi = np.searchsorted(mz_full, ms1_iso_patterns[:, :, 0].max() + 1, side="left")
+    windowed_mz = mz_full[lo:hi]
+    n_dummy = dense_matrix.shape[0] - len(windowed_mz)
+    all_mz = np.append(windowed_mz, np.zeros(max(0, n_dummy)))
 
-    lib_coefficients, residuals = optimize.nnls(dense_matrix, dia_spec_int)
+    # Keep rows with a library entry (regardless of observed signal)
+    keep = np.any(dense_matrix != 0, axis=1)
+    dense_matrix = dense_matrix[keep, :]
+    dia_spec_int = dia_spec_int[keep]
+    kept_mz = all_mz[keep]
 
-    return lib_coefficients, dia_spec_int, dense_matrix
+    # First pass: unweighted NNLS
+    lib_coefficients, _ = optimize.nnls(dense_matrix, dia_spec_int)
+
+    # Asymmetric Tukey bisquare IRLS
+    c = 4.685
+    for _ in range(3):
+        residuals = dense_matrix @ lib_coefficients - dia_spec_int
+
+        # Compute cutoff from over-predicted observed peaks
+        over_pred = (residuals > 0) & (dia_spec_int > 0)
+        if np.any(over_pred):
+            abs_r_over = np.abs(residuals[over_pred])
+            mad = np.median(np.abs(abs_r_over - np.median(abs_r_over)))
+            cutoff = c * (mad / 0.6745) if mad > 0 else 1.0
+        else:
+            cutoff = 1.0
+
+        weights = np.ones(len(dia_spec_int))
+        # Tukey biweight on under-predicted observed peaks only
+        under_pred = (residuals < 0) & (dia_spec_int > 0)
+        if np.any(under_pred):
+            u = np.abs(residuals[under_pred]) / cutoff
+            weights[under_pred] = np.where(u <= 1.0, (1.0 - u**2)**2, 0.0)
+        # Zero-observed rows keep weight=1 (full penalty)
+
+        sqrt_w = np.sqrt(weights)
+        lib_coefficients, _ = optimize.nnls(
+            dense_matrix * sqrt_w[:, None], dia_spec_int * sqrt_w)
+
+    return lib_coefficients, dia_spec_int, dense_matrix, kept_mz
 
 
 
