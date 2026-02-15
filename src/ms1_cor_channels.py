@@ -24,6 +24,7 @@ import numba as nb
 
 min_int = 1e-3
 import csv
+import pickle
 from src.logger import logger
 
 ## To enable fitting whole MS1 spectrum: in FDR analysis, set fit_whole_MS1 to true
@@ -43,7 +44,8 @@ def ms1_cor_channels(all_spectra,
                      num_iso = None,
                      num_iso_r = None,
                      additional_scans = None,
-                     fit_whole_MS1 = False
+                     fit_whole_MS1 = False,
+                     dump_precursors = None
                      ):
 
     window_half_width = 10
@@ -97,6 +99,7 @@ def ms1_cor_channels(all_spectra,
 
     all_ms1, all_coeff, all_iso, all_group_pearson, all_trace, all_fitted, all_group_keys, all_scans_len = ([] for _ in range(8))
     diag_rows = []
+    dump_data = {"ms1_ppm": mz_ppm, "num_iso": num_iso, "precursors": {}} if dump_precursors else None
 
     #these are for fit_whole_ms1
     ms1_spec_dict = {k: {"fdc_idx": [], "peak_mz": [], "rel_iso_int": [], "monoiso_groups": [], "MS1_spectra": None} for k in ms1_spec_idxs}
@@ -155,7 +158,7 @@ def ms1_cor_channels(all_spectra,
         ### fit to those from each channel
         scans_to_search = select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width)
 
-        group_pred, group_obs_peaks, group_matrices, group_fit_cor = ([] for _ in range(4))
+        group_pred, group_obs_peaks, group_matrices, group_fit_cor, group_kept_mz = ([] for _ in range(5))
 
         # if fit_whole_MS1:
         #     ms1_spec_dict, fake_fdc_dict, dummy_idx_list = add_to_ms1_spec_dict(ms1_spec_dict,
@@ -178,11 +181,14 @@ def ms1_cor_channels(all_spectra,
             group_obs_peaks.append(obs_peaks)
             group_matrices.append(fit_matrix)
             group_fit_cor.append(fit_cor)
+            group_kept_mz.append(kept_mz)
 
-            # Accumulate per-row diagnostics
+            # Accumulate per-row diagnostics (skip dummy/penalty rows where kept_mz == 0)
             if len(obs_peaks) > 0:
                 cooks_d, residuals = _compute_cooks_d(fit_matrix, obs_peaks, pred_coeff)
                 for row_i in range(len(obs_peaks)):
+                    if kept_mz[row_i] == 0:
+                        continue
                     ch_idx = int(np.argmax(fit_matrix[row_i, :]))
                     ch_name = group_keys[ch_idx][0] if ch_idx < len(group_keys) else str(ch_idx)
                     # Determine isotope index by matching mz to theoretical peaks
@@ -192,6 +198,56 @@ def ms1_cor_channels(all_spectra,
                         iso_idx = int(np.argmin(diffs))
                     diag_rows.append((ms1_spec_idx, group_protein, ch_name, iso_idx,
                                       obs_peaks[row_i], residuals[row_i], cooks_d[row_i]))
+
+        # Collect dump data for matching precursors
+        if dump_precursors is not None:
+            untag_prec_str = f"{key[0]}_{int(key[1])}"
+            if untag_prec_str in dump_precursors:
+                channels_info = []
+                for ch_i, (seq, mz_val) in enumerate(zip(prec_seqs, prec_mzs)):
+                    iso_list = [(p.mz, p.intensity) for p in group_iso[ch_i]] if ch_i < len(group_iso) else []
+                    channels_info.append({"seq": seq, "mz": float(mz_val), "isotopes": iso_list})
+
+                scans_info = []
+                for scan_i, ms1_spec_idx in enumerate(scans_to_search):
+                    pred_c = group_pred[scan_i]
+                    obs_p = group_obs_peaks[scan_i]
+                    mat = group_matrices[scan_i]
+                    fc = group_fit_cor[scan_i]
+                    km = group_kept_mz[scan_i]
+
+                    # Build row labels: (channel_idx, isotope_idx, theoretical_mz)
+                    row_labels = []
+                    if len(obs_p) > 0:
+                        for row_i in range(len(obs_p)):
+                            ch_idx = int(np.argmax(mat[row_i, :]))
+                            iso_idx = -1
+                            theo_mz = 0.0
+                            if ch_idx < len(group_iso):
+                                diffs = [abs(km[row_i] - p.mz) for p in group_iso[ch_idx]]
+                                iso_idx = int(np.argmin(diffs))
+                                theo_mz = group_iso[ch_idx][iso_idx].mz
+                            row_labels.append((ch_idx, iso_idx, theo_mz))
+
+                    scans_info.append({
+                        "scan_num": int(ms1_spec_idx),
+                        "matrix": mat,
+                        "observed_intensities": obs_p,
+                        "observed_mz": km,
+                        "row_labels": row_labels,
+                        "current_coefficients": pred_c,
+                        "fit_cor": fc,
+                    })
+
+                csv_meta = dump_precursors[untag_prec_str] if isinstance(dump_precursors, dict) else {}
+                dump_data["precursors"][untag_prec_str] = {
+                    "charge": int(key[1]),
+                    "protein": group_protein,
+                    "group": csv_meta.get("group", ""),
+                    "csv_metadata": csv_meta,
+                    "channels": channels_info,
+                    "scans": scans_info,
+                }
 
         # all_fitted.append(vals)
         all_fitted.append([np.array(group_pred),group_obs_peaks,group_matrices,group_fit_cor,scans_to_search])
@@ -215,6 +271,12 @@ def ms1_cor_channels(all_spectra,
         w.writerow(["scan_num", "protein", "channel", "isotope", "intensity", "residual", "cooks_d"])
         w.writerows(diag_rows)
     logger.info(f"Wrote MS1 fit diagnostics to {diag_path}")
+
+    if dump_data is not None and dump_data["precursors"]:
+        dump_path = os.path.join(os.getcwd(), "ms1_fitting_data.pkl")
+        with open(dump_path, "wb") as f:
+            pickle.dump(dump_data, f)
+        logger.info(f"Wrote MS1 fitting data for {len(dump_data['precursors'])} precursors to {dump_path}")
 
     return all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict
 
@@ -453,7 +515,7 @@ def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset):
     
     return all_isotope_traces
 
-@nb.njit(cache=True)
+@nb.njit(cache=False)
 def get_trace_int_numba(spec_mz, spec_intens, mz_array, rtol, base):
     """
     Match isotope mz values to the closest peaks in a spectrum and return their intensities.
@@ -1140,40 +1202,13 @@ def fit_channel_isotopes_numba(spec, all_iso, mz_ppm):
     dia_spec_int = dia_spec_int[keep]
     kept_mz = all_mz[keep]
 
-    # First pass: unweighted NNLS
     lib_coefficients, _ = optimize.nnls(dense_matrix, dia_spec_int)
-
-    # Asymmetric Tukey bisquare IRLS
-    c = 4.685
-    for _ in range(3):
-        residuals = dense_matrix @ lib_coefficients - dia_spec_int
-
-        # Compute cutoff from over-predicted observed peaks
-        over_pred = (residuals > 0) & (dia_spec_int > 0)
-        if np.any(over_pred):
-            abs_r_over = np.abs(residuals[over_pred])
-            mad = np.median(np.abs(abs_r_over - np.median(abs_r_over)))
-            cutoff = c * (mad / 0.6745) if mad > 0 else 1.0
-        else:
-            cutoff = 1.0
-
-        weights = np.ones(len(dia_spec_int))
-        # Tukey biweight on under-predicted observed peaks only
-        under_pred = (residuals < 0) & (dia_spec_int > 0)
-        if np.any(under_pred):
-            u = np.abs(residuals[under_pred]) / cutoff
-            weights[under_pred] = np.where(u <= 1.0, (1.0 - u**2)**2, 0.0)
-        # Zero-observed rows keep weight=1 (full penalty)
-
-        sqrt_w = np.sqrt(weights)
-        lib_coefficients, _ = optimize.nnls(
-            dense_matrix * sqrt_w[:, None], dia_spec_int * sqrt_w)
 
     return lib_coefficients, dia_spec_int, dense_matrix, kept_mz
 
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=False)
 def get_matrix_to_fit_numba(ms1_iso_patterns, group_lengths, dia_spectrum, all_iso_len, mz_ppm):    
     ### we only need to conseider the part of the spectrum that falls within the isotopic envelopes of the channels
     min_isotope = ms1_iso_patterns[:, :, 0].min() - 1
@@ -1185,34 +1220,106 @@ def get_matrix_to_fit_numba(ms1_iso_patterns, group_lengths, dia_spectrum, all_i
     dia_spectrum = dia_spectrum[lo:hi]
 
     mz_peaks = dia_spectrum[:, 0]
-    offsets = mz_ppm * mz_peaks
-    centroid_breaks = np.empty(mz_peaks.size * 2, dtype=mz_peaks.dtype)
-    centroid_breaks[:mz_peaks.size] = mz_peaks - offsets
-    centroid_breaks[mz_peaks.size:] = mz_peaks + offsets
-    centroid_breaks.sort()
 
     fdc_idxs = np.repeat(np.arange(all_iso_len), group_lengths)
     all_mz = ms1_iso_patterns[:,:,0].ravel()
     rel_iso_int = ms1_iso_patterns[:, :, 1].ravel()
-    ref_coords = np.searchsorted(centroid_breaks, all_mz)
 
-    lib_peaks_matched = (ref_coords % 2 == 1)
+    # For each library peak, find the nearest observed peak via binary search
+    # and check if it's within the ppm tolerance
+    n_lib = all_mz.size
+    lib_peaks_matched = np.empty(n_lib, dtype=np.bool_)
+    matched_obs_idx = np.empty(n_lib, dtype=np.int64)
 
-    # last_unnasigned_peak_idx = (max(ref_coords)-1)//2
-    last_unnasigned_peak_idx = len(mz_peaks)
-        
+    for i in range(n_lib):
+        lib_mz = all_mz[i]
+        pos = np.searchsorted(mz_peaks, lib_mz)
+
+        best_idx = -1
+        best_dist = np.inf
+
+        # Check candidate at pos-1 (the peak just below)
+        if pos > 0:
+            obs_mz = mz_peaks[pos - 1]
+            tol = mz_ppm * obs_mz
+            dist = abs(lib_mz - obs_mz)
+            if dist <= tol and dist < best_dist:
+                best_dist = dist
+                best_idx = pos - 1
+
+        # Check candidate at pos (the peak just above)
+        if pos < mz_peaks.size:
+            obs_mz = mz_peaks[pos]
+            tol = mz_ppm * obs_mz
+            dist = abs(lib_mz - obs_mz)
+            if dist <= tol and dist < best_dist:
+                best_idx = pos
+
+        lib_peaks_matched[i] = (best_idx >= 0)
+        matched_obs_idx[i] = best_idx
+
+    last_unassigned_peak_idx = len(mz_peaks)
+
     unique_fdcs = (set(fdc_idxs))
 
-    n_rows = len(mz_peaks) + len(unique_fdcs)
+    # Group unmatched library peaks by m/z proximity so that overlapping
+    # peaks from different channels share a matrix row (just like matched
+    # peaks that hit the same observed peak share a row).
+    n_unmatched = np.sum(~lib_peaks_matched)
+
+    # Collect indices of unmatched peaks
+    unmatched_idx = np.empty(n_unmatched, dtype=np.int64)
+    k = 0
+    for i in range(n_lib):
+        if not lib_peaks_matched[i]:
+            unmatched_idx[k] = i
+            k += 1
+
+    # Sort unmatched peaks by m/z
+    unmatched_mz = np.empty(n_unmatched, dtype=np.float64)
+    for k in range(n_unmatched):
+        unmatched_mz[k] = all_mz[unmatched_idx[k]]
+    sort_order = np.argsort(unmatched_mz)
+
+    # Assign group IDs: consecutive peaks within tolerance share a group
+    unmatched_group = np.empty(n_unmatched, dtype=np.int64)
+    if n_unmatched > 0:
+        current_group = 0
+        unmatched_group[sort_order[0]] = 0
+        for j in range(1, n_unmatched):
+            prev_mz = unmatched_mz[sort_order[j - 1]]
+            cur_mz = unmatched_mz[sort_order[j]]
+            tol = mz_ppm * prev_mz
+            if abs(cur_mz - prev_mz) <= tol:
+                unmatched_group[sort_order[j]] = current_group
+            else:
+                current_group += 1
+                unmatched_group[sort_order[j]] = current_group
+        num_unmatched_groups = current_group + 1
+    else:
+        num_unmatched_groups = 0
+
+    # Map group IDs back to full library-peak array
+    unmatched_group_for_all = np.empty(n_lib, dtype=np.int64)
+    k = 0
+    for i in range(n_lib):
+        if not lib_peaks_matched[i]:
+            unmatched_group_for_all[i] = unmatched_group[k]
+            k += 1
+        else:
+            unmatched_group_for_all[i] = 0  # unused
+
+    n_rows = len(mz_peaks) + num_unmatched_groups
     n_cols = len(unique_fdcs)
 
     dense_matrix = np.zeros((n_rows, n_cols), dtype=np.float64)
 
-    ms1_peak_coord = np.where(
-        lib_peaks_matched,
-        (ref_coords - 1) // 2,
-        last_unnasigned_peak_idx + fdc_idxs
-    )
+    ms1_peak_coord = np.empty(n_lib, dtype=np.int64)
+    for i in range(n_lib):
+        if lib_peaks_matched[i]:
+            ms1_peak_coord[i] = matched_obs_idx[i]
+        else:
+            ms1_peak_coord[i] = last_unassigned_peak_idx + unmatched_group_for_all[i]
 
     # np.add.at(dense_matrix, (ms1_peak_coord, fdc_idxs), rel_iso_int)
     for i in range(rel_iso_int.size):
