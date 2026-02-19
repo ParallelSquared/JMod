@@ -183,21 +183,23 @@ def ms1_cor_channels(all_spectra,
             group_fit_cor.append(fit_cor)
             group_kept_mz.append(kept_mz)
 
-            # Accumulate per-row diagnostics (skip dummy/penalty rows where kept_mz == 0)
+            # Accumulate per-row diagnostics: one entry per channel contribution
             if len(obs_peaks) > 0:
                 cooks_d, residuals = _compute_cooks_d(fit_matrix, obs_peaks, pred_coeff)
                 for row_i in range(len(obs_peaks)):
-                    if kept_mz[row_i] == 0:
-                        continue
-                    ch_idx = int(np.argmax(fit_matrix[row_i, :]))
-                    ch_name = group_keys[ch_idx][0] if ch_idx < len(group_keys) else str(ch_idx)
-                    # Determine isotope index by matching mz to theoretical peaks
-                    iso_idx = -1
-                    if ch_idx < len(group_iso):
-                        diffs = [abs(kept_mz[row_i] - p.mz) for p in group_iso[ch_idx]]
-                        iso_idx = int(np.argmin(diffs))
-                    diag_rows.append((ms1_spec_idx, group_protein, ch_name, iso_idx,
-                                      obs_peaks[row_i], residuals[row_i], cooks_d[row_i]))
+                    for ch_idx in range(fit_matrix.shape[1]):
+                        if fit_matrix[row_i, ch_idx] == 0:
+                            continue
+                        ch_name = group_keys[ch_idx][0] if ch_idx < len(group_keys) else str(ch_idx)
+                        iso_idx = -1
+                        if ch_idx < len(group_iso):
+                            if kept_mz[row_i] != 0:
+                                diffs = [abs(kept_mz[row_i] - p.mz) for p in group_iso[ch_idx]]
+                            else:
+                                diffs = [abs(fit_matrix[row_i, ch_idx] - p.intensity) for p in group_iso[ch_idx]]
+                            iso_idx = int(np.argmin(diffs))
+                        diag_rows.append((ms1_spec_idx, group_protein, ch_name, iso_idx,
+                                          obs_peaks[row_i], residuals[row_i], cooks_d[row_i]))
 
         # Collect dump data for matching precursors
         if dump_precursors is not None:

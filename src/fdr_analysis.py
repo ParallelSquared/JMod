@@ -43,6 +43,7 @@ from pyteomics import mass
 
 
 def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
+def area_at_idx(x, max_idx):return x[max_idx]
 
 
 # lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=bool(params["timeplex"]))
@@ -163,6 +164,36 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in all_keys]
         extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in all_keys]
 
+        # Build per-group apex: sum coefficients across channels, find max among filtered scans (union)
+        # Pre-build group_idx -> list of channel indices mapping (avoids O(n^2) scan of all_keys)
+        keys_by_group = {}
+        for key in all_keys:
+            g_idx = linker_dict[key][0]
+            if g_idx not in keys_by_group:
+                keys_by_group[g_idx] = []
+            keys_by_group[g_idx].append(linker_dict[key][1])
+
+        group_apex_idx = {}
+        for group_idx, ch_indices in keys_by_group.items():
+            full_coeff_matrix = group_fitted[group_idx][0]  # (n_scans, n_channels)
+            scan_ids = group_fitted[group_idx][4]
+
+            # Union of filtered scan indices across all channels in this group
+            filtered_scan_ids = set()
+            for ch_idx in ch_indices:
+                ch_ms2_scans = set(group_ms2_traces[group_idx][ch_idx].keys())
+                for s_i, s_id in enumerate(scan_ids):
+                    if s_id in ch_ms2_scans:
+                        filtered_scan_ids.add(s_i)
+
+            total_intensity = np.sum(full_coeff_matrix, axis=1)
+            if filtered_scan_ids:
+                filtered_indices = sorted(filtered_scan_ids)
+                best_filtered = filtered_indices[int(np.argmax(total_intensity[filtered_indices]))]
+            else:
+                best_filtered = int(np.argmax(total_intensity))
+            group_apex_idx[group_idx] = best_filtered
+
     else:
         ##TODO deal with fake_fdc_dict values make sure they get properly assigned
         all_fdc_idxs = list(set(key for ms1_spec_idx in new_output_dict.keys() for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys()))
@@ -198,7 +229,11 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     #fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
-    fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) if fdc.plexfittrace.iloc[idx] != '' else np.nan for idx in range(len(fdc))]
+    fdc["plex_Area"] = [
+        area_at_idx(extracted_fitted[idx], group_apex_idx[linker_dict[all_keys[idx]][0]])
+        if len(extracted_fitted[idx]) > 0 else np.nan
+        for idx in range(len(fdc))
+    ]
        
 
 

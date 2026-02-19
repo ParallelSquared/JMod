@@ -88,7 +88,7 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
 
     # Data-driven regularization
     alpha_max = np.max(np.abs(A_csr.T.dot(y))) / n_peaks
-    alpha = alpha_max * 1e-4
+    alpha = alpha_max * 1e-4 # 1e-4 means that the dynamic range within a spectrum is roughly 1,000x
 
     # Data-driven l1_ratio from max pairwise column correlation
     gram = (A_csr.T @ A_csr).toarray()
