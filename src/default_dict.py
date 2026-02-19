@@ -304,6 +304,17 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    'free_apex': {
+        'flags': ('--free_apex',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': True,
+        'type': '',
+        'widget': 'checkbutton',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'score_lib_frac': {
         'flags': ('--score_lib_frac',),
         'default': 0.5,
