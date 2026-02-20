@@ -1249,7 +1249,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # plt.hist(((mz_func(id_mzs,rts)-orig_mzs)/id_mzs)[rt_filter_bool],100)
     
     corrected_mz_diffs = (diffs-(f_rt_mz(new_lib_rt)+mz_spl(output_df.mz)))[cor_filter]
-    mz_amplitude, mz_mean, mz_stddev = fit_gaussian(corrected_mz_diffs)
+    mz_boundary = fit_errors(corrected_mz_diffs, percentile=0.99994)
     
     # ### MS2 alignment
     # if ms2:
@@ -1283,7 +1283,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     config.opt_rt_tol = np.abs(new_rt_tol)
 
 
-    new_ms1_tol = np.abs(4*mz_stddev)
+    new_ms1_tol = np.abs(mz_boundary)
     logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
     logger.info("")
 
@@ -1317,6 +1317,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         output_df["updated_lib_rt"] = [updatedLibrary[k]["iRT"] for k in id_keys]
         output_df["mz_diffs"] = diffs
+        ms1_rts = np.array([s.RT for s in dia_spectra.ms1scans])
+        ms1_tics = np.array([s.TIC for s in dia_spectra.ms1scans])
+        output_df["ms1_tic"] = ms1_tics[np.searchsorted(ms1_rts, output_df.rt).clip(0, len(ms1_rts)-1)]
         filtered_output = output_df[cor_filter]
         alignment_plots(filtered_output, 
                             emp_rt_spl, 
