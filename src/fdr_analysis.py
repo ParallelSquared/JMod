@@ -45,6 +45,7 @@ from pyteomics import mass
 def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
 
 
+
 # lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=bool(params["timeplex"]))
 
 # all_lp.append(lp)
@@ -198,7 +199,11 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     #fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
-    fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) if fdc.plexfittrace.iloc[idx] != '' else np.nan for idx in range(len(fdc))]
+    fdc["plex_Area"] = [
+        area(extracted_fitted[idx])
+        if len(extracted_fitted[idx]) > 0 else np.nan
+        for idx in range(len(fdc))
+    ]
        
 
 

@@ -299,17 +299,18 @@ def iso_library_multi(library,tag,n_iso):
         The same library as before but with updated spectrum and ordered_frags dictionaries (same level as 'frags') with additonal isotopes
     """
     ## add n isotpic peaks to the "spectrum" portio of each library entry
-    logger.info("Creating Copy of Library...")
-    new_library = copy.deepcopy(library)
-    
+    new_library = {key: dict(entry) for key, entry in library.items()}
+
     logger.info("Generating isotopes for library:")
     all_keys = list(new_library)
     all_seqs = [i[0] for i in all_keys]
     all_frags = [new_library[i]["frags"] for i in new_library]
     all_tag = [tag for _ in all_keys]
     all_iso = [n_iso for _ in all_keys]
-    with multiprocessing.Pool(8) as p:
-        iso_out = p.starmap(gen_isotopes_dict,tqdm.tqdm(zip(all_seqs,all_frags,all_tag,all_iso),total=len(all_seqs)))
+    p = multiprocessing.Pool()
+    iso_out = p.starmap(gen_isotopes_dict,tqdm.tqdm(zip(all_seqs,all_frags,all_tag,all_iso),total=len(all_seqs)))
+    p.close()
+    p.join()
     for key,out in zip(all_keys,iso_out):
         new_library[key]["spectrum"],new_library[key]["ordered_frags"] = out
         

@@ -10,6 +10,7 @@ import numpy as np
 
 import warnings
 import ptinnls as sparse_nnls
+from sklearn.linear_model import ElasticNet, Lasso
 
 from scipy import stats
 from scipy import sparse
@@ -25,61 +26,135 @@ from src.utils.parse_peptides import change_seq, convert_frags
 from src.models.spec_lib.spec_lib import frag_to_peak
 
 
-def huber_nnls_irls(A, b, max_iter=1, tol=1e-4):
+def _lasso_nnls(A, b, sample_weight=None):
     """
-    Solve non-negative least squares with Huber loss via IRLS.
+    NNLS via sklearn Lasso with near-zero L1 penalty, positive=True.
 
-    NNLS solves: min ||Ax - b||² subject to x >= 0
-    where:
-        A: (n_peaks, n_candidates) - library spectra matrix
-        b: (n_peaks,) - observed intensities
-        x: (n_candidates,) - coefficients for each library spectrum
+    Args:
+        A: Sparse matrix (n_peaks x n_candidates), will be converted to CSR
+        b: 1D array of observed intensities
+        sample_weight: Optional per-sample weights for weighted least squares
+
+    Returns:
+        1D numpy array of non-negative coefficients
+    """
+    A_csr = A.tocsr() if not sparse.issparse(A) or A.format != 'csr' else A
+
+    # Normalize b so tol is scale-independent across spectra
+    s = np.max(np.abs(b)) or 1.0
+
+    model = Lasso(
+        alpha=1e-5 / s,
+        positive=True,
+        fit_intercept=False,
+        selection='random',
+        random_state=42,
+        tol=1e-4,
+        max_iter=20000,
+    )
+    model.fit(A_csr, b / s, sample_weight=sample_weight)
+    return model.coef_ * s
+
+
+def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
+    """
+    Asymmetric IRLS-weighted NNLS with Tukey biweight on under-predicted peaks.
+
+    First pass: unweighted NNLS.
+    Subsequent passes:
+      - Under-prediction at observed peaks (residuals < 0, b > 0):
+        Tukey bisquare weights — smoothly downweights large under-predictions,
+        completely rejects beyond c * MAD. This is forgiving because other
+        peptides in the mixture can explain the extra observed signal.
+      - All other peaks: weight = 1.0 (full penalty for over-prediction
+        and false signal at zeros).
 
     Args:
         A: Sparse library matrix (n_peaks x n_candidates)
         b: Observed intensities (n_peaks,)
         max_iter: Maximum IRLS iterations
-        tol: Convergence tolerance
+        tol: Convergence tolerance on weight changes
+        c: Tukey biweight tuning constant (multiples of MAD)
 
     Returns:
-        dict with 'x': coefficients (n_candidates,)
+        dict with 'x': coefficients, 'weights': final sample weights
     """
-    # Convert to CSR for efficient matrix-vector multiplication
-    A_csr = A.tocsr()
+    A_csr = A.tocsr() if sparse.issparse(A) else sparse.csr_matrix(A)
     n_peaks = A_csr.shape[0]
+
+    # Normalize b so tol is scale-independent
+    s = float(np.max(np.abs(b)) or 1.0)
+    y = b / s
+
+    # Data-driven regularization
+    alpha_max = np.max(np.abs(A_csr.T.dot(y))) / n_peaks
+    alpha = alpha_max * 1e-4 # 1e-4 means that the dynamic range within a spectrum is roughly 1,000x
+
+    # Data-driven l1_ratio from max pairwise column correlation
+    gram = (A_csr.T @ A_csr).toarray()
+    norms = np.sqrt(np.diag(gram))
+    norms[norms == 0] = 1
+    corr = gram / np.outer(norms, norms)
+    np.fill_diagonal(corr, 0)
+    max_corr = np.max(np.abs(corr))
+    l1_ratio = max(1 - max_corr ** 2, 0.1)
+
+    model = ElasticNet(
+        alpha=alpha,
+        l1_ratio=l1_ratio,
+        positive=True,
+        fit_intercept=False,
+        selection='random',
+        random_state=42,
+        tol=1e-3,
+        max_iter=20000,
+        warm_start=True,
+    )
 
     # Initial solve with uniform weights
     weights = np.ones(n_peaks)
-    x = sparse_nnls.lsqnonneg(A, b, {"show_progress": False})['x']
+    model.fit(A_csr, y, sample_weight=weights)
+    initial_n_iter = model.n_iter_
 
-    for i in range(max_iter):
-        # Compute residuals: A @ x gives (n_peaks,) when x is (n_candidates,)
-        # Use .dot() and ravel() to ensure 1D output
-        predicted = A_csr.dot(x).ravel()
-        residuals = predicted - b
+    x = model.coef_ * s
+    residuals = A_csr.dot(x).ravel() - b
 
-        # Auto-tune delta: 1.345 * MAD (robust scale estimate)
-        mad = np.median(np.abs(residuals - np.median(residuals)))
-        delta = 1.345 * mad if mad > 0 else 1.0
+    # Compute cutoff from over-predicted observed peaks, apply to under-predicted
+    over_pred = (residuals > 0) & (b > 0)
+    if np.any(over_pred):
+        abs_r_over = np.abs(residuals[over_pred])
+        mad = np.median(np.abs(abs_r_over - np.median(abs_r_over)))
+        cutoff = c * (mad / 0.6745) if mad > 0 else 1.0
+    else:
+        cutoff = 1.0
 
-        # Update Huber weights (n_peaks,)
-        abs_r = np.abs(residuals)
-        new_weights = np.where(abs_r <= delta, 1.0, delta / abs_r)
+    for _ in range(max_iter):
+        x = model.coef_ * s
+        residuals = A_csr.dot(x).ravel() - b
+
+        new_weights = np.ones(n_peaks)
+
+        # Tukey biweight on under-predicted observed peaks
+        under_pred = (residuals < 0) & (b > 0)
+        if np.any(under_pred):
+            abs_r = np.abs(residuals[under_pred])
+            u = abs_r / cutoff
+            # Bisquare: (1 - u²)² for |u| <= 1, 0 otherwise
+            biweight = np.where(u <= 1.0, (1.0 - u**2)**2, 0.0)
+            new_weights[under_pred] = biweight
 
         # Check convergence
         if np.max(np.abs(new_weights - weights)) < tol:
             break
         weights = new_weights
+        weights *= weights.size / weights.sum()
 
-        # Weighted NNLS: apply sqrt(weights) to both A and b
-        # W is diagonal (n_peaks x n_peaks), so W @ A is (n_peaks x n_candidates)
-        sqrt_w = np.sqrt(weights)
-        A_weighted = sparse.diags(sqrt_w) @ A_csr
-        b_weighted = sqrt_w * b
+        # Warm-started from previous coefficients
+        model.fit(A_csr, y, sample_weight=weights)
 
-        x = sparse_nnls.lsqnonneg(A_weighted, b_weighted, {"show_progress": False})['x']
-
-    return {'x': x}
+    return {'x': model.coef_ * s, 'weights': weights,
+            'initial_n_iter': initial_n_iter, 'robust_n_iter': model.n_iter_,
+            'alpha_max': alpha_max, 'l1_ratio': l1_ratio}
 
 
 def get_closest_ms1(prec_rt,ms1_spectra):
@@ -667,7 +742,8 @@ def fit_to_lib2(dia_spec,
                ms1_spectra = None,
                return_frags = False,
                decoy=False,
-               decoy_library=None):
+               decoy_library=None,
+               output_folder=None):
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
@@ -997,6 +1073,19 @@ def fit_to_lib2(dia_spec,
         # Fit lib spectra to observed spectra (Huber loss via IRLS)
         fit_results = huber_nnls_irls(sparse_lib_matrix, dia_spec_int)
         lib_coefficients = fit_results['x']
+
+        if output_folder is not None:
+            with open(output_folder + "/fitting_iterations.tsv", "a") as f:
+                f.write(f"{spec_idx}\t{sparse_lib_matrix.shape[1]}\t{fit_results['initial_n_iter']}\t{fit_results['robust_n_iter']}\t{fit_results['alpha_max']}\n")
+            n_candidates = sparse_lib_matrix.shape[1]
+            n_nonzero = int(np.sum(lib_coefficients > 1))
+            import os
+            diag_path = output_folder + "/elasticnet_diag.tsv"
+            write_header = not os.path.exists(diag_path)
+            with open(diag_path, "a") as f:
+                if write_header:
+                    f.write("spec_idx\tn_candidates\tn_coeff_gt_1\talpha_max\tl1_ratio\n")
+                f.write(f"{spec_idx}\t{n_candidates}\t{n_nonzero}\t{fit_results['alpha_max']}\t{fit_results['l1_ratio']}\n")
 
 
         ####################################
