@@ -1249,7 +1249,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # plt.hist(((mz_func(id_mzs,rts)-orig_mzs)/id_mzs)[rt_filter_bool],100)
     
     corrected_mz_diffs = (diffs-(f_rt_mz(new_lib_rt)+mz_spl(output_df.mz)))[cor_filter]
-    mz_boundary = fit_errors(corrected_mz_diffs, percentile=0.99994)
+    mz_weights, mz_sigmas = fit_zero_mean_gmm_1d(corrected_mz_diffs, n_components=2)
+    mz_order = np.argsort(mz_sigmas)
+    mz_sigmas = mz_sigmas[mz_order]
+    mz_boundary = 4 * mz_sigmas[0]
     
     # ### MS2 alignment
     # if ms2:
