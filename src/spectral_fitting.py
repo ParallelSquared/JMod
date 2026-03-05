@@ -525,6 +525,7 @@ def get_features(
     frac_lib_intensity = [np.sum(i) for i in ref_spec_values_split] # all ints sum to 1 so these give frac
     tic = np.sum(dia_spectrum[:,1])
     frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in ref_spec_row_indices_split]
+    tic_feature = np.ones_like(num_lib_peaks_matched) * tic
     # mz tol
     rel_error = ms1_error#np.zeros(len(ref_peaks_in_dia))
     rt_error = prec_rt-rt_mz[:,0]
@@ -612,6 +613,7 @@ def get_features(
                           frac_int_matched_pred_sigcoeff,
                           large_coeff_cosine,
                           rt_mz[:,1],
+                          tic_feature,
                           # peaks
                             ],-1)
     return features
@@ -700,8 +702,9 @@ def create_entries(centroid_breaks,
     # peaks_in_dia = [i for i in range(len(candidate_peaks)) if len([a for a in top_ten_decoy[i] if a%2 ==1])>atleast_m]
     all_norm_intensities = [M[:,1]/(M[:,1]).sum() for M in candidate_peaks]
     # all_norm_intensities = [M[:,1]/sum(M[:,1]) for M in candidate_peaks]
-    ms1_error = np.array([closest_peak_diff(mz,ms1_spec.mz,max_diff=ms1_tol) for mz in prec_mzs])
-    ms1_peak = ~np.isnan(ms1_error)
+    ms1_error_raw = np.array([closest_peak_diff(mz,ms1_spec.mz,max_diff=ms1_tol) for mz in prec_mzs])
+    ms1_peak = ~np.isnan(ms1_error_raw)
+    ms1_error = np.where(ms1_peak, np.abs(ms1_error_raw), -1.0)
     
     # peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_intensities[i][(coords[i]%2)==1])>0.5 and np.sum(top_ten[i]%2)>atleast_m and ms1_peak[i] and top_ten[i][0]%2==1 and np.sum(top_ten[i][:3]%2==1)>=2]
     # peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(top_ten[i]%2)>atleast_m and ms1_peak[i]]
@@ -1461,9 +1464,10 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
         frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in ref_spec_row_indices_split]
         # mz tol
         if dino_features is not None:
-            rel_error = ms1_error(np.array(filtered_dino.mz), rt_mz[window_idxs[ref_peaks_in_dia],1], tol=ms1_tol)
+            rel_error_raw = ms1_error(np.array(filtered_dino.mz), rt_mz[window_idxs[ref_peaks_in_dia],1], tol=ms1_tol)
+            rel_error = np.where(~np.isnan(rel_error_raw), np.abs(rel_error_raw), -1.0)
         else:
-            rel_error = np.zeros(len(ref_peaks_in_dia))
+            rel_error = np.full(len(ref_peaks_in_dia), -1.0)
         rt_error = prec_rt-rt_mz[window_idxs[ref_peaks_in_dia],0]
         
         frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])

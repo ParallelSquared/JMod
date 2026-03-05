@@ -469,8 +469,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     y = np.array(~fdc["decoy"], dtype=int)
     
     # exclude necessary columns
-    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
-                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
+    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz', 'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq',
+                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals',
                   'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
                   "plexfittrace_ps_all",
                   "unique_frag_mz", "untag_prec",
@@ -482,6 +482,24 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "file_name",
                   "protein"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
+
+    # Compute predicted RT (library RT) from observed RT minus RT error
+    if 'rt' in X.columns and 'rt_error' in X.columns:
+        X['predicted_rt'] = X['rt'] - X['rt_error']
+    X = X.drop(columns=[c for c in ['rt'] if c in X.columns])
+
+    # Quantile-bin positional/intensity features into 100 bins
+    QBIN_FEATURES = ['predicted_rt', 'mz', 'coeff', 'tic']
+    for col in QBIN_FEATURES:
+        if col in X.columns:
+            vals = X[col].values.astype(float)
+            valid = vals[~np.isnan(vals)]
+            if len(valid) > 0:
+                edges = np.quantile(valid, np.linspace(0, 1, 101))
+                binned = np.searchsorted(edges, vals, side='right').astype(float)
+                binned = np.clip(binned, 1, 100)
+                X[col + '_qbin'] = binned
+            X = X.drop(columns=[col])
 
     # DEBUG: Check each column for infinity or very large values
     #problem_columns = []
