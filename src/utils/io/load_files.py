@@ -24,6 +24,7 @@ class Spectrum:
         self.RT=None
         self.mz=None
         self.intens=None
+        self.mobility=None
         self.collision_energy = None
         self.TIC=None
         self.isolation_window = None

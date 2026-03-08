@@ -567,10 +567,12 @@ def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
         if ms1_scan:
             # Assumes ms1_scan.closest_peak(theo_mz) returns (idx, mz, intensity)
             closest_idx, closest_mz, intensity = ms1_scan.closest_peak(theo_mz)
+            mob = float(ms1_scan.mobility[closest_idx]) if ms1_scan.mobility is not None else None
             ms1_data.append({
                 'Ms1_spec_id': ms1_scan.scan_num,
                 "closest_peak_mz_ms1": closest_mz,
                 "closest_peak_intensity_ms1": intensity,
+                "precursor_mobility": mob,
             })
         else:
             # Use 0.0 or None/NaN placeholders for missing data
@@ -578,6 +580,7 @@ def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
                 'Ms1_spec_id': None,
                 "closest_peak_mz_ms1": 0.0,
                 "closest_peak_intensity_ms1": 0.0,
+                "precursor_mobility": None,
             })
 
     return ms1_data

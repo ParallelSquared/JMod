@@ -297,6 +297,7 @@ import multiprocessing
 def _decoy_worker(args):
     """Worker function for parallel decoy generation."""
     seq, frags, rules, tag, n_iso, use_iso = args
+    config.tag = tag
     new_seq = change_seq(seq, rules)
     new_frags = convert_frags(seq, frags, rules)
     if use_iso:

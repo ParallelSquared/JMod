@@ -17,7 +17,7 @@ import sys
 import json
 import dill
 
-from src.utils.io import load_files
+from src.utils.io import load_files, file_reader
 from src.utils.set_seeds import set_seeds
 from src.models.spec_lib import spec_lib
 from src.spectral_fitting import fit_to_lib2, merge_spectrum_peaks
@@ -191,7 +191,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ######################################################
     #### Load the data
     spectrumLibrary = spec_lib.loadSpecLib(lib_file)
-    DIAspectra=load_files.loadSpectra(mzml_file)
+    DIAspectra=file_reader.loadSpectra(mzml_file)
 
     if config.args.test_mode:
         logger.info(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
