@@ -153,7 +153,7 @@ unmatched_fit_type = args.unmatched
 """
 
 
-score_model = "rf"
+score_model = "xg"
 """
 3 options:
     rf: Random Forest
