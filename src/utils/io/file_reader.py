@@ -15,35 +15,21 @@ import polars as pl
 from src.utils.io.load_files import Spectrum, SpectrumFile
 from src.logger import logger
 
-# Ion mobility filter: log(IM) = slope * log(mz) + intercept
-# Derived from identified peptides; peaks beyond n_sd * residual_sd are removed
-_IM_SLOPE = 0.4724
-_IM_INTERCEPT = -3.1007
-_IM_RESIDUAL_SD = 0.0366
-_IM_N_SD = 4.0
-
-
-def _im_filter(mz, mobility):
-    """Return boolean mask keeping peaks within _IM_N_SD of the expected m/z-mobility line."""
-    expected_log_mob = _IM_SLOPE * np.log(mz) + _IM_INTERCEPT
-    residual = np.abs(np.log(mobility) - expected_log_mob)
-    return residual <= _IM_N_SD * _IM_RESIDUAL_SD
-
 
 @nb.njit
 def collapse_tof(mz_vals, intensities, mobilities, ppm_tol=10.0):
-    """Merge peaks within ppm tolerance by intensity-weighted m/z and mobility averaging.
+    """Merge peaks within ppm tolerance by intensity-weighted m/z averaging.
 
     Processes peaks in descending intensity order. For each unmerged peak,
     gathers all unmerged neighbors within ppm_tol (computed per-pair) and
     merges them into a single peak with summed intensity, weighted m/z,
-    and weighted ion mobility (1/K0).
+    and the ion mobility of the seed (most intense) peak.
 
     mz_vals: 1D array of calibrated m/z values (unsorted, from multiple IM scans)
     intensities: 1D array of corresponding intensities
     mobilities: 1D array of ion mobility values (1/K0)
     ppm_tol: merging tolerance in ppm
-    Returns: (centroided_mz, summed_intensity, weighted_mobility) sorted by m/z
+    Returns: (centroided_mz, summed_intensity, seed_mobility) sorted by m/z
     """
     n = len(mz_vals)
     if n == 0:
@@ -72,7 +58,7 @@ def collapse_tof(mz_vals, intensities, mobilities, ppm_tol=10.0):
         anchor_mz = mz_sorted[idx]
         wsum_mz = anchor_mz * int_sorted[idx]
         wsum_int = int_sorted[idx]
-        wsum_mob = mob_sorted[idx] * int_sorted[idx]
+        seed_mob = mob_sorted[idx]
         merged[idx] = True
 
         # Search left
@@ -83,7 +69,6 @@ def collapse_tof(mz_vals, intensities, mobilities, ppm_tol=10.0):
                 break
             wsum_mz += mz_sorted[j] * int_sorted[j]
             wsum_int += int_sorted[j]
-            wsum_mob += mob_sorted[j] * int_sorted[j]
             merged[j] = True
             j -= 1
 
@@ -95,13 +80,12 @@ def collapse_tof(mz_vals, intensities, mobilities, ppm_tol=10.0):
                 break
             wsum_mz += mz_sorted[j] * int_sorted[j]
             wsum_int += int_sorted[j]
-            wsum_mob += mob_sorted[j] * int_sorted[j]
             merged[j] = True
             j += 1
 
         out_mz[n_out] = wsum_mz / wsum_int
         out_int[n_out] = wsum_int
-        out_mob[n_out] = wsum_mob / wsum_int
+        out_mob[n_out] = seed_mob
         n_out += 1
 
     # Sort output by m/z
@@ -168,7 +152,6 @@ def _load_d(filepath: str) -> SpectrumFile:
             f"Run timscentroid on {d_path} first."
         )
 
-    logger.info(f"IM filter: {_IM_N_SD} SD cutoff (slope={_IM_SLOPE}, intercept={_IM_INTERCEPT}, sd={_IM_RESIDUAL_SD})")
     logger.info(f"Loading calibration from {d_path}")
     cal = _load_calibration(tdf_path)
     dia_lookup = _load_dia_windows(tdf_path, cal["frame_ids"], cal["ms_level"])
@@ -412,12 +395,7 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         mz_concat = np.concatenate(mz_list)
         intens_concat = np.concatenate(intens_list).astype(np.float64)
         mob_concat = np.concatenate(mob_list).astype(np.float64)
-        keep = _im_filter(mz_concat, mob_concat)
-        if not keep.any():
-            continue
-        mz_collapsed, intens_collapsed, mob_collapsed = collapse_tof(
-            mz_concat[keep], intens_concat[keep], mob_concat[keep], 10.0
-        )
+        mz_collapsed, intens_collapsed, mob_collapsed = collapse_tof(mz_concat, intens_concat, mob_concat, 10.0)
 
         spec = Spectrum()
         spec.id = f"scan={scan_counter}"
@@ -447,12 +425,7 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         mz_f64 = mz_raw.astype(np.float64)
         intens_f64 = intens_raw.astype(np.float64)
         mob_f64 = mob_raw.astype(np.float64)
-        keep = _im_filter(mz_f64, mob_f64)
-        if not keep.any():
-            continue
-        mz_collapsed, intens_collapsed, mob_collapsed = collapse_tof(
-            mz_f64[keep], intens_f64[keep], mob_f64[keep], 10.0
-        )
+        mz_collapsed, intens_collapsed, mob_collapsed = collapse_tof(mz_f64, intens_f64, mob_f64, 10.0)
         half_width = iso_width / 2.0
 
         spec = Spectrum()
@@ -488,17 +461,17 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
 def loadSpectra(input_file: str) -> SpectrumFile:
     """Drop-in replacement for load_files.loadSpectra with format dispatch."""
     logger.info("Loading Spectra...")
-    python_spec_file = input_file + "_pythonspec"
-    if not os.path.exists(python_spec_file):
-        logger.info("Loading Spectra... from file")
-        reader = FileReader(input_file)
-        spectra = reader.read()
-        with open(python_spec_file, "wb") as f:
-            pickle.dump(spectra, f)
-    else:
-        with open(python_spec_file, "rb") as f:
-            logger.info("Loading Spectra... from pickle")
-            spectra = pickle.load(f)
+    # python_spec_file = input_file + "_pythonspec"
+    # if not os.path.exists(python_spec_file):
+    logger.info("Loading Spectra... from file")
+    reader = FileReader(input_file)
+    spectra = reader.read()
+    #     with open(python_spec_file, "wb") as f:
+    #         pickle.dump(spectra, f)
+    # else:
+    #     with open(python_spec_file, "rb") as f:
+    #         logger.info("Loading Spectra... from pickle")
+    #         spectra = pickle.load(f)
 
     logger.info(f"Loaded {len(spectra.ms1scans)} MS1 spectra")
     logger.info(f"Loaded {len(spectra.ms2scans)} MS2 spectra")
