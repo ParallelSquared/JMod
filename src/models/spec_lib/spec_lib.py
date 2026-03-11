@@ -297,8 +297,8 @@ import multiprocessing
 def _decoy_worker(args):
     """Worker function for parallel decoy generation."""
     seq, frags, rules, tag, n_iso, use_iso = args
-    new_seq = change_seq(seq, rules)
-    new_frags = convert_frags(seq, frags, rules)
+    new_seq = change_seq(seq, rules, tag=tag)
+    new_frags = convert_frags(seq, frags, rules, tag=tag)
     if use_iso:
         spectrum, ordered_frags = gen_isotopes_dict(new_seq, new_frags, tag, n_iso)
     else:

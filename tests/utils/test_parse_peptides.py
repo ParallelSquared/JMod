@@ -62,21 +62,16 @@ class TestChangeSeq:
     def test_change_seq_with_tags(self):
         """Test change_seq with tagged sequences"""
 
-        # Set up mock config with a tag
         mock_tag = Mock()
         mock_tag.name = "mTRAQ"
-        config.tag = mock_tag   
-        
+
         # Test with tagged sequence
-        result = change_seq("K(mTRAQ)PEPTIDE", "diann")
+        result = change_seq("K(mTRAQ)PEPTIDE", "diann", tag=mock_tag)
         assert result == "L(mTRAQ)LDLSVED"
-        
+
         # Test reverse with tags
-        result = change_seq("K(mTRAQ)PEPTIDE", "rev")
+        result = change_seq("K(mTRAQ)PEPTIDE", "rev", tag=mock_tag)
         assert result == "D(mTRAQ)ITPEPKE"
-        
-        # Reset config
-        config.tag = None
 
     def test_change_seq_invalid_aa_keyerror(self):
         """Test that change_seq raises KeyError for unknown amino acids with diann rules"""

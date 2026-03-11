@@ -270,7 +270,7 @@ diann_rules = {
                  'D':'E'
                  }
 
-def change_seq(seq: str, rules: str) -> str:
+def change_seq(seq: str, rules: str, tag=None) -> str:
     """Modifies a peptide sequence to create a complementary decoy sequence.
     Uses either the sequence reversal method or the DIA-NN rules for sequence
     'mutation' 
@@ -302,16 +302,16 @@ def change_seq(seq: str, rules: str) -> str:
     # else:
     #     seq = [re.sub("\(.*\)","",aa) for aa in seq]\
         
-    if config.tag:   
-       tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
-       seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
+    if tag:
+       tags = [re.findall(f"(\({tag.name}.*?\))",i) for i in seq]
+       seq = [re.sub(f"(\({tag.name}.*?\))","",i) for i in seq]
     else:
         tags = [[] for i in seq]
-        
+
     #mods = [extract_mod(i) for i in seq]
-    ## assume AA is the first 
+    ## assume AA is the first
     #untag_seq = [i[0] for i in seq]
-    
+
     if rules=="diann":
         new_split_seq = [diann_rules[aa] for aa in seq]
     elif rules=="rev":
@@ -381,7 +381,7 @@ def convert_prec_mz(seq: str, z: int = 1, mass_dict: dict[str, float] = {}) -> f
 ## Note: unsure if this works for modifications
 ####  TO DO:   Need to add tag masses to larger dict with modifications included 
 #@profile
-def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rules) -> dict[str, list[float]]:
+def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rules, tag=None) -> dict[str, list[float]]:
     """Gets the precursors m/z for a peptide sequence given the
     amino acid sequence and the charge state. Accepts sequences with modifications
     in '(' brackets  
@@ -434,15 +434,13 @@ def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rule
     }
     """
 
-    new_seq = change_seq(seq=seq,rules=rules)    
-    
+    new_seq = change_seq(seq=seq,rules=rules,tag=tag)
+
     split_seq = parse_peptide(new_seq)
-    
-    if config.tag:   
-       #tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
-       #seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
-       tags = [[t.strip("()") for t in re.findall(f"(\({config.tag.name}.*?\))",i)] for i in split_seq]
-       split_seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in split_seq]
+
+    if tag:
+       tags = [[t.strip("()") for t in re.findall(f"(\({tag.name}.*?\))",i)] for i in split_seq]
+       split_seq = [re.sub(f"(\({tag.name}.*?\))","",i) for i in split_seq]
 
     else:
         tags = [[] for i in seq]
@@ -453,8 +451,8 @@ def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rule
     ## assume AA is the first 
     unmod_seq = [i[0] for i in split_seq]
     
-    if config.tag:
-        tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in tags]
+    if tag:
+        tag_masses = [sum([tag.mass_dict[j]  for j in i if j in tag.mass_dict]) for i in tags]
     else:
         tag_masses = [0 for i in mods]
         
