@@ -1317,7 +1317,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         # if ms2:
         #     with open(results_folder+"/ms2_func","wb") as dill_file:
         #         dill.dump(ms2_func,dill_file)
-        
+
+        # TODO double check input for tokens that aren't in the original library
         output_df["updated_lib_rt"] = [updatedLibrary[k]["iRT"] for k in id_keys]
         output_df["mz_diffs"] = diffs
         ms1_rts = np.array([s.RT for s in dia_spectra.ms1scans])
