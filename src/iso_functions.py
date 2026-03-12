@@ -267,16 +267,17 @@ def iso_library(library,tag,n_iso):
     
     ## add n isotpic peaks to the "spectrum" portio of each library entry
     logger.info("Creating Copy of Library...")
-    new_library = copy.deepcopy(library)
-    
+    new_library = {key: dict(entry) for key, entry in library.items()}
+
     logger.info("Generating isotopes for library:")
     for key in tqdm.tqdm(new_library):
         frags = new_library[key]["frags"]
-        
+
         # new_library[key]["spectrum"] = gen_isotopes(key[0],frags)
         new_library[key]["spectrum"],new_library[key]["ordered_frags"] = gen_isotopes_dict(key[0],frags,tag,n_iso)
-        
-    return new_library
+
+    from src.models.spec_lib.library_store import SpectrumLibraryStore
+    return SpectrumLibraryStore.from_dict(new_library)
 
 import multiprocessing
 def iso_library_multi(library,tag,n_iso):
@@ -299,6 +300,7 @@ def iso_library_multi(library,tag,n_iso):
         The same library as before but with updated spectrum and ordered_frags dictionaries (same level as 'frags') with additonal isotopes
     """
     ## add n isotpic peaks to the "spectrum" portio of each library entry
+    # Materialize entries as plain dicts for multiprocessing serialization
     new_library = {key: dict(entry) for key, entry in library.items()}
 
     logger.info("Generating isotopes for library:")
@@ -313,11 +315,9 @@ def iso_library_multi(library,tag,n_iso):
     p.join()
     for key,out in zip(all_keys,iso_out):
         new_library[key]["spectrum"],new_library[key]["ordered_frags"] = out
-        
-        # new_library[key]["spectrum"] = gen_isotopes(key[0],frags)
-        # new_library[key]["spectrum"],new_library[key]["ordered_frags"] = gen_isotopes_dict(key[0],frags)
-        
-    return new_library
+
+    from src.models.spec_lib.library_store import SpectrumLibraryStore
+    return SpectrumLibraryStore.from_dict(new_library)
 
 
 # def calculate_mz(sequence,charge):

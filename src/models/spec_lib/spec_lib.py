@@ -268,25 +268,31 @@ def load_blib(spec_lib_file):
 
 
 def loadSpecLib(lib_file):
-    
+    from src.models.spec_lib.library_store import SpectrumLibraryStore
+
     lib_ext = lib_file.rsplit(".")[-1]
-    
+
     logger.info("Loading Library...")
-    python_lib_file = lib_file+"_pythonlib"
-    if not os.path.exists(python_lib_file):
-        logger.info("Loading Library... from file")
-        if lib_ext=="blib":
-            spec_lib = load_blib(lib_file)
-        else:
-            # spec_lib = load_tsv_lib(lib_file)
-            spec_lib = load_tsv_speclib(lib_file)
-        with open(python_lib_file,"wb") as write_file:
-            pickle.dump(spec_lib, write_file)
-    else:
+    store_file = lib_file + "_store.npz"
+    python_lib_file = lib_file + "_pythonlib"
+
+    if os.path.exists(store_file):
+        logger.info("Loading Library... from binary cache")
+        spec_lib = SpectrumLibraryStore.load(store_file)
+    elif os.path.exists(python_lib_file):
         logger.info("Loading Library... from pickle")
-        with open(python_lib_file,"rb") as read_file:
-            spec_lib = pickle.load(read_file)
-    
+        with open(python_lib_file, "rb") as read_file:
+            old_lib = pickle.load(read_file)
+        spec_lib = SpectrumLibraryStore.from_dict(old_lib)
+        spec_lib.save(store_file)
+    else:
+        logger.info("Loading Library... from file")
+        if lib_ext == "blib":
+            spec_lib = SpectrumLibraryStore.from_blib(lib_file)
+        else:
+            spec_lib = SpectrumLibraryStore.from_tsv(lib_file)
+        spec_lib.save(store_file)
+
     logger.info(f"Loaded {len(spec_lib)} library precursors")
     return spec_lib
 
@@ -307,15 +313,18 @@ def _decoy_worker(args):
 
 
 def create_decoy_lib(library,rules,tag,n_iso):
+    from src.models.spec_lib.library_store import SpectrumLibraryStore
+
     ## keep keys the same but change seq, mz and frags
     for key in library:
         library[key]["parent_key"] = key
 
-    decoy_lib = {key: dict(entry) for key, entry in library.items()}
+    # Materialize entries as plain dicts for multiprocessing serialization
+    decoy_dict = {key: dict(entry) for key, entry in library.items()}
 
-    all_keys = list(decoy_lib.keys())
+    all_keys = list(decoy_dict.keys())
     use_iso = config.args.iso
-    worker_args = [(key[0], decoy_lib[key]["frags"], rules, tag, n_iso, use_iso)
+    worker_args = [(key[0], decoy_dict[key]["frags"], rules, tag, n_iso, use_iso)
                    for key in all_keys]
 
     p = multiprocessing.Pool()
@@ -324,13 +333,13 @@ def create_decoy_lib(library,rules,tag,n_iso):
     p.join()
 
     for key, (new_seq, new_frags, spectrum, ordered_frags) in zip(all_keys, results):
-        entry = decoy_lib[key]
+        entry = decoy_dict[key]
         entry["seq"] = new_seq
         entry["frags"] = new_frags
         entry["spectrum"] = spectrum
         entry["ordered_frags"] = ordered_frags
 
-    return decoy_lib
+    return SpectrumLibraryStore.from_dict(decoy_dict)
             
             
 # spec_lib = loadSpecLib("/Volumes/Lab/KMD/SpectralLibraries/8ng_LF_24nce.tsv")

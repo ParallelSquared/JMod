@@ -337,10 +337,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
       
     logger.info("Creating Decoy Library")
     decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev",tag=config.tag,n_iso=config.num_iso_peaks)
-    for key in spectrumLibrary:
-        spectrumLibrary[key]["top_n"]=np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
-    for key in decoy_lib:
-        decoy_lib[key]["top_n"]=np.argsort(-decoy_lib[key]["spectrum"][:,1])[:config.top_n]
+    spectrumLibrary.bulk_set_top_n(config.top_n)
+    decoy_lib.bulk_set_top_n(config.top_n)
     logger.info("Finished Decoy Library")
     
     
