@@ -450,7 +450,7 @@ def get_manhattan_distance(
         return np.zeros(0), np.zeros(0)
 
 def hyperscore2(frags,frag_names_matched):
-    
+
     num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
     num_y = sum(["y" in i for i in frag_names_matched if "iso" not in i])
     dp = np.sum([frags[i] for i in frag_names_matched if "iso" not in i])

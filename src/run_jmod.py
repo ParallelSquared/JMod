@@ -9,13 +9,63 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import src.config as config
 import numpy as np
 import os
-import time 
+import time
 import datetime
 import tqdm
 import pandas as pd
-import sys 
+import sys
 import json
 import dill
+import resource
+
+
+def _mem_gb():
+    """Return current max RSS in GB. macOS reports bytes, Linux reports KB."""
+    maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == 'darwin':
+        return maxrss / (1024**3)
+    return maxrss / (1024**2)
+
+
+def _log_mem(label):
+    logger.info(f"[MEM] {label}: {_mem_gb():.2f} GB RSS")
+
+
+def _log_mem_breakdown(*libs):
+    """Log per-array memory for each (name, library) pair."""
+    import gc
+    gc.collect()
+    for lib_name, lib in libs:
+        logger.info(f"\n=== {lib_name} library ({len(lib)} entries) ===")
+        total = 0
+        obj_total = 0
+        for attr in sorted(lib.__slots__):
+            obj = getattr(lib, attr, None)
+            if obj is None:
+                continue
+            if isinstance(obj, dict):
+                size = sys.getsizeof(obj)
+                logger.info(f"  {attr:30s} {size/1e9:8.3f} GB  (dict, {len(obj)} keys)")
+                total += size
+            elif isinstance(obj, np.ndarray):
+                nbytes = obj.nbytes
+                logger.info(f"  {attr:30s} {nbytes/1e9:8.3f} GB  dtype={obj.dtype}  shape={obj.shape}")
+                total += nbytes
+                if obj.dtype == object and len(obj) > 0:
+                    # sample to estimate true size of contained objects
+                    sample_size = min(10000, len(obj))
+                    sample_idx = np.linspace(0, len(obj)-1, sample_size, dtype=int)
+                    sample_bytes = sum(sys.getsizeof(obj[i]) for i in sample_idx if obj[i] is not None)
+                    est_true = (sample_bytes / sample_size) * len(obj)
+                    logger.info(f"  {attr:30s} ~{est_true/1e9:7.3f} GB  (estimated object contents)")
+                    obj_total += est_true
+            else:
+                size = sys.getsizeof(obj)
+                logger.info(f"  {attr:30s} {size/1e9:8.3f} GB  type={type(obj).__name__}")
+                total += size
+        logger.info(f"  {'TOTAL (array buffers)':30s} {total/1e9:8.3f} GB")
+        logger.info(f"  {'TOTAL (object contents est)':30s} {obj_total/1e9:8.3f} GB")
+        logger.info(f"  {'TOTAL (combined est)':30s} {(total+obj_total)/1e9:8.3f} GB")
 
 from src.utils.io import load_files
 from src.utils.set_seeds import set_seeds
@@ -191,7 +241,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ######################################################
     #### Load the data
     spectrumLibrary = spec_lib.loadSpecLib(lib_file)
+    _log_mem("after loading library")
     DIAspectra=load_files.loadSpectra(mzml_file)
+    _log_mem("after loading spectra")
 
     if config.args.test_mode:
         logger.info(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
@@ -331,15 +383,20 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
                                                   tag=config.tag,
                                                   n_iso=config.num_iso_peaks)
-        
+        _log_mem("after isotope generation")
+
     # with open(results_folder_path+"/slib","wb") as dill_file:
-    #     slib = dill.dump(spectrumLibrary,dill_file)   
-      
+    #     slib = dill.dump(spectrumLibrary,dill_file)
+
     logger.info("Creating Decoy Library")
     decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev",tag=config.tag,n_iso=config.num_iso_peaks)
+    _log_mem("after decoy library creation")
     spectrumLibrary.bulk_set_top_n(config.top_n)
     decoy_lib.bulk_set_top_n(config.top_n)
     logger.info("Finished Decoy Library")
+    _log_mem("after bulk_set_top_n")
+
+    _log_mem_breakdown(("target", spectrumLibrary), ("decoy", decoy_lib))
     
     
     ######################################################
@@ -377,6 +434,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         batch_spectra = spectra_to_fit[batch_idx*num_per_batch:(batch_idx+1)*num_per_batch]
 
         logger.info(f"Fitting batch {batch_idx+1} of {num_batches}")
+        _log_mem(f"batch {batch_idx+1} start")
 
         outputs= []
 
