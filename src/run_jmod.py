@@ -20,7 +20,25 @@ import resource
 
 
 def _mem_gb():
-    """Return current max RSS in GB. macOS reports bytes, Linux reports KB."""
+    """Return current RSS in GB (not peak) via /proc or ps fallback."""
+    try:
+        import psutil
+        return psutil.Process().memory_info().rss / (1024**3)
+    except ImportError:
+        pass
+    if sys.platform == 'darwin':
+        import subprocess
+        # ps reports RSS in KB on macOS
+        out = subprocess.check_output(['ps', '-o', 'rss=', '-p', str(os.getpid())])
+        return int(out.strip()) / (1024**2)
+    # Linux: read from /proc
+    with open(f'/proc/{os.getpid()}/statm') as f:
+        pages = int(f.read().split()[1])
+    return pages * 4096 / (1024**3)
+
+
+def _peak_mem_gb():
+    """Return peak (high water mark) RSS in GB."""
     maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == 'darwin':
         return maxrss / (1024**3)
@@ -28,7 +46,7 @@ def _mem_gb():
 
 
 def _log_mem(label):
-    logger.info(f"[MEM] {label}: {_mem_gb():.2f} GB RSS")
+    logger.info(f"[MEM] {label}: {_mem_gb():.2f} GB current, {_peak_mem_gb():.2f} GB peak")
 
 
 def _log_mem_breakdown(*libs):
@@ -320,6 +338,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         mass_tag = None
         config.tag = None
 
+    _log_mem("before RT alignment")
     if config.args.timeplex:
         ## now ooutputs library as we finetune RT
         # With this:
@@ -351,6 +370,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()]) # TODO QQQXXX Input should have at least 1 dimension, got scalar array(-16.) instead
 
 
+    _log_mem("after RT alignment")
+
     ## Merge peaks in spectra
     for spec in DIAspectra.ms1scans:
         merge_spectrum_peaks(spec, config.opt_ms1_tol)
@@ -359,9 +380,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         merge_spectrum_peaks(spec, config.mz_tol)
 
     spectra_to_fit = DIAspectra.ms2scans
-    
-
-
+    _log_mem("after merge_spectrum_peaks")
 
     all_keys = list(spectrumLibrary)
      
@@ -376,6 +395,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         ms2_func=None
 
 
+    _log_mem("before isotope generation")
     if config.args.iso:
         # spectrumLibrary = iso_f.iso_library(spectrumLibrary,
         #                                            tag=config.tag,
@@ -397,8 +417,54 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     _log_mem("after bulk_set_top_n")
 
     _log_mem_breakdown(("target", spectrumLibrary), ("decoy", decoy_lib))
-    
-    
+
+    # ---- Audit known large objects ----
+    import gc as _gc
+    _gc.collect()
+    logger.info("\n=== Memory audit of known locals ===")
+    # DIAspectra: sum up the numpy arrays inside each Spectrum
+    _spec_bytes = 0
+    for _s in DIAspectra.ms1scans + DIAspectra.ms2scans:
+        for _attr in ('mz', 'intens'):
+            _arr = getattr(_s, _attr, None)
+            if _arr is not None:
+                _spec_bytes += _arr.nbytes
+    _n_scans = len(DIAspectra.ms1scans) + len(DIAspectra.ms2scans)
+    logger.info(f"  DIAspectra arrays:     {_spec_bytes/1e9:.2f} GB  ({_n_scans:,} scans)")
+    logger.info(f"  DIAspectra obj est:   ~{_n_scans * 500 /1e9:.2f} GB  ({_n_scans:,} × ~500B overhead)")
+    if dino_features is not None:
+        logger.info(f"  dino_features:         {dino_features.memory_usage(deep=True).sum()/1e9:.2f} GB")
+    else:
+        logger.info(f"  dino_features:         None")
+    logger.info(f"  rt_mz:                 {rt_mz.nbytes/1e9:.4f} GB")
+    logger.info(f"  all_keys:              {sys.getsizeof(all_keys)/1e9:.4f} GB")
+    # Check what the closures inside funcs might be holding
+    for _i, _f in enumerate(funcs):
+        _closure_bytes = 0
+        if hasattr(_f, '__closure__') and _f.__closure__:
+            for _cell in _f.__closure__:
+                try:
+                    _obj = _cell.cell_contents
+                    _closure_bytes += sys.getsizeof(_obj)
+                    if hasattr(_obj, 'nbytes'):
+                        _closure_bytes += _obj.nbytes
+                except ValueError:
+                    pass
+            logger.info(f"  funcs[{_i}] closure:     ~{_closure_bytes/1e9:.4f} GB  ({len(_f.__closure__)} cells)")
+        else:
+            logger.info(f"  funcs[{_i}]:              no closure")
+    # Count all numpy arrays on the heap
+    _np_bytes = 0
+    _np_count = 0
+    for _obj in _gc.get_objects():
+        if isinstance(_obj, np.ndarray):
+            _np_bytes += _obj.nbytes
+            _np_count += 1
+    logger.info(f"  All numpy arrays:      {_np_bytes/1e9:.2f} GB  ({_np_count:,} arrays)")
+    logger.info(f"  Current RSS:           {_mem_gb():.2f} GB")
+    logger.info(f"  Gap (RSS - numpy):     {_mem_gb() - _np_bytes/1e9:.2f} GB")
+    del _spec_bytes, _n_scans, _np_bytes, _np_count, _closure_bytes
+
     ######################################################
     ### Write search params to file
     param_file = results_folder_path + "/params.txt"

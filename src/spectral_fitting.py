@@ -11,6 +11,18 @@ import numpy as np
 import warnings
 import ptinnls as sparse_nnls
 from sklearn.linear_model import ElasticNet, Lasso
+from sklearn.exceptions import ConvergenceWarning
+
+# TODO: Investigate why sklearn reports tolerance=0 in ConvergenceWarning
+#       (duality gap: ~1e-34, tolerance: 0.000e+00). Both Lasso and ElasticNet
+#       have explicit tol set, so this may be a numerical precision issue where
+#       the internal scaled tolerance rounds to zero for certain inputs.
+warnings.filterwarnings(
+    "ignore",
+    message="Objective did not converge",
+    category=ConvergenceWarning,
+    module=r"sklearn\.linear_model\._coordinate_descent",
+)
 
 from scipy import stats
 from scipy import sparse
@@ -784,8 +796,9 @@ def fit_to_lib2(dia_spec,
     candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
     
     
-    ###### Process dia spectrum 
-    
+    ###### Process dia spectrum
+
+    # TODO: merge_spectrum_peaks already pre-merges all spectra — this may be redundant
     # # what are the first indices of peaks grouped by tolerance
     merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
     
@@ -1306,8 +1319,9 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
     
     
     
-    ###### Process dia spectrum 
-    
+    ###### Process dia spectrum
+
+    # TODO: merge_spectrum_peaks already pre-merges all spectra — this may be redundant
     # what are the first indices of peaks grouped by tolerance
     merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
     
@@ -2040,12 +2054,11 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
 
 
 def merge_spectrum_peaks(spec, mz_ppm):
+    # TODO: this duplicates the merge logic in fit_to_lib2 (line ~790) — consolidate?
     dia_spectrum = np.array(spec.peak_list(), dtype=np.float64).T
     merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_ppm*dia_spectrum[:,0],dia_spectrum[:,0])
     merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
-    merged_intensities = np.zeros(len((merged_coords_idxs)))
-    for j,val in zip(merged_coords_idxs,dia_spectrum[:,1]):
-        merged_intensities[j]+=val
-    merged_intensities = merged_intensities[merged_intensities!=0]
+    merged_intensities = np.bincount(merged_coords_idxs, weights=dia_spectrum[:, 1])
+    merged_intensities = merged_intensities[merged_intensities != 0]
     spec.mz = merged_coords
     spec.intens = merged_intensities

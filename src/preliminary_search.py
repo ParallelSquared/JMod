@@ -14,6 +14,15 @@ from src.logger import logger
 from src.models.spec_lib.spec_lib import python_lib_to_diann_df
 from src.utils.io.load_files import Spectrum
 
+import os, resource, subprocess
+def _log_mem_ps(label):
+    if sys.platform == 'darwin':
+        cur = int(subprocess.check_output(['ps', '-o', 'rss=', '-p', str(os.getpid())]).strip()) / (1024**2)
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**3)
+    else:
+        cur = peak = 0
+    logger.info(f"[MEM] {label}: {cur:.2f} GB current, {peak:.2f} GB peak")
+
 
 def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=10):
     # Get tag plex
@@ -51,6 +60,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         .alias("Modifications")
     )
 
+    _log_mem_ps("after building polars lib")
     # Convert to rust-compatible peptide objects
     pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
 
@@ -89,6 +99,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         report_psms=5*plex
     )
 
+    _log_mem_ps("after building indexed DB + scorer")
     # Convert spectra into a Rust-friendly format
     logger.info("Converting spectra")
     rust_specs = []
@@ -96,7 +107,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     for spec in tqdm(dia_spectra.ms2scans):
         rust_specs += [spec.to_rust_spectrum()]
 
-    #rust_specs = rust_specs[15000:16000]
+    _log_mem_ps("after converting spectra to rust")
 
     # Process spectra in chunks of 1000
     # Smaller chunks increases the amount of time spent passing things back and forth between Python and Rust
@@ -114,11 +125,13 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         else:
             hits.extend(batch_hits)
 
+    _log_mem_ps("after scoring")
     # Make Polars dataframe
     logger.info("Building results dataframe")
     col_names = hits.get_column_names()
     df = pl.DataFrame({name: getattr(hits, name) for name in col_names})
     del hits # Free the memory of the Rust result container
+    _log_mem_ps("after building results df + freeing hits")
 
     # 2. Vectorized Calculation of Theoretical m/z (using Polars UDF)
     # The UDF will run the Python function but is integrated into Polars' execution engine.
@@ -231,6 +244,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         .alias('matched_lib_pct')
     )
 
+    _log_mem_ps("end of preliminary search")
     return df
 
 
