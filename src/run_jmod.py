@@ -495,6 +495,34 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
 
+    # Line profiler setup — profile the first batch only, then dump stats
+    from line_profiler import LineProfiler
+    from src.spectral_fitting import (huber_nnls_irls, _lasso_nnls, hyperscore2,
+                                       get_features, get_scribe, get_residuals,
+                                       gof_stat, get_manhattan_distance,
+                                       get_closest_ms1, create_entries,
+                                       unmatched_peaks, max_matched_residual)
+    from src.utils.misc_functions import window_width, hyperscore_b_y, longest_y, cosim
+    lp = LineProfiler()
+    lp.add_function(fit_to_lib2)
+    lp.add_function(huber_nnls_irls)
+    lp.add_function(_lasso_nnls)
+    lp.add_function(hyperscore2)
+    lp.add_function(get_features)
+    lp.add_function(get_scribe)
+    lp.add_function(get_residuals)
+    lp.add_function(gof_stat)
+    lp.add_function(get_manhattan_distance)
+    lp.add_function(get_closest_ms1)
+    lp.add_function(create_entries)
+    lp.add_function(unmatched_peaks)
+    lp.add_function(max_matched_residual)
+    lp.add_function(window_width)
+    lp.add_function(hyperscore_b_y)
+    lp.add_function(longest_y)
+    lp.add_function(cosim)
+    fit_to_lib2_profiled = lp(fit_to_lib2)
+
     for batch_idx in range(num_batches):
         start_time = time.time()
         batch_spectra = spectra_to_fit[batch_idx*num_per_batch:(batch_idx+1)*num_per_batch]
@@ -504,8 +532,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
         outputs= []
 
+        # Use profiled version for batch 5 only
+        _fit_fn = fit_to_lib2_profiled if batch_idx == 4 else fit_to_lib2
+
         for i, dia_spec in enumerate(tqdm.tqdm(batch_spectra)):
-            result = fit_to_lib2(dia_spec,
+            result = _fit_fn(dia_spec,
                                  library=spectrumLibrary,
                                  rt_mz=rt_mz,
                                  all_keys=all_keys,
@@ -521,6 +552,13 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                  output_folder=results_folder_path)
             if result:
                 outputs.append(result)
+
+        # Dump line profiler stats after batch 5
+        if batch_idx == 4:
+            lp_output_path = results_folder_path + "/line_profiler_stats.txt"
+            with open(lp_output_path, "w") as lp_file:
+                lp.print_stats(stream=lp_file)
+            logger.info(f"Line profiler stats written to {lp_output_path}")
 
         long_outputs = [j for i in outputs for j in i]
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")

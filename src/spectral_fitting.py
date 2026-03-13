@@ -36,6 +36,7 @@ from src.utils.misc_functions import createTolWindows, window_width, feature_lis
 hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim,np_pearson_cor
 from src.utils.parse_peptides import change_seq, convert_frags
 from src.models.spec_lib.spec_lib import frag_to_peak
+from src.utils.frag_encoding import is_b_ion, is_y_ion, is_isotope, get_index, decode_frag_names
 
 
 def _lasso_nnls(A, b, sample_weight=None):
@@ -461,12 +462,13 @@ def get_manhattan_distance(
     else:
         return np.zeros(0), np.zeros(0)
 
-def hyperscore2(frags,frag_names_matched):
-
-    num_b = sum(["b" in i for i in frag_names_matched if "iso" not in i])
-    num_y = sum(["y" in i for i in frag_names_matched if "iso" not in i])
-    dp = np.sum([frags[i] for i in frag_names_matched if "iso" not in i])
-    return max(0,np.log(dp*math.factorial(num_b)*math.factorial(num_y))), num_b, num_y
+def hyperscore2(frag_intensities, frag_codes):
+    codes = np.asarray(frag_codes)
+    not_iso = ~is_isotope(codes)
+    num_b = int(np.sum(is_b_ion(codes) & not_iso))
+    num_y = int(np.sum(is_y_ion(codes) & not_iso))
+    dp = np.sum(frag_intensities[not_iso])
+    return max(0, np.log(dp * math.factorial(num_b) * math.factorial(num_y))), num_b, num_y
     
 #@profile
 def get_features(
@@ -490,11 +492,11 @@ def get_features(
     ref_pep_cand,
     all_row_indices,
     all_values,
-    prec_frags,
+    prec_frag_intensities,
     ms1_error,
     ref_spec_offset,
     decoy_spec_offset,
-    ordered_frags=None):
+    ordered_frag_codes=None):
     
     scribe_scores = get_scribe(
         ref_spec_row_indices_split,
@@ -588,12 +590,13 @@ def get_features(
         subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
         large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
 
-    if len(prec_frags)>0 and len(list(prec_frags)[0])==len(lib_peaks_matched[0]):
-        hyperscores, b_counts, y_counts = map(list, zip(*[hyperscore_b_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]))
-        longest_y_ions = [longest_y(frags,j) for frags,j in zip(prec_frags,lib_peaks_matched)]
-    elif len(prec_frags)>0 and ordered_frags is not None:
-        hyperscores, b_counts, y_counts  = map(list, zip(*[hyperscore2(frags,frag_names) for frags,frag_names in zip(prec_frags,ordered_frags)]))
-        longest_y_ions = [max([int(re.match("[by](\d+)",i)[1]) for i in frag_names])  for frag_names in ordered_frags]
+    if len(prec_frag_intensities) > 0 and ordered_frag_codes is not None:
+        hyperscores, b_counts, y_counts = map(list, zip(*[
+            hyperscore2(intensities, codes)
+            for intensities, codes in zip(prec_frag_intensities, ordered_frag_codes)
+        ]))
+        longest_y_ions = [int(np.max(get_index(codes))) if len(codes) > 0 else 0
+                          for codes in ordered_frag_codes]
     else:
         hyperscores, b_counts, y_counts = np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched)
         longest_y_ions = np.zeros_like(num_lib_peaks_matched)
@@ -911,8 +914,7 @@ def fit_to_lib2(dia_spec,
         
         # ## if using decoy_library
         # print("new")
-        converted_frags = [decoy_library[i]["frags"] for i in mass_window_candidates]
-        decoy_sorted_frags = [decoy_library[i]["ordered_frags"] for i in mass_window_candidates]
+        converted_frag_codes = [decoy_library[i]["ordered_frag_codes"] for i in mass_window_candidates]
         candidate_decoy_peaks = [decoy_library[i]["spectrum"] for i in mass_window_candidates]
         # decoy_mz = np.array([decoy_library[i]["prec_mz"] for i in mass_window_candidates])
         decoy_mz = rt_mz[:,1][window_idxs] - config.decoy_mz_offset
@@ -982,9 +984,10 @@ def fit_to_lib2(dia_spec,
         lib_frag_mz = [ref_pep_cand_list[i][:,0][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
         lib_frag_int = [ref_pep_cand_list[i][:,1][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
         obs_frag_int = [dia_spectrum[ref_spec_row_indices_split[i],1] for i in range(len(ref_spec_row_indices_split))]
-        frag_names = [library[i]["ordered_frags"][j] for i,j in zip(ref_pep_cand,lib_peaks_matched)]
-        
-        decoy_col_offset = np.max(ref_spec_col_indices)+1 
+        frag_name_codes = [library[i]["ordered_frag_codes"][j] for i,j in zip(ref_pep_cand,lib_peaks_matched)]
+        frag_matched_intensities = [ref_pep_cand_list[idx][:,1][j] for idx,j in enumerate(lib_peaks_matched)]
+
+        decoy_col_offset = np.max(ref_spec_col_indices)+1
         
     else:
         ref_spec_row_indices=np.array([],dtype=int)
@@ -994,7 +997,8 @@ def fit_to_lib2(dia_spec,
         lib_frag_mz = []#np.array([],dtype=float)
         lib_frag_int = []
         obs_frag_int = []
-        frag_names = []
+        frag_name_codes = []
+        frag_matched_intensities = []
         
         
     if decoy and len(decoy_spec_row_indices_split)>0:
@@ -1005,7 +1009,8 @@ def fit_to_lib2(dia_spec,
         decoy_lib_frag_mz = [decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
         decoy_lib_frag_int = [decoy_pep_cand_list[i][:,1][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
         decoy_obs_frag_int = [dia_spectrum[decoy_spec_row_indices_split[i],1] for i in range(len(decoy_spec_row_indices_split))]
-        decoy_frag_names =  [decoy_sorted_frags[i][decoy_lib_peaks_matched[idx]] for idx,i in enumerate(decoy_peaks_in_dia)]
+        decoy_frag_name_codes = [converted_frag_codes[i][decoy_lib_peaks_matched[idx]] for idx,i in enumerate(decoy_peaks_in_dia)]
+        decoy_frag_matched_intensities = [decoy_pep_cand_list[idx][:,1][decoy_lib_peaks_matched[idx]] for idx in range(len(decoy_peaks_in_dia))]
     else:
         decoy_spec_row_indices_split=[] ## needs to be improved
         decoy_spec_values_split=[] ## needs to be improved
@@ -1016,7 +1021,8 @@ def fit_to_lib2(dia_spec,
         decoy_lib_frag_mz = []#np.array([],dtype=float)
         decoy_lib_frag_int = []
         decoy_obs_frag_int = []
-        decoy_frag_names = []
+        decoy_frag_name_codes = []
+        decoy_frag_matched_intensities = []
         
     if len(decoy_spec_row_indices_split)>0 or len(ref_spec_row_indices_split)>0:
         # what peaks from the spectrum are matched by library peps
@@ -1122,11 +1128,11 @@ def fit_to_lib2(dia_spec,
                                 ref_pep_cand,
                                 (ref_spec_row_indices_split+decoy_spec_row_indices_split),
                                 (ref_spec_values_split+decoy_spec_values_split),
-                                [library[i]["frags"] for i in ref_pep_cand],
+                                frag_matched_intensities,
                                 ref_ms1_error,
                                 0,
                                 decoy_col_offset,
-                                frag_names)
+                                frag_name_codes)
         
         single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
         
@@ -1157,11 +1163,11 @@ def fit_to_lib2(dia_spec,
                                             decoy_pep_cand,
                                             (ref_spec_row_indices_split+decoy_spec_row_indices_split),
                                             (ref_spec_values_split+decoy_spec_values_split),
-                                            [converted_frags[i] for i in decoy_peaks_in_dia],
+                                            decoy_frag_matched_intensities,
                                             decoy_ms1_error,
                                             decoy_col_offset,
                                             0,
-                                            decoy_frag_names)
+                                            decoy_frag_name_codes)
         
             # new_row_indices_split = [[peak_idx_convertor[j] for j in i] for i in decoy_spec_row_indices_split]
             unique_row_indices_split_decoy = [[peak_idx_convertor[j] in single_matched_rows for j in i] for i in decoy_spec_row_indices_split]
@@ -1181,11 +1187,15 @@ def fit_to_lib2(dia_spec,
         output = [[0,spec_idx,ms1_spec.scan_num,0,0,prec_mz,prec_rt,*np.zeros(len(names)-7)]]
     
     if len(non_zero_coeffs)>0:
+        # Decode int32 frag codes to strings only at output time
+        frag_names = [decode_frag_names(codes) for codes in frag_name_codes]
+        decoy_frag_names = [decode_frag_names(codes) for codes in decoy_frag_name_codes]
+
         lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
         if decoy:
             updated_decoy_offset = int(max(ref_sparse_col_indices))+1 if len(ref_sparse_col_indices)>0 else 0
             decoy_spec_ids = [decoy_pep_cand[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
-        
+
             all_spec_ids = lib_spec_ids+decoy_spec_ids
             all_features = np.concatenate((features,decoy_features))
             all_ms2_frags = [[";".join(map(str,j)) for j in i] for i in zip(frag_names+decoy_frag_names,

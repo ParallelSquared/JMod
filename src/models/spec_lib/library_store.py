@@ -19,7 +19,8 @@ _SCALAR_FLOAT_FIELDS = frozenset({
 })
 _ALL_SCALAR_FIELDS = _SCALAR_STR_FIELDS | _SCALAR_FLOAT_FIELDS
 _ALL_KNOWN_FIELDS = _ALL_SCALAR_FIELDS | frozenset({
-    'spectrum', 'ordered_frags', 'frags', 'top_n', 'parent_key', 'spec_frags',
+    'spectrum', 'ordered_frags', 'ordered_frag_codes', 'frag_intensities',
+    'frags', 'top_n', 'parent_key', 'spec_frags',
 })
 
 
@@ -113,6 +114,12 @@ class SpectrumLibraryStore:
         off = self.spectrum_offsets[idx]
         length = self.spectrum_lengths[idx]
         return decode_frag_names(self.frag_names_data[off:off + length])
+
+    def get_frag_intensities(self, idx):
+        """Return 1-D float64 array of fragment intensities for entry *idx*."""
+        off = self.spectrum_offsets[idx]
+        length = self.spectrum_lengths[idx]
+        return self.spectrum_data[off:off + length, 1]
 
     def get_ordered_frag_codes(self, idx):
         """Return 1-D int32 array of packed fragment name codes for entry *idx*.
@@ -1064,6 +1071,10 @@ class _EntryView:
             return store.get_spectrum(idx)
         if field == 'ordered_frags':
             return store.get_ordered_frags(idx)
+        if field == 'ordered_frag_codes':
+            return store.get_ordered_frag_codes(idx)
+        if field == 'frag_intensities':
+            return store.get_frag_intensities(idx)
         if field == 'frags':
             return store.get_frags(idx)
         if field == 'top_n':
