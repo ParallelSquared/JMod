@@ -37,6 +37,312 @@ hyperscore_b_y, longest_y, closest_ms1spec, closest_peak_diff, cosim,np_pearson_
 from src.utils.parse_peptides import change_seq, convert_frags
 from src.models.spec_lib.spec_lib import frag_to_peak
 from src.utils.frag_encoding import is_b_ion, is_y_ion, is_isotope, get_index, decode_frag_names
+from numba import njit
+
+
+@njit
+def _build_y_pred_jit(all_rows, all_cols, all_vals, offsets, coeffs, coeff_offset, y_pred):
+    """Build predicted spectrum by accumulating library intensity * coefficient contributions.
+
+    Replaces get_residuals._compute_prediction. For each candidate j, for each
+    of its matched fragments k: y_pred[row] += lib_intensity * coeff[col + offset].
+    This builds the full predicted spectrum (Ax) across all candidates.
+
+    Args:
+        all_rows:      int32[]  — flattened row indices (which DIA peak each fragment maps to)
+        all_cols:      int32[]  — flattened col indices (which candidate each fragment belongs to)
+        all_vals:      float64[] — flattened normalized library intensities
+        offsets:       int32[n+1] — candidate j's fragments are at all_rows[offsets[j]:offsets[j+1]]
+        coeffs:        float64[] — fit coefficients from NNLS
+        coeff_offset:  int       — offset into coeffs for this candidate set (ref vs decoy)
+        y_pred:        float64[] — output array, accumulated in-place (must be pre-zeroed)
+    """
+    n = len(offsets) - 1
+    for j in range(n):
+        start = offsets[j]
+        end = offsets[j + 1]
+        for k in range(start, end):
+            # y_pred[peak_row] += normalized_lib_intensity * fit_coefficient
+            y_pred[all_rows[k]] += all_vals[k] * coeffs[all_cols[k] + coeff_offset]
+
+
+@njit
+def _compute_candidate_features_jit(
+    all_rows, all_vals, all_cols, offsets,
+    val_obs, residuals, y_pred, coeffs, coeff_offset,
+    scribe_scores, gof_stats, max_unmatched_res, max_matched_res,
+    manhattan_dist, spectral_contrast,
+    num_peaks_matched_out, frac_lib_intensity_out, frac_dia_intensity_out,
+    tic
+):
+    """Fused computation of per-candidate spectral features in two passes.
+
+    Replaces four separate Python-loop functions (get_scribe, gof_stat,
+    get_manhattan_distance) with a single JIT'd function that iterates over
+    each candidate's matched fragments only twice.
+
+    Pass 1: Accumulate sqrt sums needed for Scribe normalization denominators.
+    Pass 2: Compute all features in a single iteration over fragments.
+
+    All output arrays are pre-allocated by the caller and written in-place.
+
+    Args:
+        all_rows:      int32[]   — flattened row indices (DIA peak index per fragment)
+        all_vals:      float64[] — flattened normalized library intensities
+        all_cols:      int32[]   — flattened column indices (candidate index per fragment)
+        offsets:       int32[n+1] — candidate j owns fragments at [offsets[j], offsets[j+1])
+        val_obs:       float64[] — observed DIA spectrum intensities
+        residuals:     float64[] — val_obs - y_pred (precomputed)
+        y_pred:        float64[] — predicted spectrum from _build_y_pred_jit
+        coeffs:        float64[] — NNLS fit coefficients
+        coeff_offset:  int       — offset into coeffs for this candidate set
+        tic:           float     — total ion current (sum of val_obs)
+
+    Output arrays (all float64[n], written in-place):
+        scribe_scores:           Scribe score (Searle et al. 2023) — sum of squared differences
+                                 between sqrt-normalized predicted vs observed fragment distributions.
+                                 Lower = better match.
+        gof_stats:               log2(sum_abs_residuals / sum_fitted_intensity) — goodness of fit.
+                                 Lower = better fit.
+        max_unmatched_res:       log2(max_residual_at_unobserved_peaks / sum_fitted + eps) —
+                                 worst residual at peaks where val_obs ≈ 0 (false signal).
+        max_matched_res:         log2(max_residual_at_observed_peaks / sum_fitted + eps) —
+                                 worst residual at peaks where val_obs > 0.
+        manhattan_dist:          -log2(sum_abs(y_pred - val_obs) / sum_val_obs) — modified
+                                 Manhattan distance. Higher = better fit.
+        spectral_contrast:       sqrt(uv) / (sqrt(u²) * sqrt(v²)) — cosine similarity between
+                                 y_pred and val_obs at matched fragment positions.
+        num_peaks_matched_out:   Number of matched fragments (same as len(row_idx_split[j])).
+        frac_lib_intensity_out:  Sum of normalized library intensities (np.sum(val_split[j])).
+        frac_dia_intensity_out:  Sum of observed intensities at matched peaks / TIC.
+    """
+    n = len(offsets) - 1
+    _F32_MAX = 3.4028235e+38
+    _F32_MIN = -3.4028235e+38
+
+    for j in range(n):
+        start = offsets[j]
+        end = offsets[j + 1]
+
+        # ── Pass 1: Scribe normalization denominators ──
+        # h_sqrt_sum = sum(sqrt(lib_intensity)) for this candidate
+        # x_sqrt_sum = sum(sqrt(obs_intensity)) at matched peak positions
+        # These are the denominators in the Scribe score formula:
+        #   score = sum_k( (sqrt(h_k)/h_sqrt_sum - sqrt(x_k)/x_sqrt_sum)^2 )
+        h_sqrt_sum = 0.0
+        x_sqrt_sum = 0.0
+        for k in range(start, end):
+            h_sqrt_sum += math.sqrt(all_vals[k])
+            x_sqrt_sum += math.sqrt(val_obs[all_rows[k]])
+
+        # ── Pass 2: All per-candidate features in one loop ──
+        # Scribe accumulators
+        scribe = 0.0
+        # GoF accumulators (from gof_stat)
+        sum_residuals = 0.0   # sum of |residual| at matched positions
+        sum_fitted = 0.0      # sum of |coeff * lib_intensity| at matched positions
+        max_unmatched = 0.0   # max |residual| where obs ≈ 0 (unmatched library peak)
+        max_matched = 0.0     # max |residual| where obs > 0 (matched peak)
+        # Manhattan + spectral contrast accumulators (from get_manhattan_distance)
+        x_sum = 0.0           # sum of observed intensities at matched positions
+        manhattan = 0.0       # sum of |y_pred - val_obs| at matched positions
+        u2_sum = 0.0          # sum of y_pred^2 (for spectral contrast)
+        v2_sum = 0.0          # sum of val_obs^2 (for spectral contrast)
+        uv_sum = 0.0          # sum of y_pred * val_obs (for spectral contrast)
+        # Simple feature accumulators
+        val_sum = 0.0         # sum of lib intensities (= frac_lib_intensity)
+        dia_sum = 0.0         # sum of obs intensities at matched peaks (for frac_dia_intensity)
+        n_matched = 0         # count of matched fragments
+
+        for k in range(start, end):
+            row = all_rows[k]     # DIA peak index
+            val = all_vals[k]     # normalized library intensity
+            col = all_cols[k]     # candidate column index
+            obs = val_obs[row]    # observed DIA intensity at this peak
+            res = residuals[row]  # obs - predicted (precomputed)
+            pred = y_pred[row]    # full predicted intensity at this peak (all candidates)
+
+            # ── Scribe score (Searle et al. 2023, PMID: 36695531) ──
+            # Measures divergence between sqrt-normalized library and observed
+            # fragment intensity distributions. Lower = more similar spectra.
+            if h_sqrt_sum > 0 and x_sqrt_sum > 0:
+                h_norm = math.sqrt(val) / h_sqrt_sum   # normalized predicted
+                x_norm = math.sqrt(obs) / x_sqrt_sum   # normalized observed
+                scribe += (h_norm - x_norm) ** 2
+
+            # ── Goodness-of-fit (from gof_stat) ──
+            # Accumulates total absolute residuals and total fitted intensity.
+            # Also tracks the single worst residual separately for observed peaks
+            # (max_matched) vs unobserved peaks (max_unmatched, where obs ≈ 0
+            # means the library predicted a peak the DIA spectrum doesn't have).
+            abs_res = abs(res)
+            sum_residuals += abs_res
+            sum_fitted += abs(coeffs[col + coeff_offset] * val)
+            if obs > 1e-6:
+                # Observed peak — track worst match
+                if abs_res > max_matched:
+                    max_matched = abs_res
+            elif obs < 1e-6:
+                # Unobserved peak — library predicted signal that isn't there
+                if abs_res > max_unmatched:
+                    max_unmatched = abs_res
+
+            # ── Manhattan distance + spectral contrast (from get_manhattan_distance) ──
+            # Manhattan: sum of absolute differences between predicted and observed.
+            # Spectral contrast: cosine similarity between y_pred and val_obs vectors
+            # at matched positions: cos(θ) = dot(u,v) / (|u| * |v|).
+            x_sum += obs
+            manhattan += abs(pred - obs)
+            u2_sum += pred * pred
+            v2_sum += obs * obs
+            uv_sum += pred * obs
+
+            # ── Simple features ──
+            val_sum += val    # replaces: np.sum(ref_spec_values_split[j])
+            dia_sum += obs    # replaces: np.sum(dia_spectrum[row_idx_split[j], 1])
+            n_matched += 1    # replaces: np.sum(lib_peaks_matched[j])
+
+        # ── Finalize Scribe ──
+        scribe_scores[j] = scribe
+
+        # ── Finalize GoF ──
+        # Guard against zero denominators, then log-transform
+        if sum_fitted == 0:
+            sum_fitted = 1e-6
+        if sum_residuals == 0:
+            sum_residuals = 1e-6
+        gof_stats[j] = math.log2(sum_residuals / sum_fitted)
+        max_matched_res[j] = math.log2(max_matched / (sum_fitted + 1e-10) + 1e-10)
+        max_unmatched_res[j] = math.log2(max_unmatched / (sum_fitted + 1e-10) + 1e-10)
+
+        # ── Finalize Manhattan + spectral contrast ──
+        if x_sum > 0 and manhattan > 0:
+            # Normal case: -log2 so higher = better fit
+            manhattan_dist[j] = -math.log2(manhattan / x_sum)
+            spectral_contrast[j] = math.sqrt(uv_sum) / (math.sqrt(u2_sum) * math.sqrt(v2_sum) + 1e-10)
+        elif x_sum == 0:
+            # No observed intensity at any matched position — bad fit
+            manhattan_dist[j] = _F32_MAX
+            spectral_contrast[j] = 0.0
+        else:
+            # manhattan == 0 means perfect prediction — rare edge case
+            manhattan_dist[j] = _F32_MIN
+            spectral_contrast[j] = math.sqrt(uv_sum) / (math.sqrt(u2_sum) * math.sqrt(v2_sum) + 1e-10)
+
+        # ── Finalize simple features ──
+        num_peaks_matched_out[j] = n_matched
+        frac_lib_intensity_out[j] = val_sum
+        if tic > 0:
+            frac_dia_intensity_out[j] = dia_sum / tic
+        else:
+            frac_dia_intensity_out[j] = 0.0
+
+
+@njit
+def _compute_hyperscores_jit(all_intensities, all_codes, offsets,
+                              hyperscores, b_counts_out, y_counts_out,
+                              longest_y_out):
+    """Batch-compute hyperscores and ion counts for all candidates in one JIT'd loop.
+
+    Replaces per-candidate calls to hyperscore2 + get_index. For each candidate,
+    decodes the packed int32 frag codes using bitwise operations to classify ions
+    as b/y and filter out isotopes, then computes:
+      hyperscore = max(0, ln(dot_product * b_factorial * y_factorial))
+
+    Bit layout of frag codes (from frag_encoding.py):
+      [2:0]   ion_type  — 0=b, 1=y, 2=a, 3=c, 4=x, 5=z
+      [10:3]  index     — fragment ordinal (1-255)
+      [20:17] iso       — isotope index (0 = monoisotopic, >0 = isotope)
+
+    Args:
+        all_intensities: float64[] — flattened fragment intensities for all candidates
+        all_codes:       int32[]   — flattened packed frag codes for all candidates
+        offsets:         int32[n+1] — candidate j's fragments at [offsets[j], offsets[j+1])
+        hyperscores:     float64[n] — output: hyperscore per candidate
+        b_counts_out:    float64[n] — output: number of non-isotope b-ions per candidate
+        y_counts_out:    float64[n] — output: number of non-isotope y-ions per candidate
+        longest_y_out:   float64[n] — output: max fragment index among y-ions per candidate
+    """
+    # Bit masks and shifts (must match frag_encoding.py)
+    ION_MASK = 0x7
+    ION_SHIFT = 0
+    IDX_MASK = 0xFF
+    IDX_SHIFT = 3
+    ISO_MASK = 0xF
+    ISO_SHIFT = 17
+    ION_B = 0
+    ION_Y = 1
+
+    n = len(offsets) - 1
+    for j in range(n):
+        start = offsets[j]
+        end = offsets[j + 1]
+
+        num_b = 0
+        num_y = 0
+        dp = 0.0          # sum of non-isotope fragment intensities
+        max_idx = 0        # max fragment index (for longest_y)
+
+        for k in range(start, end):
+            code = all_codes[k]
+            ion_type = (code >> ION_SHIFT) & ION_MASK
+            iso = (code >> ISO_SHIFT) & ISO_MASK
+            idx = (code >> IDX_SHIFT) & IDX_MASK
+
+            # Track max fragment index across all ion types
+            if idx > max_idx:
+                max_idx = idx
+
+            # Only count non-isotope fragments for hyperscore
+            if iso == 0:
+                dp += all_intensities[k]
+                if ion_type == ION_B:
+                    num_b += 1
+                elif ion_type == ION_Y:
+                    num_y += 1
+
+        # hyperscore = max(0, ln(dp * b! * y!))
+        # Use log-space to avoid overflow: ln(dp) + ln(b!) + ln(y!)
+        if dp > 0 and (num_b > 0 or num_y > 0):
+            log_score = math.log(dp) + math.lgamma(num_b + 1) + math.lgamma(num_y + 1)
+            hyperscores[j] = max(0.0, log_score)
+        else:
+            hyperscores[j] = 0.0
+
+        b_counts_out[j] = num_b
+        y_counts_out[j] = num_y
+        longest_y_out[j] = max_idx
+
+
+def _flatten_splits(row_idx_split, col_idx_split, val_split):
+    """Concatenate per-candidate split arrays into flat arrays with an offset table.
+
+    The split arrays (lists of variable-length numpy arrays, one per candidate)
+    can't be passed to numba directly. This flattens them into contiguous arrays
+    with an offset table so candidate j's data is at flat[offsets[j]:offsets[j+1]].
+
+    Args:
+        row_idx_split: list of int arrays — DIA peak indices per candidate
+        col_idx_split: list of int arrays — candidate column indices per candidate
+        val_split:     list of float arrays — normalized lib intensities per candidate
+
+    Returns:
+        all_rows:  int32[]   — concatenated row indices
+        all_vals:  float64[] — concatenated intensity values
+        all_cols:  int32[]   — concatenated column indices
+        offsets:   int32[n+1] — offset table, candidate j spans [offsets[j], offsets[j+1])
+    """
+    n = len(row_idx_split)
+    if n == 0:
+        return (np.empty(0, dtype=np.int32), np.empty(0, dtype=np.float64),
+                np.empty(0, dtype=np.int32), np.zeros(1, dtype=np.int32))
+    all_rows = np.concatenate(row_idx_split).astype(np.int32)
+    all_vals = np.concatenate(val_split).astype(np.float64)
+    all_cols = np.concatenate(col_idx_split).astype(np.int32)
+    offsets = np.zeros(n + 1, dtype=np.int32)
+    for i in range(n):
+        offsets[i + 1] = offsets[i] + len(row_idx_split[i])
+    return all_rows, all_vals, all_cols, offsets
 
 
 def _lasso_nnls(A, b, sample_weight=None):
@@ -498,47 +804,59 @@ def get_features(
     decoy_spec_offset,
     ordered_frag_codes=None):
     
-    scribe_scores = get_scribe(
-        ref_spec_row_indices_split,
-        ref_spec_col_indices_split,
-        ref_spec_values_split,
-        dia_spectrum[:,1]
-    )
+    val_obs = dia_spectrum[:, 1]
+    coeffs = np.asarray(lib_coefficients).ravel()
+    tic = np.sum(val_obs)
 
-    residuals, y_pred = get_residuals(
-        ref_spec_values_split,
-        ref_spec_row_indices_split,
-        ref_spec_col_indices_split,
-        decoy_spec_values_split,
-        decoy_spec_row_indices_split,
-        decoy_spec_col_indices_split,
-        dia_spectrum[:,1],
-        lib_coefficients,
-        ref_spec_offset,
-        decoy_spec_offset
-    )
-    gof_stats, max_unmatched_residuals, max_matched_residuals = gof_stat(
-        ref_spec_row_indices_split,
-        ref_spec_col_indices_split,
-        ref_spec_values_split,
-        residuals,
-        dia_spectrum[:,1],
-        lib_coefficients,
-        ref_spec_offset
-    )
-    # Add our new function call
-    manhattan_distances, fitted_spectral_contrasts = get_manhattan_distance(
-        ref_spec_row_indices_split,
-        ref_spec_col_indices_split,
-        ref_spec_values_split,
-        dia_spectrum[:,1],
-        y_pred
-    )
-    ### features 
-    num_lib_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched])
-    frac_lib_intensity = [np.sum(i) for i in ref_spec_values_split] # all ints sum to 1 so these give frac
-    tic = np.sum(dia_spectrum[:,1])
-    frac_dia_intensity = [np.sum(dia_spectrum[i,1])/tic for i in ref_spec_row_indices_split]
+    # ── Step 1: Flatten split arrays for numba ──
+    # The per-candidate split arrays (lists of variable-length numpy arrays) can't
+    # be passed to numba. Flatten into contiguous arrays + offset table.
+    ref_rows, ref_vals, ref_cols, ref_offsets = _flatten_splits(
+        ref_spec_row_indices_split, ref_spec_col_indices_split, ref_spec_values_split)
+    dec_rows, dec_vals, dec_cols, dec_offsets = _flatten_splits(
+        decoy_spec_row_indices_split, decoy_spec_col_indices_split, decoy_spec_values_split)
+
+    # ── Step 2: Build predicted spectrum y_pred = A * x ──
+    # Replaces get_residuals. Accumulates contributions from both ref and decoy
+    # candidates into a single predicted intensity array. Each fragment contributes
+    # lib_intensity * fit_coefficient to its matched DIA peak position.
+    y_pred = np.zeros(len(val_obs))
+    if len(ref_rows) > 0:
+        _build_y_pred_jit(ref_rows, ref_cols, ref_vals, ref_offsets, coeffs, ref_spec_offset, y_pred)
+    if len(dec_rows) > 0:
+        _build_y_pred_jit(dec_rows, dec_cols, dec_vals, dec_offsets, coeffs, decoy_spec_offset, y_pred)
+    # residuals = observed - predicted (same as get_residuals returned)
+    residuals = val_obs - y_pred
+
+    # ── Step 3: Fused per-candidate features ──
+    # Replaces three separate functions that each looped over the same fragment data:
+    #   - get_scribe       → scribe_scores
+    #   - gof_stat         → gof_stats, max_unmatched_residuals, max_matched_residuals
+    #   - get_manhattan_distance → manhattan_distances, fitted_spectral_contrasts
+    # Also computes simple per-candidate stats that were previously list comprehensions:
+    #   - num_lib_peaks_matched  (was: np.array([np.sum(i) for i in lib_peaks_matched]))
+    #   - frac_lib_intensity     (was: [np.sum(i) for i in ref_spec_values_split])
+    #   - frac_dia_intensity     (was: [np.sum(dia_spectrum[i,1])/tic for i in ...])
+    n = len(ref_spec_row_indices_split)
+    scribe_scores = np.zeros(n)
+    gof_stats = np.zeros(n)
+    max_unmatched_residuals = np.zeros(n)
+    max_matched_residuals = np.zeros(n)
+    manhattan_distances = np.zeros(n)
+    fitted_spectral_contrasts = np.zeros(n)
+    num_lib_peaks_matched = np.zeros(n)
+    frac_lib_intensity = np.zeros(n)
+    frac_dia_intensity = np.zeros(n)
+
+    if len(ref_rows) > 0:
+        _compute_candidate_features_jit(
+            ref_rows, ref_vals, ref_cols, ref_offsets,
+            val_obs, residuals, y_pred, coeffs, ref_spec_offset,
+            scribe_scores, gof_stats, max_unmatched_residuals, max_matched_residuals,
+            manhattan_distances, fitted_spectral_contrasts,
+            num_lib_peaks_matched, frac_lib_intensity, frac_dia_intensity,
+            tic
+        )
     # mz tol
     rel_error = ms1_error#np.zeros(len(ref_peaks_in_dia))
     rt_error = prec_rt-rt_mz[:,0]
@@ -552,7 +870,9 @@ def get_features(
     r2_lib_spec = np.zeros_like(rt_error)
     
     single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
-    peaks_not_shared = [np.array([[dia_spectrum[i,1],j] for i,j in zip(dia,lib) if i in single_matched_rows]) for dia,lib in zip(ref_spec_row_indices_split,ref_spec_values_split)]
+    # Convert to set for O(1) membership test (was O(n) with numpy array `in`)
+    single_matched_set = set(single_matched_rows.ravel().tolist())
+    peaks_not_shared = [np.array([[dia_spectrum[i,1],j] for i,j in zip(dia,lib) if i in single_matched_set]) for dia,lib in zip(ref_spec_row_indices_split,ref_spec_values_split)]
     # with warnings.catch_warnings():
     #     warnings.simplefilter("ignore")
     #     r2_unique = [np_pearson_cor(*i.T).statistic if i.shape[0]>1 else 0 for i in peaks_not_shared ]
@@ -590,15 +910,31 @@ def get_features(
         subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
         large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
 
+    # ── Hyperscores + ion counts ──
+    # Replaces per-candidate loop of hyperscore2() + get_index() calls (231K calls
+    # total across target+decoy). Batch-processes all candidates in one JIT'd pass.
     if len(prec_frag_intensities) > 0 and ordered_frag_codes is not None:
-        hyperscores, b_counts, y_counts = map(list, zip(*[
-            hyperscore2(intensities, codes)
-            for intensities, codes in zip(prec_frag_intensities, ordered_frag_codes)
-        ]))
-        longest_y_ions = [int(np.max(get_index(codes))) if len(codes) > 0 else 0
-                          for codes in ordered_frag_codes]
+        # Flatten intensities and codes into contiguous arrays for numba
+        all_hyper_int = np.concatenate(prec_frag_intensities).astype(np.float64)
+        all_hyper_codes = np.concatenate(ordered_frag_codes).astype(np.int32)
+        n_hyper = len(prec_frag_intensities)
+        hyper_offsets = np.zeros(n_hyper + 1, dtype=np.int32)
+        for i in range(n_hyper):
+            hyper_offsets[i + 1] = hyper_offsets[i] + len(prec_frag_intensities[i])
+
+        hyperscores = np.zeros(n_hyper)
+        b_counts = np.zeros(n_hyper)
+        y_counts = np.zeros(n_hyper)
+        longest_y_ions = np.zeros(n_hyper)
+
+        _compute_hyperscores_jit(
+            all_hyper_int, all_hyper_codes, hyper_offsets,
+            hyperscores, b_counts, y_counts, longest_y_ions
+        )
     else:
-        hyperscores, b_counts, y_counts = np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched), np.zeros_like(num_lib_peaks_matched)
+        hyperscores = np.zeros_like(num_lib_peaks_matched)
+        b_counts = np.zeros_like(num_lib_peaks_matched)
+        y_counts = np.zeros_like(num_lib_peaks_matched)
         longest_y_ions = np.zeros_like(num_lib_peaks_matched)
     
     features = np.stack([num_lib_peaks_matched,
