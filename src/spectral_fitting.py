@@ -758,7 +758,9 @@ def fit_to_lib2(dia_spec,
                return_frags = False,
                decoy=False,
                decoy_library=None,
-               output_folder=None):
+               output_folder=None,
+               frag_index=None,
+               decoy_frag_index=None):
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
@@ -782,93 +784,50 @@ def fit_to_lib2(dia_spec,
     
     
     lib_coefficients = []
-   
-    if ms1_mz:
-        _bool = (np.abs(rt_mz[:,1]-ms1_mz)/ms1_mz)<ms1_tol
-        
-    else:
-        if rt_filter:
-            _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
-        else:
-            _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
-            
-    window_idxs = np.where(_bool)[0]        
-        
-    
-    mass_window_candidates = [all_keys[i] for i in window_idxs] 
-    candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
-    
-    
+
     ###### Process dia spectrum
 
     # TODO: merge_spectrum_peaks already pre-merges all spectra — this may be redundant
     # # what are the first indices of peaks grouped by tolerance
     merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
-    
+
     # # what are the first mz of these peak groups
     merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
-    # # print(merged_coords)
-    
-    
-    # # NB - should we not sum the intensities?????
-    # # merged_intensities = [np.mean(dia_spectrum[np.where(merged_coords_idxs==i)[0],1]) for i in np.unique(merged_coords_idxs)]
-    # merged_intensities = np.zeros(len((merged_coords_idxs)))
-    # for j,val in zip(merged_coords_idxs,dia_spectrum[:,1]):
-    #     merged_intensities[j]+=val
-    # #merged_intensities = [np.mean(dia_spectrum[merged_coords_idxs==i,1]) for i in np.unique(merged_coords_idxs)]
-    # merged_intensities = merged_intensities[merged_intensities!=0]
+
     merged_intensities = np.bincount(merged_coords_idxs, weights=dia_spectrum[:, 1])
     merged_intensities = merged_intensities[merged_intensities != 0]
-    
+
     # #update spectrum to new values (note mz remains first in group as this will eventually be rounded)
     if dia_spectrum.shape != np.array((merged_coords,merged_intensities)).transpose().shape:
         print("Warning: Shapes dont match in fit_to_lib2")
     dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
-    # # print(dia_spectrum)
-    
+
     #get window edge positions each side of peaks in observed spectra (NB the tolerance is now about the first peak in the group not the middile)
     centroid_breaks = np.concatenate((dia_spectrum[:,0]-mz_tol*dia_spectrum[:,0],dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0]))
     centroid_breaks = np.sort(centroid_breaks)
     bin_centers = np.mean(np.stack((centroid_breaks[::2],centroid_breaks[1::2]),1),1)
-    
-    # lib_idx=0
-    # M = candidate_peaks[lib_idx]
-    # ref_coords = [np.searchsorted(centroid_breaks,M[:,0]) for M in candidate_peaks]
-    # top_ten = [np.searchsorted(centroid_breaks,M[np.argsort(-M[:,1])[0:min(top_n,M.shape[0])],0]) for M in candidate_peaks]
-    
-    ## Filter precursors based on resp. MS1 peak
-    # ms1_peak = ~np.isnan([closest_peak_diff(mz,ms1_spec.mz) for mz in rt_mz[window_idxs,1]])
-    
-    # does the top ten peaks fall between centroid breaks? i.e. odd numbers (%2==1), 
-    # ref_peaks_in_dia = [i for i in range(len(candidate_peaks)) if len([a for a in top_ten[i] if a%2 ==1])>atleast_m]
-    # prop_ref_peaks_in_dia = [len([a for a in top_ten[i] if a%2 ==1])/candidate_peaks[i].shape[0] for i in range(len(candidate_peaks))]
-    
-    # all_norm_intensities = [M[:,1]/sum(M[:,1]) for M in candidate_peaks]
-    # ref_peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_intensities[i][(ref_coords[i]%2)==1])>0.5 and np.sum(top_ten[i]%2)>atleast_m and ms1_peak[i]]
-    # ref_peaks_in_dia = [i for i in range(len(candidate_peaks)) if  np.sum(top_ten[i]%2)>atleast_m and ms1_peak[i]]
-    
-    # print(len(ref_peaks_in_dia))
-    
-    # filter database further to those that match the required num peaks
-    # ref_pep_cand_loc = [ref_coords[i] for i in ref_peaks_in_dia]
-    # ref_pep_cand_list = [candidate_peaks[i] for i in ref_peaks_in_dia]
-    # # ref_pep_cand = [candidate_lib[i]["seq"] for i in ref_peaks_in_dia] # Nb this is modified seq!!
-    # ref_pep_cand = [mass_window_candidates[i] for i in ref_peaks_in_dia] # Nb this is modified seq!!
-    
-    # norm_intensities = [M[:,1]/sum(M[:,1]) for M in ref_pep_cand_list]
 
+    # Get candidates via fragment index or fallback to m/z + RT window
+    if frag_index is not None and not ms1_mz:
+        win_lo = prec_mz - windowWidth / 2
+        win_hi = prec_mz + windowWidth / 2
+        window_idxs = frag_index.query(
+            dia_spectrum[:, 0], win_lo, win_hi,
+            prec_rt, rt_tol, atleast_m
+        )
+    else:
+        if ms1_mz:
+            _bool = (np.abs(rt_mz[:,1]-ms1_mz)/ms1_mz)<ms1_tol
+        else:
+            if rt_filter:
+                _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
+            else:
+                _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
+        window_idxs = np.where(_bool)[0]
 
-    ########## Update
-    # lib peaks that match
-    # lib_peaks_matched = [j%2==1 for j in ref_pep_cand_loc]
-    
-    # # name these something different so can be accessed later
-    # ref_spec_row_indices_split = [np.int32(((i[j]+1)/2)-1) for i,j in zip(ref_pep_cand_loc,lib_peaks_matched)] # NB these are floats
-    # num_lib_peaks_matched = np.array([np.sum(i) for i in lib_peaks_matched]) #f1
-    # ref_spec_col_indices_split = [np.array([idx]*i) for idx,i in zip(range(len(ref_pep_cand)),num_lib_peaks_matched)] 
-    # ref_spec_values_split = [ints[i] for ints,i in zip(norm_intensities,lib_peaks_matched)]
-    
-    
+    mass_window_candidates = [all_keys[i] for i in window_idxs]
+    candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
+
     top_n_idxs = [library[i]['top_n'] for i in mass_window_candidates]
     
     
@@ -898,7 +857,19 @@ def fit_to_lib2(dia_spec,
     
     ### Generate eqivalent Decoy spectra
     if decoy:
-        mass_window_decoy_candidates = [("Decoy_"+i[0],*i[1:]) for i in mass_window_candidates] 
+        # Get decoy candidates via fragment index or fallback to same as target
+        if decoy_frag_index is not None and not ms1_mz:
+            win_lo = prec_mz - windowWidth / 2
+            win_hi = prec_mz + windowWidth / 2
+            decoy_window_idxs = decoy_frag_index.query(
+                dia_spectrum[:, 0], win_lo, win_hi,
+                prec_rt, rt_tol, atleast_m
+            )
+        else:
+            decoy_window_idxs = window_idxs
+        decoy_mass_window_candidates = [all_keys[i] for i in decoy_window_idxs]
+
+        mass_window_decoy_candidates = [("Decoy_"+i[0],*i[1:]) for i in decoy_mass_window_candidates]
         # print("old")
         # converted_seqs = [change_seq(i[0],config.args.decoy) for i in mass_window_candidates]
         # decoy_mz = np.array([convert_prec_mz(i, z=j[1]) for i,j in zip(converted_seqs, mass_window_candidates)])
@@ -911,15 +882,15 @@ def fit_to_lib2(dia_spec,
         #     candidate_decoy_peaks = [gen_isotopes(i,j) for i,j in zip(converted_seqs,converted_frags)]
         # else:
         #     candidate_decoy_peaks = [frag_to_peak(i) for i in converted_frags]
-        
+
         # ## if using decoy_library
         # print("new")
-        converted_frag_codes = [decoy_library[i]["ordered_frag_codes"] for i in mass_window_candidates]
-        candidate_decoy_peaks = [decoy_library[i]["spectrum"] for i in mass_window_candidates]
+        converted_frag_codes = [decoy_library[i]["ordered_frag_codes"] for i in decoy_mass_window_candidates]
+        candidate_decoy_peaks = [decoy_library[i]["spectrum"] for i in decoy_mass_window_candidates]
         # decoy_mz = np.array([decoy_library[i]["prec_mz"] for i in mass_window_candidates])
-        decoy_mz = rt_mz[:,1][window_idxs] - config.decoy_mz_offset
-    
-        decoy_top_n_idxs = [decoy_library[i]['top_n'] for i in mass_window_candidates]
+        decoy_mz = rt_mz[:,1][decoy_window_idxs] - config.decoy_mz_offset
+
+        decoy_top_n_idxs = [decoy_library[i]['top_n'] for i in decoy_mass_window_candidates]
         
         decoy_spec_frags = None
         # if "spec_frags" in library[all_keys[0]].keys():
@@ -1143,7 +1114,7 @@ def fit_to_lib2(dia_spec,
         
         ####################################
         if decoy:
-            decoy_features = get_features(np.stack([rt_mz[window_idxs[decoy_peaks_in_dia],0],decoy_mz[decoy_peaks_in_dia]],1),
+            decoy_features = get_features(np.stack([rt_mz[decoy_window_idxs[decoy_peaks_in_dia],0],decoy_mz[decoy_peaks_in_dia]],1),
                                           decoy_spec_values_split,
                                             decoy_spec_row_indices_split,
                                             decoy_spec_col_indices_split,
@@ -1153,7 +1124,7 @@ def fit_to_lib2(dia_spec,
                                             decoy_peaks_in_dia,
                                             dia_spectrum,
                                             prec_rt,
-                                            window_idxs,
+                                            decoy_window_idxs,
                                             dia_spec_int,
                                             lib_coefficients,
                                             sparse_lib_matrix,

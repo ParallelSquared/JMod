@@ -416,6 +416,20 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     logger.info("Finished Decoy Library")
     _log_mem("after bulk_set_top_n")
 
+    # Build fragment indices (non-timeplex only)
+    if not config.args.timeplex:
+        from src.fragment_index import FragmentIndex
+        logger.info("Building fragment ion index")
+        frag_index = FragmentIndex.build(spectrumLibrary, all_keys, rt_mz, config.mz_ppm)
+        decoy_frag_index = FragmentIndex.build(
+            decoy_lib, all_keys, rt_mz, config.mz_ppm,
+            prec_mz_offset=-config.decoy_mz_offset
+        )
+        logger.info("Fragment index built")
+    else:
+        frag_index = None
+        decoy_frag_index = None
+
     _log_mem_breakdown(("target", spectrumLibrary), ("decoy", decoy_lib))
 
     # ---- Audit known large objects ----
@@ -549,7 +563,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                  return_frags=False,
                                  decoy=True,
                                  decoy_library=decoy_lib,
-                                 output_folder=results_folder_path)
+                                 output_folder=results_folder_path,
+                                 frag_index=frag_index,
+                                 decoy_frag_index=decoy_frag_index)
             if result:
                 outputs.append(result)
 
