@@ -102,6 +102,8 @@ def encode_frag_name(name):
     )
 
 
+_decode_cache = {}
+
 def decode_frag_name(code):
     """Decode a packed int32 code back to a fragment name string.
 
@@ -116,6 +118,9 @@ def decode_frag_name(code):
         Fragment name, e.g. "b5_2", "y10-H2O_1_iso3"
     """
     code = int(code)
+    cached = _decode_cache.get(code)
+    if cached is not None:
+        return cached
     ion_type = _INT_TO_ION_TYPE[(code >> _ION_SHIFT) & _ION_MASK]
     index = (code >> _IDX_SHIFT) & _IDX_MASK
     loss = _INT_TO_LOSS.get((code >> _LOSS_SHIFT) & _LOSS_MASK, '')
@@ -128,6 +133,7 @@ def decode_frag_name(code):
     name += '_' + str(charge)
     if iso > 0:
         name += '_iso' + str(iso)
+    _decode_cache[code] = name
     return name
 
 

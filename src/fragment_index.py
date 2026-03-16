@@ -110,7 +110,7 @@ class _Partition:
     """One RT-range slice of the library, with flat arrays for numba access."""
     __slots__ = ('rt_lo', 'rt_hi', 'n_precursors', 'precursor_global_idx',
                  'precursor_rt', 'flat_prec_mz', 'flat_deficit', 'flat_prec_idx',
-                 'bin_offsets', 'bin_lengths', 'min_nominal', 'counter')
+                 'bin_offsets', 'bin_lengths', 'min_nominal')
 
     def __init__(self, rt_lo, rt_hi, n_precursors, precursor_global_idx,
                  precursor_rt, flat_prec_mz, flat_deficit, flat_prec_idx,
@@ -126,7 +126,6 @@ class _Partition:
         self.bin_offsets = bin_offsets        # int32[n_bins] — offset into flat arrays
         self.bin_lengths = bin_lengths        # int32[n_bins] — length of each bin
         self.min_nominal = min_nominal        # int32 — minimum nominal mass
-        self.counter = np.zeros(n_precursors, dtype=np.int32)  # int32 workspace
 
 
 class FragmentIndex:
@@ -287,17 +286,18 @@ class FragmentIndex:
             if len(p.flat_prec_mz) == 0:
                 continue
 
-            p.counter[:] = 0
+            # Per-call counter allocation (thread-safe)
+            counter = np.zeros(p.n_precursors, dtype=np.int32)
 
             _query_partition_jit(
                 p.flat_prec_mz, p.flat_deficit, p.flat_prec_idx,
                 p.bin_offsets, p.bin_lengths, p.min_nominal,
-                p.counter, ion_nominals, ion_deficits, ion_tols,
+                counter, ion_nominals, ion_deficits, ion_tols,
                 win_lo_f32, win_hi_f32,
             )
 
             # Phase 2: collect fragment-passing precursors, then RT filter
-            passing = np.where(p.counter >= atleast_m)[0]
+            passing = np.where(counter >= atleast_m)[0]
             if len(passing) > 0:
                 rt_ok = np.abs(p.precursor_rt[passing] - prec_rt) < rt_tol
                 candidates.extend(p.precursor_global_idx[passing[rt_ok]])
