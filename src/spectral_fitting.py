@@ -1330,14 +1330,16 @@ def fit_to_lib2(dia_spec,
         window_idxs = np.where(_bool)[0]
 
     mass_window_candidates = [all_keys[i] for i in window_idxs]
-    candidate_peaks = [library[i]['spectrum'] for i in mass_window_candidates]
+    _ref_idxs = library.resolve_indices(mass_window_candidates)
+    candidate_peaks = library.get_spectra_batch(_ref_idxs)
 
-    top_n_idxs = [library[i]['top_n'] for i in mass_window_candidates]
-    
-    
+    top_n_idxs = library.get_top_n_batch(_ref_idxs)
+
+
     spec_frags = None
-    if "spec_frags" in library[all_keys[0]].keys():
-        spec_frags = [library[i]['spec_frags'] for i in mass_window_candidates]
+    # spec_frags is always None in current store
+    # if "spec_frags" in library[all_keys[0]].keys():
+    #     spec_frags = [library[i]['spec_frags'] for i in mass_window_candidates]
         
     ref_peaks_in_dia,\
     ref_pep_cand,\
@@ -1394,12 +1396,13 @@ def fit_to_lib2(dia_spec,
 
         # ## if using decoy_library
         # print("new")
-        converted_frag_codes = [decoy_library[i]["ordered_frag_codes"] for i in decoy_mass_window_candidates]
-        candidate_decoy_peaks = [decoy_library[i]["spectrum"] for i in decoy_mass_window_candidates]
+        _decoy_idxs = decoy_library.resolve_indices(decoy_mass_window_candidates)
+        converted_frag_codes = decoy_library.get_frag_codes_batch(_decoy_idxs)
+        candidate_decoy_peaks = decoy_library.get_spectra_batch(_decoy_idxs)
         # decoy_mz = np.array([decoy_library[i]["prec_mz"] for i in mass_window_candidates])
         decoy_mz = rt_mz[:,1][decoy_window_idxs] - config.decoy_mz_offset
 
-        decoy_top_n_idxs = [decoy_library[i]['top_n'] for i in decoy_mass_window_candidates]
+        decoy_top_n_idxs = decoy_library.get_top_n_batch(_decoy_idxs)
         
         decoy_spec_frags = None
         # if "spec_frags" in library[all_keys[0]].keys():
@@ -1469,7 +1472,9 @@ def fit_to_lib2(dia_spec,
         lib_frag_mz = [ref_pep_cand_list[i][:,0][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
         lib_frag_int = [ref_pep_cand_list[i][:,1][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
         obs_frag_int = [dia_spectrum[ref_spec_row_indices_split[i],1] for i in range(len(ref_spec_row_indices_split))]
-        frag_name_codes = [library[i]["ordered_frag_codes"][j] for i,j in zip(ref_pep_cand,lib_peaks_matched)]
+        _ref_surv_idxs = library.resolve_indices(ref_pep_cand)
+        _ref_surv_frag_codes = library.get_frag_codes_batch(_ref_surv_idxs)
+        frag_name_codes = [_ref_surv_frag_codes[i][j] for i,j in enumerate(lib_peaks_matched)]
         frag_matched_intensities = [ref_pep_cand_list[idx][:,1][j] for idx,j in enumerate(lib_peaks_matched)]
 
         decoy_col_offset = np.max(ref_spec_col_indices)+1
@@ -1581,18 +1586,6 @@ def fit_to_lib2(dia_spec,
         fit_results = huber_nnls_irls(sparse_lib_matrix, dia_spec_int)
         lib_coefficients = fit_results['x']
 
-        if output_folder is not None:
-            with open(output_folder + "/fitting_iterations.tsv", "a") as f:
-                f.write(f"{spec_idx}\t{sparse_lib_matrix.shape[1]}\t{fit_results['initial_n_iter']}\t{fit_results['robust_n_iter']}\t{fit_results['alpha_max']}\n")
-            n_candidates = sparse_lib_matrix.shape[1]
-            n_nonzero = int(np.sum(lib_coefficients > 1))
-            import os
-            diag_path = output_folder + "/elasticnet_diag.tsv"
-            write_header = not os.path.exists(diag_path)
-            with open(diag_path, "a") as f:
-                if write_header:
-                    f.write("spec_idx\tn_candidates\tn_coeff_gt_1\talpha_max\tl1_ratio\n")
-                f.write(f"{spec_idx}\t{n_candidates}\t{n_nonzero}\t{fit_results['alpha_max']}\t{fit_results['l1_ratio']}\n")
 
 
         ####################################
@@ -1716,9 +1709,25 @@ def fit_to_lib2(dia_spec,
                                                                             obs_frag_int,
                                                                             unique_frags,
                                                                             unique_frags_int)]
-            
-        return_prot = config.protein_column in library[next(iter(library))]
-        
+
+        # Check if protein column is populated (without creating _EntryView)
+        _first_idx = library.key_to_idx[next(iter(library.key_to_idx))]
+        _prot_field_map = {'protein_group': library.protein_group, 'protein_name': library.protein_name,
+                           'genes': library.genes, 'UniprotID': library.uniprot_id}
+        _prot_arr = _prot_field_map.get(config.protein_column)
+        return_prot = _prot_arr is not None and _prot_arr[_first_idx] not in (None, '')
+
+        # Pre-resolve protein column values for non-zero coefficients
+        if return_prot:
+            _prot_keys = []
+            for sid in all_spec_ids:
+                if config.args.timeplex:
+                    _prot_keys.append((re.sub("Decoy_", "", sid[0]), sid[1], sid[2]))
+                else:
+                    _prot_keys.append((re.sub("Decoy_", "", sid[0]), sid[1]))
+            _prot_idxs = library.resolve_indices(_prot_keys)
+            _prot_vals = library.get_scalar_batch(_prot_idxs, config.protein_column)
+
         if config.args.timeplex:
             output = [[non_zero_coeffs[i],
                        spec_idx,
@@ -1731,11 +1740,11 @@ def fit_to_lib2(dia_spec,
                        *all_features[j],
                        *all_ms2_frags[j],
                        config.args.mzml,
-                       library[(re.sub("Decoy_","",all_spec_ids[i][0]),all_spec_ids[i][1],all_spec_ids[i][2])][config.protein_column] if return_prot else "NA" ]
+                       _prot_vals[i] if return_prot else "NA" ]
                        for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
-        
+
         else:
-            
+
             output = [[non_zero_coeffs[i],
                        spec_idx,
                        ms1_spec.scan_num,
@@ -1746,7 +1755,7 @@ def fit_to_lib2(dia_spec,
                        *all_features[j],
                        *all_ms2_frags[j],
                        config.args.mzml,
-                       library[(re.sub("Decoy_","",all_spec_ids[i][0]),all_spec_ids[i][1])][config.protein_column] if return_prot else "NA" ]
+                       _prot_vals[i] if return_prot else "NA" ]
                        for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
             
         # lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
