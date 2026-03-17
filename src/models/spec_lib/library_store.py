@@ -237,6 +237,50 @@ class SpectrumLibraryStore:
         self.frag_lengths[idx] = n_frags
 
     # ------------------------------------------------------------------
+    # Batch accessors — bypass _EntryView for bulk reads in hot loops
+    # ------------------------------------------------------------------
+
+    def resolve_indices(self, keys):
+        """Convert an iterable of keys to a list of internal integer indices."""
+        k2i = self.key_to_idx
+        return [k2i[k] for k in keys]
+
+    def get_spectra_batch(self, indices):
+        """Return list of (n_peaks, 2) spectrum arrays for internal indices."""
+        sd, so, sl = self.spectrum_data, self.spectrum_offsets, self.spectrum_lengths
+        return [sd[so[i]:so[i] + sl[i]] for i in indices]
+
+    def get_top_n_batch(self, indices):
+        """Return list of int32 top-N index arrays for internal indices."""
+        td, to, tl = self.top_n_data, self.top_n_offsets, self.top_n_lengths
+        return [td[to[i]:to[i] + tl[i]] for i in indices]
+
+    def get_frag_codes_batch(self, indices):
+        """Return list of int32 frag code arrays for internal indices."""
+        fd, so, sl = self.frag_names_data, self.spectrum_offsets, self.spectrum_lengths
+        return [fd[so[i]:so[i] + sl[i]] for i in indices]
+
+    def get_scalar_batch(self, indices, field):
+        """Return values for a scalar field at given internal indices.
+
+        For string fields returns a list; for float fields returns a numpy slice.
+        """
+        _field_map = {
+            'mod_seq': self.mod_seq,
+            'seq': self.seq,
+            'protein_group': self.protein_group,
+            'protein_name': self.protein_name,
+            'genes': self.genes,
+            'UniprotID': self.uniprot_id,
+            'prec_mz': self.prec_mz,
+            'prec_z': self.prec_z,
+            'iRT': self.iRT,
+            'IonMob': self.ion_mob,
+        }
+        arr = _field_map[field]
+        return [arr[i] for i in indices]
+
+    # ------------------------------------------------------------------
     # Dict-like interface
     # ------------------------------------------------------------------
 
