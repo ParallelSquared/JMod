@@ -334,16 +334,7 @@ def get_large_prec(file,
         "obs_int", "unique_frag_mz", "unique_obs_int"
     ]
 
-    # Read CSV using Polars
-    # Use schema_overrides instead of the deprecated dtypes
-    # TODO set threads explicitly
-    decoy_coeffs_lf = pl.read_csv(
-        file,
-        has_header=False,
-        new_columns=col_names,
-        schema_overrides=pl_schema,
-        infer_schema=False,
-    ).lazy()
+    decoy_coeffs_lf = pl.scan_parquet(file)
 
     decoy_coeffs_lf = find_extrema_in_nearby_scans(
         decoy_coeffs_lf,

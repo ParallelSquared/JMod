@@ -91,6 +91,8 @@ from src.models.spec_lib import spec_lib
 from src.spectral_fitting import fit_to_lib2, merge_spectrum_peaks
 from src.rt_alignment import MZRTfit, MZRTfit_timeplex
 from src.utils.misc_functions import write_to_csv
+import polars as pl
+from src.utils.io.read_output import names as output_col_names, dtypes as output_col_dtypes, numpy_dtypes_to_polars_schema
 from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
@@ -579,10 +581,27 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         long_outputs = [j for i in outputs for j in i]
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
 
-        decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
-        write_mode = "w" if batch_idx==0 else "a"
-        write_to_csv(long_outputs, decoylib_search_path, write_mode)
+        # Write batch results as Parquet (one file per batch)
+        _pl_schema = numpy_dtypes_to_polars_schema(output_col_dtypes)
+        # Add columns present in names but missing from dtypes
+        for _cn in output_col_names:
+            if _cn not in _pl_schema:
+                _pl_schema[_cn] = pl.Utf8
+        if config.args.timeplex:
+            items = list(_pl_schema.items())
+            items.insert(5, ("time_channel", pl.Float32))
+            _pl_schema = dict(items)
+        batch_df = pl.DataFrame(long_outputs, schema=_pl_schema, orient="row")
+        batch_parquet_path = results_folder_path + f"/decoylibsearch_coeffs_batch{batch_idx}.parquet"
+        batch_df.write_parquet(batch_parquet_path)
 
+    # Merge batch parquets into single file
+    import glob as _glob
+    batch_files = sorted(_glob.glob(results_folder_path + "/decoylibsearch_coeffs_batch*.parquet"))
+    decoylib_search_path = results_folder_path + "/decoylibsearch_coeffs.parquet"
+    pl.scan_parquet(batch_files).collect().write_parquet(decoylib_search_path)
+    for f in batch_files:
+        os.remove(f)
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
                  library=spectrumLibrary,
