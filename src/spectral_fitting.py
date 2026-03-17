@@ -526,8 +526,9 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
             'alpha_max': alpha_max, 'l1_ratio': l1_ratio}
 
 
-def get_closest_ms1(prec_rt,ms1_spectra):
-    ms1_rt = np.array([i.RT for i in ms1_spectra])
+def get_closest_ms1(prec_rt, ms1_spectra, ms1_rt=None):
+    if ms1_rt is None:
+        ms1_rt = np.array([i.RT for i in ms1_spectra])
     closest_ms1_scan_idx = closest_ms1spec(prec_rt, ms1_rt)
     ms1_spec = ms1_spectra[closest_ms1_scan_idx]
     return ms1_spec
@@ -1264,7 +1265,8 @@ def fit_to_lib2(dia_spec,
                decoy_library=None,
                output_folder=None,
                frag_index=None,
-               decoy_frag_index=None):
+               decoy_frag_index=None,
+               ms1_rt=None):
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
@@ -1284,7 +1286,7 @@ def fit_to_lib2(dia_spec,
     
     
     if ms1_spectra is not None:
-        ms1_spec = get_closest_ms1(prec_rt,ms1_spectra)
+        ms1_spec = get_closest_ms1(prec_rt, ms1_spectra, ms1_rt=ms1_rt)
     
     
     lib_coefficients = []
@@ -1673,16 +1675,9 @@ def fit_to_lib2(dia_spec,
     non_zero_coeffs = [c for c in lib_coefficients if c!=0]
     non_zero_coeffs_idxs = [i for i,c in enumerate(lib_coefficients) if c!=0]
     # print(f"N: {len(lib_coefficients)}, {len(non_zero_coeffs)}")
-    if config.args.timeplex:
-        output = [[0,spec_idx,ms1_spec.scan_num,0,0,-1,prec_mz,prec_rt,*np.zeros(len(names)-7)]]
-    else:
-        output = [[0,spec_idx,ms1_spec.scan_num,0,0,prec_mz,prec_rt,*np.zeros(len(names)-7)]]
-    
-    if len(non_zero_coeffs)>0:
-        # Decode int32 frag codes to strings only at output time
-        frag_names = [decode_frag_names(codes) for codes in frag_name_codes]
-        decoy_frag_names = [decode_frag_names(codes) for codes in decoy_frag_name_codes]
+    output = []
 
+    if len(non_zero_coeffs)>0:
         lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
         if decoy:
             updated_decoy_offset = int(max(ref_sparse_col_indices))+1 if len(ref_sparse_col_indices)>0 else 0
