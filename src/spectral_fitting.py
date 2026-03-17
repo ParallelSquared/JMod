@@ -1690,25 +1690,26 @@ def fit_to_lib2(dia_spec,
 
             all_spec_ids = lib_spec_ids+decoy_spec_ids
             all_features = np.concatenate((features,decoy_features))
-            all_ms2_frags = [[";".join(map(str,j)) for j in i] for i in zip(frag_names+decoy_frag_names,
-                                                                            frag_errors+decoy_frag_errors,
-                                                                            lib_frag_mz+decoy_lib_frag_mz,
-                                                                            lib_frag_int+decoy_lib_frag_int,
-                                                                            obs_frag_int+decoy_obs_frag_int,
-                                                                            unique_frags+unique_frags_decoy,
-                                                                            unique_frags_int+unique_frags_int_decoy)]
-            
-            
+            # Store raw arrays instead of stringified — parquet handles list columns
+            all_ms2_frags = [list(i) for i in zip(frag_name_codes+decoy_frag_name_codes,
+                                                  frag_errors+decoy_frag_errors,
+                                                  lib_frag_mz+decoy_lib_frag_mz,
+                                                  lib_frag_int+decoy_lib_frag_int,
+                                                  obs_frag_int+decoy_obs_frag_int,
+                                                  unique_frags+unique_frags_decoy,
+                                                  unique_frags_int+unique_frags_int_decoy)]
+
+
         else:
             all_spec_ids = lib_spec_ids
             all_features = features
-            all_ms2_frags = [[";".join(map(str,j)) for j in i] for i in zip(frag_names,
-                                                                            frag_errors,
-                                                                            lib_frag_mz,
-                                                                            lib_frag_int,
-                                                                            obs_frag_int,
-                                                                            unique_frags,
-                                                                            unique_frags_int)]
+            all_ms2_frags = [list(i) for i in zip(frag_name_codes,
+                                                  frag_errors,
+                                                  lib_frag_mz,
+                                                  lib_frag_int,
+                                                  obs_frag_int,
+                                                  unique_frags,
+                                                  unique_frags_int)]
 
         # Check if protein column is populated (without creating _EntryView)
         _first_idx = library.key_to_idx[next(iter(library.key_to_idx))]

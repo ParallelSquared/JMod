@@ -92,7 +92,7 @@ from src.spectral_fitting import fit_to_lib2, merge_spectrum_peaks
 from src.rt_alignment import MZRTfit, MZRTfit_timeplex
 from src.utils.misc_functions import write_to_csv
 import polars as pl
-from src.utils.io.read_output import names as output_col_names, dtypes as output_col_dtypes, numpy_dtypes_to_polars_schema
+from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
@@ -551,6 +551,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # Use profiled version for batch 5 only
         _fit_fn = fit_to_lib2_profiled if batch_idx == 4 else fit_to_lib2
 
+        # Precompute MS1 RT array once per batch
+        _ms1_rt = np.array([s.RT for s in DIAspectra.ms1scans])
+
         for i, dia_spec in enumerate(tqdm.tqdm(batch_spectra)):
             result = _fit_fn(dia_spec,
                                  library=spectrumLibrary,
@@ -567,31 +570,28 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                  decoy_library=decoy_lib,
                                  output_folder=results_folder_path,
                                  frag_index=frag_index,
-                                 decoy_frag_index=decoy_frag_index)
+                                 decoy_frag_index=decoy_frag_index,
+                                 ms1_rt=_ms1_rt)
             if result:
                 outputs.append(result)
 
         # Dump line profiler stats after batch 5
         if batch_idx == 4:
+            import io
             lp_output_path = results_folder_path + "/line_profiler_stats.txt"
+            _buf = io.StringIO()
+            lp.print_stats(stream=_buf)
             with open(lp_output_path, "w") as lp_file:
-                lp.print_stats(stream=lp_file)
+                lp_file.write(_buf.getvalue())
             logger.info(f"Line profiler stats written to {lp_output_path}")
 
         long_outputs = [j for i in outputs for j in i]
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
 
         # Write batch results as Parquet (one file per batch)
-        _pl_schema = numpy_dtypes_to_polars_schema(output_col_dtypes)
-        # Add columns present in names but missing from dtypes
-        for _cn in output_col_names:
-            if _cn not in _pl_schema:
-                _pl_schema[_cn] = pl.Utf8
-        if config.args.timeplex:
-            items = list(_pl_schema.items())
-            items.insert(5, ("time_channel", pl.Float32))
-            _pl_schema = dict(items)
-        batch_df = pl.DataFrame(long_outputs, schema=_pl_schema, orient="row")
+        _pl_schema = get_parquet_schema(timeplex=config.args.timeplex)
+        _col_data = {col: [row[i] for row in long_outputs] for i, col in enumerate(_pl_schema)}
+        batch_df = pl.DataFrame(_col_data, schema=_pl_schema)
         batch_parquet_path = results_folder_path + f"/decoylibsearch_coeffs_batch{batch_idx}.parquet"
         batch_df.write_parquet(batch_parquet_path)
 
