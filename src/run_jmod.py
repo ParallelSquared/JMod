@@ -511,33 +511,13 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
 
-    # Line profiler setup — profile the first batch only, then dump stats
-    from line_profiler import LineProfiler
-    from src.spectral_fitting import (huber_nnls_irls, _lasso_nnls, hyperscore2,
-                                       get_features, get_scribe, get_residuals,
-                                       gof_stat, get_manhattan_distance,
-                                       get_closest_ms1, create_entries,
-                                       unmatched_peaks, max_matched_residual)
-    from src.utils.misc_functions import window_width, hyperscore_b_y, longest_y, cosim
-    lp = LineProfiler()
-    lp.add_function(fit_to_lib2)
-    lp.add_function(huber_nnls_irls)
-    lp.add_function(_lasso_nnls)
-    lp.add_function(hyperscore2)
-    lp.add_function(get_features)
-    lp.add_function(get_scribe)
-    lp.add_function(get_residuals)
-    lp.add_function(gof_stat)
-    lp.add_function(get_manhattan_distance)
-    lp.add_function(get_closest_ms1)
-    lp.add_function(create_entries)
-    lp.add_function(unmatched_peaks)
-    lp.add_function(max_matched_residual)
-    lp.add_function(window_width)
-    lp.add_function(hyperscore_b_y)
-    lp.add_function(longest_y)
-    lp.add_function(cosim)
-    fit_to_lib2_profiled = lp(fit_to_lib2)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    n_threads = os.cpu_count() or 1
+    logger.info(f"Using {n_threads} threads for main search")
+
+    # Precompute MS1 RT array once (shared across all threads, read-only)
+    _ms1_rt = np.array([s.RT for s in DIAspectra.ms1scans])
 
     for batch_idx in range(num_batches):
         start_time = time.time()
@@ -546,44 +526,32 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         logger.info(f"Fitting batch {batch_idx+1} of {num_batches}")
         _log_mem(f"batch {batch_idx+1} start")
 
-        outputs= []
+        outputs = []
 
-        # Use profiled version for batch 5 only
-        _fit_fn = fit_to_lib2_profiled if batch_idx == 4 else fit_to_lib2
+        with ThreadPoolExecutor(max_workers=n_threads) as pool:
+            futures = {pool.submit(fit_to_lib2, dia_spec,
+                                   library=spectrumLibrary,
+                                   rt_mz=rt_mz,
+                                   all_keys=all_keys,
+                                   dino_features=None,
+                                   rt_filter=True,
+                                   rt_tol=config.opt_rt_tol,
+                                   ms1_tol=config.opt_ms1_tol,
+                                   mz_tol=config.mz_tol,
+                                   ms1_spectra=DIAspectra.ms1scans,
+                                   return_frags=False,
+                                   decoy=True,
+                                   decoy_library=decoy_lib,
+                                   output_folder=results_folder_path,
+                                   frag_index=frag_index,
+                                   decoy_frag_index=decoy_frag_index,
+                                   ms1_rt=_ms1_rt): i
+                      for i, dia_spec in enumerate(batch_spectra)}
 
-        # Precompute MS1 RT array once per batch
-        _ms1_rt = np.array([s.RT for s in DIAspectra.ms1scans])
-
-        for i, dia_spec in enumerate(tqdm.tqdm(batch_spectra)):
-            result = _fit_fn(dia_spec,
-                                 library=spectrumLibrary,
-                                 rt_mz=rt_mz,
-                                 all_keys=all_keys,
-                                 dino_features=None,
-                                 rt_filter=True,
-                                 rt_tol=config.opt_rt_tol,
-                                 ms1_tol=config.opt_ms1_tol,
-                                 mz_tol=config.mz_tol,
-                                 ms1_spectra=DIAspectra.ms1scans,
-                                 return_frags=False,
-                                 decoy=True,
-                                 decoy_library=decoy_lib,
-                                 output_folder=results_folder_path,
-                                 frag_index=frag_index,
-                                 decoy_frag_index=decoy_frag_index,
-                                 ms1_rt=_ms1_rt)
-            if result:
-                outputs.append(result)
-
-        # Dump line profiler stats after batch 5
-        if batch_idx == 4:
-            import io
-            lp_output_path = results_folder_path + "/line_profiler_stats.txt"
-            _buf = io.StringIO()
-            lp.print_stats(stream=_buf)
-            with open(lp_output_path, "w") as lp_file:
-                lp_file.write(_buf.getvalue())
-            logger.info(f"Line profiler stats written to {lp_output_path}")
+            for f in tqdm.tqdm(as_completed(futures), total=len(futures)):
+                result = f.result()
+                if result:
+                    outputs.append(result)
 
         long_outputs = [j for i in outputs for j in i]
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")

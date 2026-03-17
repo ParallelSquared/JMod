@@ -250,10 +250,55 @@ class SpectrumLibraryStore:
         sd, so, sl = self.spectrum_data, self.spectrum_offsets, self.spectrum_lengths
         return [sd[so[i]:so[i] + sl[i]] for i in indices]
 
+    def get_spectra_batch_flat(self, indices):
+        """Return pre-flattened spectrum arrays for a batch of internal indices.
+
+        Returns:
+            flat_mz:   float64[] — all fragment m/z concatenated
+            flat_int:  float64[] — all fragment intensities concatenated
+            offsets:   int32[n+1] — candidate i's fragments at [offsets[i], offsets[i+1])
+        """
+        sd, so, sl = self.spectrum_data, self.spectrum_offsets, self.spectrum_lengths
+        n = len(indices)
+        lengths = np.array([sl[i] for i in indices], dtype=np.int32)
+        offsets = np.empty(n + 1, dtype=np.int32)
+        offsets[0] = 0
+        np.cumsum(lengths, out=offsets[1:])
+        total = int(offsets[-1])
+        flat_mz = np.empty(total, dtype=np.float64)
+        flat_int = np.empty(total, dtype=np.float64)
+        for i in range(n):
+            s_src = so[indices[i]]
+            l = int(lengths[i])
+            flat_mz[offsets[i]:offsets[i] + l] = sd[s_src:s_src + l, 0]
+            flat_int[offsets[i]:offsets[i] + l] = sd[s_src:s_src + l, 1]
+        return flat_mz, flat_int, offsets
+
     def get_top_n_batch(self, indices):
         """Return list of int32 top-N index arrays for internal indices."""
         td, to, tl = self.top_n_data, self.top_n_offsets, self.top_n_lengths
         return [td[to[i]:to[i] + tl[i]] for i in indices]
+
+    def get_top_n_batch_flat(self, indices):
+        """Return pre-flattened top-N index arrays.
+
+        Returns:
+            flat_top_n: int32[] — all top-N local indices concatenated
+            offsets:    int32[n+1] — candidate i's top-N at [offsets[i], offsets[i+1])
+        """
+        td, to, tl = self.top_n_data, self.top_n_offsets, self.top_n_lengths
+        n = len(indices)
+        lengths = np.array([tl[i] for i in indices], dtype=np.int32)
+        offsets = np.empty(n + 1, dtype=np.int32)
+        offsets[0] = 0
+        np.cumsum(lengths, out=offsets[1:])
+        total = int(offsets[-1])
+        flat_top_n = np.empty(total, dtype=np.int32)
+        for i in range(n):
+            s_src = to[indices[i]]
+            l = int(lengths[i])
+            flat_top_n[offsets[i]:offsets[i] + l] = td[s_src:s_src + l]
+        return flat_top_n, offsets
 
     def get_frag_codes_batch(self, indices):
         """Return list of int32 frag code arrays for internal indices."""
@@ -775,6 +820,11 @@ class SpectrumLibraryStore:
         frag_data = np.concatenate(all_frag_peaks, axis=0) if all_frag_peaks else np.empty((0, 2), dtype=np.float64)
         frag_keys_data = np.concatenate(all_frag_keys) if all_frag_keys else np.empty(0, dtype=np.int32)
         top_n_data = np.concatenate(top_n_all) if top_n_all else np.empty(0, dtype=np.int32)
+
+        # TODO: Sort library entries by calibrated RT before building spectrum_data.
+        #       This aligns physical memory layout with the RT-ordered access pattern
+        #       from fragment index queries, improving L3 cache locality when multiple
+        #       threads read nearby RT neighborhoods simultaneously.
 
         return cls(
             key_to_idx=key_to_idx,
