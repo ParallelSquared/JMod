@@ -858,7 +858,6 @@ def create_entries_direct(centroid_breaks,
                           topn_data, topn_offsets, topn_lengths,
                           candidate_indices,
                           mass_window_candidates,
-                          candidate_peaks,
                           atleast_m,
                           prec_mzs,
                           ms1_spec,
@@ -870,8 +869,8 @@ def create_entries_direct(centroid_breaks,
 
     Args:
         centroid_breaks: float64[] — sorted DIA bin edges
-        spec_data_mz:  float64[] — library spectrum_data column 0 (pre-split once)
-        spec_data_int: float64[] — library spectrum_data column 1 (pre-split once)
+        spec_data_mz:  float64[] — library spectrum_mz (contiguous 1D)
+        spec_data_int: float64[] — library spectrum_int (contiguous 1D)
         spec_offsets:  int64[] — spectrum_offsets from library
         spec_lengths:  int32[] — spectrum_lengths from library
         topn_data:     int32[] — top_n_data from library
@@ -879,7 +878,6 @@ def create_entries_direct(centroid_breaks,
         topn_lengths:  int32[] — top_n_lengths from library
         candidate_indices: int[] — internal library indices for each candidate
         mass_window_candidates: list — candidate keys (for output reconstruction)
-        candidate_peaks: list of (n,2) arrays — needed for output reconstruction only
         atleast_m: int — minimum top-N fragments matched
         prec_mzs: float64[] — precursor m/z per candidate
         ms1_spec: MS1 spectrum object with .mz attribute
@@ -915,11 +913,17 @@ def create_entries_direct(centroid_breaks,
             bool(config.match_ms1))
     _perf_add("ce_d:jit_direct", time.perf_counter() - _ce0)
 
-    # Reconstruct Python lists from JIT output
+    # Reconstruct Python lists from JIT output — only for passing candidates
     _ce0 = time.perf_counter()
     peaks_in_dia = passing.tolist()
     pep_cand_loc = [all_coords[frag_offsets[i]:frag_offsets[i + 1]] for i in peaks_in_dia]
-    pep_cand_list = [candidate_peaks[i] for i in peaks_in_dia]
+    # Reconstruct (n,2) spectrum arrays only for passing candidates from library arrays
+    pep_cand_list = []
+    for i in peaks_in_dia:
+        lib_idx = cand_idx_arr[i]
+        off = int(spec_offsets[lib_idx])
+        l = int(spec_lengths[lib_idx])
+        pep_cand_list.append(np.stack([spec_data_mz[off:off + l], spec_data_int[off:off + l]], axis=1))
     pep_cand = [mass_window_candidates[i] for i in peaks_in_dia]
     norm_intensities = [all_norm_int[frag_offsets[i]:frag_offsets[i + 1]] for i in peaks_in_dia]
     lib_peaks_matched = [pep_cand_loc[j] % 2 == 1 for j in range(len(peaks_in_dia))]
@@ -1798,8 +1802,6 @@ def fit_to_lib2(dia_spec,
     _ft0 = time.perf_counter()
     mass_window_candidates = [all_keys[i] for i in window_idxs]
     _ref_idxs = library.resolve_indices(mass_window_candidates)
-    candidate_peaks = library.get_spectra_batch(_ref_idxs)
-    top_n_idxs = library.get_top_n_batch(_ref_idxs)
     _perf_add("ft:lib_resolve+batch", time.perf_counter() - _ft0)
 
     spec_frags = None
@@ -1816,15 +1818,21 @@ def fit_to_lib2(dia_spec,
         norm_intensities, \
         lib_peaks_matched, \
         ref_ms1_error, \
-        ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_passing = create_entries(centroid_breaks=centroid_breaks,
-                                        candidate_peaks=candidate_peaks,
+        ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_passing = create_entries_direct(
+                                        centroid_breaks=centroid_breaks,
+                                        spec_data_mz=library.spectrum_mz,
+                                        spec_data_int=library.spectrum_int,
+                                        spec_offsets=library.spectrum_offsets,
+                                        spec_lengths=library.spectrum_lengths,
+                                        topn_data=library.top_n_data,
+                                        topn_offsets=library.top_n_offsets,
+                                        topn_lengths=library.top_n_lengths,
+                                        candidate_indices=_ref_idxs,
                                         mass_window_candidates=mass_window_candidates,
-                                        top_n=top_n,
                                         atleast_m=atleast_m,
                                         prec_mzs=rt_mz[:,1][window_idxs],
                                         ms1_spec=ms1_spec,
-                                        ms1_tol=ms1_tol,
-                                        top_n_idxs=top_n_idxs)
+                                        ms1_tol=ms1_tol)
     _perf_add("ft:create_entries_ref", time.perf_counter() - _ft0)
     # Reconstruct split views where needed downstream
     ref_spec_row_indices_split = _split_flat(ref_flat_rows, ref_flat_offsets)
@@ -1865,40 +1873,11 @@ def fit_to_lib2(dia_spec,
         # print("new")
         _decoy_idxs = decoy_library.resolve_indices(decoy_mass_window_candidates)
         converted_frag_codes = decoy_library.get_frag_codes_batch(_decoy_idxs)
-        candidate_decoy_peaks = decoy_library.get_spectra_batch(_decoy_idxs)
         # decoy_mz = np.array([decoy_library[i]["prec_mz"] for i in mass_window_candidates])
         decoy_mz = rt_mz[:,1][decoy_window_idxs] - config.decoy_mz_offset
 
-        decoy_top_n_idxs = decoy_library.get_top_n_batch(_decoy_idxs)
-        
         decoy_spec_frags = None
-        # if "spec_frags" in library[all_keys[0]].keys():
-        #     decoy_spec_frags = [specific_frags(i) for i in converted_frags]
-        
-        # ## Decoy equiv
-        # decoy_coords = [np.searchsorted(centroid_breaks,M[:,0]) for M in candidate_decoy_peaks]
-        # top_ten_decoy = [np.searchsorted(centroid_breaks,M[np.argsort(-M[:,1])[0:min(top_n,M.shape[0])],0]) for M in candidate_decoy_peaks]
-        # # decoy_peaks_in_dia = [i for i in range(len(candidate_decoy_peaks)) if len([a for a in top_ten_decoy[i] if a%2 ==1])>atleast_m]
-        # all_norm_decoy_intensities = [M[:,1]/sum(M[:,1]) for M in candidate_decoy_peaks]
-        # decoy_ms1_peak = ~np.isnan([closest_peak_diff(mz,ms1_spec.mz) for mz in decoy_mz])
-        # # decoy_peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(all_norm_decoy_intensities[i][(decoy_coords[i]%2)==1])>0.5 and np.sum(top_ten_decoy[i]%2)>atleast_m and decoy_ms1_peak[i]]
-        # decoy_peaks_in_dia = [i for i in range(len(candidate_peaks)) if np.sum(top_ten_decoy[i]%2)>atleast_m and decoy_ms1_peak[i]]
-        
-        # decoy_pep_cand_loc = [decoy_coords[i] for i in decoy_peaks_in_dia]
-        # decoy_pep_cand_list = [candidate_decoy_peaks[i] for i in decoy_peaks_in_dia]
-        # decoy_pep_cand = [mass_window_decoy_candidates[i] for i in decoy_peaks_in_dia] # Nb this is modified seq!!
-        
-        # norm_decoy_intensities = [M[:,1]/sum(M[:,1]) for M in decoy_pep_cand_list]
-        
-        # decoy_lib_peaks_matched = [j%2==1 for j in decoy_pep_cand_loc]
-        
-        # decoy_spec_row_indices_split = [np.int32(((i[j]+1)/2)-1) for i,j in zip(decoy_pep_cand_loc,decoy_lib_peaks_matched)] # NB these are floats
-        # num_decoy_peaks_matched = np.array([np.sum(i) for i in decoy_lib_peaks_matched]) #f1
-        # decoy_spec_col_indices_split = [np.array([idx]*i,dtype=int) for idx,i in zip(range(len(decoy_pep_cand)),num_decoy_peaks_matched)] 
-        # decoy_spec_values_split = [ints[i] for ints,i in zip(norm_decoy_intensities,decoy_lib_peaks_matched)]
-        
-        
-    
+
         decoy_peaks_in_dia,\
         decoy_pep_cand,\
         decoy_pep_cand_loc,\
@@ -1910,16 +1889,21 @@ def fit_to_lib2(dia_spec,
                         norm_decoy_intensities, \
                             decoy_lib_peaks_matched, \
                                 decoy_ms1_error, \
-                                    dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_passing = create_entries(centroid_breaks=centroid_breaks,
-                                                                    candidate_peaks=candidate_decoy_peaks,
+                                    dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_passing = create_entries_direct(
+                                                                    centroid_breaks=centroid_breaks,
+                                                                    spec_data_mz=decoy_library.spectrum_mz,
+                                                                    spec_data_int=decoy_library.spectrum_int,
+                                                                    spec_offsets=decoy_library.spectrum_offsets,
+                                                                    spec_lengths=decoy_library.spectrum_lengths,
+                                                                    topn_data=decoy_library.top_n_data,
+                                                                    topn_offsets=decoy_library.top_n_offsets,
+                                                                    topn_lengths=decoy_library.top_n_lengths,
+                                                                    candidate_indices=_decoy_idxs,
                                                                     mass_window_candidates=mass_window_decoy_candidates,
-                                                                    top_n=top_n,
                                                                     atleast_m=atleast_m,
                                                                     prec_mzs=decoy_mz,
                                                                     ms1_spec=ms1_spec,
-                                                                    ms1_tol=ms1_tol,
-                                                                    spec_frags=decoy_spec_frags,
-                                                                    top_n_idxs=decoy_top_n_idxs)
+                                                                    ms1_tol=ms1_tol)
         # Reconstruct split views where needed downstream
         decoy_spec_row_indices_split = _split_flat(decoy_flat_rows, decoy_flat_offsets)
         decoy_spec_col_indices_split = _split_flat(decoy_flat_cols, decoy_flat_offsets)
