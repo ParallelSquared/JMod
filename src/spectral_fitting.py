@@ -44,7 +44,7 @@ import threading
 _perf_lock = threading.Lock()
 _perf_counts = {}  # section_name -> [total_seconds, call_count]
 _perf_call_total = 0
-_PERF_INTERVAL = 500  # print every N fit_to_lib2 calls
+_PERF_INTERVAL = 10000  # print every N fit_to_lib2 calls
 
 
 def _perf_add(section, elapsed):
