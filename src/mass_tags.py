@@ -285,8 +285,11 @@ def tag_library(library,tag=mTRAQ):
             if "spec_frags" in library[key]:
                 lib_entry["spec_frags"] = specific_frags(lib_entry["frags"])
             new_lib[new_seq,key[1]] = lib_entry
-            
-        
+
+
+    from src.models.spec_lib.library_store import SpectrumLibraryStore
+    if isinstance(library, SpectrumLibraryStore):
+        return SpectrumLibraryStore.from_dict(new_lib)
     return new_lib
 
 # mTRAQ_lib = tag_library(library, tag=mTRAQ)

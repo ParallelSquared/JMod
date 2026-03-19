@@ -1064,9 +1064,11 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
         fdc["silac_channel"] = np.nan 
         
     #this was previously in ms1_quant function.. we need it for the target/decoy classification
-    frag_errors = [unstring_floats(mz) for mz in fdc.frag_errors]
-    median  = np.median(np.concatenate([i for i in frag_errors]))
-    fdc["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
+    # frag_errors stored as list columns in parquet — convert to numpy arrays
+    frag_errors = [np.array(x, dtype=float) if x is not None and len(x) > 0 else np.array([]) for x in fdc.frag_errors]
+    non_empty = [i for i in frag_errors if len(i) > 0]
+    median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
+    fdc["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
 
     ## What precursors are labeled as decoys
     fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])

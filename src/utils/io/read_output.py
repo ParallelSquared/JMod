@@ -49,12 +49,6 @@ names = ["coeff", "spec_id", "Ms1_spec_id",
          "unique_obs_int",
          "file_name",
          "protein",
-         # "manhattan_distances_nearby_max",
-         # "max_matched_residuals_nearby_min",
-         # "gof_stats_nearby_min",
-         # "scribe_scores_nearby_min",
-         # "n_scans",
-         # "smoothness"
          ]
 
 dtypes  = {"coeff":np.float32,
@@ -98,13 +92,75 @@ dtypes  = {"coeff":np.float32,
             "obs_int":str,
             "file_name":str,
             "protein":str,
-            # "manhattan_distances_nearby_max":np.float32,
-            # "max_matched_residuals_nearby_min":np.float32,
-            # "gof_stats_nearby_min":np.float32,
-            # "scribe_scores_nearby_min":np.float32,
-            # "n_scans":np.float32,
-            # "smoothness":np.float32
             }
+
+
+# ---------------------------------------------------------------------------
+# Parquet output schema — single source of truth for column names, types,
+# and placeholder defaults used by fit_to_lib2 and run_jmod.
+# ---------------------------------------------------------------------------
+
+# Each entry: (column_name, polars_type, placeholder_default)
+_SCHEMA_SPEC = [
+    ("coeff",                       pl.Float32,             0.0),
+    ("spec_id",                     pl.Int32,               0),
+    ("Ms1_spec_id",                 pl.Int32,               0),
+    ("seq",                         pl.Utf8,                ""),
+    ("z",                           pl.Float32,             0.0),
+    # -- timeplex inserts "time_channel" here at index 5 --
+    ("window_mz",                   pl.Float32,             0.0),
+    ("rt",                          pl.Float32,             0.0),
+    # 26 feature columns
+    ("num_lib",                     pl.Float32,             0.0),
+    ("frac_lib_int",                pl.Float32,             0.0),
+    ("frac_dia_int",                pl.Float32,             0.0),
+    ("mz_error",                    pl.Float32,             0.0),
+    ("rt_error",                    pl.Float32,             0.0),
+    ("frac_int_matched",            pl.Float32,             0.0),
+    ("frac_int_pred",               pl.Float32,             0.0),
+    ("spec_r2",                     pl.Float32,             0.0),
+    ("prec_r2",                     pl.Float32,             0.0),
+    ("prec_r2_uniq",                pl.Float32,             0.0),
+    ("frac_int_uniq",               pl.Float32,             0.0),
+    ("frac_int_uniq_pred",          pl.Float32,             0.0),
+    ("hyperscore",                  pl.Float32,             0.0),
+    ("b_counts",                    pl.Float32,             0.0),
+    ("y_counts",                    pl.Float32,             0.0),
+    ("longest_y_ions",              pl.Float32,             0.0),
+    ("scribe_scores",               pl.Float32,             0.0),
+    ("max_unmatched_residuals",     pl.Float32,             0.0),
+    ("max_matched_residuals",       pl.Float32,             0.0),
+    ("gof_stats",                   pl.Float32,             0.0),
+    ("manhattan_distances",         pl.Float32,             0.0),
+    ("fitted_spectral_contrasts",   pl.Float32,             0.0),
+    ("frac_int_matched_pred",       pl.Float32,             0.0),
+    ("frac_int_matched_pred_sigcoeff", pl.Float32,          0.0),
+    ("cosine",                      pl.Float32,             0.0),
+    ("mz",                          pl.Float32,             0.0),
+    # 7 fragment list columns
+    ("frag_names",                  pl.List(pl.Int32),       None),
+    ("frag_errors",                 pl.List(pl.Float64),     None),
+    ("frag_mz",                     pl.List(pl.Float64),     None),
+    ("frag_int",                    pl.List(pl.Float64),     None),
+    ("obs_int",                     pl.List(pl.Float64),     None),
+    ("unique_frag_mz",             pl.List(pl.Float64),     None),
+    ("unique_obs_int",             pl.List(pl.Float64),     None),
+    # 2 string metadata columns
+    ("file_name",                   pl.Utf8,                ""),
+    ("protein",                     pl.Utf8,                ""),
+]
+
+
+def get_parquet_schema(timeplex=False):
+    """Return an ordered dict of {col_name: pl_dtype} for parquet output."""
+    schema = {name: dtype for name, dtype, _ in _SCHEMA_SPEC}
+    if timeplex:
+        items = list(schema.items())
+        items.insert(5, ("time_channel", pl.Float32))
+        schema = dict(items)
+    return schema
+
+
 
 def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
     """
@@ -336,16 +392,7 @@ def get_large_prec(file,
         "obs_int", "unique_frag_mz", "unique_obs_int"
     ]
 
-    # Read CSV using Polars
-    # Use schema_overrides instead of the deprecated dtypes
-    # TODO set threads explicitly
-    decoy_coeffs_lf = pl.read_csv(
-        file,
-        has_header=False,
-        new_columns=col_names,
-        schema_overrides=pl_schema,
-        infer_schema=False,
-    ).lazy()
+    decoy_coeffs_lf = pl.scan_parquet(file)
 
     decoy_coeffs_lf = find_extrema_in_nearby_scans(
         decoy_coeffs_lf,

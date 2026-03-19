@@ -58,9 +58,10 @@ def ms1_cor_channels(all_spectra,
     decoy_coeffs["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(decoy_coeffs["untag_seq"],decoy_coeffs["z"])]
     
     if "med_frag_error" not in decoy_coeffs.columns:
-        frag_errors = [mf.unstring_floats(mz) if mz==mz else [] for mz in decoy_coeffs.frag_errors]
-        median  = np.median(np.concatenate([i for i in frag_errors]))
-        decoy_coeffs["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
+        frag_errors = [np.array(x, dtype=float) if x is not None and len(x) > 0 else np.array([]) for x in decoy_coeffs.frag_errors]
+        non_empty = [i for i in frag_errors if len(i) > 0]
+        median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
+        decoy_coeffs["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
     
     if "abs_rt_error" not in decoy_coeffs.columns:
         decoy_coeffs["abs_rt_error"] = np.abs(decoy_coeffs.rt_error)
