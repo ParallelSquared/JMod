@@ -10,6 +10,7 @@ from src.utils.io.read_output import get_large_prec
 
 from sklearn.model_selection import KFold,GroupKFold
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import roc_curve,auc 
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.neural_network import MLPClassifier
@@ -259,6 +260,27 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
 
 
 
+def estimate_pep(scores, is_decoy):
+    """Estimate Posterior Error Probability via isotonic regression.
+
+    Fits a non-decreasing decoy probability curve over the score distribution.
+    PEP = decoy_prob / (1 - decoy_prob), clamped to [0, 1].
+    """
+    order = np.argsort(-scores)  # descending
+    labels = is_decoy[order].astype(float)  # decoy=1, target=0
+
+    ir = IsotonicRegression(y_min=0, y_max=1, increasing=True)
+    fitted = ir.fit_transform(np.arange(len(labels)), labels)
+
+    pep = fitted / (1 - fitted + 1e-10)
+    pep = np.clip(pep, 0, 1)
+
+    # Map back to original order
+    result = np.empty_like(pep)
+    result[order] = pep
+    return result
+
+
 class model_instance():
     def __init__(self,model_type):
         self.mode_type = model_type
@@ -333,7 +355,7 @@ class score_model():
             ## XGBoost
             def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    dTrain = xgb.DMatrix(X,y,weight=sample_weight)
+                    dTrain = xgb.DMatrix(X,y,weight=sample_weight,feature_names=list(X.columns))
                     # param = {
                     #     'max_depth': config.tree_max_depth, 
                     #     'eta': .1, 
@@ -360,19 +382,23 @@ class score_model():
                     
                     m.model = xgb.train(param, dtrain=dTrain,num_boost_round=500)
                     def xg_predict(X):
-                        X_convert = xgb.DMatrix(X)
+                        X_convert = xgb.DMatrix(X,feature_names=list(X.columns))
                         return m.model.predict(X_convert)
                     m.__predict_fn__ = xg_predict
                     
                     if self.folder:
-                        plt.subplots()
                         fi = m.model.get_score(importance_type="gain")
-                        plt.barh(X.columns,[fi[i] if i in fi else 0 for i in X.columns])
-                        plt.title("Feature Importance")
+                        feature_importance = np.array([fi.get(c, 0) for c in X.columns])
+                        sorted_indices = np.argsort(feature_importance, kind='stable')
+                        sorted_features = np.array(X.columns)[sorted_indices]
+                        sorted_importance = feature_importance[sorted_indices]
+
+                        fig, ax = plt.subplots(figsize=(8, len(X.columns)*0.3))
+                        ax.barh(sorted_features, sorted_importance)
+                        ax.set_title("Feature Importance")
                         plt.savefig(self.folder+f"/XGBoost{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
-                        plt.close()
-                    
-                    
+                        plt.close(fig)
+
                     return m
                 
             # self.model = fit_model(X,y)
@@ -438,8 +464,99 @@ class score_model():
             
         return np.concatenate(self.predictions)[rev_order]
 
-    
-    
+    def run_model_filtered(self, X, y, keep_mask, y_filtered, sample_weight=None, groups=None):
+        """Train with per-fold filtering: CV folds on full data, filter/relabel training portion only.
+
+        For each CV fold:
+          - Take the training indices from the full dataset
+          - Apply keep_mask to retain only selected training samples
+          - Use y_filtered (with negative-mined labels) for training
+          - Predict on the FULL test split (unfiltered, unbiased)
+        """
+        if self.model_type=="rf":
+            def fit_model(X,y,sample_weight,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    m.model = RandomForestClassifier(n_estimators = 200,max_depth=config.tree_max_depth,n_jobs=-1, random_state=config.RANDOM_SEED)
+                    m.model.fit(X,y,sample_weight=sample_weight)
+                    m.__predict_fn__ = m.model.predict_proba
+                    return m
+        elif self.model_type=="lda":
+            def fit_model(X,y,sample_weight,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    m.model = LinearDiscriminantAnalysis()
+                    m.model.fit(X,y)
+                    m.__predict_fn__ = m.model.predict_proba
+                    return m
+        elif self.model_type == "xg":
+            def fit_model(X,y,sample_weight,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    dTrain = xgb.DMatrix(X,y,weight=sample_weight,feature_names=list(X.columns))
+                    param = {
+                        'objective': 'binary:logistic',
+                         'eval_metric': 'aucpr',
+                         'eta': 0.1,
+                         'max_depth': 10,
+                         'subsample': 0.8,
+                         'colsample_bytree': 0.8,
+                         'tree_method': 'hist',
+                         'nthread': -1,
+                         'seed': config.RANDOM_SEED,
+                         'min_child_weight': .5
+                        }
+                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=500)
+                    def xg_predict(X):
+                        X_convert = xgb.DMatrix(X,feature_names=list(X.columns))
+                        return m.model.predict(X_convert)
+                    m.__predict_fn__ = xg_predict
+                    return m
+        elif self.model_type == "nn":
+            columns = X.columns
+            X = pd.DataFrame(preprocessing.StandardScaler().fit(X).transform(X),columns=columns)
+            def fit_model(X,y,sample_weight,idx=""):
+                    m = model_instance(model_type=self.model_type)
+                    m.model = MLPClassifier((20,20,4),activation="relu")
+                    m.model.fit(X,y)
+                    m.__predict_fn__ = m.model.predict_proba
+                    return m
+        else:
+            raise ValueError("Unsupported model type")
+
+        logger.debug(f"Total samples: {len(y)}, Kept for training: {keep_mask.sum()}")
+
+        # CV folds on the FULL dataset (same as run_model)
+        kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = config.RANDOM_SEED)
+        k_orders = [i for i in kf.split(X,y)]
+
+        if groups is not None:
+            unique_groups = np.unique(groups)
+            if len(unique_groups) < 5:
+                gfk = KFold(n_splits=5, shuffle=True, random_state=config.RANDOM_SEED)
+            else:
+                gfk = GroupKFold(n_splits=5)
+            k_orders = [i for i in gfk.split(X, y, groups=groups)]
+
+        rev_order = np.argsort(np.concatenate([i[1] for i in k_orders]), kind='stable')
+
+        self.models = []
+        self.predictions = []
+        model_idx = 0
+        for train_idx, test_idx in tqdm.tqdm(k_orders):
+            # Filter training portion: keep only samples in keep_mask, use relabeled y
+            fold_keep = keep_mask[train_idx]
+            filtered_train_idx = train_idx[fold_keep]
+            X_train_fold = X.iloc[filtered_train_idx]
+            y_train_fold = y_filtered[filtered_train_idx]
+            sw = sample_weight[filtered_train_idx] if sample_weight is not None else None
+
+            m = fit_model(X_train_fold, y_train_fold, sample_weight=sw, idx=model_idx)
+            self.models.append(m)
+            # Predict on FULL test split (unfiltered)
+            self.predictions.append(m.predict(X.iloc[test_idx]))
+            model_idx += 1
+
+        return np.concatenate(self.predictions)[rev_order]
+
+
 def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     """
     Parameters
@@ -469,8 +586,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     y = np.array(~fdc["decoy"], dtype=int)
     
     # exclude necessary columns
-    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz','frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq', 
-                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals', 
+    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz', 'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq',
+                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals',
                   'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
                   "plexfittrace_ps_all",
                   "unique_frag_mz", "untag_prec",
@@ -482,6 +599,24 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "file_name",
                   "protein"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
+
+    # Compute predicted RT (library RT) from observed RT minus RT error
+    if 'rt' in X.columns and 'rt_error' in X.columns:
+        X['predicted_rt'] = X['rt'] - X['rt_error']
+    X = X.drop(columns=[c for c in ['rt'] if c in X.columns])
+
+    # Quantile-bin positional/intensity features into 100 bins
+    QBIN_FEATURES = ['predicted_rt', 'mz', 'coeff', 'tic']
+    for col in QBIN_FEATURES:
+        if col in X.columns:
+            vals = X[col].values.astype(float)
+            valid = vals[~np.isnan(vals)]
+            if len(valid) > 0:
+                edges = np.quantile(valid, np.linspace(0, 1, 101))
+                binned = np.searchsorted(edges, vals, side='right').astype(float)
+                binned = np.clip(binned, 1, 100)
+                X[col + '_qbin'] = binned
+            X = X.drop(columns=[col])
 
     # DEBUG: Check each column for infinity or very large values
     #problem_columns = []
@@ -533,10 +668,46 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     #    print(f"{idx+1}. {feature}")
     
     X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
-        
-    sc_model = score_model(model_type,folder=folder)
-    pred = sc_model.run_model(X, y, groups=fdc.stripped_seq)
-    
+
+    # Iterative training: 3 iterations with target filtering and negative mining
+    n_iterations = 3
+    pred = None
+    fdc_qvalues = None
+
+    for itr in range(n_iterations):
+        logger.info(f"  Scoring iteration {itr + 1}/{n_iterations}")
+
+        if itr == 0:
+            # Iteration 1: train on all targets vs all decoys (current behavior)
+            sc_model = score_model(model_type, folder=folder)
+            pred = sc_model.run_model(X, y, groups=fdc.stripped_seq)
+        else:
+            # Iterations 2+: filter targets to q<=0.01, relabel PEP>=0.90 as decoys
+            pep_values = estimate_pep(pred, fdc["decoy"].values)
+
+            # Keep: all decoys + targets with q <= 0.01
+            keep_mask = fdc["decoy"].values | (fdc_qvalues <= 0.01)
+
+            # Build relabeled y: targets with PEP >= 0.90 become decoys
+            y_filtered = y.copy()
+            neg_mine_mask = (y_filtered == 1) & (pep_values >= 0.90)
+            y_filtered[neg_mine_mask] = 0
+
+            n_kept = keep_mask.sum()
+            n_relabeled = (keep_mask & neg_mine_mask).sum()
+            logger.info(f"    Kept {n_kept}/{len(keep_mask)} samples, relabeled {n_relabeled} as decoys")
+
+            sc_model = score_model(model_type, folder=folder)
+            pred = sc_model.run_model_filtered(X, y, keep_mask, y_filtered, groups=fdc.stripped_seq)
+
+        # Compute q-values for this iteration
+        score_order = np.argsort(-pred, kind='stable')
+        decoy_order = fdc["decoy"].values[score_order]
+        fdc_qvalues_ordered = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order)
+        fdc_qvalues_ordered = np.minimum.accumulate(fdc_qvalues_ordered[::-1])[::-1]
+        fdc_qvalues = np.empty_like(fdc_qvalues_ordered)
+        fdc_qvalues[score_order] = fdc_qvalues_ordered
+
     model_name= model_type
 
     ####### make sure to not have these in the model (bc they are left out in decoys) #######
