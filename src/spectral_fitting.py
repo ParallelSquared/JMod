@@ -405,6 +405,118 @@ def _large_coeff_int_pred_jit(all_vals, all_offsets, coeffs,
     return total
 
 
+@njit(nogil=True)
+def _large_coeff_block_jit(coo_rows, coo_cols, coo_vals, n_rows,
+                            coeffs, val_obs,
+                            all_flat_rows, all_flat_vals, all_flat_offsets,
+                            col_to_pos):
+    """Replaces the large_coeff block in get_features with a single nogil pass.
+
+    Computes three outputs for candidates with coefficient > 1:
+      1. frac_int_matched_pred_sigcoeff: ratio of predicted intensity from
+         large-coeff candidates to their matched observed intensity
+      2. subset_cosine: cosine similarity between observed and predicted
+         spectra at real DIA peaks matched by large-coeff candidates.
+         Computed entirely from flat arrays (original DIA peak space), so
+         penalty rows (unmatched fragments) are never included.
+      3. predicted_spec: A @ coeffs (full predicted spectrum), also used
+         for frac_int_pred / frac_int_matched_pred outside this function
+
+    Args:
+        coo_rows/coo_cols/coo_vals: COO sparse matrix (library spectra vs DIA peaks).
+            Rows = DIA peak indices (re-indexed via rankdata), cols = candidate indices.
+        n_rows: number of rows in sparse matrix (includes penalty rows).
+        coeffs: NNLS coefficients per candidate column.
+        val_obs: observed intensities at original DIA peak indices. Used for
+            large_coeff_int_matched and cosine (original DIA peak space, no
+            penalty rows).
+        all_flat_rows/all_flat_vals/all_flat_offsets: flattened per-candidate
+            matched fragment arrays (ref + decoy). Rows are original DIA peak
+            indices, vals are normalized library intensities. These only contain
+            real matched peaks — no penalty rows.
+        col_to_pos: maps candidate column index → position in the flat arrays.
+            -1 if the candidate has no entry.
+
+    Returns:
+        (predicted_spec, frac, subset_cosine)
+
+    Previously this was ~10 GIL-holding numpy/scipy calls (~4000 py-spy samples):
+      np.where, np.isin, np.unique, np.concatenate, np.delete,
+      sparse_lib_matrix.toarray(), np.multiply, np.sum, cosim
+    """
+    n_cols = len(coeffs)
+
+    # ── Step 1: Identify large-coeff columns (coeff > 1) ──
+    n_large = 0
+    for c in range(n_cols):
+        if coeffs[c] > 1.0:
+            n_large += 1
+
+    # ── Step 2: Full predicted spectrum A @ coeffs (reused for frac_int_pred) ──
+    predicted_spec = np.zeros(n_rows)
+    for i in range(len(coo_vals)):
+        predicted_spec[coo_rows[i]] += coo_vals[i] * coeffs[coo_cols[i]]
+
+    if n_large == 0:
+        return predicted_spec, 0.0, 0.0
+
+    # ── Step 3: frac + cosine in one pass over flat arrays ──
+    # Flat arrays contain only real matched DIA peaks (no penalty rows), so
+    # the cosine naturally excludes all penalty rows.
+    #
+    # We accumulate per-peak predicted intensity from large-coeff candidates
+    # into val_obs-sized arrays, then compute cosine over touched peaks.
+    n_obs = len(val_obs)
+    pred_at_peak = np.zeros(n_obs)   # predicted intensity per DIA peak (large coeffs only)
+    peak_touched = np.zeros(n_obs, dtype=np.int8)  # which peaks were matched
+
+    large_coeff_int_pred = 0.0
+    for c in range(n_cols):
+        if coeffs[c] <= 1.0:
+            continue
+        pos = col_to_pos[c]
+        if pos < 0:
+            continue
+        # Sum library intensity for this candidate (for frac numerator)
+        val_sum = 0.0
+        for j in range(all_flat_offsets[pos], all_flat_offsets[pos + 1]):
+            val_sum += all_flat_vals[j]
+            # Accumulate predicted intensity at each matched DIA peak (for cosine)
+            row = all_flat_rows[j]
+            pred_at_peak[row] += all_flat_vals[j] * coeffs[c]
+            peak_touched[row] = 1
+        large_coeff_int_pred += val_sum * coeffs[c]
+
+    # Sum observed intensity at matched peaks (for frac denominator)
+    large_coeff_int_matched = 0.0
+    for r in range(n_obs):
+        if peak_touched[r]:
+            large_coeff_int_matched += val_obs[r]
+
+    if large_coeff_int_matched == 0.0:
+        large_coeff_int_matched = 1.0  # avoid division by zero
+
+    frac = large_coeff_int_pred / large_coeff_int_matched
+
+    # ── Cosine similarity at matched peaks ──
+    # Only real DIA peaks contribute — penalty rows are not in flat arrays
+    dot_xy = 0.0
+    sum_x2 = 0.0
+    sum_y2 = 0.0
+    for r in range(n_obs):
+        if peak_touched[r]:
+            x = val_obs[r]
+            y = pred_at_peak[r]
+            dot_xy += x * y
+            sum_x2 += x * x
+            sum_y2 += y * y
+
+    denom = np.sqrt(sum_x2) * np.sqrt(sum_y2)
+    subset_cosine = dot_xy / denom if denom > 0.0 else 0.0
+
+    return predicted_spec, frac, subset_cosine
+
+
 def _split_flat(flat_arr, offsets):
     """Split a flat array into a list of sub-arrays using an offset table."""
     return [flat_arr[offsets[i]:offsets[i+1]] for i in range(len(offsets)-1)]
@@ -437,6 +549,60 @@ def _rankdata_dense_jit(x):
     out = np.empty(n, dtype=np.int32)
     for i in range(n):
         out[i] = rank_map[int(x[i])]
+    return out
+
+
+@njit(nogil=True)
+def _assemble_features_jit(
+    num_lib_peaks_matched, frac_lib_intensity, frac_dia_intensity,
+    rel_error, rt_error,
+    frac_int_matched, frac_int_pred,
+    r2all, r2_lib_spec, r2_unique,
+    frac_unique_pred, frac_dia_intensity_pred,
+    hyperscores, b_counts, y_counts, longest_y_ions,
+    scribe_scores, max_unmatched_residuals, max_matched_residuals,
+    gof_stats, manhattan_distances, fitted_spectral_contrasts,
+    frac_int_matched_pred, lc_frac, lc_cosine,
+    prec_mz):
+    """Assemble the 26-column feature matrix in one nogil pass.
+
+    Replaces np.ones_like * scalar broadcasts (5 allocations) + np.stack of
+    26 arrays (~1500 GIL-holding samples). Fills a pre-allocated (n, 26)
+    array directly — no intermediate arrays, no GIL.
+
+    Per-candidate arrays (length n) are copied directly into their column.
+    Scalar features (frac_int_matched, frac_int_pred, frac_int_matched_pred,
+    lc_frac, lc_cosine) are broadcast by filling the column with the value.
+    """
+    n = len(num_lib_peaks_matched)
+    out = np.empty((n, 26), dtype=np.float64)
+    for i in range(n):
+        out[i, 0] = num_lib_peaks_matched[i]
+        out[i, 1] = frac_lib_intensity[i]
+        out[i, 2] = frac_dia_intensity[i]
+        out[i, 3] = rel_error[i]
+        out[i, 4] = rt_error[i]
+        out[i, 5] = frac_int_matched       # scalar broadcast
+        out[i, 6] = frac_int_pred           # scalar broadcast
+        out[i, 7] = r2all[i]
+        out[i, 8] = r2_lib_spec[i]
+        out[i, 9] = r2_unique[i]
+        out[i, 10] = frac_unique_pred[i]
+        out[i, 11] = frac_dia_intensity_pred[i]
+        out[i, 12] = hyperscores[i]
+        out[i, 13] = b_counts[i]
+        out[i, 14] = y_counts[i]
+        out[i, 15] = longest_y_ions[i]
+        out[i, 16] = scribe_scores[i]
+        out[i, 17] = max_unmatched_residuals[i]
+        out[i, 18] = max_matched_residuals[i]
+        out[i, 19] = gof_stats[i]
+        out[i, 20] = manhattan_distances[i]
+        out[i, 21] = fitted_spectral_contrasts[i]
+        out[i, 22] = frac_int_matched_pred  # scalar broadcast
+        out[i, 23] = lc_frac                # scalar broadcast
+        out[i, 24] = lc_cosine              # scalar broadcast
+        out[i, 25] = prec_mz[i]
     return out
 
 
@@ -1667,10 +1833,18 @@ def get_features(
     rt_error = prec_rt-rt_mz[:,0]
 
     frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
-    predicted_spec = np.squeeze(sparse_lib_matrix*lib_coefficients)[:-1]
-    
-    # r2all = np_pearson_cor(dia_spec_int[:-1],predicted_spec).statistic
-    # r2_lib_spec = [np_pearson_cor(i,dia_spectrum[j,1]).statistic for i,j in zip(ref_spec_values_split,ref_spec_row_indices_split)]
+
+    # Compute predicted spectrum + large_coeff features in one JIT pass (nogil).
+    # Replaces: sparse_lib_matrix*lib_coefficients, np.isin, np.unique, .toarray(), cosim, etc.
+    _n_coo_rows = sparse_lib_matrix.shape[0] if sparse.issparse(sparse_lib_matrix) else int(sparse_row_indices.max()) + 1
+    _coo_vals = sparse_lib_matrix.data if sparse.issparse(sparse_lib_matrix) else np.empty(0)
+    predicted_spec_full, _lc_frac, _lc_cosine = _large_coeff_block_jit(
+        sparse_row_indices, sparse_col_indices, _coo_vals, _n_coo_rows,
+        coeffs, val_obs,
+        _all_flat_rows, _all_flat_vals, _all_flat_offsets,
+        _col_to_pos)
+    predicted_spec = predicted_spec_full[:-1]  # drop penalty row (unmatched-fragment intensity)
+
     r2all = np.zeros_like(rt_error)
     r2_lib_spec = np.zeros_like(rt_error)
     
@@ -1697,41 +1871,17 @@ def get_features(
     _perf_add("gf:sparse_matmul+unique_frac", time.perf_counter() - _t0)
 
     #### stack spectrum features
-    # r2all = np.ones_like(num_lib_peaks_matched)*r2all
+    # Compute scalar feature values (broadcast to all candidates below in JIT)
     _t0 = time.perf_counter()
-    frac_int_matched = np.ones_like(num_lib_peaks_matched)*frac_int_matched
-    frac_int_pred = (np.ones_like(num_lib_peaks_matched)*np.sum(predicted_spec))/tic
-    frac_int_matched_pred = (np.ones_like(num_lib_peaks_matched)*np.sum(predicted_spec))/np.sum(dia_spec_int)
-    large_coeff_indices = np.where(np.array(lib_coefficients)>1)[0] # identify large coeffs
-
-    if len(large_coeff_indices) == 0: # Guards against spectra where no peptides have coeff > 1
-        frac_int_matched_pred_sigcoeff = np.zeros_like(num_lib_peaks_matched)
-        large_coeff_cosine = np.zeros_like(num_lib_peaks_matched)
-
-    else: # standard execution
-        # Use combined flat arrays for GIL-free computation
-        _lc_positions = _col_to_pos[large_coeff_indices]
-        _lc_valid = _lc_positions >= 0
-        _lc_pos_valid = _lc_positions[_lc_valid]
-        large_coeff_matched_peaks = np.unique(np.concatenate([_all_flat_rows[_all_flat_offsets[p]:_all_flat_offsets[p+1]] for p in _lc_pos_valid])) if len(_lc_pos_valid) > 0 else np.empty(0, dtype=np.int32)
-        large_coeff_int_pred = _large_coeff_int_pred_jit(_all_flat_vals, _all_flat_offsets, coeffs, large_coeff_indices.astype(np.int32), _col_to_pos)
-        large_coeff_int_matched = np.sum(dia_spectrum[large_coeff_matched_peaks,1]) # sum the intensity matched
-        frac_int_matched_pred_sigcoeff = (np.ones_like(num_lib_peaks_matched)*large_coeff_int_pred)/large_coeff_int_matched
-
-        subset_row_indices = np.unique(sparse_row_indices[np.where(np.isin(sparse_col_indices,large_coeff_indices))])
-        subset_row_indices = np.delete(subset_row_indices,np.where(subset_row_indices==max(subset_row_indices))[0][0])
-        large_coeffs = np.squeeze(lib_coefficients) # get the coeffs
-        large_coeffs[large_coeffs<1] = 0 # set those <1 to 0
-        scaled_matrix = np.multiply(sparse_lib_matrix.toarray(),large_coeffs)#scale the matrix
-        subset_pred_spec = np.sum(scaled_matrix,1)
-        subset_cosine = cosim(dia_spec_int[subset_row_indices],subset_pred_spec[subset_row_indices])
-        large_coeff_cosine = np.ones_like(num_lib_peaks_matched)*subset_cosine
-    _perf_add("gf:large_coeff_block", time.perf_counter() - _t0)
+    _sum_predicted = np.sum(predicted_spec)
+    _sum_dia_spec_int = np.sum(dia_spec_int)
+    _frac_int_matched_scalar = frac_int_matched  # already a scalar
+    _frac_int_pred_scalar = _sum_predicted / tic if tic > 0 else 0.0
+    _frac_int_matched_pred_scalar = _sum_predicted / _sum_dia_spec_int if _sum_dia_spec_int > 0 else 0.0
 
     # ── Hyperscores + ion counts ──
     # Replaces per-candidate loop of hyperscore2() + get_index() calls (231K calls
     # total across target+decoy). Batch-processes all candidates in one JIT'd pass.
-    _t0 = time.perf_counter()
     if len(prec_frag_intensities) > 0 and ordered_frag_codes is not None:
         # Flatten intensities and codes into contiguous arrays for numba
         all_hyper_int = np.concatenate(prec_frag_intensities).astype(np.float64)
@@ -1757,36 +1907,40 @@ def get_features(
         longest_y_ions = np.zeros_like(num_lib_peaks_matched)
     _perf_add("gf:hyperscores", time.perf_counter() - _t0)
 
+    # ── Assemble feature matrix in one pass (nogil) ──
+    # Replaces ~5 np.ones_like*scalar broadcasts + np.stack of 26 arrays.
+    # Each row is a feature column; transposed at the end via -1 axis.
     _t0 = time.perf_counter()
-    features = np.stack([num_lib_peaks_matched,
-                          frac_lib_intensity,
-                          frac_dia_intensity,
-                          rel_error,
-                          rt_error,
-                          frac_int_matched,
-                          frac_int_pred,
-                          r2all,
-                          r2_lib_spec,
-                          r2_unique,
-                          frac_unique_pred,
-                          frac_dia_intensity_pred,
-                          hyperscores,
-                          b_counts,
-                          y_counts,
-                          longest_y_ions,
-                          scribe_scores,
-                          max_unmatched_residuals,
-                          max_matched_residuals,
-                          gof_stats,
-                          manhattan_distances,
-                          fitted_spectral_contrasts,
-                          frac_int_matched_pred,
-                          frac_int_matched_pred_sigcoeff,
-                          large_coeff_cosine,
-                          rt_mz[:,1],
-                          # peaks
-                            ],-1)
-    _perf_add("gf:np.stack_features", time.perf_counter() - _t0)
+    _prec_mz = rt_mz[:, 1].copy()  # contiguous for JIT
+    features = _assemble_features_jit(
+        num_lib_peaks_matched,          #  0: number of library peaks matched per candidate
+        frac_lib_intensity,             #  1: fraction of library intensity matched
+        frac_dia_intensity,             #  2: fraction of DIA intensity at matched peaks
+        rel_error,                      #  3: relative MS1 m/z error
+        rt_error,                       #  4: RT error (observed - calibrated)
+        _frac_int_matched_scalar,       #  5: fraction of total DIA intensity matched (scalar → broadcast)
+        _frac_int_pred_scalar,          #  6: fraction of TIC predicted by model (scalar → broadcast)
+        r2all,                          #  7: R² all (placeholder, currently zeros)
+        r2_lib_spec,                    #  8: R² library spectrum (placeholder, currently zeros)
+        r2_unique,                      #  9: R² unique (placeholder, currently zeros)
+        frac_unique_pred,               # 10: predicted intensity fraction at uniquely-matched peaks
+        frac_dia_intensity_pred,        # 11: predicted DIA intensity fraction per candidate
+        hyperscores,                    # 12: X!Tandem-style hyperscore
+        b_counts,                       # 13: number of b-ions matched
+        y_counts,                       # 14: number of y-ions matched
+        longest_y_ions,                 # 15: longest consecutive y-ion series
+        scribe_scores,                  # 16: scribe score (spectral similarity metric)
+        max_unmatched_residuals,        # 17: max residual at unmatched peaks
+        max_matched_residuals,          # 18: max residual at matched peaks
+        gof_stats,                      # 19: goodness-of-fit statistic (log2 residual/fitted ratio)
+        manhattan_distances,            # 20: manhattan distance between predicted and observed
+        fitted_spectral_contrasts,      # 21: spectral contrast angle between fitted and observed
+        _frac_int_matched_pred_scalar,  # 22: predicted/observed intensity ratio (scalar → broadcast)
+        _lc_frac,                       # 23: large-coeff predicted/observed intensity ratio (scalar → broadcast)
+        _lc_cosine,                     # 24: large-coeff subset cosine similarity (scalar → broadcast)
+        _prec_mz                        # 25: calibrated precursor m/z
+    )
+    _perf_add("gf:assemble_features_jit", time.perf_counter() - _t0)
     return features
 
 
