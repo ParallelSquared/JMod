@@ -11,6 +11,8 @@ import numpy as np
 import warnings
 import ptinnls as sparse_nnls
 from sklearn.linear_model import ElasticNet, Lasso
+from sklearn.linear_model._coordinate_descent import enet_path
+from scipy.sparse import csc_matrix
 from sklearn.exceptions import ConvergenceWarning
 
 # TODO: Investigate why sklearn reports tolerance=0 in ConvergenceWarning
@@ -45,6 +47,20 @@ _perf_lock = threading.Lock()
 _perf_counts = {}  # section_name -> [total_seconds, call_count]
 _perf_call_total = 0
 _PERF_INTERVAL = 10000  # print every N fit_to_lib2 calls
+
+# ── Thread-local RandomState cache for enet_path ──
+# Constructing np.random.RandomState(42) is expensive (~2K GIL samples in profiling).
+# Each thread keeps one, reseeded to 42 per spectrum for determinism + thread safety.
+_enet_tls = threading.local()
+
+def _get_enet_rng():
+    try:
+        rng = _enet_tls.rng
+    except AttributeError:
+        rng = np.random.RandomState(42)
+        _enet_tls.rng = rng
+    rng.seed(42)
+    return rng
 
 
 def _perf_add(section, elapsed):
@@ -998,9 +1014,133 @@ def _lasso_nnls(A, b, sample_weight=None):
     return model.coef_ * s
 
 
-def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
+# ── JIT helpers for huber_nnls_irls (replace scipy sparse ops to release GIL) ──
+
+@njit(nogil=True)
+def _coo_gram_and_Aty(rows, cols, vals, y, n_cols):
+    """Compute Gram matrix (A^T A) and A^T y from COO arrays in one pass.
+    Returns (gram, Aty) where gram is (n_cols, n_cols) and Aty is (n_cols,)."""
+    gram = np.zeros((n_cols, n_cols))
+    Aty = np.zeros(n_cols)
+    # Group entries by row for outer-product accumulation
+    # First pass: A^T y
+    for i in range(len(vals)):
+        Aty[cols[i]] += vals[i] * y[rows[i]]
+    # Gram matrix: for each pair of entries sharing a row, accumulate
+    # Sort by row for efficient grouping
+    order = np.argsort(rows)
+    i = 0
+    n = len(order)
+    while i < n:
+        r = rows[order[i]]
+        j = i
+        while j < n and rows[order[j]] == r:
+            j += 1
+        # entries order[i:j] all share row r
+        for a in range(i, j):
+            ca = cols[order[a]]
+            va = vals[order[a]]
+            for b in range(a, j):
+                cb = cols[order[b]]
+                vb = vals[order[b]]
+                gram[ca, cb] += va * vb
+                if ca != cb:
+                    gram[cb, ca] += va * vb
+        i = j
+    return gram, Aty
+
+
+@njit(nogil=True)
+def _coo_Ax(rows, cols, vals, x, n_rows):
+    """Compute A @ x from COO arrays. Returns dense (n_rows,) vector."""
+    result = np.zeros(n_rows)
+    for i in range(len(vals)):
+        result[rows[i]] += vals[i] * x[cols[i]]
+    return result
+
+
+@njit(nogil=True)
+def _coo_to_csc_arrays(rows, cols, vals, n_rows, n_cols):
+    """Convert COO to CSC arrays (data, indices, indptr).
+    Returns (data, indices, indptr) suitable for scipy csc_matrix constructor."""
+    # Count entries per column
+    col_counts = np.zeros(n_cols, dtype=np.int64)
+    for i in range(len(cols)):
+        col_counts[cols[i]] += 1
+    # Build indptr
+    indptr = np.zeros(n_cols + 1, dtype=np.int64)
+    for c in range(n_cols):
+        indptr[c + 1] = indptr[c] + col_counts[c]
+    # Fill data and indices
+    data = np.empty(len(vals))
+    indices = np.empty(len(vals), dtype=np.int64)
+    pos = np.zeros(n_cols, dtype=np.int64)  # current write position per column
+    for i in range(len(vals)):
+        c = cols[i]
+        dest = indptr[c] + pos[c]
+        data[dest] = vals[i]
+        indices[dest] = rows[i]
+        pos[c] += 1
+    return data, indices, indptr
+
+
+@njit(nogil=True)
+def _compute_mad_cutoff(residuals, b, c):
+    """Compute MAD-based cutoff from over-predicted observed peaks.
+    Returns cutoff value (scalar)."""
+    # Collect abs residuals where over-predicted and observed
+    count = 0
+    for i in range(len(residuals)):
+        if residuals[i] > 0.0 and b[i] > 0.0:
+            count += 1
+    if count == 0:
+        return 1.0
+    abs_r = np.empty(count)
+    k = 0
+    for i in range(len(residuals)):
+        if residuals[i] > 0.0 and b[i] > 0.0:
+            abs_r[k] = abs(residuals[i])
+            k += 1
+    med = np.median(abs_r)
+    deviations = np.empty(count)
+    for i in range(count):
+        deviations[i] = abs(abs_r[i] - med)
+    mad = np.median(deviations)
+    if mad > 0.0:
+        return c * (mad / 0.6745)
+    return 1.0
+
+
+@njit(nogil=True)
+def _irls_weights(residuals, b, cutoff):
+    """Compute Tukey biweight weights for under-predicted observed peaks.
+    Returns (new_weights, max_change_from_ones)."""
+    n = len(residuals)
+    new_weights = np.ones(n)
+    max_change = 0.0
+    for i in range(n):
+        if residuals[i] < 0.0 and b[i] > 0.0:
+            abs_r = -residuals[i]  # residuals[i] < 0, so abs = -residuals[i]
+            u = abs_r / cutoff
+            if u <= 1.0:
+                w = (1.0 - u * u) ** 2
+            else:
+                w = 0.0
+            new_weights[i] = w
+            change = abs(1.0 - w)
+            if change > max_change:
+                max_change = change
+    return new_weights, max_change
+
+
+def huber_nnls_irls(coo_vals, coo_rows, coo_cols, n_rows, n_cols, b,
+                    max_iter=1, tol=1e-4, c=4.685):
     """
     Asymmetric IRLS-weighted NNLS with Tukey biweight on under-predicted peaks.
+
+    Accepts flat COO arrays instead of scipy sparse to avoid GIL-holding format
+    conversions. All pre-solver math is JIT'd (nogil=True); only enet_path
+    requires a scipy CSC matrix.
 
     First pass: unweighted NNLS.
     Subsequent passes:
@@ -1012,8 +1152,12 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
         and false signal at zeros).
 
     Args:
-        A: Sparse library matrix (n_peaks x n_candidates)
-        b: Observed intensities (n_peaks,)
+        coo_vals: Non-zero values (flat array)
+        coo_rows: Row indices (flat array)
+        coo_cols: Column indices (flat array)
+        n_rows: Number of rows in sparse matrix
+        n_cols: Number of columns in sparse matrix
+        b: Observed intensities (n_rows,)
         max_iter: Maximum IRLS iterations
         tol: Convergence tolerance on weight changes
         c: Tukey biweight tuning constant (multiples of MAD)
@@ -1021,19 +1165,18 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
     Returns:
         dict with 'x': coefficients, 'weights': final sample weights
     """
-    A_csr = A.tocsr() if sparse.issparse(A) else sparse.csr_matrix(A)
-    n_peaks = A_csr.shape[0]
-
     # Normalize b so tol is scale-independent
     s = float(np.max(np.abs(b)) or 1.0)
     y = b / s
 
+    # Compute Gram matrix and A^T y in one JIT pass (nogil — releases GIL)
+    gram, Aty = _coo_gram_and_Aty(coo_rows, coo_cols, coo_vals, y, n_cols)
+
     # Data-driven regularization
-    alpha_max = np.max(np.abs(A_csr.T.dot(y))) / n_peaks
-    alpha = alpha_max * 1e-4 # 1e-4 means that the dynamic range within a spectrum is roughly 1,000x
+    alpha_max = np.max(np.abs(Aty)) / n_rows
+    alpha = alpha_max * 1e-4  # dynamic range within a spectrum is roughly 1,000x
 
     # Data-driven l1_ratio from max pairwise column correlation
-    gram = (A_csr.T @ A_csr).toarray()
     norms = np.sqrt(np.diag(gram))
     norms[norms == 0] = 1
     corr = gram / np.outer(norms, norms)
@@ -1041,61 +1184,81 @@ def huber_nnls_irls(A, b, max_iter=1, tol=1e-4, c=4.685):
     max_corr = np.max(np.abs(corr))
     l1_ratio = max(1 - max_corr ** 2, 0.1)
 
-    model = ElasticNet(
-        alpha=alpha,
-        l1_ratio=l1_ratio,
-        positive=True,
-        fit_intercept=False,
-        selection='random',
-        random_state=42,
-        tol=1e-3,
-        max_iter=20000,
-        warm_start=True,
-    )
+    # Build CSC once from COO via JIT (nogil) — only format enet_path accepts.
+    # Replaces COO→CSR→CSC conversion chain that held the GIL.
+    # Also pre-allocate X_w for IRLS loop — mutate .data in-place to avoid
+    # reconstructing the csc_matrix object each iteration.
+    csc_data, csc_indices, csc_indptr = _coo_to_csc_arrays(
+        coo_rows, coo_cols, coo_vals, n_rows, n_cols)
+    A_csc = csc_matrix((csc_data, csc_indices, csc_indptr), shape=(n_rows, n_cols))
+    X_w = csc_matrix((csc_data.copy(), csc_indices, csc_indptr), shape=(n_rows, n_cols))
+
+    coef = np.zeros(n_cols)
+    _enet_path = enet_path.__wrapped__
 
     # Initial solve with uniform weights
-    weights = np.ones(n_peaks)
-    model.fit(A_csr, y, sample_weight=weights)
-    initial_n_iter = model.n_iter_
+    weights = np.ones(n_rows)
+    _rng = _get_enet_rng()  # thread-local, reseeded to 42 (enet_path mutates rng state)
+    _, coef_path, _, n_iters = _enet_path(
+        A_csc, y,
+        l1_ratio=l1_ratio,
+        alphas=[alpha],
+        positive=True,
+        coef_init=coef,
+        check_input=False,
+        return_n_iter=True,
+        max_iter=20000,
+        tol=1e-3,
+        selection='random',
+        random_state=_rng,
+    )
+    coef = coef_path[:, 0]
+    initial_n_iter = n_iters[0]
 
-    x = model.coef_ * s
-    residuals = A_csr.dot(x).ravel() - b
+    x = coef * s
+    # Residuals via JIT (nogil) instead of A_csr.dot(x) which holds GIL
+    residuals = _coo_Ax(coo_rows, coo_cols, coo_vals, x, n_rows) - b
 
-    # Compute cutoff from over-predicted observed peaks, apply to under-predicted
-    over_pred = (residuals > 0) & (b > 0)
-    if np.any(over_pred):
-        abs_r_over = np.abs(residuals[over_pred])
-        mad = np.median(np.abs(abs_r_over - np.median(abs_r_over)))
-        cutoff = c * (mad / 0.6745) if mad > 0 else 1.0
-    else:
-        cutoff = 1.0
+    # Compute cutoff from over-predicted observed peaks (nogil JIT)
+    cutoff = _compute_mad_cutoff(residuals, b, c)
 
     for _ in range(max_iter):
-        x = model.coef_ * s
-        residuals = A_csr.dot(x).ravel() - b
+        x = coef * s
+        residuals = _coo_Ax(coo_rows, coo_cols, coo_vals, x, n_rows) - b
 
-        new_weights = np.ones(n_peaks)
-
-        # Tukey biweight on under-predicted observed peaks
-        under_pred = (residuals < 0) & (b > 0)
-        if np.any(under_pred):
-            abs_r = np.abs(residuals[under_pred])
-            u = abs_r / cutoff
-            # Bisquare: (1 - u²)² for |u| <= 1, 0 otherwise
-            biweight = np.where(u <= 1.0, (1.0 - u**2)**2, 0.0)
-            new_weights[under_pred] = biweight
+        # JIT'd weight computation (nogil) — replaces boolean indexing + np.where
+        new_weights, max_change = _irls_weights(residuals, b, cutoff)
 
         # Check convergence
-        if np.max(np.abs(new_weights - weights)) < tol:
+        if max_change < tol:
             break
         weights = new_weights
         weights *= weights.size / weights.sum()
 
-        # Warm-started from previous coefficients
-        model.fit(A_csr, y, sample_weight=weights)
+        # Scale CSC data by sqrt(weights) per row — mutate in-place to avoid
+        # rebuilding the csc_matrix object each iteration
+        sw = np.sqrt(weights)
+        X_w.data[:] = csc_data * np.take(sw, csc_indices)
+        y_w = y * sw
 
-    return {'x': model.coef_ * s, 'weights': weights,
-            'initial_n_iter': initial_n_iter, 'robust_n_iter': model.n_iter_,
+        # Warm-started from previous coefficients
+        _, coef_path, _, n_iters = _enet_path(
+            X_w, y_w,
+            l1_ratio=l1_ratio,
+            alphas=[alpha],
+            positive=True,
+            coef_init=coef,
+            check_input=False,
+            return_n_iter=True,
+            max_iter=20000,
+            tol=1e-3,
+            selection='random',
+            random_state=_rng,
+        )
+        coef = coef_path[:, 0]
+
+    return {'x': coef * s, 'weights': weights,
+            'initial_n_iter': initial_n_iter, 'robust_n_iter': n_iters[0],
             'alpha_max': alpha_max, 'l1_ratio': l1_ratio}
 
 
@@ -1993,17 +2156,23 @@ def fit_to_lib2(dia_spec,
                 dia_spectrum[:, 1],
                 1e-10)
 
-        sparse_lib_matrix = sparse.coo_matrix((sparse_values, (sparse_row_indices, sparse_col_indices)))
-        _perf_add("ft:assemble_coo_jit+sparse", time.perf_counter() - _ft0)
+        _perf_add("ft:assemble_coo_jit", time.perf_counter() - _ft0)
 
         # Fit lib spectra to observed spectra (Huber loss via IRLS)
+        # Pass flat COO arrays directly — avoids constructing scipy sparse matrix
         _ft0 = time.perf_counter()
-        fit_results = huber_nnls_irls(sparse_lib_matrix, dia_spec_int)
+        _n_coo_rows = len(dia_spec_int)
+        _n_coo_cols = int(sparse_col_indices.max()) + 1 if len(sparse_col_indices) > 0 else 0
+        fit_results = huber_nnls_irls(sparse_values, sparse_row_indices, sparse_col_indices,
+                                      _n_coo_rows, _n_coo_cols, dia_spec_int)
         lib_coefficients = fit_results['x']
         _perf_add("ft:huber_nnls_irls", time.perf_counter() - _ft0)
 
         ####################################
         _ft0 = time.perf_counter()
+        # Construct sparse_lib_matrix (still needed by get_features for sparse matmul/toarray)
+        sparse_lib_matrix = sparse.coo_matrix((sparse_values, (sparse_row_indices, sparse_col_indices)))
+
         # Compute single-matched rows ONCE, build DIA-space lookup for get_features
         single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
         _sm_max = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0

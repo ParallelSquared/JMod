@@ -104,73 +104,6 @@ from src.logger import logger, set_log_filepath, log_exceptions
 import logging
 
 
-class _LightSpectrum:
-    """Lightweight spectrum backed by shared memory arrays. No pickling needed."""
-    __slots__ = ('mz', 'intens', 'prec_mz', 'RT', 'scan_num', 'ms1window',
-                 'scanwindow', 'level')
-    def __init__(self, mz, intens, prec_mz, RT, scan_num, ms1window, scanwindow):
-        self.mz = mz
-        self.intens = intens
-        self.prec_mz = prec_mz
-        self.RT = RT
-        self.scan_num = scan_num
-        self.ms1window = ms1window
-        self.scanwindow = scanwindow
-        self.level = 2
-    def peak_list(self):
-        return np.array([self.mz, self.intens])
-
-
-_worker_shared = {}
-
-
-def _init_worker(library, decoy_lib, rt_mz, all_keys, frag_index,
-                 decoy_frag_index, ms1_spectra, ms1_rt, output_folder,
-                 rt_tol, ms1_tol, mz_tol,
-                 all_spec_mz, all_spec_int, spec_offsets, spec_lengths,
-                 spec_prec_mz, spec_rt, spec_scan_num, spec_ms1window,
-                 spec_scanwindow):
-    """Called once per worker process after fork. Stores refs to shared data."""
-    _worker_shared.update({
-        'library': library, 'decoy_lib': decoy_lib, 'rt_mz': rt_mz,
-        'all_keys': all_keys, 'frag_index': frag_index,
-        'decoy_frag_index': decoy_frag_index, 'ms1_spectra': ms1_spectra,
-        'ms1_rt': ms1_rt, 'output_folder': output_folder,
-        'rt_tol': rt_tol, 'ms1_tol': ms1_tol, 'mz_tol': mz_tol,
-        'all_spec_mz': all_spec_mz, 'all_spec_int': all_spec_int,
-        'spec_offsets': spec_offsets, 'spec_lengths': spec_lengths,
-        'spec_prec_mz': spec_prec_mz, 'spec_rt': spec_rt,
-        'spec_scan_num': spec_scan_num, 'spec_ms1window': spec_ms1window,
-        'spec_scanwindow': spec_scanwindow,
-    })
-
-
-def _fit_worker(spec_idx):
-    """Worker function. Only an integer index is sent via IPC."""
-    s = _worker_shared
-    off = int(s['spec_offsets'][spec_idx])
-    length = int(s['spec_lengths'][spec_idx])
-    dia_spec = _LightSpectrum(
-        mz=s['all_spec_mz'][off:off+length],
-        intens=s['all_spec_int'][off:off+length],
-        prec_mz=s['spec_prec_mz'][spec_idx],
-        RT=s['spec_rt'][spec_idx],
-        scan_num=int(s['spec_scan_num'][spec_idx]),
-        ms1window=s['spec_ms1window'][spec_idx],
-        scanwindow=s['spec_scanwindow'][spec_idx],
-    )
-    return fit_to_lib2(
-        dia_spec,
-        library=s['library'], rt_mz=s['rt_mz'], all_keys=s['all_keys'],
-        dino_features=None, rt_filter=True,
-        rt_tol=s['rt_tol'], ms1_tol=s['ms1_tol'], mz_tol=s['mz_tol'],
-        ms1_spectra=s['ms1_spectra'], return_frags=False,
-        decoy=True, decoy_library=s['decoy_lib'],
-        output_folder=s['output_folder'],
-        frag_index=s['frag_index'], decoy_frag_index=s['decoy_frag_index'],
-        ms1_rt=s['ms1_rt'],
-    )
-
 @log_exceptions
 def main(GUI_config_json=None, GUI_result_queue=None):
     """Main function to run JMod analysis."""
@@ -582,12 +515,23 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
 
-    # Precompute MS1 RT array once
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    n_threads = os.cpu_count() or 1
+    logger.info(f"Using {n_threads} threads for main search")
+
+    # Precompute MS1 RT array once (shared across all threads, read-only)
     _ms1_rt = np.array([s.RT for s in DIAspectra.ms1scans])
 
     _pl_schema = get_parquet_schema(timeplex=config.args.timeplex)
     _pa_schema = pl.DataFrame(schema=_pl_schema).to_arrow().schema
     _BUFFER_SIZE = 1000  # results to buffer before flushing to disk
+
+    # Measure CPU utilization across the search to assess GIL contention
+    import psutil as _psutil
+    _search_proc = _psutil.Process(os.getpid())
+    _search_proc.cpu_percent()  # prime the measurement
+    _search_wall_t0 = time.time()
 
     for batch_idx in range(num_batches):
         start_time = time.time()
@@ -602,35 +546,39 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         n_results = 0
         _completed = 0
 
-        for dia_spec in tqdm.tqdm(batch_spectra, total=len(batch_spectra)):
-            result = fit_to_lib2(dia_spec,
-                                 library=spectrumLibrary,
-                                 rt_mz=rt_mz,
-                                 all_keys=all_keys,
-                                 dino_features=None,
-                                 rt_filter=True,
-                                 rt_tol=config.opt_rt_tol,
-                                 ms1_tol=config.opt_ms1_tol,
-                                 mz_tol=config.mz_tol,
-                                 ms1_spectra=DIAspectra.ms1scans,
-                                 return_frags=False,
-                                 decoy=True,
-                                 decoy_library=decoy_lib,
-                                 output_folder=results_folder_path,
-                                 frag_index=frag_index,
-                                 decoy_frag_index=decoy_frag_index,
-                                 ms1_rt=_ms1_rt)
-            _completed += 1
-            if _completed % 10000 == 0:
-                _log_mem(f"batch {batch_idx+1}, {_completed}/{len(batch_spectra)} done")
-            if result:
-                buffer.extend(result)
-                n_results += len(result)
-                if len(buffer) >= _BUFFER_SIZE:
-                    _col_data = {col: [row[i] for row in buffer]
-                                 for i, col in enumerate(_pl_schema)}
-                    writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
-                    buffer.clear()
+        with ThreadPoolExecutor(max_workers=n_threads) as pool:
+            futures = {pool.submit(fit_to_lib2, dia_spec,
+                                   library=spectrumLibrary,
+                                   rt_mz=rt_mz,
+                                   all_keys=all_keys,
+                                   dino_features=None,
+                                   rt_filter=True,
+                                   rt_tol=config.opt_rt_tol,
+                                   ms1_tol=config.opt_ms1_tol,
+                                   mz_tol=config.mz_tol,
+                                   ms1_spectra=DIAspectra.ms1scans,
+                                   return_frags=False,
+                                   decoy=True,
+                                   decoy_library=decoy_lib,
+                                   output_folder=results_folder_path,
+                                   frag_index=frag_index,
+                                   decoy_frag_index=decoy_frag_index,
+                                   ms1_rt=_ms1_rt): i
+                      for i, dia_spec in enumerate(batch_spectra)}
+
+            for f in tqdm.tqdm(as_completed(futures), total=len(futures)):
+                result = f.result()
+                _completed += 1
+                if _completed % 10000 == 0:
+                    _log_mem(f"batch {batch_idx+1}, {_completed}/{len(batch_spectra)} done")
+                if result:
+                    buffer.extend(result)
+                    n_results += len(result)
+                    if len(buffer) >= _BUFFER_SIZE:
+                        _col_data = {col: [row[i] for row in buffer]
+                                     for i, col in enumerate(_pl_schema)}
+                        writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+                        buffer.clear()
 
         # Flush remaining buffered results
         if buffer:
@@ -642,6 +590,13 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         writer.close()
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         logger.info(f"Batch {batch_idx+1}: {n_results} results written")
+
+    # Report CPU utilization for GIL contention assessment
+    _search_wall = time.time() - _search_wall_t0
+    _search_cpu = _search_proc.cpu_percent()
+    logger.info(f"[CPU] Search wall time: {_search_wall:.1f}s, "
+                f"CPU: {_search_cpu:.0f}%, "
+                f"Effective cores: {_search_cpu/100:.1f}/{n_threads}")
 
     # Free large objects no longer needed after search
     del decoy_lib, frag_index, decoy_frag_index, _ms1_rt, spectra_to_fit
