@@ -684,19 +684,19 @@ def _assemble_features_jit(
     scribe_scores, max_unmatched_residuals, max_matched_residuals,
     gof_stats, manhattan_distances, fitted_spectral_contrasts,
     frac_int_matched_pred, lc_frac, lc_cosine,
-    prec_mz):
-    """Assemble the 26-column feature matrix in one nogil pass.
+    prec_mz, tic):
+    """Assemble the 27-column feature matrix in one nogil pass.
 
     Replaces np.ones_like * scalar broadcasts (5 allocations) + np.stack of
-    26 arrays (~1500 GIL-holding samples). Fills a pre-allocated (n, 26)
+    27 arrays (~1500 GIL-holding samples). Fills a pre-allocated (n, 27)
     array directly — no intermediate arrays, no GIL.
 
     Per-candidate arrays (length n) are copied directly into their column.
     Scalar features (frac_int_matched, frac_int_pred, frac_int_matched_pred,
-    lc_frac, lc_cosine) are broadcast by filling the column with the value.
+    lc_frac, lc_cosine, tic) are broadcast by filling the column with the value.
     """
     n = len(num_lib_peaks_matched)
-    out = np.empty((n, 26), dtype=np.float64)
+    out = np.empty((n, 27), dtype=np.float64)
     for i in range(n):
         out[i, 0] = num_lib_peaks_matched[i]
         out[i, 1] = frac_lib_intensity[i]
@@ -724,6 +724,7 @@ def _assemble_features_jit(
         out[i, 23] = lc_frac                # scalar broadcast
         out[i, 24] = lc_cosine              # scalar broadcast
         out[i, 25] = prec_mz[i]
+        out[i, 26] = tic                    # scalar broadcast
     return out
 
 
@@ -1950,7 +1951,7 @@ def get_features(
 
     # mz tol
     _t0 = time.perf_counter()
-    rel_error = ms1_error#np.zeros(len(ref_peaks_in_dia))
+    rel_error = np.where(~np.isnan(ms1_error), np.abs(ms1_error), -1.0)
     rt_error = prec_rt-rt_mz[:,0]
 
     frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
@@ -2057,7 +2058,8 @@ def get_features(
         _frac_int_matched_pred_scalar,  # 22: predicted/observed intensity ratio (scalar → broadcast)
         _lc_frac,                       # 23: large-coeff predicted/observed intensity ratio (scalar → broadcast)
         _lc_cosine,                     # 24: large-coeff subset cosine similarity (scalar → broadcast)
-        _prec_mz                        # 25: calibrated precursor m/z
+        _prec_mz,                       # 25: calibrated precursor m/z
+        tic                              # 26: total ion current (scalar → broadcast)
     )
     _perf_add("gf:assemble_features_jit", time.perf_counter() - _t0)
     return features

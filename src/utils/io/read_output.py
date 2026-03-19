@@ -110,7 +110,7 @@ _SCHEMA_SPEC = [
     # -- timeplex inserts "time_channel" here at index 5 --
     ("window_mz",                   pl.Float32,             0.0),
     ("rt",                          pl.Float32,             0.0),
-    # 26 feature columns
+    # 27 feature columns
     ("num_lib",                     pl.Float32,             0.0),
     ("frac_lib_int",                pl.Float32,             0.0),
     ("frac_dia_int",                pl.Float32,             0.0),
@@ -137,6 +137,7 @@ _SCHEMA_SPEC = [
     ("frac_int_matched_pred_sigcoeff", pl.Float32,          0.0),
     ("cosine",                      pl.Float32,             0.0),
     ("mz",                          pl.Float32,             0.0),
+    ("tic",                         pl.Float32,             0.0),
     # 7 fragment list columns
     ("frag_names",                  pl.List(pl.Int32),       None),
     ("frag_errors",                 pl.List(pl.Float64),     None),
