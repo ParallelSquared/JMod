@@ -364,6 +364,49 @@ def _compute_hyperscores_jit(all_intensities, all_codes, offsets,
 
 
 @njit(nogil=True)
+def _single_match_lookup_jit(coo_rows, coo_cols, n_rows):
+    """Compute boolean lookup of rows matched by exactly one candidate.
+
+    A row (DIA peak) matched by exactly one column (precursor candidate) means
+    that peak's intensity is unambiguously explained by a single precursor.
+    These uniquely-matched peaks are used to compute frac_unique_pred.
+
+    Replaces: sparse.coo_matrix(...) → np.sum(matrix>0, axis=1)==1 → np.where
+
+    Args:
+        coo_rows: int32/int64 array of row indices (COO format)
+        coo_cols: int32/int64 array of column indices (COO format)
+        n_rows: total number of rows
+
+    Returns:
+        bool array of length n_rows — True where row is matched by exactly one precursor.
+    """
+    # Count distinct columns per row using a seen-column tracker
+    # Since values can be duplicated in COO (same row, same col), we need
+    # to count distinct columns. Use a simple approach: for each row, track
+    # how many distinct columns we've seen.
+    col_count = np.zeros(n_rows, dtype=np.int32)
+    # Track last seen column per row to avoid counting duplicates from sorted COO
+    # But COO isn't necessarily sorted, so use a different approach:
+    # First pass: for each (row, col) pair, mark the row as having that col
+    # Since we just need count >= 2 vs == 1, we can increment and cap at 2
+    last_col = np.full(n_rows, -1, dtype=np.int64)
+    for i in range(len(coo_rows)):
+        r = coo_rows[i]
+        c = coo_cols[i]
+        if col_count[r] == 0:
+            col_count[r] = 1
+            last_col[r] = c
+        elif last_col[r] != c:
+            col_count[r] = 2  # already >= 2, no need to count further
+
+    result = np.empty(n_rows, dtype=np.bool_)
+    for i in range(n_rows):
+        result[i] = col_count[i] == 1
+    return result
+
+
+@njit(nogil=True)
 def _compute_unique_frac_jit(ref_rows, ref_vals, ref_offsets,
                               unique_lookup, dia_obs, coeffs, coeff_offset,
                               frac_unique_pred_out):
@@ -1740,9 +1783,9 @@ def get_features(
     window_idxs,
     dia_spec_int,
     lib_coefficients,
-    sparse_lib_matrix,
     sparse_row_indices,
     sparse_col_indices,
+    sparse_values,
     lib_peaks_matched,
     ref_pep_cand,
     all_row_indices,
@@ -1836,10 +1879,9 @@ def get_features(
 
     # Compute predicted spectrum + large_coeff features in one JIT pass (nogil).
     # Replaces: sparse_lib_matrix*lib_coefficients, np.isin, np.unique, .toarray(), cosim, etc.
-    _n_coo_rows = sparse_lib_matrix.shape[0] if sparse.issparse(sparse_lib_matrix) else int(sparse_row_indices.max()) + 1
-    _coo_vals = sparse_lib_matrix.data if sparse.issparse(sparse_lib_matrix) else np.empty(0)
+    _n_coo_rows = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
     predicted_spec_full, _lc_frac, _lc_cosine = _large_coeff_block_jit(
-        sparse_row_indices, sparse_col_indices, _coo_vals, _n_coo_rows,
+        sparse_row_indices, sparse_col_indices, sparse_values, _n_coo_rows,
         coeffs, val_obs,
         _all_flat_rows, _all_flat_vals, _all_flat_offsets,
         _col_to_pos)
@@ -1852,10 +1894,9 @@ def get_features(
     if unique_lookup_dia is not None:
         _unique_lookup = unique_lookup_dia
     else:
-        single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
-        _max_idx = max((dia.max() for dia in ref_spec_row_indices_split if len(dia) > 0), default=-1) + 1
-        _unique_lookup = np.zeros(_max_idx, dtype=bool)
-        _unique_lookup[single_matched_rows.ravel()] = True
+        # Fallback: compute from COO arrays directly
+        _n_sm = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
+        _unique_lookup = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _n_sm)
 
     r2_unique = np.zeros_like(rt_error)
 
@@ -2324,14 +2365,9 @@ def fit_to_lib2(dia_spec,
 
         ####################################
         _ft0 = time.perf_counter()
-        # Construct sparse_lib_matrix (still needed by get_features for sparse matmul/toarray)
-        sparse_lib_matrix = sparse.coo_matrix((sparse_values, (sparse_row_indices, sparse_col_indices)))
-
-        # Compute single-matched rows ONCE, build DIA-space lookup for get_features
-        single_matched_rows = np.where(np.sum(sparse_lib_matrix>0,1)==1)[0]
+        # Compute single-matched rows via JIT (replaces sparse.coo_matrix + np.sum(matrix>0,1)==1)
         _sm_max = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
-        single_match_lookup = np.zeros(_sm_max, dtype=bool)
-        single_match_lookup[single_matched_rows.ravel()] = True
+        single_match_lookup = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _sm_max)
 
         # Map re-indexed single-match status back to original DIA peak indices
         n_dia = dia_spectrum.shape[0]
@@ -2360,9 +2396,9 @@ def fit_to_lib2(dia_spec,
                                 window_idxs,
                                 dia_spec_int,
                                 lib_coefficients,
-                                sparse_lib_matrix,
                                 sparse_row_indices,
                                 sparse_col_indices,
+                                sparse_values,
                                 lib_peaks_matched,
                                 ref_pep_cand,
                                 (ref_spec_row_indices_split+decoy_spec_row_indices_split),
@@ -2392,9 +2428,9 @@ def fit_to_lib2(dia_spec,
                                             decoy_window_idxs,
                                             dia_spec_int,
                                             lib_coefficients,
-                                            sparse_lib_matrix,
                                             sparse_row_indices,
                                             sparse_col_indices,
+                                            sparse_values,
                                             decoy_lib_peaks_matched,
                                             decoy_pep_cand,
                                             (ref_spec_row_indices_split+decoy_spec_row_indices_split),

@@ -517,7 +517,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    n_threads = os.cpu_count() or 1
+    n_threads = 3
     logger.info(f"Using {n_threads} threads for main search")
 
     # Precompute MS1 RT array once (shared across all threads, read-only)
