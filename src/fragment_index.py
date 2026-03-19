@@ -36,104 +36,142 @@ def _searchsorted_right_f32(arr, lo, hi, val):
     return lo
 
 
-@njit
-def _query_partition_jit(flat_prec_mz, flat_deficit, flat_prec_idx,
-                         bin_offsets, bin_lengths, min_nominal,
-                         counter, ion_nominals, ion_deficits, ion_tols,
-                         win_lo, win_hi):
-    """JIT-compiled inner loop: count fragment matches per precursor.
+@njit(nogil=True)
+def _query_all_partitions_jit(
+        # Per-ion precomputed arrays
+        ion_nominals, ion_deficits, ion_tols,
+        # DIA isolation window bounds
+        win_lo, win_hi,
+        # Query parameters
+        prec_rt, rt_tol, atleast_m,
+        # Partition metadata (one entry per partition)
+        part_rt_lo, part_rt_hi, part_n_precursors, part_min_nominal,
+        # Fragment data — concatenated across partitions
+        all_flat_prec_mz, all_flat_deficit, all_flat_prec_idx,
+        flat_offsets,       # int64[n_partitions+1] — into fragment arrays
+        # Bin metadata — concatenated across partitions
+        all_bin_offsets, all_bin_lengths,
+        bin_meta_offsets,   # int64[n_partitions+1] — into bin arrays
+        # Precursor metadata — concatenated across partitions
+        all_prec_global_idx, all_prec_rt,
+        prec_offsets,       # int64[n_partitions+1] — into precursor arrays
+        # Output buffer (pre-allocated, max possible size)
+        out_indices):
+    """Full query across all partitions in one nogil pass.
 
-    For each observed ion, looks up the nominal mass bin, binary-searches for
-    precursors within the DIA isolation window, and increments the counter for
-    precursors whose fragment deficit matches within tolerance.
+    Returns the number of results written to out_indices.
     """
-    n_bins = len(bin_offsets)
+    n_partitions = len(part_rt_lo)
+    rt_lo_bound = prec_rt - rt_tol
+    rt_hi_bound = prec_rt + rt_tol
+    n_results = 0
 
-    for i in range(len(ion_nominals)):
-        nominal = ion_nominals[i]
-        query_deficit = ion_deficits[i]
-        tol_u16 = ion_tols[i]
+    for p in range(n_partitions):
+        # Partition RT overlap check
+        if part_rt_hi[p] < rt_lo_bound or part_rt_lo[p] > rt_hi_bound:
+            continue
 
-        # Query primary nominal bin
-        bin_idx = nominal - min_nominal
-        if 0 <= bin_idx < n_bins:
-            length = bin_lengths[bin_idx]
-            if length > 0:
-                offset = bin_offsets[bin_idx]
-                lo = _searchsorted_left_f32(flat_prec_mz, offset, offset + length, win_lo)
-                hi = _searchsorted_right_f32(flat_prec_mz, offset, offset + length, win_hi)
-                for j in range(lo, hi):
-                    diff = flat_deficit[j] - query_deficit
-                    if diff < 0:
-                        diff = -diff
-                    if diff <= tol_u16:
-                        counter[flat_prec_idx[j]] += 1
+        # Skip empty partitions
+        frag_start = flat_offsets[p]
+        frag_end = flat_offsets[p + 1]
+        if frag_start == frag_end:
+            continue
 
-        # Handle 1 Da boundary wrapping — low side
-        if query_deficit - tol_u16 < 0:
-            wrapped_deficit = 65536 + (query_deficit - tol_u16)
-            wrapped_tol = -(query_deficit - tol_u16)
-            bin_idx_lo = (nominal - 1) - min_nominal
-            if 0 <= bin_idx_lo < n_bins:
-                length = bin_lengths[bin_idx_lo]
+        n_prec = part_n_precursors[p]
+        min_nominal = part_min_nominal[p]
+        prec_start = prec_offsets[p]
+
+        # Bin arrays for this partition
+        bin_start = bin_meta_offsets[p]
+        bin_end = bin_meta_offsets[p + 1]
+        n_bins = bin_end - bin_start
+
+        # Fragment arrays for this partition (views via offset)
+        p_flat_prec_mz = all_flat_prec_mz[frag_start:frag_end]
+        p_flat_deficit = all_flat_deficit[frag_start:frag_end]
+        p_flat_prec_idx = all_flat_prec_idx[frag_start:frag_end]
+        p_bin_offsets = all_bin_offsets[bin_start:bin_end]
+        p_bin_lengths = all_bin_lengths[bin_start:bin_end]
+
+        # Zero counter for this partition (stack-allocated via array)
+        counter = np.zeros(n_prec, dtype=np.int32)
+
+        # ── Inner query loop (same logic as _query_partition_jit) ──
+        for i in range(len(ion_nominals)):
+            nominal = ion_nominals[i]
+            query_deficit = ion_deficits[i]
+            tol_u16 = ion_tols[i]
+
+            # Query primary nominal bin
+            bin_idx = nominal - min_nominal
+            if 0 <= bin_idx < n_bins:
+                length = p_bin_lengths[bin_idx]
                 if length > 0:
-                    offset = bin_offsets[bin_idx_lo]
-                    lo = _searchsorted_left_f32(flat_prec_mz, offset, offset + length, win_lo)
-                    hi = _searchsorted_right_f32(flat_prec_mz, offset, offset + length, win_hi)
+                    offset = p_bin_offsets[bin_idx]
+                    lo = _searchsorted_left_f32(p_flat_prec_mz, offset, offset + length, win_lo)
+                    hi = _searchsorted_right_f32(p_flat_prec_mz, offset, offset + length, win_hi)
                     for j in range(lo, hi):
-                        diff = flat_deficit[j] - wrapped_deficit
+                        diff = p_flat_deficit[j] - query_deficit
                         if diff < 0:
                             diff = -diff
-                        if diff <= wrapped_tol:
-                            counter[flat_prec_idx[j]] += 1
+                        if diff <= tol_u16:
+                            counter[p_flat_prec_idx[j]] += 1
 
-        # Handle 1 Da boundary wrapping — high side
-        if query_deficit + tol_u16 > 65535:
-            wrapped_deficit = (query_deficit + tol_u16) - 65536
-            wrapped_tol = (query_deficit + tol_u16) - 65535
-            bin_idx_hi = (nominal + 1) - min_nominal
-            if 0 <= bin_idx_hi < n_bins:
-                length = bin_lengths[bin_idx_hi]
-                if length > 0:
-                    offset = bin_offsets[bin_idx_hi]
-                    lo = _searchsorted_left_f32(flat_prec_mz, offset, offset + length, win_lo)
-                    hi = _searchsorted_right_f32(flat_prec_mz, offset, offset + length, win_hi)
-                    for j in range(lo, hi):
-                        diff = flat_deficit[j] - wrapped_deficit
-                        if diff < 0:
-                            diff = -diff
-                        if diff <= wrapped_tol:
-                            counter[flat_prec_idx[j]] += 1
+            # Handle 1 Da boundary wrapping — low side
+            if query_deficit - tol_u16 < 0:
+                wrapped_deficit = 65536 + (query_deficit - tol_u16)
+                wrapped_tol = -(query_deficit - tol_u16)
+                bin_idx_lo = (nominal - 1) - min_nominal
+                if 0 <= bin_idx_lo < n_bins:
+                    length = p_bin_lengths[bin_idx_lo]
+                    if length > 0:
+                        offset = p_bin_offsets[bin_idx_lo]
+                        lo = _searchsorted_left_f32(p_flat_prec_mz, offset, offset + length, win_lo)
+                        hi = _searchsorted_right_f32(p_flat_prec_mz, offset, offset + length, win_hi)
+                        for j in range(lo, hi):
+                            diff = p_flat_deficit[j] - wrapped_deficit
+                            if diff < 0:
+                                diff = -diff
+                            if diff <= wrapped_tol:
+                                counter[p_flat_prec_idx[j]] += 1
 
+            # Handle 1 Da boundary wrapping — high side
+            if query_deficit + tol_u16 > 65535:
+                wrapped_deficit = (query_deficit + tol_u16) - 65536
+                wrapped_tol = (query_deficit + tol_u16) - 65535
+                bin_idx_hi = (nominal + 1) - min_nominal
+                if 0 <= bin_idx_hi < n_bins:
+                    length = p_bin_lengths[bin_idx_hi]
+                    if length > 0:
+                        offset = p_bin_offsets[bin_idx_hi]
+                        lo = _searchsorted_left_f32(p_flat_prec_mz, offset, offset + length, win_lo)
+                        hi = _searchsorted_right_f32(p_flat_prec_mz, offset, offset + length, win_hi)
+                        for j in range(lo, hi):
+                            diff = p_flat_deficit[j] - wrapped_deficit
+                            if diff < 0:
+                                diff = -diff
+                            if diff <= wrapped_tol:
+                                counter[p_flat_prec_idx[j]] += 1
 
-class _Partition:
-    """One RT-range slice of the library, with flat arrays for numba access."""
-    __slots__ = ('rt_lo', 'rt_hi', 'n_precursors', 'precursor_global_idx',
-                 'precursor_rt', 'flat_prec_mz', 'flat_deficit', 'flat_prec_idx',
-                 'bin_offsets', 'bin_lengths', 'min_nominal')
+        # ── Collect passing precursors with RT filter ──
+        for k in range(n_prec):
+            if counter[k] >= atleast_m:
+                p_rt = all_prec_rt[prec_start + k]
+                if p_rt - prec_rt < rt_tol and prec_rt - p_rt < rt_tol:
+                    out_indices[n_results] = all_prec_global_idx[prec_start + k]
+                    n_results += 1
 
-    def __init__(self, rt_lo, rt_hi, n_precursors, precursor_global_idx,
-                 precursor_rt, flat_prec_mz, flat_deficit, flat_prec_idx,
-                 bin_offsets, bin_lengths, min_nominal):
-        self.rt_lo = rt_lo
-        self.rt_hi = rt_hi
-        self.n_precursors = n_precursors
-        self.precursor_global_idx = precursor_global_idx  # uint32[n_precursors]
-        self.precursor_rt = precursor_rt                  # float32[n_precursors]
-        self.flat_prec_mz = flat_prec_mz    # float32 — all bins concatenated, sorted within each bin
-        self.flat_deficit = flat_deficit      # int32 — deficit values (int32 for numba arithmetic)
-        self.flat_prec_idx = flat_prec_idx  # int32 — precursor indices (int32 for numba)
-        self.bin_offsets = bin_offsets        # int32[n_bins] — offset into flat arrays
-        self.bin_lengths = bin_lengths        # int32[n_bins] — length of each bin
-        self.min_nominal = min_nominal        # int32 — minimum nominal mass
+    return n_results
 
 
 class FragmentIndex:
     """Fragment ion index for fast candidate pre-filtering."""
 
     def __init__(self, mz_tol_ppm: float):
-        self.partitions: list[_Partition] = []
+        self.partitions: list = []
         self.mz_tol_ppm = mz_tol_ppm
+        # Flattened arrays (populated by _finalize)
+        self._finalized = False
 
     @classmethod
     def build(cls, library, all_keys, rt_mz, mz_tol_ppm,
@@ -153,6 +191,7 @@ class FragmentIndex:
 
         n = len(all_keys)
         if n == 0:
+            idx._finalize()
             return idx
 
         # Count fragments per precursor (top_n only)
@@ -195,18 +234,18 @@ class FragmentIndex:
                 all_frag_prec_idx.append(np.full(len(frag_mzs), local_idx, dtype=np.int32))
 
             if not all_frag_mz:
-                partition = _Partition(
-                    rt_lo=float(prec_rts.min()), rt_hi=float(prec_rts.max()),
-                    n_precursors=n_prec, precursor_global_idx=p_indices.astype(np.uint32),
-                    precursor_rt=prec_rts,
-                    flat_prec_mz=np.empty(0, dtype=np.float32),
-                    flat_deficit=np.empty(0, dtype=np.int32),
-                    flat_prec_idx=np.empty(0, dtype=np.int32),
-                    bin_offsets=np.empty(0, dtype=np.int32),
-                    bin_lengths=np.empty(0, dtype=np.int32),
-                    min_nominal=0,
-                )
-                idx.partitions.append(partition)
+                idx.partitions.append({
+                    'rt_lo': float(prec_rts.min()), 'rt_hi': float(prec_rts.max()),
+                    'n_precursors': n_prec,
+                    'precursor_global_idx': p_indices.astype(np.uint32),
+                    'precursor_rt': prec_rts,
+                    'flat_prec_mz': np.empty(0, dtype=np.float32),
+                    'flat_deficit': np.empty(0, dtype=np.int32),
+                    'flat_prec_idx': np.empty(0, dtype=np.int32),
+                    'bin_offsets': np.empty(0, dtype=np.int32),
+                    'bin_lengths': np.empty(0, dtype=np.int32),
+                    'min_nominal': np.int32(0),
+                })
                 continue
 
             frag_mz_arr = np.concatenate(all_frag_mz)
@@ -241,20 +280,84 @@ class FragmentIndex:
                 bin_lengths[bin_idx] = count
                 cum += count
 
-            partition = _Partition(
-                rt_lo=float(prec_rts.min()), rt_hi=float(prec_rts.max()),
-                n_precursors=n_prec, precursor_global_idx=p_indices.astype(np.uint32),
-                precursor_rt=prec_rts,
-                flat_prec_mz=frag_prec_mz,
-                flat_deficit=deficit,
-                flat_prec_idx=frag_prec_idx,
-                bin_offsets=bin_offsets,
-                bin_lengths=bin_lengths,
-                min_nominal=np.int32(min_nom),
-            )
-            idx.partitions.append(partition)
+            idx.partitions.append({
+                'rt_lo': float(prec_rts.min()), 'rt_hi': float(prec_rts.max()),
+                'n_precursors': n_prec,
+                'precursor_global_idx': p_indices.astype(np.uint32),
+                'precursor_rt': prec_rts,
+                'flat_prec_mz': frag_prec_mz,
+                'flat_deficit': deficit,
+                'flat_prec_idx': frag_prec_idx,
+                'bin_offsets': bin_offsets,
+                'bin_lengths': bin_lengths,
+                'min_nominal': np.int32(min_nom),
+            })
 
+        idx._finalize()
         return idx
+
+    def _finalize(self):
+        """Pack partition data into concatenated arrays for the JIT query kernel."""
+        n_parts = len(self.partitions)
+        if n_parts == 0:
+            self.part_rt_lo = np.empty(0, dtype=np.float32)
+            self.part_rt_hi = np.empty(0, dtype=np.float32)
+            self.part_n_precursors = np.empty(0, dtype=np.int32)
+            self.part_min_nominal = np.empty(0, dtype=np.int32)
+            self.all_flat_prec_mz = np.empty(0, dtype=np.float32)
+            self.all_flat_deficit = np.empty(0, dtype=np.int32)
+            self.all_flat_prec_idx = np.empty(0, dtype=np.int32)
+            self.flat_offsets = np.zeros(1, dtype=np.int64)
+            self.all_bin_offsets = np.empty(0, dtype=np.int32)
+            self.all_bin_lengths = np.empty(0, dtype=np.int32)
+            self.bin_meta_offsets = np.zeros(1, dtype=np.int64)
+            self.all_prec_global_idx = np.empty(0, dtype=np.uint32)
+            self.all_prec_rt = np.empty(0, dtype=np.float32)
+            self.prec_offsets = np.zeros(1, dtype=np.int64)
+            self._total_precursors = 0
+            self._finalized = True
+            return
+
+        # Partition-level scalar metadata
+        self.part_rt_lo = np.array([p['rt_lo'] for p in self.partitions], dtype=np.float32)
+        self.part_rt_hi = np.array([p['rt_hi'] for p in self.partitions], dtype=np.float32)
+        self.part_n_precursors = np.array([p['n_precursors'] for p in self.partitions], dtype=np.int32)
+        self.part_min_nominal = np.array([p['min_nominal'] for p in self.partitions], dtype=np.int32)
+
+        # Concatenate fragment arrays with offset table
+        frag_arrays_mz = [p['flat_prec_mz'] for p in self.partitions]
+        frag_arrays_def = [p['flat_deficit'] for p in self.partitions]
+        frag_arrays_idx = [p['flat_prec_idx'] for p in self.partitions]
+        self.all_flat_prec_mz = np.concatenate(frag_arrays_mz) if any(len(a) > 0 for a in frag_arrays_mz) else np.empty(0, dtype=np.float32)
+        self.all_flat_deficit = np.concatenate(frag_arrays_def) if any(len(a) > 0 for a in frag_arrays_def) else np.empty(0, dtype=np.int32)
+        self.all_flat_prec_idx = np.concatenate(frag_arrays_idx) if any(len(a) > 0 for a in frag_arrays_idx) else np.empty(0, dtype=np.int32)
+        self.flat_offsets = np.zeros(n_parts + 1, dtype=np.int64)
+        for i in range(n_parts):
+            self.flat_offsets[i + 1] = self.flat_offsets[i] + len(frag_arrays_mz[i])
+
+        # Concatenate bin arrays with offset table
+        bin_arrays_off = [p['bin_offsets'] for p in self.partitions]
+        bin_arrays_len = [p['bin_lengths'] for p in self.partitions]
+        self.all_bin_offsets = np.concatenate(bin_arrays_off) if any(len(a) > 0 for a in bin_arrays_off) else np.empty(0, dtype=np.int32)
+        self.all_bin_lengths = np.concatenate(bin_arrays_len) if any(len(a) > 0 for a in bin_arrays_len) else np.empty(0, dtype=np.int32)
+        self.bin_meta_offsets = np.zeros(n_parts + 1, dtype=np.int64)
+        for i in range(n_parts):
+            self.bin_meta_offsets[i + 1] = self.bin_meta_offsets[i] + len(bin_arrays_off[i])
+
+        # Concatenate precursor arrays with offset table
+        prec_arrays_gidx = [p['precursor_global_idx'] for p in self.partitions]
+        prec_arrays_rt = [p['precursor_rt'] for p in self.partitions]
+        self.all_prec_global_idx = np.concatenate(prec_arrays_gidx)
+        self.all_prec_rt = np.concatenate(prec_arrays_rt)
+        self.prec_offsets = np.zeros(n_parts + 1, dtype=np.int64)
+        for i in range(n_parts):
+            self.prec_offsets[i + 1] = self.prec_offsets[i] + len(prec_arrays_gidx[i])
+
+        self._total_precursors = int(self.prec_offsets[-1])
+        self._finalized = True
+
+        # Free the partition dicts — all data is in flat arrays now
+        self.partitions = None
 
     def query(self, dia_mz_array, win_lo, win_hi, prec_rt, rt_tol, atleast_m):
         """Return global indices of precursors with >= atleast_m fragment matches within RT window.
@@ -270,36 +373,29 @@ class FragmentIndex:
         Returns:
             np.ndarray of uint32 global indices into all_keys/rt_mz.
         """
-        active = [p for p in self.partitions
-                  if p.rt_hi >= prec_rt - rt_tol and p.rt_lo <= prec_rt + rt_tol]
-
-        win_lo_f32 = np.float32(win_lo)
-        win_hi_f32 = np.float32(win_hi)
+        if self._total_precursors == 0:
+            return np.empty(0, dtype=np.uint32)
 
         # Precompute per-ion nominal, deficit, tol
         ion_nominals = np.floor(dia_mz_array).astype(np.int32)
         ion_deficits = np.round((dia_mz_array - ion_nominals) * 65536).astype(np.int32)
         ion_tols = np.ceil(ion_nominals * self.mz_tol_ppm * 1e-6 * 65536).astype(np.int32)
 
-        candidates = []
-        for p in active:
-            if len(p.flat_prec_mz) == 0:
-                continue
+        # Output buffer — worst case: all precursors pass
+        out_indices = np.empty(self._total_precursors, dtype=np.uint32)
 
-            # Per-call counter allocation (thread-safe)
-            counter = np.zeros(p.n_precursors, dtype=np.int32)
+        n_results = _query_all_partitions_jit(
+            ion_nominals, ion_deficits, ion_tols,
+            np.float32(win_lo), np.float32(win_hi),
+            prec_rt, rt_tol, atleast_m,
+            self.part_rt_lo, self.part_rt_hi, self.part_n_precursors, self.part_min_nominal,
+            self.all_flat_prec_mz, self.all_flat_deficit, self.all_flat_prec_idx,
+            self.flat_offsets,
+            self.all_bin_offsets, self.all_bin_lengths,
+            self.bin_meta_offsets,
+            self.all_prec_global_idx, self.all_prec_rt,
+            self.prec_offsets,
+            out_indices,
+        )
 
-            _query_partition_jit(
-                p.flat_prec_mz, p.flat_deficit, p.flat_prec_idx,
-                p.bin_offsets, p.bin_lengths, p.min_nominal,
-                counter, ion_nominals, ion_deficits, ion_tols,
-                win_lo_f32, win_hi_f32,
-            )
-
-            # Phase 2: collect fragment-passing precursors, then RT filter
-            passing = np.where(counter >= atleast_m)[0]
-            if len(passing) > 0:
-                rt_ok = np.abs(p.precursor_rt[passing] - prec_rt) < rt_tol
-                candidates.extend(p.precursor_global_idx[passing[rt_ok]])
-
-        return np.array(candidates, dtype=np.uint32) if candidates else np.empty(0, dtype=np.uint32)
+        return out_indices[:n_results]
