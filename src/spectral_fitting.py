@@ -407,6 +407,84 @@ def _single_match_lookup_jit(coo_rows, coo_cols, n_rows):
 
 
 @njit(nogil=True)
+def _dia_prep_jit(mz, intens, mz_tol):
+    """Merge nearby DIA peaks and compute centroid breaks + bin centers.
+
+    NOTE: This merging step may be redundant if the input spectra are already
+    centroided. The original code merged peaks within mz_tol of each other,
+    which could collapse peaks that are close in m/z. If inputs are already
+    properly centroided, this step could be skipped.
+
+    Returns:
+        merged_mz: merged peak m/z values
+        merged_int: merged peak intensities
+        centroid_breaks: sorted lower/upper tolerance bounds (2*n_merged)
+        bin_centers: midpoints of each (lower, upper) break pair (n_merged)
+    """
+    n = len(mz)
+
+    # ── Step 1: Merge nearby peaks within mz_tol ──
+    # Equivalent to: searchsorted(mz + mz_tol*mz, mz) to find merge groups
+    upper_bounds = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        upper_bounds[i] = mz[i] + mz_tol * mz[i]
+
+    # Assign each peak to a merge group via searchsorted into upper_bounds
+    merge_idx = np.empty(n, dtype=np.int64)
+    for i in range(n):
+        # Binary search for leftmost position where upper_bounds[pos] >= mz[i]
+        lo = 0
+        hi = n
+        while lo < hi:
+            mid = (lo + hi) >> 1
+            if upper_bounds[mid] < mz[i]:
+                lo = mid + 1
+            else:
+                hi = mid
+        merge_idx[i] = lo
+
+    # Count unique merge groups
+    n_merged = 0
+    for i in range(n):
+        if i == 0 or merge_idx[i] != merge_idx[i - 1]:
+            n_merged += 1
+
+    # Build merged arrays
+    merged_mz = np.empty(n_merged, dtype=np.float64)
+    merged_int = np.zeros(n_merged, dtype=np.float64)
+    g = -1
+    prev_idx = -1
+    for i in range(n):
+        if merge_idx[i] != prev_idx:
+            g += 1
+            merged_mz[g] = mz[merge_idx[i]]
+            prev_idx = merge_idx[i]
+        merged_int[g] += intens[i]
+
+    # ── Step 2: Compute centroid breaks and bin centers ──
+    breaks = np.empty(2 * n_merged, dtype=np.float64)
+    for i in range(n_merged):
+        breaks[2 * i] = merged_mz[i] - mz_tol * merged_mz[i]
+        breaks[2 * i + 1] = merged_mz[i] + mz_tol * merged_mz[i]
+
+    # Sort breaks
+    for i in range(1, len(breaks)):
+        key = breaks[i]
+        j = i - 1
+        while j >= 0 and breaks[j] > key:
+            breaks[j + 1] = breaks[j]
+            j -= 1
+        breaks[j + 1] = key
+
+    # Bin centers: mean of each consecutive pair
+    bin_centers = np.empty(n_merged, dtype=np.float64)
+    for i in range(n_merged):
+        bin_centers[i] = (breaks[2 * i] + breaks[2 * i + 1]) * 0.5
+
+    return merged_mz, merged_int, breaks, bin_centers
+
+
+@njit(nogil=True)
 def _compute_unique_frac_jit(ref_rows, ref_vals, ref_offsets,
                               unique_lookup, dia_obs, coeffs, coeff_offset,
                               frac_unique_pred_out):
@@ -2123,17 +2201,9 @@ def fit_to_lib2(dia_spec,
         ms1_spec = get_closest_ms1(prec_rt, ms1_spectra, ms1_rt=ms1_rt)
     lib_coefficients = []
 
-    merged_coords_idxs = np.searchsorted(dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0],dia_spectrum[:,0])
-    merged_coords = dia_spectrum[np.unique(merged_coords_idxs),0]
-    merged_intensities = np.bincount(merged_coords_idxs, weights=dia_spectrum[:, 1])
-    merged_intensities = merged_intensities[merged_intensities != 0]
-    if dia_spectrum.shape != np.array((merged_coords,merged_intensities)).transpose().shape:
-        print("Warning: Shapes dont match in fit_to_lib2")
-    dia_spectrum = np.array((merged_coords,merged_intensities)).transpose()
-
-    centroid_breaks = np.concatenate((dia_spectrum[:,0]-mz_tol*dia_spectrum[:,0],dia_spectrum[:,0]+mz_tol*dia_spectrum[:,0]))
-    centroid_breaks = np.sort(centroid_breaks)
-    bin_centers = np.mean(np.stack((centroid_breaks[::2],centroid_breaks[1::2]),1),1)
+    merged_mz, merged_int, centroid_breaks, bin_centers = _dia_prep_jit(
+        dia_spectrum[:, 0].copy(), dia_spectrum[:, 1].copy(), mz_tol)
+    dia_spectrum = np.stack([merged_mz, merged_int], axis=1)
     _perf_add("ft:dia_prep", time.perf_counter() - _ft0)
 
     # Get candidates via fragment index or fallback to m/z + RT window
