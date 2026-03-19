@@ -355,7 +355,7 @@ class score_model():
             ## XGBoost
             def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    dTrain = xgb.DMatrix(X,y,weight=sample_weight)
+                    dTrain = xgb.DMatrix(X,y,weight=sample_weight,feature_names=list(X.columns))
                     # param = {
                     #     'max_depth': config.tree_max_depth, 
                     #     'eta': .1, 
@@ -382,19 +382,23 @@ class score_model():
                     
                     m.model = xgb.train(param, dtrain=dTrain,num_boost_round=500)
                     def xg_predict(X):
-                        X_convert = xgb.DMatrix(X)
+                        X_convert = xgb.DMatrix(X,feature_names=list(X.columns))
                         return m.model.predict(X_convert)
                     m.__predict_fn__ = xg_predict
                     
                     if self.folder:
-                        plt.subplots()
                         fi = m.model.get_score(importance_type="gain")
-                        plt.barh(X.columns,[fi[i] if i in fi else 0 for i in X.columns])
-                        plt.title("Feature Importance")
+                        feature_importance = np.array([fi.get(c, 0) for c in X.columns])
+                        sorted_indices = np.argsort(feature_importance, kind='stable')
+                        sorted_features = np.array(X.columns)[sorted_indices]
+                        sorted_importance = feature_importance[sorted_indices]
+
+                        fig, ax = plt.subplots(figsize=(8, len(X.columns)*0.3))
+                        ax.barh(sorted_features, sorted_importance)
+                        ax.set_title("Feature Importance")
                         plt.savefig(self.folder+f"/XGBoost{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
-                        plt.close()
-                    
-                    
+                        plt.close(fig)
+
                     return m
                 
             # self.model = fit_model(X,y)
@@ -486,7 +490,7 @@ class score_model():
         elif self.model_type == "xg":
             def fit_model(X,y,sample_weight,idx=""):
                     m = model_instance(model_type=self.model_type)
-                    dTrain = xgb.DMatrix(X,y,weight=sample_weight)
+                    dTrain = xgb.DMatrix(X,y,weight=sample_weight,feature_names=list(X.columns))
                     param = {
                         'objective': 'binary:logistic',
                          'eval_metric': 'aucpr',
@@ -501,7 +505,7 @@ class score_model():
                         }
                     m.model = xgb.train(param, dtrain=dTrain,num_boost_round=500)
                     def xg_predict(X):
-                        X_convert = xgb.DMatrix(X)
+                        X_convert = xgb.DMatrix(X,feature_names=list(X.columns))
                         return m.model.predict(X_convert)
                     m.__predict_fn__ = xg_predict
                     return m
