@@ -38,8 +38,8 @@ def _searchsorted_right_f32(arr, lo, hi, val):
 
 @njit(nogil=True)
 def _query_all_partitions_jit(
-        # Per-ion precomputed arrays
-        ion_nominals, ion_deficits, ion_tols,
+        # DIA observed fragment m/z values
+        dia_mz_array, mz_tol_ppm,
         # DIA isolation window bounds
         win_lo, win_hi,
         # Query parameters
@@ -59,8 +59,28 @@ def _query_all_partitions_jit(
         out_indices):
     """Full query across all partitions in one nogil pass.
 
+    Computes ion nominals, deficits, and tolerances internally to avoid
+    GIL-holding numpy calls in the Python wrapper.
+
     Returns the number of results written to out_indices.
     """
+    # Precompute per-ion nominal, deficit, tol (replaces 3 numpy calls in Python)
+    n_ions = len(dia_mz_array)
+    ion_nominals = np.empty(n_ions, dtype=np.int32)
+    ion_deficits = np.empty(n_ions, dtype=np.int32)
+    ion_tols = np.empty(n_ions, dtype=np.int32)
+    ppm_factor = mz_tol_ppm * 1e-6 * 65536.0
+    for i in range(n_ions):
+        nom = int(np.floor(dia_mz_array[i]))
+        ion_nominals[i] = nom
+        ion_deficits[i] = int(np.round((dia_mz_array[i] - nom) * 65536.0))
+        # np.ceil equivalent for positive values
+        tol_f = nom * ppm_factor
+        tol_i = int(tol_f)
+        if tol_f > tol_i:
+            tol_i += 1
+        ion_tols[i] = tol_i
+
     n_partitions = len(part_rt_lo)
     rt_lo_bound = prec_rt - rt_tol
     rt_hi_bound = prec_rt + rt_tol
@@ -97,7 +117,7 @@ def _query_all_partitions_jit(
         counter = np.zeros(n_prec, dtype=np.int32)
 
         # ── Inner query loop (same logic as _query_partition_jit) ──
-        for i in range(len(ion_nominals)):
+        for i in range(n_ions):
             nominal = ion_nominals[i]
             query_deficit = ion_deficits[i]
             tol_u16 = ion_tols[i]
@@ -376,16 +396,11 @@ class FragmentIndex:
         if self._total_precursors == 0:
             return np.empty(0, dtype=np.uint32)
 
-        # Precompute per-ion nominal, deficit, tol
-        ion_nominals = np.floor(dia_mz_array).astype(np.int32)
-        ion_deficits = np.round((dia_mz_array - ion_nominals) * 65536).astype(np.int32)
-        ion_tols = np.ceil(ion_nominals * self.mz_tol_ppm * 1e-6 * 65536).astype(np.int32)
-
         # Output buffer — worst case: all precursors pass
         out_indices = np.empty(self._total_precursors, dtype=np.uint32)
 
         n_results = _query_all_partitions_jit(
-            ion_nominals, ion_deficits, ion_tols,
+            dia_mz_array, self.mz_tol_ppm,
             np.float32(win_lo), np.float32(win_hi),
             prec_rt, rt_tol, atleast_m,
             self.part_rt_lo, self.part_rt_hi, self.part_n_precursors, self.part_min_nominal,
