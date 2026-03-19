@@ -258,16 +258,16 @@ def fine_tune_rt(grouped_df,
        tag=config.tag
    
     if tag is None:
-        model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_LF_09182024_")
+        model_path = os.path.join(current_dir,"../rt_models","iRT_CNN_model_LF_09182024_")
         
     elif "mTRAQ" in tag.name:
-        model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_mTRAQ_09182024_")
+        model_path = os.path.join(current_dir,"../rt_models","iRT_CNN_model_mTRAQ_09182024_")
         
     elif "diethyl" in tag.name:
-        model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_DiEthyl_11052024_")
+        model_path = os.path.join(current_dir,"../rt_models","iRT_CNN_model_DiEthyl_11052024_")
         
     elif "PSMtag" in tag.name:
-        model_path = os.path.join(current_dir,"../RT_models","iRT_TransferLearning_Tag6_updated_05072025_")
+        model_path = os.path.join(current_dir,"../rt_models","iRT_TransferLearning_Tag6_updated_05072025_")
         
     else:
         from src.utils.gui_utils import send_raise_to_TK
