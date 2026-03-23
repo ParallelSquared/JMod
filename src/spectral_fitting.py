@@ -2513,7 +2513,7 @@ def fit_to_lib2(dia_spec,
                                             0,
                                             decoy_frag_name_codes,
                                             unique_lookup_dia=unique_lookup_dia)
-        
+
             _perf_add("ft:get_features_decoy", time.perf_counter() - _ft0)
 
             unique_row_indices_split_decoy = [single_match_lookup[peak_idx_lookup[i]] for i in decoy_spec_row_indices_split]

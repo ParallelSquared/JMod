@@ -685,16 +685,16 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
             # Iterations 2+: filter targets to q<=0.01, relabel PEP>=0.90 as decoys
             pep_values = estimate_pep(pred, fdc["decoy"].values)
 
-            # Keep: all decoys + targets with q <= 0.01
-            keep_mask = fdc["decoy"].values | (fdc_qvalues <= 0.01)
-
             # Build relabeled y: targets with PEP >= 0.90 become decoys
             y_filtered = y.copy()
             neg_mine_mask = (y_filtered == 1) & (pep_values >= 0.90)
             y_filtered[neg_mine_mask] = 0
 
+            # Keep: all decoys + confident targets (q <= 0.01) + negative-mined targets
+            keep_mask = fdc["decoy"].values | (fdc_qvalues <= 0.01) | neg_mine_mask
+
             n_kept = keep_mask.sum()
-            n_relabeled = (keep_mask & neg_mine_mask).sum()
+            n_relabeled = neg_mine_mask[keep_mask].sum()
             logger.info(f"    Kept {n_kept}/{len(keep_mask)} samples, relabeled {n_relabeled} as decoys")
 
             sc_model = score_model(model_type, folder=folder)
