@@ -523,6 +523,23 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     # Precompute MS1 RT array once (shared across all threads, read-only)
     _ms1_rt = np.array([s.RT for s in DIAspectra.ms1scans])
 
+    # Precompute IM-bin MS1 lookup if IM data is present
+    if len(DIAspectra.ms1scans) > 0 and DIAspectra.ms1scans[0].im_lo is not None:
+        from collections import defaultdict
+        _im_bin_ms1_tmp = defaultdict(lambda: ([], []))
+        for i, s in enumerate(DIAspectra.ms1scans):
+            _im_bin_ms1_tmp[(s.im_lo, s.im_hi)][0].append(s.RT)
+            _im_bin_ms1_tmp[(s.im_lo, s.im_hi)][1].append(i)
+        _im_bin_ms1 = {}
+        for key, (rts, idxs) in _im_bin_ms1_tmp.items():
+            rt_arr = np.array(rts)
+            idx_arr = np.array(idxs, dtype=int)
+            order = np.argsort(rt_arr)
+            _im_bin_ms1[key] = (rt_arr[order], idx_arr[order])
+        logger.info(f"Built IM-bin MS1 lookup with {len(_im_bin_ms1)} bins")
+    else:
+        _im_bin_ms1 = None
+
     _pl_schema = get_parquet_schema(timeplex=config.args.timeplex)
     _pa_schema = pl.DataFrame(schema=_pl_schema).to_arrow().schema
     _BUFFER_SIZE = 1000  # results to buffer before flushing to disk
@@ -563,7 +580,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                    output_folder=results_folder_path,
                                    frag_index=frag_index,
                                    decoy_frag_index=decoy_frag_index,
-                                   ms1_rt=_ms1_rt): i
+                                   ms1_rt=_ms1_rt,
+                                   im_bin_ms1=_im_bin_ms1): i
                       for i, dia_spec in enumerate(batch_spectra)}
 
             for f in tqdm.tqdm(as_completed(futures), total=len(futures)):

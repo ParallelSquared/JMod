@@ -84,8 +84,11 @@ def ms1_cor_channels(all_spectra,
     bottom_of_window, top_of_window = np.array([i.ms1window for i in ms2_spectra]).T
     ms2_rt = np.array([i.RT for i in ms2_spectra])
 
-    ## list of scan nums of the closest ms1 scan for each ms2 scan
-    resp_ms1scans = [ms1_spec_idxs[closest_ms1spec(ms2_rt[i], ms1_rt)] for i in range(len(ms2_rt))]
+    ## list of scan nums of the closest ms1 scan for each ms2 scan (IM-aware if available)
+    if all_spectra.ms2_to_ms1_map is not None:
+        resp_ms1scans = [ms1_spec_idxs[all_spectra.ms2_to_ms1_map[i]] for i in range(len(ms2_spectra))]
+    else:
+        resp_ms1scans = [ms1_spec_idxs[closest_ms1spec(ms2_rt[i], ms1_rt)] for i in range(len(ms2_rt))]
 
     ## mapping of ms2 scan nums to ms1 scan nums
     ms2_ms1_scan_map = {spec.scan_num:resp_ms1scans[i] for i,spec in enumerate(ms2_spectra)}
@@ -351,7 +354,7 @@ def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC):
 
     return prec_seqs, prec_mzs, group_prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel
 
-def minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width): 
+def minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width):
     """
     Retrieve the list of MS1 scan and scan idxs within a window of the highest coeff scans
 
@@ -371,25 +374,61 @@ def minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spec
     Returns
     -------
     all_scans : list of int
-        A list of scan idxs 
+        A list of scan idxs
     spectra_subset : list of Spectrum
         A list of corresponding Spectrum Objects
 
     Notes
     -----
-    The function identifies the min and max scan numbers from `largest_coeff_scans` 
-    and selects a contiguous window of MS1 scans surrounding them, 
-    bounded by `window_half_width`
+    The function identifies the min and max scan numbers from `largest_coeff_scans`
+    and selects a contiguous window of MS1 scans surrounding them,
+    bounded by `window_half_width`.
 
+    When IM data is present, filters to spectra sharing the same IM bin as the
+    reference scans, using RT-based windowing within that bin.
     """
-    ## max and min of this list
-    max_scan, min_scan = max(largest_coeff_scans), min(largest_coeff_scans)
-    ms1_list_idx_min = list(ms1_spec_idxs).index(min_scan)
-    ms1_list_idx_max = list(ms1_spec_idxs).index(max_scan)
-    scans_each_side = np.array(ms1_spec_idxs)[np.arange(max(0,ms1_list_idx_min-window_half_width),min(len(ms1_spectra),ms1_list_idx_max+window_half_width+1))]
-    all_scans = list(scans_each_side)
+    # Check if IM data is present
+    has_im = len(ms1_spectra) > 0 and getattr(ms1_spectra[0], 'im_lo', None) is not None
 
-    spectra_subset = [all_spectra.get_by_idx(idx) for idx in all_scans]
+    if has_im:
+        # Determine target IM bin from reference scan
+        ref_scan = largest_coeff_scans[0]
+        ref_idx = list(ms1_spec_idxs).index(ref_scan)
+        ref_spec = ms1_spectra[ref_idx]
+        target_im_lo, target_im_hi = ref_spec.im_lo, ref_spec.im_hi
+
+        # Filter ms1 indices to same IM bin
+        im_filtered_idxs = [i for i, s in enumerate(ms1_spectra)
+                            if s.im_lo == target_im_lo and s.im_hi == target_im_hi]
+        im_filtered_scan_nums = np.array([ms1_spec_idxs[i] for i in im_filtered_idxs])
+
+        # Find min/max within filtered set
+        max_scan, min_scan = max(largest_coeff_scans), min(largest_coeff_scans)
+        # Find positions within the IM-filtered list
+        filtered_list = list(im_filtered_scan_nums)
+        if min_scan in filtered_list:
+            idx_min = filtered_list.index(min_scan)
+        else:
+            idx_min = np.searchsorted(im_filtered_scan_nums, min_scan)
+        if max_scan in filtered_list:
+            idx_max = filtered_list.index(max_scan)
+        else:
+            idx_max = np.searchsorted(im_filtered_scan_nums, max_scan)
+
+        lo = max(0, idx_min - window_half_width)
+        hi = min(len(im_filtered_scan_nums), idx_max + window_half_width + 1)
+        scans_each_side = im_filtered_scan_nums[lo:hi]
+        all_scans = list(scans_each_side)
+        spectra_subset = [all_spectra.get_by_idx(idx) for idx in all_scans]
+    else:
+        ## max and min of this list
+        max_scan, min_scan = max(largest_coeff_scans), min(largest_coeff_scans)
+        ms1_list_idx_min = list(ms1_spec_idxs).index(min_scan)
+        ms1_list_idx_max = list(ms1_spec_idxs).index(max_scan)
+        scans_each_side = np.array(ms1_spec_idxs)[np.arange(max(0,ms1_list_idx_min-window_half_width),min(len(ms1_spectra),ms1_list_idx_max+window_half_width+1))]
+        all_scans = list(scans_each_side)
+        spectra_subset = [all_spectra.get_by_idx(idx) for idx in all_scans]
+
     return all_scans, spectra_subset
 
 

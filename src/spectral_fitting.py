@@ -2187,7 +2187,8 @@ def fit_to_lib2(dia_spec,
                output_folder=None,
                frag_index=None,
                decoy_frag_index=None,
-               ms1_rt=None):
+               ms1_rt=None,
+               im_bin_ms1=None):
     # spec_idx,dia_spec,library = inputs
     
     _ft0 = time.perf_counter()
@@ -2200,7 +2201,22 @@ def fit_to_lib2(dia_spec,
     prec_rt = spec.RT
     windowWidth = window_width(dia_spec)
     if ms1_spectra is not None:
-        ms1_spec = get_closest_ms1(prec_rt, ms1_spectra, ms1_rt=ms1_rt)
+        if im_bin_ms1 is not None and getattr(spec, 'im_lo', None) is not None:
+            im_key = (spec.im_lo, spec.im_hi)
+            if im_key in im_bin_ms1:
+                _rt_arr, _idx_arr = im_bin_ms1[im_key]
+                _pos = np.searchsorted(_rt_arr, prec_rt)
+                if _pos == 0:
+                    ms1_spec = ms1_spectra[_idx_arr[0]]
+                elif _pos == len(_rt_arr):
+                    ms1_spec = ms1_spectra[_idx_arr[-1]]
+                else:
+                    _before, _after = _rt_arr[_pos - 1], _rt_arr[_pos]
+                    ms1_spec = ms1_spectra[_idx_arr[_pos - 1] if abs(prec_rt - _before) < abs(prec_rt - _after) else _idx_arr[_pos]]
+            else:
+                ms1_spec = get_closest_ms1(prec_rt, ms1_spectra, ms1_rt=ms1_rt)
+        else:
+            ms1_spec = get_closest_ms1(prec_rt, ms1_spectra, ms1_rt=ms1_rt)
     lib_coefficients = []
 
     merged_mz, merged_int, centroid_breaks, bin_centers = _dia_prep_jit(
