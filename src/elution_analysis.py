@@ -62,23 +62,41 @@ def _compute_scan_gap_mode(df: pl.DataFrame) -> int:
     """
     Compute the mode of scan gaps between consecutive PSMs for the same peptide.
 
-    This automatically detects the MS duty cycle.
+    This automatically detects the MS duty cycle. When IM-binned data produces
+    many scans at the same RT, duplicates are collapsed per unique RT first so
+    that the gap reflects the true RT-cycle spacing.
 
     Args:
-        df: DataFrame with columns: file_id, scan, seq
+        df: DataFrame with columns: file_id, scan, rt, seq
 
     Returns:
         Mode of scan gap distribution (the MS duty cycle)
     """
     all_gaps: list[int] = []
 
-    # Group by file_id and seq
+    # Group by file_id and seq, collecting both scan and rt
     grouped = df.group_by(['file_id', 'seq']).agg([
-        pl.col('scan').sort()
+        pl.col('scan').sort(),
+        pl.col('rt'),
     ])
 
     for row in grouped.iter_rows(named=True):
-        scans = row['scan']
+        scans = np.array(row['scan'])
+        rts = np.array(row['rt'])
+
+        if len(scans) < 2:
+            continue
+
+        # Sort by scan number
+        order = np.argsort(scans)
+        scans = scans[order]
+        rts = rts[order]
+
+        # Deduplicate by unique RT (collapse IM-bin duplicates at the same RT)
+        _, unique_idx = np.unique(rts, return_index=True)
+        unique_idx.sort()
+        scans = scans[unique_idx]
+
         if len(scans) < 2:
             continue
 
@@ -159,10 +177,26 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float, pl.DataFram
     ])
 
     for row in grouped.iter_rows(named=True):
-        scans = row['scan']
-        rts = row['rt']
-        intensities = row['closest_peak_intensity_ms1']
+        scans = np.array(row['scan'])
+        rts = np.array(row['rt'])
+        intensities = np.array(row['closest_peak_intensity_ms1'])
         key = (row['seq'], row['z'])
+
+        # Collapse IM-bin duplicates: keep highest intensity per unique RT
+        unique_rts_vals, inv = np.unique(rts, return_inverse=True)
+        if len(unique_rts_vals) < len(rts):
+            # Multiple scans at same RT (IM bins) — pick best intensity per RT
+            best_scans = np.empty(len(unique_rts_vals), dtype=scans.dtype)
+            best_ints = np.full(len(unique_rts_vals), -np.inf)
+            best_rts = unique_rts_vals
+            for j in range(len(scans)):
+                uid = inv[j]
+                if intensities[j] > best_ints[uid]:
+                    best_ints[uid] = intensities[j]
+                    best_scans[uid] = scans[j]
+            scans = best_scans
+            rts = best_rts
+            intensities = best_ints
 
         if len(scans) < 2:
             cluster_sizes[key] = max(cluster_sizes.get(key, 0), 1)

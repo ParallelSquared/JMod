@@ -266,7 +266,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     #### Load the data
     spectrumLibrary = spec_lib.loadSpecLib(lib_file)
     _log_mem("after loading library")
-    DIAspectra=load_files.loadSpectra(mzml_file)
+    DIAspectra=file_reader.loadSpectra(mzml_file)
     _log_mem("after loading spectra")
 
     if config.args.test_mode:
