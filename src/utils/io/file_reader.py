@@ -140,14 +140,10 @@ def _load_raw(filepath: str) -> SpectrumFile:
 
 
 def _load_d(filepath: str) -> SpectrumFile:
-    """Load timsTOF .d data from .peaks.parquet + analysis.tdf."""
+    """Load timsTOF .d data from peaks.parquet + analysis.tdf."""
     d_path = filepath.rstrip("/")
-    parent_dir = os.path.dirname(d_path)
-    base_name = os.path.basename(d_path)
-    if base_name.endswith(".d"):
-        base_name = base_name[:-2]
 
-    peaks_path = os.path.join(parent_dir, base_name + ".peaks.parquet")
+    peaks_path = os.path.join(d_path, "peaks.parquet")
     tdf_path = os.path.join(d_path, "analysis.tdf")
 
     if not os.path.exists(tdf_path):
@@ -155,7 +151,7 @@ def _load_d(filepath: str) -> SpectrumFile:
     if not os.path.exists(peaks_path):
         raise FileNotFoundError(
             f"Peaks file not found: {peaks_path}. "
-            f"Run timscentroid on {d_path} first."
+            f"Place peaks.parquet inside {d_path}."
         )
 
     logger.info(f"Loading calibration from {d_path}")
@@ -166,7 +162,7 @@ def _load_d(filepath: str) -> SpectrumFile:
     logger.info(f"Computed {len(im_bins)} overlapping IM bins "
                 f"[{cal['im_range_lower']:.4f}, {cal['im_range_upper']:.4f}]")
 
-    logger.info(f"Reading and calibrating peaks from {peaks_path}")
+    logger.info(f"Reading peaks from {peaks_path}")
     sf = _build_spectrum_file(filepath, peaks_path, cal, dia_lookup, im_bins)
 
     logger.info(f"Loaded {len(sf.ms1scans)} MS1 spectra, {len(sf.ms2scans)} MS2 spectra")
@@ -307,10 +303,11 @@ def _assign_peaks_to_im_bins(mob_arr, im_bins):
 
 
 def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: pl.DataFrame, im_bins: np.ndarray) -> SpectrumFile:
-    """Read raw peaks, calibrate, assign DIA windows and IM bins, and build SpectrumFile.
+    """Read pre-calibrated peaks, assign DIA windows and IM bins, and build SpectrumFile.
 
     Processes the parquet in row-group batches to avoid loading 6+ GB at once.
-    Uses numpy indexing for calibration (no polars joins needed for mz/mobility/rt).
+    Expects columns: frame, scan, mz, inv_mobility, apex_intensity
+    (mz and inv_mobility are pre-calibrated).
     Each non-empty IM bin produces a separate Spectrum object.
     """
     import pyarrow.parquet as pq
@@ -322,9 +319,6 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
     for i, fid in enumerate(cal["frame_ids"]):
         rt_by_frame[int(fid)] = cal["rt_values"][i]
         ms_level_by_frame[int(fid)] = cal["ms_level"][i]
-
-    mz_values = cal["mz_values"]
-    mobility_values = cal["mobility_values"]
 
     # Build DIA lookup as a dict: frame -> list of (scan_begin, scan_end, prec_mz, iso_width, ce)
     dia_dict = {}
@@ -346,12 +340,11 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         table = pf.read_row_group(rg_idx)
         frames = table.column("frame").to_numpy()
         scans = table.column("scan").to_numpy()
-        tofs = table.column("tof").to_numpy()
+        mz_arr = table.column("mz").to_numpy()
+        mob_arr = table.column("im").to_numpy()
         intensities = table.column("apex_intensity").to_numpy()
 
-        # Vectorized calibration via numpy indexing
-        mz_arr = mz_values[tofs]
-        mob_arr = mobility_values[scans]
+        # RT and MS level still come from analysis.tdf (indexed by frame)
         rt_arr = rt_by_frame[frames]
         level_arr = ms_level_by_frame[frames]
 
