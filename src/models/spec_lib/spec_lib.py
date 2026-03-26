@@ -182,6 +182,9 @@ def load_tsv_speclib(spec_lib_file):
             if "IonMobility" in row:
                 if row["IonMobility"]!="":
                     python_lib[unique_id]["IonMob"] = float(row["IonMobility"]) 
+            elif "IM" in row:
+                if row["IM"]!="":
+                    python_lib[unique_id]["IonMob"] = float(row["IM"]) 
             
             ### Protein info
             if "ProteinGroup" in row:
