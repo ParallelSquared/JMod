@@ -140,6 +140,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False):
                             group_fitted,
                             new_output_dict,
                             fake_fdc_dict,
+                            mass_tag,SILAC,timeplex,
                             fit_whole_MS1=fit_whole_MS1
                             )
 
@@ -147,7 +148,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False):
 
 
 
-def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group_ms2_traces, group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict, fit_whole_MS1=False):
+def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group_ms2_traces, group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict,mass_tag,SILAC,timeplex, fit_whole_MS1=False):
     
     ## create dictionary  that links keys to data so we can match the order of "fdc"
     linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}
@@ -201,7 +202,56 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) if fdc.plexfittrace.iloc[idx] != '' else np.nan for idx in range(len(fdc))]
        
 
+    ### do same for all values
+    linker_keys = [i for i in linker_dict]
+    group_linker = {}
+    for key in linker_keys:
+        g_idx = linker_dict[key][0]
+        group_linker.setdefault(g_idx,[])
+        group_linker[g_idx].append(key)
+        
+    ms2_traces = [group_ms2_traces[linker_dict[key][0]][linker_dict[key][1]] for key in linker_keys]
+   
+    extracted_fitted = [group_fitted[linker_dict[key][0]][0][:,linker_dict[key][1]] for key in linker_keys]
+    extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in linker_keys]
+    extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in linker_keys]
+    
+    plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
+    plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
+    _fdc_plexfittrace = [";".join(map(str,i)) for i in plexfittrace] 
+    _fdc_plex_Area =[area(list(map(float,_fdc_plexfittrace[idx].split(";")))) if _fdc_plexfittrace[idx] != '' else np.nan for idx in range(len(_fdc_plexfittrace))]
 
+    area_dict = {i:j for i,j in zip(linker_keys,_fdc_plex_Area)}
+    
+    
+    if mass_tag and SILAC:
+         area_names = [f'channel_{i}_{j}' for i in mass_tag.channel_names for j in SILAC.channel_names]
+    elif mass_tag:
+        area_names = [f'channel_{i}' for i in mass_tag.channel_names]
+    elif SILAC:
+        area_names = [f'channel_{i}' for i in SILAC.channel_names]
+        
+    
+    for i in area_names:
+        fdc[i] = np.nan
+        
+    if timeplex:
+        fdc_group = fdc.groupby(["untag_seq","z","time_channel"])
+    else:
+        fdc_group = fdc.groupby(["untag_seq","z"])
+    
+    fdc_group_keys = list(fdc_group.groups.keys())
+    
+    for g_idx in tqdm.tqdm(group_linker):
+        g_keys = sorted(group_linker[g_idx],key=lambda x: [int(re.findall(f"{mass_tag.name}-(\d+)",x[0])[0] if mass_tag and mass_tag.name in x[0] else 0),
+                                                           int(re.findall(f"{SILAC.name}-(\d+)",x[0])[0]) if SILAC and SILAC.name in x[0] else 0,
+                                                           ])
+        g_areas = [area_dict[k] for k in g_keys]
+        
+        indices = np.array(fdc.index)[np.where(np.logical_and(fdc.stripped_seq==fdc_group_keys[g_idx][0],
+                                          fdc.z==fdc_group_keys[g_idx][1]))[0]]
+        fdc.loc[indices,area_names] = g_areas
+    
     
     
     fdc["ms1_cor"] = [i[0] for i in p_corrs]
@@ -241,7 +291,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         "plexfittrace_spec_all", "plexfittrace_all", "plexfittrace_ps_all",
         "plex_Area", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
         "all_ms1_specs", "MS1_Area"
-    ] + [f"all_ms1_iso{i}vals" for i in range(config.num_iso_ms1)]
+    ] + [f"all_ms1_iso{i}vals" for i in range(config.num_iso_ms1)]+area_names
     
     # Ensure we only select columns that actually exist in fdc
     existing_cols = [col for col in selected_cols if col in fdc.columns]
