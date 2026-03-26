@@ -1151,11 +1151,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             # Combine elution width and GMM sigma, take 4th standard deviation
             boundary = 4 * sigmas[0] + 8 * elution_sd
             rt_spl = pred_rt_spl
-            all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
-            all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
-            
-            for key,rt in zip(all_lib_keys,all_new_lib_rts):
-                updatedLibrary[key]["iRT"] = rt
+            # Deduplicate sequences to avoid redundant predictions
+            unique_seqs = list(set(updatedLibrary[key]["seq"] for key in all_lib_keys))
+            unique_encoded = np.array([one_hot_encode_sequence(s) for s in unique_seqs], dtype=np.float32)
+            unique_rts = convertor(np.mean([model.predict(unique_encoded, batch_size=4096) for model in models], axis=0).flatten())
+            seq_to_rt = dict(zip(unique_seqs, unique_rts))
+
+            for key in all_lib_keys:
+                updatedLibrary[key]["iRT"] = seq_to_rt[updatedLibrary[key]["seq"]]
                 
         else: ### empirical are better
             # boundary = elbow_emp_x
