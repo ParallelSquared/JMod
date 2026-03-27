@@ -225,10 +225,13 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     
     
     if mass_tag and SILAC:
+         channel_columns =[(int(i),int(j)) for i in mass_tag.channel_names for j in SILAC.channel_names]
          area_names = [f'channel_{i}_{j}' for i in mass_tag.channel_names for j in SILAC.channel_names]
     elif mass_tag:
+        channel_columns =[(int(i),0) for i in mass_tag.channel_names]
         area_names = [f'channel_{i}' for i in mass_tag.channel_names]
     elif SILAC:
+        channel_columns = [(0,int(j)) for j in SILAC.channel_names]
         area_names = [f'channel_{i}' for i in SILAC.channel_names]
         
     
@@ -243,10 +246,19 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     fdc_group_keys = list(fdc_group.groups.keys())
     
     for g_idx in tqdm.tqdm(group_linker):
-        g_keys = sorted(group_linker[g_idx],key=lambda x: [int(re.findall(f"{mass_tag.name}-(\d+)",x[0])[0] if mass_tag and mass_tag.name in x[0] else 0),
+        g_keys = group_linker[g_idx]
+        get_channels = lambda x: (int(re.findall(f"{mass_tag.name}-(\d+)",x[0])[0] if mass_tag and mass_tag.name in x[0] else 0),
                                                            int(re.findall(f"{SILAC.name}-(\d+)",x[0])[0]) if SILAC and SILAC.name in x[0] else 0,
-                                                           ])
-        g_areas = [area_dict[k] for k in g_keys]
+                                                           )
+        g_channels = [get_channels(i) for i in g_keys]
+        channel_order = np.lexsort((np.array(g_channels)[:,1],np.array(g_channels)[:,0]))
+        g_area_dict = {i:np.nan for i in channel_columns}
+        for g_k,g_c in zip(g_keys,g_channels):
+            g_area_dict[g_c] = area_dict[g_k]
+        # g_keys = sorted(group_linker[g_idx],key=lambda x: [int(re.findall(f"{mass_tag.name}-(\d+)",x[0])[0] if mass_tag and mass_tag.name in x[0] else 0),
+        #                                                    int(re.findall(f"{SILAC.name}-(\d+)",x[0])[0]) if SILAC and SILAC.name in x[0] else 0,
+        #                                                    ])
+        g_areas = [g_area_dict[k] for k in channel_columns]
         
         indices = np.array(fdc.index)[np.where(np.logical_and(fdc.stripped_seq==fdc_group_keys[g_idx][0],
                                           fdc.z==fdc_group_keys[g_idx][1]))[0]]
