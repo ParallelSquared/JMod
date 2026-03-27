@@ -9,26 +9,100 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import src.config as config
 import numpy as np
 import os
-import time 
+import time
 import datetime
 import tqdm
 import pandas as pd
-import sys 
+import sys
 import json
 import dill
+import resource
 
-from src.utils.io import load_files
+
+def _mem_gb():
+    """Return current RSS in GB (not peak) via /proc or ps fallback."""
+    try:
+        import psutil
+        return psutil.Process().memory_info().rss / (1024**3)
+    except ImportError:
+        pass
+    if sys.platform == 'darwin':
+        import subprocess
+        # ps reports RSS in KB on macOS
+        out = subprocess.check_output(['ps', '-o', 'rss=', '-p', str(os.getpid())])
+        return int(out.strip()) / (1024**2)
+    # Linux: read from /proc
+    with open(f'/proc/{os.getpid()}/statm') as f:
+        pages = int(f.read().split()[1])
+    return pages * 4096 / (1024**3)
+
+
+def _peak_mem_gb():
+    """Return peak (high water mark) RSS in GB."""
+    maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == 'darwin':
+        return maxrss / (1024**3)
+    return maxrss / (1024**2)
+
+
+def _log_mem(label):
+    logger.info(f"[MEM] {label}: {_mem_gb():.2f} GB current, {_peak_mem_gb():.2f} GB peak")
+    for h in logger.handlers:
+        h.flush()
+
+
+def _log_mem_breakdown(*libs):
+    """Log per-array memory for each (name, library) pair."""
+    import gc
+    gc.collect()
+    for lib_name, lib in libs:
+        logger.info(f"\n=== {lib_name} library ({len(lib)} entries) ===")
+        total = 0
+        obj_total = 0
+        for attr in sorted(lib.__slots__):
+            obj = getattr(lib, attr, None)
+            if obj is None:
+                continue
+            if isinstance(obj, dict):
+                size = sys.getsizeof(obj)
+                logger.info(f"  {attr:30s} {size/1e9:8.3f} GB  (dict, {len(obj)} keys)")
+                total += size
+            elif isinstance(obj, np.ndarray):
+                nbytes = obj.nbytes
+                logger.info(f"  {attr:30s} {nbytes/1e9:8.3f} GB  dtype={obj.dtype}  shape={obj.shape}")
+                total += nbytes
+                if obj.dtype == object and len(obj) > 0:
+                    # sample to estimate true size of contained objects
+                    sample_size = min(10000, len(obj))
+                    sample_idx = np.linspace(0, len(obj)-1, sample_size, dtype=int)
+                    sample_bytes = sum(sys.getsizeof(obj[i]) for i in sample_idx if obj[i] is not None)
+                    est_true = (sample_bytes / sample_size) * len(obj)
+                    logger.info(f"  {attr:30s} ~{est_true/1e9:7.3f} GB  (estimated object contents)")
+                    obj_total += est_true
+            else:
+                size = sys.getsizeof(obj)
+                logger.info(f"  {attr:30s} {size/1e9:8.3f} GB  type={type(obj).__name__}")
+                total += size
+        logger.info(f"  {'TOTAL (array buffers)':30s} {total/1e9:8.3f} GB")
+        logger.info(f"  {'TOTAL (object contents est)':30s} {obj_total/1e9:8.3f} GB")
+        logger.info(f"  {'TOTAL (combined est)':30s} {(total+obj_total)/1e9:8.3f} GB")
+
+from src.utils.io import load_files, file_reader
 from src.utils.set_seeds import set_seeds
 from src.models.spec_lib import spec_lib
 from src.spectral_fitting import fit_to_lib2, merge_spectrum_peaks
 from src.rt_alignment import MZRTfit, MZRTfit_timeplex
 from src.utils.misc_functions import write_to_csv
+import polars as pl
+import pyarrow.parquet as pq
+from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
 
 from src.logger import logger, set_log_filepath, log_exceptions
 import logging
+
 
 @log_exceptions
 def main(GUI_config_json=None, GUI_result_queue=None):
@@ -191,7 +265,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ######################################################
     #### Load the data
     spectrumLibrary = spec_lib.loadSpecLib(lib_file)
+    _log_mem("after loading library")
     DIAspectra=load_files.loadSpectra(mzml_file)
+    _log_mem("after loading spectra")
 
     if config.args.test_mode:
         logger.info(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
@@ -268,6 +344,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         mass_tag = None
         config.tag = None
 
+    _log_mem("before RT alignment")
     if config.args.timeplex:
         ## now ooutputs library as we finetune RT
         # With this:
@@ -299,6 +376,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()]) # TODO QQQXXX Input should have at least 1 dimension, got scalar array(-16.) instead
 
 
+    _log_mem("after RT alignment")
+
     ## Merge peaks in spectra
     for spec in DIAspectra.ms1scans:
         merge_spectrum_peaks(spec, config.opt_ms1_tol)
@@ -307,9 +386,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         merge_spectrum_peaks(spec, config.mz_tol)
 
     spectra_to_fit = DIAspectra.ms2scans
-    
-
-
+    _log_mem("after merge_spectrum_peaks")
 
     all_keys = list(spectrumLibrary)
      
@@ -324,6 +401,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         ms2_func=None
 
 
+    _log_mem("before isotope generation")
     if config.args.iso:
         # spectrumLibrary = iso_f.iso_library(spectrumLibrary,
         #                                            tag=config.tag,
@@ -331,16 +409,82 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
                                                   tag=config.tag,
                                                   n_iso=config.num_iso_peaks)
+        _log_mem("after isotope generation")
+
+    # with open(results_folder_path+"/slib","wb") as dill_file:
+    #     slib = dill.dump(spectrumLibrary,dill_file)
 
     logger.info("Creating Decoy Library")
     decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev",tag=config.tag,n_iso=config.num_iso_peaks)
-    for key in spectrumLibrary:
-        spectrumLibrary[key]["top_n"]=np.argsort(-spectrumLibrary[key]["spectrum"][:,1])[:config.top_n]
-    for key in decoy_lib:
-        decoy_lib[key]["top_n"]=np.argsort(-decoy_lib[key]["spectrum"][:,1])[:config.top_n]
+    _log_mem("after decoy library creation")
+    spectrumLibrary.bulk_set_top_n(config.top_n)
+    decoy_lib.bulk_set_top_n(config.top_n)
     logger.info("Finished Decoy Library")
-    
-    
+    _log_mem("after bulk_set_top_n")
+
+    # Build fragment indices (non-timeplex only)
+    if not config.args.timeplex:
+        from src.fragment_index import FragmentIndex
+        logger.info("Building fragment ion index")
+        frag_index = FragmentIndex.build(spectrumLibrary, all_keys, rt_mz, config.mz_ppm)
+        decoy_frag_index = FragmentIndex.build(
+            decoy_lib, all_keys, rt_mz, config.mz_ppm,
+            prec_mz_offset=-config.decoy_mz_offset
+        )
+        logger.info("Fragment index built")
+    else:
+        frag_index = None
+        decoy_frag_index = None
+
+    _log_mem_breakdown(("target", spectrumLibrary), ("decoy", decoy_lib))
+
+    # ---- Audit known large objects ----
+    import gc as _gc
+    _gc.collect()
+    logger.info("\n=== Memory audit of known locals ===")
+    # DIAspectra: sum up the numpy arrays inside each Spectrum
+    _spec_bytes = 0
+    for _s in DIAspectra.ms1scans + DIAspectra.ms2scans:
+        for _attr in ('mz', 'intens'):
+            _arr = getattr(_s, _attr, None)
+            if _arr is not None:
+                _spec_bytes += _arr.nbytes
+    _n_scans = len(DIAspectra.ms1scans) + len(DIAspectra.ms2scans)
+    logger.info(f"  DIAspectra arrays:     {_spec_bytes/1e9:.2f} GB  ({_n_scans:,} scans)")
+    logger.info(f"  DIAspectra obj est:   ~{_n_scans * 500 /1e9:.2f} GB  ({_n_scans:,} × ~500B overhead)")
+    if dino_features is not None:
+        logger.info(f"  dino_features:         {dino_features.memory_usage(deep=True).sum()/1e9:.2f} GB")
+    else:
+        logger.info(f"  dino_features:         None")
+    logger.info(f"  rt_mz:                 {rt_mz.nbytes/1e9:.4f} GB")
+    logger.info(f"  all_keys:              {sys.getsizeof(all_keys)/1e9:.4f} GB")
+    # Check what the closures inside funcs might be holding
+    for _i, _f in enumerate(funcs):
+        _closure_bytes = 0
+        if hasattr(_f, '__closure__') and _f.__closure__:
+            for _cell in _f.__closure__:
+                try:
+                    _obj = _cell.cell_contents
+                    _closure_bytes += sys.getsizeof(_obj)
+                    if hasattr(_obj, 'nbytes'):
+                        _closure_bytes += _obj.nbytes
+                except ValueError:
+                    pass
+            logger.info(f"  funcs[{_i}] closure:     ~{_closure_bytes/1e9:.4f} GB  ({len(_f.__closure__)} cells)")
+        else:
+            logger.info(f"  funcs[{_i}]:              no closure")
+    # Count all numpy arrays on the heap
+    _np_bytes = 0
+    _np_count = 0
+    for _obj in _gc.get_objects():
+        if isinstance(_obj, np.ndarray):
+            _np_bytes += _obj.nbytes
+            _np_count += 1
+    logger.info(f"  All numpy arrays:      {_np_bytes/1e9:.2f} GB  ({_np_count:,} arrays)")
+    logger.info(f"  Current RSS:           {_mem_gb():.2f} GB")
+    logger.info(f"  Gap (RSS - numpy):     {_mem_gb() - _np_bytes/1e9:.2f} GB")
+    del _spec_bytes, _n_scans, _np_bytes, _np_count, _closure_bytes
+
     ######################################################
     ### Write search params to file
     param_file = results_folder_path + "/params.txt"
@@ -371,51 +515,113 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
 
-    # Use resilient fitter with hang detection
-    from src.utils.resilient_fitter import ResilientFitter
-    static_kwargs = {
-        'library': spectrumLibrary,
-        'rt_mz': rt_mz,
-        'all_keys': all_keys,
-        'dino_features': None,
-        'rt_filter': True,
-        'rt_tol': config.opt_rt_tol,
-        'ms1_tol': config.opt_ms1_tol,
-        'mz_tol': config.mz_tol,
-        'ms1_spectra': DIAspectra.ms1scans,
-        'return_frags': False,
-        'decoy': True,
-        'decoy_library': decoy_lib
-    }
-    fitter = ResilientFitter(fit_to_lib2, static_kwargs, timeout=30,
-                             config_json=config.args.config_json)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    n_threads = 3
+    logger.info(f"Using {n_threads} threads for main search")
+
+    # Precompute MS1 RT array once (shared across all threads, read-only)
+    _ms1_rt = np.array([s.RT for s in DIAspectra.ms1scans])
+
+    _pl_schema = get_parquet_schema(timeplex=config.args.timeplex)
+    _pa_schema = pl.DataFrame(schema=_pl_schema).to_arrow().schema
+    _BUFFER_SIZE = 1000  # results to buffer before flushing to disk
+
+    # Measure CPU utilization across the search to assess GIL contention
+    import psutil as _psutil
+    _search_proc = _psutil.Process(os.getpid())
+    _search_proc.cpu_percent()  # prime the measurement
+    _search_wall_t0 = time.time()
 
     for batch_idx in range(num_batches):
         start_time = time.time()
         batch_spectra = spectra_to_fit[batch_idx*num_per_batch:(batch_idx+1)*num_per_batch]
 
         logger.info(f"Fitting batch {batch_idx+1} of {num_batches}")
+        _log_mem(f"batch {batch_idx+1} start")
 
-        outputs= []
+        batch_parquet_path = results_folder_path + f"/decoylibsearch_coeffs_batch{batch_idx}.parquet"
+        writer = pq.ParquetWriter(batch_parquet_path, _pa_schema)
+        buffer = []
+        n_results = 0
+        _completed = 0
 
-        for i, dia_spec in enumerate(tqdm.tqdm(batch_spectra)):
-            result = fitter.fit(dia_spec, idx=batch_idx*num_per_batch + i)
-            if result:
-                outputs.append(result)
-            
-        long_outputs = [j for i in outputs for j in i]
+        with ThreadPoolExecutor(max_workers=n_threads) as pool:
+            futures = {pool.submit(fit_to_lib2, dia_spec,
+                                   library=spectrumLibrary,
+                                   rt_mz=rt_mz,
+                                   all_keys=all_keys,
+                                   dino_features=None,
+                                   rt_filter=True,
+                                   rt_tol=config.opt_rt_tol,
+                                   ms1_tol=config.opt_ms1_tol,
+                                   mz_tol=config.mz_tol,
+                                   ms1_spectra=DIAspectra.ms1scans,
+                                   return_frags=False,
+                                   decoy=True,
+                                   decoy_library=decoy_lib,
+                                   output_folder=results_folder_path,
+                                   frag_index=frag_index,
+                                   decoy_frag_index=decoy_frag_index,
+                                   ms1_rt=_ms1_rt): i
+                      for i, dia_spec in enumerate(batch_spectra)}
+
+            for f in tqdm.tqdm(as_completed(futures), total=len(futures)):
+                result = f.result()
+                _completed += 1
+                if _completed % 10000 == 0:
+                    _log_mem(f"batch {batch_idx+1}, {_completed}/{len(batch_spectra)} done")
+                if result:
+                    buffer.extend(result)
+                    n_results += len(result)
+                    if len(buffer) >= _BUFFER_SIZE:
+                        _col_data = {col: [row[i] for row in buffer]
+                                     for i, col in enumerate(_pl_schema)}
+                        writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+                        buffer.clear()
+
+        # Flush remaining buffered results
+        if buffer:
+            _col_data = {col: [row[i] for row in buffer]
+                         for i, col in enumerate(_pl_schema)}
+            writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+            buffer.clear()
+
+        writer.close()
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
-        
-        decoylib_search_path = results_folder_path+"/decoylibsearch_coeffs.csv"
-        write_mode = "w" if batch_idx==0 else "a"
-        write_to_csv(long_outputs, decoylib_search_path, write_mode)
+        logger.info(f"Batch {batch_idx+1}: {n_results} results written")
 
-    # Clean up fitter subprocess and log stats
-    stats = fitter.get_stats()
-    if stats['hangs_recovered'] > 0:
-        logger.warning(f"Recovered from {stats['hangs_recovered']} hang(s) during fitting")
-    fitter.shutdown()
+    # Report CPU utilization for GIL contention assessment
+    _search_wall = time.time() - _search_wall_t0
+    _search_cpu = _search_proc.cpu_percent()
+    logger.info(f"[CPU] Search wall time: {_search_wall:.1f}s, "
+                f"CPU: {_search_cpu:.0f}%, "
+                f"Effective cores: {_search_cpu/100:.1f}/{n_threads}")
 
+    # Free large objects no longer needed after search
+    del decoy_lib, frag_index, decoy_frag_index, _ms1_rt, spectra_to_fit
+    del rt_mz, all_keys, funcs, dino_features
+    import gc as _gc2
+    _gc2.collect()
+    _log_mem("after freeing search objects")
+
+    # Merge batch parquets into single file (streaming, one batch at a time)
+    import glob as _glob
+    batch_files = sorted(_glob.glob(results_folder_path + "/decoylibsearch_coeffs_batch*.parquet"))
+    decoylib_search_path = results_folder_path + "/decoylibsearch_coeffs.parquet"
+    merge_writer = None
+    for bf in batch_files:
+        table = pq.read_table(bf)
+        if merge_writer is None:
+            merge_writer = pq.ParquetWriter(decoylib_search_path, table.schema)
+        merge_writer.write_table(table)
+        del table
+    if merge_writer:
+        merge_writer.close()
+    for bf in batch_files:
+        os.remove(bf)
+    _log_mem("after merge")
+    _log_mem("before process_data")
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
                  library=spectrumLibrary,

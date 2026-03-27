@@ -81,6 +81,9 @@ deps = [
   "tensorboard-data-server",
   "tensorflow-io-gcs-filesystem",
 ]
+dev = [
+    "pyside6<6.8",
+]
 
 [tool.coverage.run]
 omit = [

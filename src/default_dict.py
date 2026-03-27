@@ -304,7 +304,7 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
-    'score_lib_frac': {
+'score_lib_frac': {
         'flags': ('--score_lib_frac',),
         'default': 0.5,
         'takes_value': True,

@@ -245,78 +245,151 @@ def gen_isotopes_dict(seq,frags, tag, n_iso):
                 
     return frag_to_peak(new_frags,return_frags=True)
 
-def iso_library(library,tag,n_iso):
+
+def _gen_isotopes_encoded(seq, frags, tag, n_iso):
+    """Wrapper that encodes frag names to int32 inside the worker process."""
+    from src.utils.frag_encoding import encode_frag_names
+    spectrum, ordered_frags = gen_isotopes_dict(seq, frags, tag, n_iso)
+    return spectrum, encode_frag_names(ordered_frags)
+
+
+def iso_library(library, tag, n_iso):
     """
-    Generate isotopes for library fragments
+    Generate isotopes for library fragments (single-threaded).
+
+    Only rebuilds spectrum_data and frag_names_data on the store.
 
     Parameters
     ----------
-    library : dict[(str, int)]['frags'] = {b1_1:[mass, int], ..., y10-H2O_2[mass_int]}
-        A dictionary with keys of (peptide_seq, z) and corresponding values of another dictionary. 
-        This dictionary contains the key 'frags' among other keys.
-        library[(seq, z)][frags] is a dictionary with fragment identies (see split_frag_name) as keys and [mass, int] as values
+    library : SpectrumLibraryStore
+        Spectral library.
     tag : massTag
-        a massTag instance
-    n_iso : number of isotopes for each fragment to generate
+        A massTag instance.
+    n_iso : int
+        Number of isotopes per fragment to generate.
 
     Returns
     -------
-    new_library : dict
-        The same library as before but with updated spectrum and ordered_frags dictionaries (same level as 'frags') with additonal isotopes
+    SpectrumLibraryStore
+        The same store with updated spectrum/frag_names arrays.
     """
-    
-    ## add n isotpic peaks to the "spectrum" portio of each library entry
-    logger.info("Creating Copy of Library...")
-    new_library = copy.deepcopy(library)
-    
+    from src.utils.frag_encoding import encode_frag_names
+
+    n = len(library)
+    all_keys = list(library)
+
+    all_spec_peaks = []
+    all_frag_codes = []
+    spec_offsets = np.empty(n, dtype=np.int64)
+    spec_lengths = np.empty(n, dtype=np.int32)
+    cursor = 0
+
     logger.info("Generating isotopes for library:")
-    for key in tqdm.tqdm(new_library):
-        frags = new_library[key]["frags"]
-        
-        # new_library[key]["spectrum"] = gen_isotopes(key[0],frags)
-        new_library[key]["spectrum"],new_library[key]["ordered_frags"] = gen_isotopes_dict(key[0],frags,tag,n_iso)
-        
-    return new_library
+    for i, key in enumerate(tqdm.tqdm(all_keys)):
+        frags = library[key]["frags"]
+        spectrum, ordered_frags = gen_isotopes_dict(key[0], frags, tag, n_iso)
+        n_peaks = len(spectrum)
+        spec_offsets[i] = cursor
+        spec_lengths[i] = n_peaks
+        all_spec_peaks.append(np.asarray(spectrum, dtype=np.float64))
+        all_frag_codes.append(encode_frag_names(ordered_frags))
+        cursor += n_peaks
+
+    library.spectrum_data = np.concatenate(all_spec_peaks, axis=0) if all_spec_peaks else np.empty((0, 2), dtype=np.float64)
+    library.frag_names_data = np.concatenate(all_frag_codes) if all_frag_codes else np.empty(0, dtype=np.int32)
+    library.spectrum_offsets = spec_offsets
+    library.spectrum_lengths = spec_lengths
+
+    return library
 
 import multiprocessing
-def iso_library_multi(library,tag,n_iso):
+def iso_library_multi(library, tag, n_iso):
     """
-    Generate isotopes for library fragments (but multiprocessed)
+    Generate isotopes for library fragments (multiprocessed).
+
+    Only rebuilds spectrum_data and frag_names_data on the store.
+    All other arrays (frag_data, frag_keys_data, scalars) are unchanged.
 
     Parameters
     ----------
-    library : dict[(str, int)]['frags'] = {b1_1:[mass, int], ..., y10-H2O_2[mass_int]}
-        A dictionary with keys of (peptide_seq, z) and corresponding values of another dictionary. 
-        This dictionary contains the key 'frags' among other keys.
-        library[(seq, z)][frags] is a dictionary with fragment identies (see split_frag_name) as keys and [mass, int] as values
+    library : SpectrumLibraryStore
+        Spectral library.
     tag : massTag
-        a massTag instance
-    n_iso : number of isotopes for each fragment to generate
+        A massTag instance.
+    n_iso : int
+        Number of isotopes per fragment to generate.
 
     Returns
     -------
-    new_library : dict
-        The same library as before but with updated spectrum and ordered_frags dictionaries (same level as 'frags') with additonal isotopes
+    SpectrumLibraryStore
+        The same store with updated spectrum/frag_names arrays.
     """
-    ## add n isotpic peaks to the "spectrum" portio of each library entry
-    logger.info("Creating Copy of Library...")
-    new_library = copy.deepcopy(library)
-    
+    from src.utils.frag_encoding import encode_frag_names
+
+    n = len(library)
+    all_keys = list(library)
+
+    # Extract only what gen_isotopes_dict needs: seq string and frags dict.
+    # These are small relative to the full library — no scalar/spectrum copies.
+    all_seqs = [k[0] for k in all_keys]
+    all_frags = [library[k]["frags"] for k in all_keys]
+
     logger.info("Generating isotopes for library:")
-    all_keys = list(new_library)
-    all_seqs = [i[0] for i in all_keys]
-    all_frags = [new_library[i]["frags"] for i in new_library]
-    all_tag = [tag for _ in all_keys]
-    all_iso = [n_iso for _ in all_keys]
-    with multiprocessing.Pool(8) as p:
-        iso_out = p.starmap(gen_isotopes_dict,tqdm.tqdm(zip(all_seqs,all_frags,all_tag,all_iso),total=len(all_seqs)))
-    for key,out in zip(all_keys,iso_out):
-        new_library[key]["spectrum"],new_library[key]["ordered_frags"] = out
-        
-        # new_library[key]["spectrum"] = gen_isotopes(key[0],frags)
-        # new_library[key]["spectrum"],new_library[key]["ordered_frags"] = gen_isotopes_dict(key[0],frags)
-        
-    return new_library
+    p = multiprocessing.get_context('spawn').Pool()
+    iso_out = p.starmap(
+        gen_isotopes_dict,
+        tqdm.tqdm(zip(all_seqs, all_frags, [tag]*n, [n_iso]*n), total=n)
+    )
+    p.close()
+    p.join()
+    import resource, subprocess, sys as _sys
+    if _sys.platform == 'darwin':
+        _cur = int(subprocess.check_output(['ps', '-o', 'rss=', '-p', str(os.getpid())]).strip()) / (1024**2)
+        _peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**3)
+    else:
+        _cur = _peak = 0
+    logger.info(f"[MEM] after pool.join: {_cur:.2f} GB current, {_peak:.2f} GB peak")
+
+    # Free the input lists before building output arrays
+    del all_seqs, all_frags
+
+    # Build new spectrum_data and frag_names_data from the results.
+    # Each iso_out[i] is (spectrum_array, ordered_frags_list).
+    all_spec_peaks = []
+    all_frag_codes = []
+    spec_offsets = np.empty(n, dtype=np.int64)
+    spec_lengths = np.empty(n, dtype=np.int32)
+    cursor = 0
+
+    for i, (spectrum, ordered_frags) in enumerate(iso_out):
+        n_peaks = len(spectrum)
+        spec_offsets[i] = cursor
+        spec_lengths[i] = n_peaks
+        all_spec_peaks.append(np.asarray(spectrum, dtype=np.float64))
+        all_frag_codes.append(encode_frag_names(ordered_frags))
+        cursor += n_peaks
+
+    del iso_out
+    if _sys.platform == 'darwin':
+        _cur2 = int(subprocess.check_output(['ps', '-o', 'rss=', '-p', str(os.getpid())]).strip()) / (1024**2)
+        _peak2 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**3)
+    else:
+        _cur2 = _peak2 = 0
+    logger.info(f"[MEM] after encoding loop: {_cur2:.2f} GB current, {_peak2:.2f} GB peak")
+
+    spectrum_data = np.concatenate(all_spec_peaks, axis=0) if all_spec_peaks else np.empty((0, 2), dtype=np.float64)
+    del all_spec_peaks
+    frag_names_data = np.concatenate(all_frag_codes) if all_frag_codes else np.empty(0, dtype=np.int32)
+    del all_frag_codes
+
+    # Replace the spectrum arrays on the store.
+    # The old arrays are dereferenced and freed by GC.
+    library.spectrum_data = spectrum_data
+    library.frag_names_data = frag_names_data
+    library.spectrum_offsets = spec_offsets
+    library.spectrum_lengths = spec_lengths
+
+    return library
 
 
 # def calculate_mz(sequence,charge):
