@@ -853,6 +853,127 @@ class SpectrumLibraryStore:
         )
 
     # ------------------------------------------------------------------
+    # Factory: build decoy store from target + worker results
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_target_and_decoy_results(cls, target_store, all_keys, results):
+        """Build a decoy SpectrumLibraryStore directly from the target store's
+        arrays and per-entry worker results, skipping intermediate dicts.
+
+        Only ``seq``, ``frags``, ``spectrum``, and ``ordered_frags`` differ
+        between target and decoy; all other fields are copied from
+        *target_store*.
+
+        Parameters
+        ----------
+        target_store : SpectrumLibraryStore
+            The target library whose scalar/top-n arrays are reused.
+        all_keys : list[tuple]
+            Ordered precursor keys (same order as *results*).
+        results : list[tuple]
+            Per-entry ``(new_seq, new_frags, spectrum, ordered_frags)``
+            from the decoy worker pool.
+        """
+        n = len(all_keys)
+        key_to_idx = {key: i for i, key in enumerate(all_keys)}
+
+        # Scalar arrays — copy unchanged from target
+        mod_seq = target_store.mod_seq.copy()
+        prec_mz = target_store.prec_mz.copy()
+        prec_z = target_store.prec_z.copy()
+        iRT = target_store.iRT.copy()
+        ion_mob = target_store.ion_mob.copy()
+        protein_group = target_store.protein_group.copy()
+        protein_name = target_store.protein_name.copy()
+        genes = target_store.genes.copy()
+        uniprot_id = target_store.uniprot_id.copy()
+
+        # seq — replaced from worker results
+        seq = np.empty(n, dtype=object)
+        # parent_key — set to original keys
+        parent_key = np.empty(n, dtype=object)
+
+        # Variable-length accumulators for spectrum
+        all_spec_mz, all_spec_int, all_frag_names = [], [], []
+        spec_offsets = np.empty(n, dtype=np.int64)
+        spec_lengths = np.empty(n, dtype=np.int32)
+        spec_cursor = 0
+
+        # Variable-length accumulators for original frags
+        all_frag_peaks, all_frag_keys = [], []
+        frag_offsets = np.empty(n, dtype=np.int64)
+        frag_lengths = np.empty(n, dtype=np.int32)
+        frag_cursor = 0
+
+        for i, (key, (new_seq, new_frags, spectrum, ordered_frags)) in enumerate(
+            zip(all_keys, results)
+        ):
+            seq[i] = new_seq
+            parent_key[i] = key
+
+            # Spectrum
+            spec_arr = np.asarray(spectrum, dtype=np.float64)
+            n_peaks = len(spec_arr)
+            spec_offsets[i] = spec_cursor
+            spec_lengths[i] = n_peaks
+            all_spec_mz.append(np.ascontiguousarray(spec_arr[:, 0]))
+            all_spec_int.append(np.ascontiguousarray(spec_arr[:, 1]))
+            all_frag_names.append(_ensure_frag_codes(ordered_frags))
+            spec_cursor += n_peaks
+
+            # Original frags
+            frag_offsets[i] = frag_cursor
+            if new_frags:
+                fk = encode_frag_names(list(new_frags.keys()))
+                fv = np.array(list(new_frags.values()), dtype=np.float64)
+                all_frag_keys.append(fk)
+                all_frag_peaks.append(fv)
+                frag_lengths[i] = len(fk)
+                frag_cursor += len(fk)
+            else:
+                frag_lengths[i] = 0
+
+        # Concatenate variable-length arrays
+        spectrum_mz = np.concatenate(all_spec_mz) if all_spec_mz else np.empty(0, dtype=np.float64)
+        spectrum_int = np.concatenate(all_spec_int) if all_spec_int else np.empty(0, dtype=np.float64)
+        frag_names_data = np.concatenate(all_frag_names) if all_frag_names else np.empty(0, dtype=np.int32)
+        frag_data = np.concatenate(all_frag_peaks, axis=0) if all_frag_peaks else np.empty((0, 2), dtype=np.float64)
+        frag_keys_data = np.concatenate(all_frag_keys) if all_frag_keys else np.empty(0, dtype=np.int32)
+
+        # Top-N — copy from target
+        top_n_data = target_store.top_n_data.copy()
+        top_n_offsets = target_store.top_n_offsets.copy()
+        top_n_lengths = target_store.top_n_lengths.copy()
+
+        return cls(
+            key_to_idx=key_to_idx,
+            mod_seq=mod_seq,
+            seq=seq,
+            prec_mz=prec_mz,
+            prec_z=prec_z,
+            iRT=iRT,
+            ion_mob=ion_mob,
+            protein_group=protein_group,
+            protein_name=protein_name,
+            genes=genes,
+            uniprot_id=uniprot_id,
+            spectrum_mz=spectrum_mz,
+            spectrum_int=spectrum_int,
+            spectrum_offsets=spec_offsets,
+            spectrum_lengths=spec_lengths,
+            frag_names_data=frag_names_data,
+            frag_data=frag_data,
+            frag_keys_data=frag_keys_data,
+            frag_offsets=frag_offsets,
+            frag_lengths=frag_lengths,
+            top_n_data=top_n_data,
+            top_n_offsets=top_n_offsets,
+            top_n_lengths=top_n_lengths,
+            parent_key=parent_key,
+        )
+
+    # ------------------------------------------------------------------
     # Factory: direct TSV parser
     # ------------------------------------------------------------------
 
