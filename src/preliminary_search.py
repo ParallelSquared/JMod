@@ -50,29 +50,40 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     mod_dict.update(diann_mods)
 
     # Construct polars df from python lib
+    import time as _time
+    _t0 = _time.time()
     pl_lib = python_lib_to_diann_df(library_spectra)
+    logger.info(f"  to_diann_df: {_time.time()-_t0:.1f}s")
 
     # Add modification array to the polars dataframe
-    pl_lib = pl_lib.with_columns(
-        pl.struct(["ModifiedPeptide"])
-        .map_elements(lambda r: peptide_to_mod_array(r["ModifiedPeptide"], mod_dict),
+    # Deduplicate: compute on unique ModifiedPeptide values, then join back
+    _t0 = _time.time()
+    unique_peps = pl_lib.select("ModifiedPeptide").unique()
+    unique_peps = unique_peps.with_columns(
+        pl.col("ModifiedPeptide")
+        .map_elements(lambda p: peptide_to_mod_array(p, mod_dict),
                       return_dtype=pl.List(pl.Float32))
         .alias("Modifications")
     )
+    pl_lib = pl_lib.join(unique_peps, on="ModifiedPeptide", how="left")
+    logger.info(f"  peptide_to_mod_array (unique): {_time.time()-_t0:.1f}s")
 
     _log_mem_ps("after building polars lib")
-    # Convert to rust-compatible peptide objects
-    pep_seqs = [(v['seq'], v['mod_seq']) for v in library_spectra.values()]
+    # Build mod_array lookup from the unique peptides we already computed
+    _t0 = _time.time()
+    _mod_array_map = dict(zip(
+        unique_peps["ModifiedPeptide"].to_list(),
+        unique_peps["Modifications"].to_list(),
+    ))
 
-    rust_peps = []
-    observed_mods: set[str] = set() # Allows us to backtrack original mod names from Sage results
+    # observed_mods only needs unique mod_seqs
+    observed_mods: set[str] = set()
+    for ms in _mod_array_map:
+        observed_mods.update(extract_mod_names(ms))
+    rev_map = {round(mod_dict[m], 4): m for m in observed_mods}
+    logger.info(f"  mod_array_map + observed_mods: {_time.time()-_t0:.1f}s")
 
-    for seq, mod_seq in pep_seqs:
-        rust_peps.append(ps.Peptide(seq, peptide_to_mod_array(mod_seq, mod_dict)))
-        observed_mods.update(extract_mod_names(mod_seq))
-
-    rev_map = {round(mod_dict[m], 4): m for m in observed_mods}  # Allows us to lookup mods by mass despite float error
-
+    _t0 = _time.time()
     db = ps.IndexedDatabase.from_library(
         library=pl_lib,
         bucket_size=4096,
@@ -83,6 +94,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         peptide_min_mass=0.0,
         peptide_max_mass=5000.0,
     )
+    logger.info(f"  IndexedDatabase.from_library: {_time.time()-_t0:.1f}s")
 
     # Create scorer
     # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are annotated as
@@ -96,7 +108,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         annotate_matches=True, # Add fragment annotation
         min_matched_peaks=3,
         max_fragment_charge=2,
-        report_psms=5*plex
+        report_psms=int(5*(plex**(1/2)))
     )
 
     _log_mem_ps("after building indexed DB + scorer")

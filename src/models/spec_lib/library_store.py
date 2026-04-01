@@ -1175,6 +1175,78 @@ class SpectrumLibraryStore:
         )
 
     # ------------------------------------------------------------------
+    # Export: vectorized DIA-NN-format Polars DataFrame
+    # ------------------------------------------------------------------
+
+    def to_diann_df(self):
+        """Convert to a one-row-per-fragment Polars DataFrame (DIA-NN format).
+
+        Replaces the Python-loop-based python_lib_to_diann_df() with
+        vectorized numpy operations — no per-fragment Python iteration.
+        """
+        import polars as pl
+        from src.utils.frag_encoding import (
+            get_ion_type, get_index, get_charge, get_loss,
+        )
+
+        N = len(self)
+        frag_lens = self.frag_lengths[:N].astype(np.intp)
+        total_frags = int(frag_lens.sum())
+
+        # -- Build gather index (handles potential gaps in frag_data) --
+        entry_idx = np.repeat(np.arange(N, dtype=np.intp), frag_lens)
+        offsets_expanded = np.repeat(self.frag_offsets[:N], frag_lens)
+        within_group = np.arange(total_frags, dtype=np.intp) - np.repeat(
+            np.cumsum(frag_lens) - frag_lens, frag_lens
+        )
+        gather_idx = offsets_expanded + within_group
+
+        # -- Fragment-level columns from frag_data / frag_keys_data --
+        frag_mz = self.frag_data[gather_idx, 0]
+        frag_int = self.frag_data[gather_idx, 1]
+        codes = self.frag_keys_data[gather_idx]
+
+        # Decode packed int32 codes into separate fields
+        _ION_NAMES = np.array(['b', 'y', 'a', 'c', 'x', 'z'], dtype=object)
+        _LOSS_NAMES = np.array(['noloss', 'H2O', 'NH3', 'H3PO4'], dtype=object)
+
+        frag_type = _ION_NAMES[get_ion_type(codes)]
+        frag_num = get_index(codes)
+        frag_charge = get_charge(codes)
+        frag_loss = _LOSS_NAMES[get_loss(codes)]
+
+        # -- Scalar columns expanded to per-fragment rows --
+        mod_seq = self.mod_seq[:N][entry_idx]
+        seq = self.seq[:N][entry_idx]
+        prec_mz = self.prec_mz[:N][entry_idx]
+        prec_z = self.prec_z[:N][entry_idx]
+        iRT = self.iRT[:N][entry_idx]
+        ion_mob = self.ion_mob[:N][entry_idx]
+        protein_group = self.protein_group[:N][entry_idx]
+        protein_name = self.protein_name[:N][entry_idx]
+        genes = self.genes[:N][entry_idx]
+        uniprot_id = self.uniprot_id[:N][entry_idx]
+
+        return pl.DataFrame({
+            "ModifiedPeptide": mod_seq,
+            "StrippedPeptide": seq,
+            "PrecursorCharge": prec_z.astype(np.int32),
+            "RT": iRT,
+            "IonMobility": ion_mob,
+            "PrecursorMz": prec_mz,
+            "FragmentMz": frag_mz,
+            "RelativeIntensity": frag_int,
+            "FragmentType": frag_type,
+            "FragmentCharge": frag_charge.astype(np.int32),
+            "FragmentSeriesNumber": frag_num.astype(np.int32),
+            "FragmentLossType": frag_loss,
+            "ProteinID": uniprot_id,
+            "ProteinGroup": protein_group,
+            "ProteinName": protein_name,
+            "Genes": genes,
+        })
+
+    # ------------------------------------------------------------------
     # Factory: direct TSV parser
     # ------------------------------------------------------------------
 

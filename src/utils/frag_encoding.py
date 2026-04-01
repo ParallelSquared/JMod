@@ -215,6 +215,11 @@ def get_charge(codes):
     return ((np.asarray(codes) >> _CHG_SHIFT) & _CHG_MASK) + 1
 
 
+def get_loss(codes):
+    """Array of loss type codes (0=none, 1=H2O, 2=NH3, 3=H3PO4)."""
+    return (np.asarray(codes) >> _LOSS_SHIFT) & _LOSS_MASK
+
+
 def get_iso(codes):
     """Array of isotope indices (0=monoisotopic)."""
     return (np.asarray(codes) >> _ISO_SHIFT) & _ISO_MASK

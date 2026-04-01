@@ -472,7 +472,7 @@ def _parse_frag_key(frag_key: str):
     return frag_type, frag_num, loss_type, frag_charge
 
 
-def python_lib_to_diann_df(python_lib: dict) -> pl.DataFrame:
+def python_lib_to_diann_df(python_lib) -> pl.DataFrame:
     """
     Convert internal python_lib representation back to a DIA-NN-style
     spectral library (one row per fragment) as a Polars DataFrame.
@@ -488,6 +488,7 @@ def python_lib_to_diann_df(python_lib: dict) -> pl.DataFrame:
         protein_name  -> ProteinName
         genes         -> Genes
     """
+    return python_lib.to_diann_df()
     # Pre-allocate column lists (much more memory efficient than list of dicts)
     prec_mz_col = []
     mod_seq_col = []
