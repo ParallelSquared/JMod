@@ -894,52 +894,45 @@ class SpectrumLibraryStore:
         # parent_key — set to original keys
         parent_key = np.empty(n, dtype=object)
 
-        # Variable-length accumulators for spectrum
-        all_spec_mz, all_spec_int, all_frag_names = [], [], []
-        spec_offsets = np.empty(n, dtype=np.int64)
-        spec_lengths = np.empty(n, dtype=np.int32)
-        spec_cursor = 0
+        # Offsets/lengths are identical to target (1-to-1 fragment correspondence)
+        spec_offsets = target_store.spectrum_offsets.copy()
+        spec_lengths = target_store.spectrum_lengths.copy()
+        frag_offsets = target_store.frag_offsets.copy()
+        frag_lengths = target_store.frag_lengths.copy()
 
-        # Variable-length accumulators for original frags
-        all_frag_peaks, all_frag_keys = [], []
-        frag_offsets = np.empty(n, dtype=np.int64)
-        frag_lengths = np.empty(n, dtype=np.int32)
-        frag_cursor = 0
+        # Pre-allocate output arrays using target sizes
+        total_spec = len(target_store.spectrum_mz)
+        total_frag = len(target_store.frag_data)
+        spectrum_mz = np.empty(total_spec, dtype=np.float64)
+        spectrum_int = np.empty(total_spec, dtype=np.float64)
+        frag_names_data = np.empty(total_spec, dtype=np.int32)
+        frag_data = np.empty((total_frag, 2), dtype=np.float64)
+        frag_keys_data = np.empty(total_frag, dtype=np.int32)
 
-        for i, (key, (new_seq, new_frags, spectrum, ordered_frags)) in enumerate(
-            zip(all_keys, results)
-        ):
+        for i, (key, result) in enumerate(zip(all_keys, results)):
+            new_seq, new_frags, spectrum, ordered_frags = result
             seq[i] = new_seq
             parent_key[i] = key
 
-            # Spectrum
+            # Spectrum — write into pre-allocated slice
             spec_arr = np.asarray(spectrum, dtype=np.float64)
-            n_peaks = len(spec_arr)
-            spec_offsets[i] = spec_cursor
-            spec_lengths[i] = n_peaks
-            all_spec_mz.append(np.ascontiguousarray(spec_arr[:, 0]))
-            all_spec_int.append(np.ascontiguousarray(spec_arr[:, 1]))
-            all_frag_names.append(_ensure_frag_codes(ordered_frags))
-            spec_cursor += n_peaks
+            off = spec_offsets[i]
+            length = spec_lengths[i]
+            spectrum_mz[off:off + length] = spec_arr[:, 0]
+            spectrum_int[off:off + length] = spec_arr[:, 1]
+            frag_names_data[off:off + length] = _ensure_frag_codes(ordered_frags)
 
-            # Original frags
-            frag_offsets[i] = frag_cursor
-            if new_frags:
+            # Original frags — write into pre-allocated slice
+            foff = frag_offsets[i]
+            flength = frag_lengths[i]
+            if flength > 0:
                 fk = encode_frag_names(list(new_frags.keys()))
                 fv = np.array(list(new_frags.values()), dtype=np.float64)
-                all_frag_keys.append(fk)
-                all_frag_peaks.append(fv)
-                frag_lengths[i] = len(fk)
-                frag_cursor += len(fk)
-            else:
-                frag_lengths[i] = 0
+                frag_keys_data[foff:foff + flength] = fk
+                frag_data[foff:foff + flength] = fv
 
-        # Concatenate variable-length arrays
-        spectrum_mz = np.concatenate(all_spec_mz) if all_spec_mz else np.empty(0, dtype=np.float64)
-        spectrum_int = np.concatenate(all_spec_int) if all_spec_int else np.empty(0, dtype=np.float64)
-        frag_names_data = np.concatenate(all_frag_names) if all_frag_names else np.empty(0, dtype=np.int32)
-        frag_data = np.concatenate(all_frag_peaks, axis=0) if all_frag_peaks else np.empty((0, 2), dtype=np.float64)
-        frag_keys_data = np.concatenate(all_frag_keys) if all_frag_keys else np.empty(0, dtype=np.int32)
+            # Free eagerly
+            results[i] = None
 
         # Top-N — copy from target
         top_n_data = target_store.top_n_data.copy()
@@ -971,6 +964,214 @@ class SpectrumLibraryStore:
             top_n_offsets=top_n_offsets,
             top_n_lengths=top_n_lengths,
             parent_key=parent_key,
+        )
+
+    # ------------------------------------------------------------------
+    # Factory: build tagged store from target + mass tag
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_tagged(cls, target_store, tag):
+        """Build a tagged SpectrumLibraryStore by pre-allocating arrays.
+
+        For each entry in *target_store*, creates M copies (one per tag
+        channel), with modified ``mod_seq``, ``prec_mz``, and fragment
+        m/z values.  No deepcopy, no intermediate dicts.
+
+        Parameters
+        ----------
+        target_store : SpectrumLibraryStore
+            The untagged library.
+        tag : massTag
+            Mass tag with ``channel_names``, ``channel_masses``,
+            ``rules``, ``name``.
+        """
+        from src.utils.parse_peptides import parse_peptide
+        from src.mass_tags import get_tag_pos
+        from src.utils.frag_encoding import get_ion_type, get_index, get_charge
+        from src.logger import logger
+        import tqdm
+
+        logger.info(f"Building tagged library (pre-allocated) with tag: {tag.name}")
+
+        N = len(target_store.key_to_idx)
+        M = tag.n_channels
+        NM = N * M
+
+        # --- Phase 1: Pre-compute per-entry tag info ---
+        total_target_frag = len(target_store.frag_data)
+        frag_n_tags = np.empty(total_target_frag, dtype=np.float64)
+        n_tag_sites = np.empty(N, dtype=np.float64)
+        tagged_templates = np.empty(N, dtype=object)
+
+        # Pre-compute frag charges for all frags at once
+        if total_target_frag > 0:
+            all_frag_charges = get_charge(
+                target_store.frag_keys_data
+            ).astype(np.float64)
+        else:
+            all_frag_charges = np.empty(0, dtype=np.float64)
+
+        for i in tqdm.tqdm(range(N), desc="Computing tag positions"):
+            mod_seq_str = target_store.mod_seq[i]
+            peptide = (
+                mod_seq_str
+                if isinstance(mod_seq_str, str)
+                else "".join(mod_seq_str)
+            )
+            split_peptide = parse_peptide(peptide)
+
+            all_tag_pos, additional_tag_masses = get_tag_pos(
+                split_peptide, tag.rules
+            )
+            n_tag_sites[i] = len(all_tag_pos)
+
+            num_tags_n = np.cumsum(additional_tag_masses, dtype=int)
+            num_tags_c = np.cumsum(additional_tag_masses[::-1], dtype=int)
+
+            for pos in all_tag_pos:
+                split_peptide[pos] += "(" + tag.name + ")"
+            tagged_templates[i] = "".join(split_peptide)
+
+            foff = int(target_store.frag_offsets[i])
+            flen = int(target_store.frag_lengths[i])
+            if flen > 0:
+                codes = target_store.frag_keys_data[foff:foff + flen]
+                ion_types = get_ion_type(codes)
+                indices = get_index(codes)
+                local = np.empty(flen, dtype=np.float64)
+                # N-terminal ions: b=0, a=2, c=3
+                n_term = (
+                    (ion_types == 0) | (ion_types == 2) | (ion_types == 3)
+                )
+                c_term = ~n_term  # y=1, x=4, z=5
+                if n_term.any():
+                    local[n_term] = num_tags_n[
+                        indices[n_term] - 1
+                    ].astype(np.float64)
+                if c_term.any():
+                    local[c_term] = num_tags_c[
+                        indices[c_term] - 1
+                    ].astype(np.float64)
+                frag_n_tags[foff:foff + flen] = local
+
+        # --- Phase 2: Pre-allocate output arrays ---
+        target_frag_lengths = target_store.frag_lengths
+        total_out_frag = int(np.sum(target_frag_lengths)) * M
+
+        # Scalar arrays (tile from target)
+        out_mod_seq = np.empty(NM, dtype=object)
+        out_seq = np.repeat(target_store.seq, M)
+        out_prec_mz = np.repeat(target_store.prec_mz, M)
+        out_prec_z = np.repeat(target_store.prec_z, M)
+        out_iRT = np.repeat(target_store.iRT, M)
+        out_ion_mob = np.repeat(target_store.ion_mob, M)
+        out_protein_group = np.repeat(target_store.protein_group, M)
+        out_protein_name = np.repeat(target_store.protein_name, M)
+        out_genes = np.repeat(target_store.genes, M)
+        out_uniprot_id = np.repeat(target_store.uniprot_id, M)
+        out_parent_key = np.empty(NM, dtype=object)
+
+        # Variable-length arrays
+        out_spectrum_mz = np.empty(total_out_frag, dtype=np.float64)
+        out_spectrum_int = np.empty(total_out_frag, dtype=np.float64)
+        out_frag_names_data = np.empty(total_out_frag, dtype=np.int32)
+        out_frag_data = np.empty((total_out_frag, 2), dtype=np.float64)
+        out_frag_keys_data = np.empty(total_out_frag, dtype=np.int32)
+        out_spec_offsets = np.empty(NM, dtype=np.int64)
+        out_spec_lengths = np.empty(NM, dtype=np.int32)
+        out_frag_offsets = np.empty(NM, dtype=np.int64)
+        out_frag_lengths = np.empty(NM, dtype=np.int32)
+
+        # Adjust prec_mz per channel (vectorised over entries)
+        for c in range(M):
+            tag_mass = tag.channel_masses[c]
+            out_prec_mz[c::M] += tag_mass * n_tag_sites / target_store.prec_z
+
+        # Build mod_seq per channel and key_to_idx
+        # Recover original key charge values for key construction
+        idx_to_key = {v: k for k, v in target_store.key_to_idx.items()}
+
+        key_to_idx = {}
+        for c in range(M):
+            tag_n = tag.channel_names[c]
+            replacement = tag.name + "-" + str(tag_n)
+            for i in range(N):
+                out_idx = i * M + c
+                new_seq = tagged_templates[i].replace(
+                    tag.name, replacement
+                )
+                out_mod_seq[out_idx] = new_seq
+                orig_charge = idx_to_key[i][1]
+                key_to_idx[(new_seq, orig_charge)] = out_idx
+
+        # --- Phase 3: Fill variable-length arrays ---
+        cursor = 0
+        for i in tqdm.tqdm(range(N), desc="Tagging library"):
+            foff = int(target_store.frag_offsets[i])
+            flen = int(target_store.frag_lengths[i])
+
+            if flen > 0:
+                src_mz = target_store.frag_data[foff:foff + flen, 0]
+                src_int = target_store.frag_data[foff:foff + flen, 1]
+                src_keys = target_store.frag_keys_data[foff:foff + flen]
+                local_n_tags = frag_n_tags[foff:foff + flen]
+                local_charges = all_frag_charges[foff:foff + flen]
+
+            for c in range(M):
+                out_idx = i * M + c
+                out_spec_offsets[out_idx] = cursor
+                out_spec_lengths[out_idx] = flen
+                out_frag_offsets[out_idx] = cursor
+                out_frag_lengths[out_idx] = flen
+
+                if flen > 0:
+                    tag_mass = tag.channel_masses[c]
+                    new_mz = src_mz + (tag_mass * local_n_tags / local_charges)
+
+                    # Frag data (original ordering)
+                    out_frag_data[cursor:cursor + flen, 0] = new_mz
+                    out_frag_data[cursor:cursor + flen, 1] = src_int
+                    out_frag_keys_data[cursor:cursor + flen] = src_keys
+
+                    # Spectrum data (sorted by m/z)
+                    order = np.argsort(new_mz)
+                    out_spectrum_mz[cursor:cursor + flen] = new_mz[order]
+                    out_spectrum_int[cursor:cursor + flen] = src_int[order]
+                    out_frag_names_data[cursor:cursor + flen] = src_keys[order]
+
+                cursor += flen
+
+        # Top-N: empty (recomputed downstream when needed)
+        out_top_n_data = np.empty(0, dtype=np.int32)
+        out_top_n_offsets = np.zeros(NM, dtype=np.int64)
+        out_top_n_lengths = np.zeros(NM, dtype=np.int32)
+
+        return cls(
+            key_to_idx=key_to_idx,
+            mod_seq=out_mod_seq,
+            seq=out_seq,
+            prec_mz=out_prec_mz,
+            prec_z=out_prec_z,
+            iRT=out_iRT,
+            ion_mob=out_ion_mob,
+            protein_group=out_protein_group,
+            protein_name=out_protein_name,
+            genes=out_genes,
+            uniprot_id=out_uniprot_id,
+            spectrum_mz=out_spectrum_mz,
+            spectrum_int=out_spectrum_int,
+            spectrum_offsets=out_spec_offsets,
+            spectrum_lengths=out_spec_lengths,
+            frag_names_data=out_frag_names_data,
+            frag_data=out_frag_data,
+            frag_keys_data=out_frag_keys_data,
+            frag_offsets=out_frag_offsets,
+            frag_lengths=out_frag_lengths,
+            top_n_data=out_top_n_data,
+            top_n_offsets=out_top_n_offsets,
+            top_n_lengths=out_top_n_lengths,
+            parent_key=out_parent_key,
         )
 
     # ------------------------------------------------------------------
