@@ -40,7 +40,74 @@ from src.logger import logger
 from src.utils.misc_functions import p_result
 from src.mass_tags import massTag
 from pyteomics import mass
+from numba import njit
 
+
+
+@njit(nogil=True)
+def _compute_shared_frac_jit(target_mz, target_int, other_mz_flat, mz_tol):
+    """For one precursor, compute fraction of library intensity shared with other channels.
+
+    target_mz, target_int: 1D arrays for this channel's matched library fragments
+    other_mz_flat: concatenated m/z arrays from all OTHER channels of same untag_prec
+    mz_tol: relative tolerance (e.g. 20e-6)
+
+    Returns: fraction of target_int that has a match in any other channel
+    """
+    total_int = 0.0
+    shared_int = 0.0
+    for i in range(len(target_mz)):
+        total_int += target_int[i]
+        mz = target_mz[i]
+        found = False
+        for j in range(len(other_mz_flat)):
+            if abs(other_mz_flat[j] - mz) / mz < mz_tol:
+                found = True
+                break
+        if found:
+            shared_int += target_int[i]
+    if total_int == 0.0:
+        return 0.0
+    return shared_int / total_int
+
+
+def _compute_frac_shared_intensity(fdc, mz_tol):
+    """Compute fraction of library intensity from fragments shared across channels.
+
+    For each untag_prec group with 2+ channels, compares fragment m/z lists
+    across channels using relative PPM tolerance. Single-channel groups get -1.
+    """
+    result = np.full(len(fdc), -1.0)
+    groups = fdc.groupby("untag_prec").indices
+
+    for untag_prec, indices in groups.items():
+        if len(indices) < 2:
+            continue
+
+        # Collect frag_mz and frag_int arrays for all rows in this group
+        mz_arrays = []
+        int_arrays = []
+        for idx in indices:
+            mz_arr = np.array(fdc["frag_mz"].iloc[idx], dtype=np.float64)
+            int_arr = np.array(fdc["frag_int"].iloc[idx], dtype=np.float64)
+            mz_arrays.append(mz_arr)
+            int_arrays.append(int_arr)
+
+        for k, idx in enumerate(indices):
+            # Build other_mz_flat from all channels except this one
+            other_parts = [mz_arrays[j] for j in range(len(indices)) if j != k]
+            if len(other_parts) == 0 or all(len(p) == 0 for p in other_parts):
+                result[idx] = 0.0
+                continue
+            other_mz_flat = np.concatenate(other_parts)
+            target_mz = mz_arrays[k]
+            target_int = int_arrays[k]
+            if len(target_mz) == 0:
+                result[idx] = 0.0
+                continue
+            result[idx] = _compute_shared_frac_jit(target_mz, target_int, other_mz_flat, mz_tol)
+
+    return result
 
 
 def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
@@ -578,13 +645,13 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     """
 
     assert model_type in ["lda", "rf", "xg"], 'model_type must be one of ["lda", "rf", "xg"]'
-    
+
     logger.info("Scoring IDs")
-    
-    
+
+
     ## Only decoys are negatives - all targets are positives
     y = np.array(~fdc["decoy"], dtype=int)
-    
+
     # exclude necessary columns
     drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz', 'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq',
                   'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals',
@@ -618,55 +685,6 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                 X[col + '_qbin'] = binned
             X = X.drop(columns=[col])
 
-    # DEBUG: Check each column for infinity or very large values
-    #problem_columns = []
-    #for col in X.columns:
-    #    try:
-    #        # Check for infinity
-    #        if np.isinf(X[col]).any():
-    #            problem_columns.append(f"{col}: has infinity")
-    #            
-    #        # Check for very large values
-    #        max_val = X[col].max()
-    #        min_val = X[col].min()
-    #        if abs(max_val) > 1e30 or abs(min_val) > 1e30:
-    #            problem_columns.append(f"{col}: has extreme value (min={min_val}, max={max_val})")
-    #            
-    #        # Check for NaN
-    #        if np.isnan(X[col]).any():
-    #            problem_columns.append(f"{col}: has NaN")
-    #            
-    #    except Exception as e:
-    #        problem_columns.append(f"{col}: error checking - {str(e)}")
-    
-    #if problem_columns:
-    #    print("Problem columns detected:")
-    #    for prob in problem_columns:
-    #        print(f"  - {prob}")
-    #        
-    #    # Additional info about columns with infinity
-    #    for col in X.columns:
-    #        if np.isinf(X[col]).any():
-    #            inf_indices = np.where(np.isinf(X[col]))[0]
-    #            print(f"\nInfinity values in column '{col}' at indices: {inf_indices[:5]}...")
-    #            print(f"Example row with infinity in '{col}':")
-    #            print(X.iloc[inf_indices[0]].to_string())
-    #            
-    #            # Try to find the cause
-    #            if col in ['rt_error', 'sq_rt_error', 'mz_error', 'sq_mz_error']:
-    #                print(f"Original values for '{col.replace('sq_', '')}':")
-    #                if 'sq_rt_error' in col:
-    #                    print(fdc.loc[inf_indices[0], 'rt_error'])
-    #                elif 'sq_mz_error' in col:
-    #                    print(fdc.loc[inf_indices[0], 'mz_error'])
-    #            
-    #            break  # Just show one example to avoid overwhelming output
-    
-    # print(X.columns)
-    #print(f"Using {len(X.columns)} features for scoring:")
-    #for idx, feature in enumerate(X.columns):
-    #    print(f"{idx+1}. {feature}")
-    
     X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
 
     # Iterative training: 3 iterations with target filtering and negative mining
@@ -678,19 +696,15 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         logger.info(f"  Scoring iteration {itr + 1}/{n_iterations}")
 
         if itr == 0:
-            # Iteration 1: train on all targets vs all decoys (current behavior)
             sc_model = score_model(model_type, folder=folder)
             pred = sc_model.run_model(X, y, groups=fdc.stripped_seq)
         else:
-            # Iterations 2+: filter targets to q<=0.01, relabel PEP>=0.90 as decoys
             pep_values = estimate_pep(pred, fdc["decoy"].values)
 
-            # Build relabeled y: targets with PEP >= 0.90 become decoys
             y_filtered = y.copy()
             neg_mine_mask = (y_filtered == 1) & (pep_values >= 0.90)
             y_filtered[neg_mine_mask] = 0
 
-            # Keep: all decoys + confident targets (q <= 0.01) + negative-mined targets
             keep_mask = fdc["decoy"].values | (fdc_qvalues <= 0.01) | neg_mine_mask
 
             n_kept = keep_mask.sum()
@@ -708,69 +722,28 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         fdc_qvalues = np.empty_like(fdc_qvalues_ordered)
         fdc_qvalues[score_order] = fdc_qvalues_ordered
 
-    model_name= model_type
+    model_name = model_type
 
-    ####### make sure to not have these in the model (bc they are left out in decoys) #######
-       # "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps","plexfittrace_spec_all","plexfittrace_all","plexfittrace_ps_all","plex_Area","ms1_cor","traceproduct","iso_cor","MS1_Int","all_ms1_specs","MS1_Area"
-        
-    ###############################################################################################
-    ########################  Analysis the predictions    ######################################
-    
-    
-    
-    
     if len(pred.shape)==2:
         output = pred[:,1]
     else:
         output = pred
-        
-        
-        
+
     ## Use the scores to estimate the #IDs as 1% FDR
-    
     fpr, tpr, _ = roc_curve(y, output)
-    # plt.subplots()
-    # plt.plot(fpr,tpr)
-    # print("AUC: ",np.round(auc(fpr,tpr),3))
-    
-    
-    
-    # ordered_scores = sorted(output)[::-1]
-    
-    ## note this is slow
-    ## count down to find optimal FDR but then just use every Nth score to get a nice plot
-    # fdr = []
-    # threshold = []
-    # interval = 1
-    # for idx,s in enumerate(tqdm.tqdm(ordered_scores)):
-    #     if idx%interval==0:
-    #         ## SCORES IN INCREASING ORDER
-    #         # fdr.append(np.sum(np.greater_equal(pred[~y.astype(bool),1],s))/np.sum(np.greater_equal(pred[:,1],s)))
-            
-    #         # Scores decreasing
-    #         val = np.sum(np.greater_equal(output[~y.astype(bool)],s))/np.sum(np.greater_equal(output,s))
-    #         fdr.append(val)
-    #         if val<.01:
-    #             # if threshold==[]:
-    #             threshold = [ordered_scores[idx-1],s]
-    #         else:
-    #             interval=10
-    
-    
-    ## FASTER VERSION OF ABOVE
+
     score_order = np.argsort(-output, kind='stable')
     orig_order = np.argsort(score_order, kind='stable')
     decoy_order = fdc["decoy"][score_order]
     frac_decoy = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order)  # Unbiased FDR estimator: (1+d)/t
     frac_decoy = np.minimum.accumulate(frac_decoy[::-1])[::-1]  # Monotonize: q-value = min of downstream q-values
-    # plt.plot(frac_decoy)
     T = output[score_order[min(len(score_order)-1,np.searchsorted(frac_decoy,0.01))]]
     above_t = output>T
     fdc["PredVal"] = output
     fdc["Qvalue"] = frac_decoy[orig_order]
-    
+
     if folder:
-        
+
         plt.subplots()
         y_log=False
         vals,bins,_ = plt.hist(output,50,log=y_log,label="All")
@@ -780,9 +753,9 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
         plt.vlines(T,0,max(vals))
         plt.savefig(folder+"/ModelScore.png",dpi=600,bbox_inches="tight")
-        
-        
-        
+
+
+
         feat = 'rt_error'
         func = np.array#np.log10#
         plt.subplots()
@@ -796,8 +769,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
         plt.legend()
         plt.savefig(folder+"/RT_error.png",dpi=600,bbox_inches="tight")
-        
-                
+
+
         feat = 'mz_error'
         func = np.array#np.log10#
         plt.subplots()
@@ -813,7 +786,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         plt.savefig(folder+"/mz_error.png",dpi=600,bbox_inches="tight")
 
         plt.close("all")
-    
+
     return fdc
 
 
@@ -1026,12 +999,6 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
     # Add untag_prec and channels_matched
     fdc["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdc["untag_seq"],fdc["z"])]
     
-    
-    
-    
-    
-    
-    
     channel_matches_counts = fdc["untag_prec"].value_counts()
     channel_matches_counts_dict = {i:j for i,j in zip(channel_matches_counts.index,channel_matches_counts)}
     fdc["channels_matched"] = [channel_matches_counts_dict[i] for i in fdc["untag_prec"]]
@@ -1039,6 +1006,9 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
     # Use the helper function to add median-based features
     metrics_to_process = ["gof_stats", "scribe_scores", "max_matched_residuals", "manhattan_distances"]
     fdc = add_median_based_features(fdc, metrics_to_process)
+
+    # Compute frac_shared_intensity: fraction of library intensity from fragments shared across channels
+    fdc["frac_shared_intensity"] = _compute_frac_shared_intensity(fdc, mz_tol=config.mz_tol)
 
     if timeplex:
         if mass_tag:
