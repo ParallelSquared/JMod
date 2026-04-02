@@ -1470,7 +1470,7 @@ def huber_nnls_irls(coo_vals, coo_rows, coo_cols, n_rows, n_cols, b,
     corr = gram / np.outer(norms, norms)
     np.fill_diagonal(corr, 0)
     max_corr = np.max(np.abs(corr))
-    l1_ratio = max(1 - max_corr ** 2, 0.1)
+    l1_ratio = min(max(1 - max_corr ** 2, 0.1), 0.9)
 
     # Build CSC once from COO via JIT (nogil) — only format enet_path accepts.
     # Replaces COO→CSR→CSC conversion chain that held the GIL.
