@@ -108,7 +108,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         annotate_matches=True, # Add fragment annotation
         min_matched_peaks=3,
         max_fragment_charge=2,
-        report_psms=int(5*(plex**(1/2)))
+        report_psms=int(5*plex)
     )
 
     _log_mem_ps("after building indexed DB + scorer")
@@ -137,12 +137,22 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         else:
             hits.extend(batch_hits)
 
+    # Once spectra are searched, delete rust verison to free up memory
+    # Realistically these should be zero copy in the first place
+    #del rust_specs
+
     _log_mem_ps("after scoring")
-    # Make Polars dataframe
+    # Make Polars dataframe directly from Rust
     logger.info("Building results dataframe")
-    col_names = hits.get_column_names()
-    df = pl.DataFrame({name: getattr(hits, name) for name in col_names})
-    del hits # Free the memory of the Rust result container
+    # Log both old and new column names for comparison
+    old_cols = hits.get_column_names()
+    logger.info(f"  old columns (get_column_names): {old_cols}")
+    df = hits.to_polars()
+    logger.info(f"  new columns (to_polars):        {df.columns}")
+    logger.info(f"  to_polars dtypes: {dict(zip(df.columns, df.dtypes))}")
+    logger.info(f"  to_polars shape: {df.shape}")
+    del hits
+
     _log_mem_ps("after building results df + freeing hits")
 
     # 2. Vectorized Calculation of Theoretical m/z (using Polars UDF)
@@ -179,7 +189,9 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     df = df.drop("mz_diff")
 
     # 5. Filter out large MS1 errors (Polars syntax)
+    logger.info(f"  rows before ms1 ppm filter: {df.shape[0]}")
     df = df.filter(pl.col('ppm_error_ms1').abs() < ms1_ppm_error)
+    logger.info(f"  rows after ms1 ppm filter: {df.shape[0]}")
 
     # Get RTs for alignment
     lib_rts = {v['mod_seq'] : v['iRT'] for v in library_spectra.values()}

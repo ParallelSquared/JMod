@@ -894,15 +894,24 @@ class SpectrumLibraryStore:
         # parent_key — set to original keys
         parent_key = np.empty(n, dtype=object)
 
-        # Offsets/lengths are identical to target (1-to-1 fragment correspondence)
-        spec_offsets = target_store.spectrum_offsets.copy()
-        spec_lengths = target_store.spectrum_lengths.copy()
-        frag_offsets = target_store.frag_offsets.copy()
-        frag_lengths = target_store.frag_lengths.copy()
+        # Compute actual sizes from results (decoy may differ from target)
+        spec_lengths = np.empty(n, dtype=np.int32)
+        frag_lengths = np.empty(n, dtype=np.int32)
+        for i, result in enumerate(results):
+            _, new_frags, spectrum, _ = result
+            spec_arr = np.asarray(spectrum)
+            spec_lengths[i] = spec_arr.shape[0] if spec_arr.ndim == 2 else 0
+            frag_lengths[i] = len(new_frags)
 
-        # Pre-allocate output arrays using target sizes
-        total_spec = len(target_store.spectrum_mz)
-        total_frag = len(target_store.frag_data)
+        spec_offsets = np.empty(n, dtype=np.int64)
+        spec_offsets[0] = 0
+        np.cumsum(spec_lengths[:-1], out=spec_offsets[1:])
+        frag_offsets = np.empty(n, dtype=np.int64)
+        frag_offsets[0] = 0
+        np.cumsum(frag_lengths[:-1], out=frag_offsets[1:])
+
+        total_spec = int(spec_lengths.sum())
+        total_frag = int(frag_lengths.sum())
         spectrum_mz = np.empty(total_spec, dtype=np.float64)
         spectrum_int = np.empty(total_spec, dtype=np.float64)
         frag_names_data = np.empty(total_spec, dtype=np.int32)
