@@ -1102,16 +1102,16 @@ class SpectrumLibraryStore:
         idx_to_key = {v: k for k, v in target_store.key_to_idx.items()}
 
         key_to_idx = {}
-        for c in range(M):
-            tag_n = tag.channel_names[c]
-            replacement = tag.name + "-" + str(tag_n)
-            for i in range(N):
+        for i in range(N):
+            orig_charge = idx_to_key[i][1]
+            for c in range(M):
+                tag_n = tag.channel_names[c]
+                replacement = tag.name + "-" + str(tag_n)
                 out_idx = i * M + c
                 new_seq = tagged_templates[i].replace(
                     tag.name, replacement
                 )
                 out_mod_seq[out_idx] = new_seq
-                orig_charge = idx_to_key[i][1]
                 key_to_idx[(new_seq, orig_charge)] = out_idx
 
         # --- Phase 3: Fill variable-length arrays ---
