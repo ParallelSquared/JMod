@@ -415,7 +415,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     #     slib = dill.dump(spectrumLibrary,dill_file)
 
     logger.info("Creating Decoy Library")
-    decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules="rev",tag=config.tag,n_iso=config.num_iso_peaks)
+    decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules=config.args.decoy,tag=config.tag,n_iso=config.num_iso_peaks)
     _log_mem("after decoy library creation")
     spectrumLibrary.bulk_set_top_n(config.top_n)
     decoy_lib.bulk_set_top_n(config.top_n)

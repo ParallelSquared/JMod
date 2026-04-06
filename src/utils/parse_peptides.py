@@ -5,6 +5,8 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 #######
 #Parse peptide strings, fragments and modifications from spectral libraries 
+import hashlib
+import random
 import re
 from pyteomics import mass
 import src.config as config
@@ -272,27 +274,31 @@ diann_rules = {
 
 def change_seq(seq: str, rules: str, tag=None) -> str:
     """Modifies a peptide sequence to create a complementary decoy sequence.
-    Uses either the sequence reversal method or the DIA-NN rules for sequence
-    'mutation' 
+    Uses either the sequence reversal method, the DIA-NN rules for sequence
+    'mutation', or random shuffling.
 
     Parameters
     ----------
     seq : str
-        The original peptide sequence 
+        The original peptide sequence
     rules : str
-        Method to modify string (must either be 'rev' or 'diann')
+        Method to modify string ('rev', 'diann', or 'shuffle')
+    tag : massTag, optional
+        Channel label tag. When provided, tags are stripped before
+        transformation and re-applied afterward so all channels get
+        the same underlying decoy sequence.
 
     Returns
     -------
     str
-        The modified sequence 
-    
+        The modified sequence
+
     Example
     -------
     >>> change_seq("PEPTIDE", "diann")
     "LDLSVED"
     >>> change_seq("PEPTIDE", "rev")
-    "LDLSVED"
+    "EDITPEP"
     """
     # seq: list of AAs
     # frags: dictionary of frags
@@ -316,6 +322,22 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
         new_split_seq = [diann_rules[aa] for aa in seq]
     elif rules=="rev":
         new_split_seq = seq[:-1][::-1]+seq[-1:]
+    elif rules=="shuffle":
+        # Shuffle body (all but C-term), keeping mods attached to their AA.
+        # Seed on the tag-stripped sequence so all channels get the same shuffle.
+        seed_str = "decoy:" + "".join(seq)
+        base_seed = int(hashlib.md5(seed_str.encode()).hexdigest(), 16)
+        if len(seq) > 2 and len(set(seq[:-1])) > 1:
+            rng = random.Random(base_seed)
+            body = list(seq[:-1])
+            rng.shuffle(body)
+            new_split_seq = body + [seq[-1]]
+            # Fall back to reversal if shuffle == original
+            if new_split_seq == list(seq):
+                new_split_seq = seq[:-1][::-1] + seq[-1:]
+        else:
+            # Not enough unique residues to shuffle — reverse instead
+            new_split_seq = seq[:-1][::-1] + seq[-1:]
     else:
         from src.utils.gui_utils import send_raise_to_TK
         send_raise_to_TK("ValueError - Unavailable Rules Selected")

@@ -26,6 +26,7 @@ import re
 import sys
 
 import numpy as np
+import tqdm
 from pyteomics import mass
 
 # ── Amino acid parsing ────────────────────────────────────────────────────────
@@ -80,17 +81,13 @@ def mod_mass(mod_str: str) -> float:
 def shuffle_seq(tokens: list[str], rng: random.Random) -> list[str]:
     """Shuffle AA tokens, keeping the last residue (C-term) fixed.
     Modifications stay attached to their amino acid during the shuffle.
-    Retries if the shuffle produces the original sequence.
+    Single shuffle — caller is responsible for retries.
     """
     if len(tokens) <= 2:
         return list(tokens)
 
     body = list(tokens[:-1])
-    original = list(body)
-    for _ in range(100):
-        rng.shuffle(body)
-        if body != original:
-            break
+    rng.shuffle(body)
     return body + [tokens[-1]]
 
 
@@ -129,21 +126,48 @@ def compute_frag_mz(unmod_seq: list[str], mod_masses: list[float],
 
 # ── Multiprocessing worker ────────────────────────────────────────────────────
 
+_MAX_COLLISION_RETRIES = 50
+_worker_existing_mod_seqs = None
+
+
+def _init_worker(existing_mod_seqs):
+    global _worker_existing_mod_seqs
+    _worker_existing_mod_seqs = existing_mod_seqs
+
+
 def _entrapment_worker(args):
     """Worker function for parallel entrapment generation.
 
     Uses a per-peptide deterministic seed: hash(mod_seq) + user_seed.
+    Retries with incremented seed (up to _MAX_COLLISION_RETRIES) if the
+    shuffled sequence collides with an existing target modified sequence.
     """
     entry, user_seed = args
+    existing_mod_seqs = _worker_existing_mod_seqs
     mod_seq = entry["mod_seq"]
     tokens = parse_peptide(mod_seq)
 
-    # Per-peptide deterministic seed (hashlib for cross-run reproducibility)
-    peptide_seed = int(hashlib.md5(mod_seq.encode()).hexdigest(), 16) + user_seed
-    rng = random.Random(peptide_seed)
+    # Check if distinct shuffles are even possible (e.g., AAAAAAR cannot shuffle)
+    # Only the body (excluding C-term) is shuffled
+    shuffleable = len(tokens) > 2 and len(set(strip_mods(t) for t in tokens[:-1])) > 1
 
-    shuffled_tokens = shuffle_seq(tokens, rng)
-    new_mod_seq = "".join(shuffled_tokens)
+    # Per-peptide deterministic seed (hashlib for cross-run reproducibility)
+    base_seed = int(hashlib.md5(mod_seq.encode()).hexdigest(), 16) + user_seed
+
+    if not shuffleable:
+        rng = random.Random(base_seed)
+        shuffled_tokens = shuffle_seq(tokens, rng)
+        new_mod_seq = "".join(shuffled_tokens)
+    else:
+        for attempt in range(_MAX_COLLISION_RETRIES):
+            rng = random.Random(base_seed + attempt)
+            shuffled_tokens = shuffle_seq(tokens, rng)
+            new_mod_seq = "".join(shuffled_tokens)
+            if new_mod_seq != mod_seq and new_mod_seq not in existing_mod_seqs:
+                break
+        else:
+            print(f"Warning: could not resolve collision for {mod_seq} "
+                  f"after {_MAX_COLLISION_RETRIES} attempts", file=sys.stderr)
 
     unmod_seq = [strip_mods(t) for t in shuffled_tokens]
     per_residue_mod_mass = [
@@ -161,7 +185,6 @@ def _entrapment_worker(args):
         new_frags[frag_key] = [new_mz, intensity]
 
     stripped = "".join(unmod_seq)
-    # Replace _0 target suffix with _1 entrapment suffix
     return {
         "mod_seq": new_mod_seq,
         "seq": stripped,
@@ -222,7 +245,7 @@ def predict_irts(sequences: list[str], tag: str = "LF") -> np.ndarray:
         models.append(model)
 
     X = np.array([_one_hot_encode(seq) for seq in sequences])
-    predictions = np.mean([m.predict(X, verbose=0) for m in models], axis=0).flatten()
+    predictions = np.mean([m.predict(X, batch_size=4096, verbose=0) for m in models], axis=0).flatten()
     return predictions
 
 
@@ -379,17 +402,59 @@ def main():
         entry["protein_name"] = entry["protein_name"] + "_0"
         entry["genes"] = entry["genes"] + "_0"
 
+    # Build set of existing modified sequences for target collision detection in workers
+    existing_mod_seqs = frozenset(entry["mod_seq"] for entry in library)
+
     # Build worker args — plain dicts for pickling
     worker_args = [(entry, args.seed) for entry in library]
 
     print(f"Generating entrapment library (seed={args.seed}, jobs={args.jobs or 'all'})...")
     entrapment = []
     n_workers = args.jobs or multiprocessing.cpu_count()
-    with multiprocessing.Pool(n_workers) as pool:
-        for result in pool.imap(_entrapment_worker, worker_args, chunksize=256):
+    with multiprocessing.Pool(n_workers, initializer=_init_worker, initargs=(existing_mod_seqs,)) as pool:
+        for result in tqdm.tqdm(pool.imap(_entrapment_worker, worker_args, chunksize=256),
+                                total=len(worker_args), desc="Generating entrapments"):
             entrapment.append(result)
 
     print(f"  {len(entrapment)} entrapment precursors generated")
+
+    # Post-hoc deduplication of entrapment-entrapment collisions
+    # Check (mod_seq, prec_z) tuples — same shuffled sequence at different
+    # charge states is expected and not a collision.
+    seen_precursors = {(entry["mod_seq"], entry["prec_z"]) for entry in library}
+    duplicates = []
+    for i, entry in enumerate(entrapment):
+        key = (entry["mod_seq"], entry["prec_z"])
+        if key in seen_precursors:
+            duplicates.append(i)
+        else:
+            seen_precursors.add(key)
+
+    if duplicates:
+        print(f"  {len(duplicates)} entrapment-entrapment collisions detected, resolving...")
+        _init_worker(existing_mod_seqs)  # set global for main-process retries
+        for dup_idx in duplicates:
+            entry = library[dup_idx]
+            resolved = False
+            for seed_offset in range(_MAX_COLLISION_RETRIES, _MAX_COLLISION_RETRIES * 2):
+                result = _entrapment_worker((entry, args.seed + seed_offset))
+                key = (result["mod_seq"], result["prec_z"])
+                if key not in seen_precursors:
+                    seen_precursors.add(key)
+                    entrapment[dup_idx] = result
+                    resolved = True
+                    break
+            if not resolved:
+                print(f"Warning: dropping entrapment for {entry['mod_seq']} — "
+                      f"could not resolve collision", file=sys.stderr)
+                entrapment[dup_idx] = None
+
+        dropped = {i for i, e in enumerate(entrapment) if e is None}
+        if dropped:
+            print(f"  {len(dropped)} entrapments dropped due to unresolvable collisions")
+            # Also drop the paired targets so indices stay aligned
+            library = [e for i, e in enumerate(library) if i not in dropped]
+            entrapment = [e for e in entrapment if e is not None]
 
     # Assign iRT values
     if args.keep_rt:
@@ -413,7 +478,7 @@ def main():
         entry["precursor_idx"] = i
     for i, entry in enumerate(entrapment):
         entry["entrapment_group_id"] = 1
-        entry["precursor_idx"] = i + N
+        entry["precursor_idx"] = i
 
     n_target_frags = sum(len(e["frags"]) for e in library)
     n_entrap_frags = sum(len(e["frags"]) for e in entrapment)
