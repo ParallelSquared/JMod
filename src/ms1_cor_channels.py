@@ -4,6 +4,12 @@ import sys
 import os
 from itertools import product
 
+# no-op @profile when not running under kernprof
+try:
+    profile
+except NameError:
+    profile = lambda f: f
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import src.config as config 
 
@@ -32,7 +38,7 @@ from src.logger import logger
     # Uncomment functions fit_whole_MS1_sepctrum, add_to_MS1_spec_dict, and fit_all_ms1_specs
 
 
-# @profile
+@profile
 def ms1_cor_channels(all_spectra,
                      filtered_decoy_coeffs,
                      decoy_coeffs,
@@ -110,97 +116,106 @@ def ms1_cor_channels(all_spectra,
     fake_fdc_dict = {}
 
 
+    import time as _time
+    _prof = {}
+    def _padd(name, elapsed):
+        if name not in _prof:
+            _prof[name] = [0.0, 0]
+        _prof[name][0] += elapsed
+        _prof[name][1] += 1
+
     GUI_print_idxs = [int(((len(fdc_group.groups)-1)/10)*y) for y in range(1,11)]
     fdc_group_idx = -1
+    _loop_wall_t0 = _time.perf_counter()
     for key in tqdm.tqdm(list(fdc_group.groups)):
+        _iter_t0 = _time.perf_counter()
         fdc_group_idx += 1
         if config.ran_from_GUI:
             if fdc_group_idx in GUI_print_idxs:
                 frac_done = (GUI_print_idxs.index(fdc_group_idx)+1) * 10
                 logger.info(f"Fitting - {frac_done}%")
 
+        _t = _time.perf_counter()
         tag_group = fdc_group.get_group(key)
         group_protein = tag_group["protein"].iloc[0] if "protein" in tag_group.columns else ""
+        _padd("get_group+protein", _time.perf_counter() - _t)
 
+        _t = _time.perf_counter()
         prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC)
-        all_scans, spectra_subset = minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width)
+        _padd("get_seqs_and_mzs", _time.perf_counter() - _t)
 
+        _t = _time.perf_counter()
+        all_scans, spectra_subset = minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width)
+        _padd("minmax_spec_window", _time.perf_counter() - _t)
+
+        _t = _time.perf_counter()
         ms1_traces, coeff_traces, is_traces, all_pearson, iso_ratios = ([] for _ in range(5))
         obs_ratios, group_iso, group_keys, all_channel_scans, interp_funcs, best_coeff = ([] for _ in range(6))
+        _padd("inner_loop_alloc", _time.perf_counter() - _t)
 
         for prec_mz,prec_seq in zip(prec_mzs,prec_seqs):
-            
+
+            _t = _time.perf_counter()
             ms2_vals, highest_ranked_spec, channel_key = get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_decoy_coeffs, ms2_rt, rt_tol, prec_mz, bottom_of_window, top_of_window, ms2_spec_idxs)
-            group_keys.append(channel_key)  
-            
+            _padd("get_ms2_vals", _time.perf_counter() - _t)
+
+            _t = _time.perf_counter()
+            group_keys.append(channel_key)
             interp_func = build_ms2_interpolator(ms2_vals)
             interp_funcs.append(interp_func)
+            _padd("build_ms2_interpolator", _time.perf_counter() - _t)
 
-            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, [tag,SILAC], all_scans, prec_mz, mz_ppm, spectra_subset, interp_func)   
+            _t = _time.perf_counter()
+            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, [tag,SILAC], all_scans, prec_mz, mz_ppm, spectra_subset, interp_func)
+            _padd("get_isotopes_and_vals", _time.perf_counter() - _t)
+
+            _t = _time.perf_counter()
             group_iso.append(isotopes)
-
-            ## use monoiso ms1 prec mz to find the elution ms1 peak
             ms1_index_of_max = get_ms1_index_of_max(ms2_vals, top_ms1_spec_idx, highest_ranked_spec)
-                
             ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), moving_average(list(all_ms1_vals.values())), ms1_index_of_max, additional_scans)
-            
-            ## redefine all_scans to keep only thoe from the above peak
+            _padd("ms1_peak_finding", _time.perf_counter() - _t)
+
+            _t = _time.perf_counter()
             channel_scans, all_ms1_vals, all_iso_vals, all_ms2_vals = filter_all_scans(all_scans, ms1_peak_edge_idxs, all_ms1_vals, all_iso_vals, all_ms2_vals)
+            _padd("filter_all_scans", _time.perf_counter() - _t)
+
+            _t = _time.perf_counter()
             all_channel_scans.append(channel_scans)
             ms1_traces.append([all_ms1_vals,*all_iso_vals])
             coeff_traces.append(all_ms2_vals)
+            _padd("inner_loop_appends", _time.perf_counter() - _t)
 
+            _t = _time.perf_counter()
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-
                 all_pearson_to_append, iso_ratios_to_append = compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
-                all_pearson.append(all_pearson_to_append)
-                iso_ratios.append(iso_ratios_to_append)
-            
-        ### need to reduce the number of spectra we fit to
-        ### fit to those from each channel
+            _padd("compute_ms1_ms2_cors", _time.perf_counter() - _t)
+
+            _t = _time.perf_counter()
+            all_pearson.append(all_pearson_to_append)
+            iso_ratios.append(iso_ratios_to_append)
+            _padd("cors_appends", _time.perf_counter() - _t)
+
+        _t = _time.perf_counter()
         scans_to_search = select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width)
+        _padd("select_scans_to_search", _time.perf_counter() - _t)
 
         group_pred, group_obs_peaks, group_matrices, group_fit_cor, group_kept_mz = ([] for _ in range(5))
 
-        # if fit_whole_MS1:
-        #     ms1_spec_dict, fake_fdc_dict, dummy_idx_list = add_to_ms1_spec_dict(ms1_spec_dict,
-                                        #                                         ms1_spectra,
-                                        #                                         ms1_spec_idxs,
-                                        #                                         group_iso,
-                                        #                                         key,
-                                        #                                         fdc_group,
-                                        #                                         filtered_decoy_coeffs,
-                                        #                                         tag,
-                                        #                                         scans_to_search,
-                                        #                                         fdc_group_idx,
-                                        #                                         dummy_idx_list,
-                                        #                                         fake_fdc_dict
-                                        #                                         )
-
         for ms1_spec_idx in scans_to_search:
+            _t = _time.perf_counter()
             pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+            _padd("fit_isotopes_and_score", _time.perf_counter() - _t)
+
+            _t = _time.perf_counter()
             group_pred.append(pred_coeff)
             group_obs_peaks.append(obs_peaks)
             group_matrices.append(fit_matrix)
             group_fit_cor.append(fit_cor)
             group_kept_mz.append(kept_mz)
+            _padd("fit_loop_appends", _time.perf_counter() - _t)
 
-            # Accumulate per-row diagnostics: one entry per channel contribution
-            if len(obs_peaks) > 0:
-                cooks_d, residuals = _compute_cooks_d(fit_matrix, obs_peaks, pred_coeff)
-                for row_i in range(len(obs_peaks)):
-                    for ch_idx in range(fit_matrix.shape[1]):
-                        if fit_matrix[row_i, ch_idx] == 0:
-                            continue
-                        ch_name = group_keys[ch_idx][0] if ch_idx < len(group_keys) else str(ch_idx)
-                        iso_idx = -1
-                        if ch_idx < len(group_iso):
-                            if kept_mz[row_i] != 0:
-                                diffs = [abs(kept_mz[row_i] - p.mz) for p in group_iso[ch_idx]]
-                            else:
-                                diffs = [abs(fit_matrix[row_i, ch_idx] - p.intensity) for p in group_iso[ch_idx]]
-                            iso_idx = int(np.argmin(diffs))
+            _t = _time.perf_counter()
 
         # Collect dump data for matching precursors
         if dump_precursors is not None:
@@ -253,15 +268,27 @@ def ms1_cor_channels(all_spectra,
                 }
 
         # all_fitted.append(vals)
+        _t = _time.perf_counter()
         all_fitted.append([np.array(group_pred),group_obs_peaks,group_matrices,group_fit_cor,scans_to_search])
         all_ms1.append(ms1_traces)
         all_coeff.append(coeff_traces)
         all_iso.append(iso_ratios)
         all_group_pearson.append(all_pearson)
         all_group_keys.append(group_keys)
+        _padd("result_accumulation", _time.perf_counter() - _t)
 
-        # break
-        # all_pearson, ms1_traces, coeff_traces, iso_ratios
+        _padd("iter_total", _time.perf_counter() - _iter_t0)
+
+    _loop_wall = _time.perf_counter() - _loop_wall_t0
+    # Print profiling summary
+    logger.info("\n=== ms1_cor_channels profiling ===")
+    logger.info(f"  {'loop_wall_time':30s}  total={_loop_wall:8.2f}s")
+    _traced = sum(v[0] for k, v in _prof.items() if k != "iter_total")
+    logger.info(f"  {'traced_total':30s}  total={_traced:8.2f}s")
+    logger.info(f"  {'untraced_gap':30s}  total={_loop_wall - _prof.get('iter_total', [0])[0]:8.2f}s  (tqdm/groupby/loop overhead)")
+    for name, (total, count) in sorted(_prof.items(), key=lambda x: -x[1][0]):
+        avg_ms = total / count * 1e3 if count > 0 else 0
+        logger.info(f"  {name:30s}  total={total:8.2f}s  calls={count:8d}  avg={avg_ms:8.3f}ms")
 
     new_output_dict = {}
     # if fit_whole_MS1:
@@ -275,7 +302,7 @@ def ms1_cor_channels(all_spectra,
 
     return all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict
 
-# @profile
+@profile
 def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC):
     """
     Retrieve sequences, m/z values, charge, retention time, and scan information 
@@ -343,6 +370,7 @@ def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC):
 
     return prec_seqs, prec_mzs, group_prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel
 
+@profile
 def minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width):
     """
     Retrieve the list of MS1 scan and scan idxs within a window of the highest coeff scans
@@ -421,6 +449,7 @@ def minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spec
     return all_scans, spectra_subset
 
 
+@profile
 def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_decoy_coeffs, ms2_rt, rt_tol, prec_mz, bottom_of_window, top_of_window, ms2_spec_idxs):
     """
     For a given precursor, get the ms2 JMod coefficients at MS2 scan #s and return this dictionary,
@@ -500,6 +529,7 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
     return ms2_vals, highest_ranked_spec, channel_key
 
 
+@profile
 def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tags, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func):
     isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tags)
     all_isotope_traces = get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset)
@@ -507,10 +537,12 @@ def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tags, all_scans, prec_mz, m
 
     return all_isotope_traces[0], all_ms2_vals, all_isotope_traces[1:], isotopes, interp_func
 
+@profile
 def build_ms2_interpolator(ms2_vals):
     return interp1d(list(ms2_vals.keys()), np.array(list(ms2_vals.values())), bounds_error=False)   
 
 
+@profile
 def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset):
     """
     Get a trace of each isotopic peak across a set of MS1 spectra
@@ -596,6 +628,7 @@ def get_trace_int_numba(spec_mz, spec_intens, mz_array, rtol, base):
     return vals_to_return
 
 
+@profile
 def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tags):
     """
     Gets a list of brainpy theoretical peak isotopes for a precursor
@@ -633,6 +666,7 @@ def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tags):
 
     return isotopes
 
+@profile
 def fill_scan_values(all_scans, interp_func, ms1_vals):
     """
     Interpolate MS2 intensities at the scan numbers corresponding to MS1 spectra.
@@ -668,6 +702,7 @@ def fill_scan_values(all_scans, interp_func, ms1_vals):
     return all_ms2_vals
 
 
+@profile
 def get_ms1_index_of_max(ms2_vals, top_ms1_spec_idx, highest_ranked_spec):
     """
     Return the best MS1 spec idx to be used
@@ -695,6 +730,7 @@ def get_ms1_index_of_max(ms2_vals, top_ms1_spec_idx, highest_ranked_spec):
         ms1_index_of_max = highest_ranked_spec
     return ms1_index_of_max
 
+@profile
 def filter_all_scans(all_scans, ms1_peak_edge_idxs, all_ms1_vals, all_iso_vals, all_ms2_vals):
     """
     Filter all scans and corresponding values to only those within the MS1 peak edges.
@@ -706,6 +742,7 @@ def filter_all_scans(all_scans, ms1_peak_edge_idxs, all_ms1_vals, all_iso_vals, 
 
     return channel_scans, all_ms1_vals, all_iso_vals, all_ms2_vals
 
+@profile
 def compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes):
     """
     Return ms1/ms2 pearson correlation and isotope ratio
@@ -747,6 +784,7 @@ def compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, ch
 
     return spec_pearsons, iso_ratio
 
+@profile
 def select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width):
     "Aggregate a sorted list of all unique scans collected from every channel"
     # idx_of_max =all_scans.index(top_ms1_spec_idx)
@@ -754,6 +792,7 @@ def select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, windo
     scans_to_search = np.sort(np.unique(np.concatenate(all_channel_scans)))
     return scans_to_search
 
+@profile
 def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm):
     spec = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
 
@@ -1052,6 +1091,7 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
 
 
 
+@profile
 def get_other_channels(prec, mz, tags):
     """
     Return the m/z and sequences for all channels of a given precursor.
@@ -1108,6 +1148,7 @@ def get_other_channels(prec, mz, tags):
 
 
 
+@profile
 def get_ms1_peak(x,y,idx,additional_scans):
     """
     Get the peak apex and bounds for a given set of monoisotopic intensities
@@ -1151,6 +1192,7 @@ def get_ms1_peak(x,y,idx,additional_scans):
     return x[peak_idx],x[peak_edge_idxs]
 
 
+@profile
 def moving_average(x, w=4):
     return np.convolve(x, np.ones(w), 'same') / w
 
@@ -1173,6 +1215,7 @@ def _compute_cooks_d(fit_matrix, obs_peaks, pred_coeff):
     return cooks_d, residuals
 
 
+@profile
 def fit_channel_isotopes_numba(spec, all_iso, mz_ppm):
     """
     Takes observed peaks fom spectra and expected peaks from from all_iso for one plex-group and builds a matrix to fit them
