@@ -102,7 +102,6 @@ def ms1_cor_channels(all_spectra,
         fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z"])
 
     all_ms1, all_coeff, all_iso, all_group_pearson, all_trace, all_fitted, all_group_keys, all_scans_len = ([] for _ in range(8))
-    diag_rows = []
     dump_data = {"ms1_ppm": mz_ppm, "num_iso": num_iso, "precursors": {}} if dump_precursors else None
 
     #these are for fit_whole_ms1
@@ -202,8 +201,6 @@ def ms1_cor_channels(all_spectra,
                             else:
                                 diffs = [abs(fit_matrix[row_i, ch_idx] - p.intensity) for p in group_iso[ch_idx]]
                             iso_idx = int(np.argmin(diffs))
-                        diag_rows.append((ms1_spec_idx, group_protein, ch_name, iso_idx,
-                                          obs_peaks[row_i], residuals[row_i], cooks_d[row_i]))
 
         # Collect dump data for matching precursors
         if dump_precursors is not None:
@@ -269,14 +266,6 @@ def ms1_cor_channels(all_spectra,
     new_output_dict = {}
     # if fit_whole_MS1:
     #     new_output_dict = fit_all_ms1_specs(ms1_spec_dict, new_output_dict, mz_ppm)
-
-    # Write diagnostics TSV
-    diag_path = os.path.join(os.getcwd(), "ms1_fit_diagnostics.tsv")
-    with open(diag_path, "w", newline="") as f:
-        w = csv.writer(f, delimiter="\t")
-        w.writerow(["scan_num", "protein", "channel", "isotope", "intensity", "residual", "cooks_d"])
-        w.writerows(diag_rows)
-    logger.info(f"Wrote MS1 fit diagnostics to {diag_path}")
 
     if dump_data is not None and dump_data["precursors"]:
         dump_path = os.path.join(os.getcwd(), "ms1_fitting_data.pkl")

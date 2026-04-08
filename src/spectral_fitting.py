@@ -42,11 +42,6 @@ from numba import njit
 import time
 import threading
 
-# ── Profiling accumulators (thread-safe) ──
-_perf_lock = threading.Lock()
-_perf_counts = {}  # section_name -> [total_seconds, call_count]
-_perf_call_total = 0
-_PERF_INTERVAL = 10000  # print every N fit_to_lib2 calls
 
 # ── Thread-local RandomState cache for enet_path ──
 # Constructing np.random.RandomState(42) is expensive (~2K GIL samples in profiling).
@@ -63,27 +58,6 @@ def _get_enet_rng():
     return rng
 
 
-def _perf_add(section, elapsed):
-    global _perf_call_total
-    with _perf_lock:
-        if section not in _perf_counts:
-            _perf_counts[section] = [0.0, 0]
-        _perf_counts[section][0] += elapsed
-        _perf_counts[section][1] += 1
-
-
-def _perf_tick_and_maybe_print():
-    global _perf_call_total
-    with _perf_lock:
-        _perf_call_total += 1
-        if _perf_call_total % _PERF_INTERVAL == 0:
-            import sys
-            sys.stderr.write(f"\n=== PERF after {_perf_call_total} fit_to_lib2 calls ===\n")
-            for name, (total, count) in sorted(_perf_counts.items(), key=lambda x: -x[1][0]):
-                avg_us = total / count * 1e6 if count > 0 else 0
-                sys.stderr.write(f"  {name:40s}  total={total:8.2f}s  count={count:8d}  avg={avg_us:8.1f}us\n")
-            sys.stderr.write(f"{'':40s}  -----------\n")
-            sys.stderr.flush()
 
 
 @njit(nogil=True)
@@ -1199,7 +1173,6 @@ def create_entries_direct(centroid_breaks,
                 np.empty(0, np.int64), np.empty(0, np.float64),
                 np.zeros(1, np.int32), np.empty(0, np.int32))
 
-    _ce0 = time.perf_counter()
     cand_idx_arr = np.asarray(candidate_indices, dtype=np.int64)
 
     passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, \
@@ -1215,10 +1188,8 @@ def create_entries_direct(centroid_breaks,
             float(ms1_tol),
             float(config.frac_lib_matched), int(atleast_m),
             bool(config.match_ms1))
-    _perf_add("ce_d:jit_direct", time.perf_counter() - _ce0)
 
     # Reconstruct Python lists from JIT output — only for passing candidates
-    _ce0 = time.perf_counter()
     peaks_in_dia = passing.tolist()
     pep_cand_loc = [all_coords[frag_offsets[i]:frag_offsets[i + 1]] for i in peaks_in_dia]
     # Reconstruct (n,2) spectrum arrays only for passing candidates from library arrays
@@ -1231,7 +1202,6 @@ def create_entries_direct(centroid_breaks,
     pep_cand = [mass_window_candidates[i] for i in peaks_in_dia]
     norm_intensities = [all_norm_int[frag_offsets[i]:frag_offsets[i + 1]] for i in peaks_in_dia]
     lib_peaks_matched = [pep_cand_loc[j] % 2 == 1 for j in range(len(peaks_in_dia))]
-    _perf_add("ce_d:reconstruct_lists", time.perf_counter() - _ce0)
 
     return (peaks_in_dia,
             pep_cand,
@@ -1876,7 +1846,6 @@ def get_features(
     ordered_frag_codes=None,
     unique_lookup_dia=None):
 
-    _t0 = time.perf_counter()
     val_obs = dia_spectrum[:, 1]
     coeffs = np.asarray(lib_coefficients).ravel()
     tic = np.sum(val_obs)
@@ -1905,17 +1874,14 @@ def get_features(
         _col_to_pos[ref_spec_offset:ref_spec_offset + n_ref] = np.arange(n_ref, dtype=np.int32)
     if n_dec > 0:
         _col_to_pos[decoy_spec_offset:decoy_spec_offset + n_dec] = np.arange(n_ref, n_ref + n_dec, dtype=np.int32)
-    _perf_add("gf:setup+split+concat", time.perf_counter() - _t0)
 
     # ── Step 2: Build predicted spectrum y_pred = A * x ──
-    _t0 = time.perf_counter()
     y_pred = np.zeros(len(val_obs))
     if len(ref_rows) > 0:
         _build_y_pred_jit(ref_rows, ref_cols, ref_vals, ref_offsets, coeffs, ref_spec_offset, y_pred)
     if len(dec_rows) > 0:
         _build_y_pred_jit(dec_rows, dec_cols, dec_vals, dec_offsets, coeffs, decoy_spec_offset, y_pred)
     residuals = val_obs - y_pred
-    _perf_add("gf:build_y_pred_jit", time.perf_counter() - _t0)
 
     # ── Step 3: Fused per-candidate features ──
     # Replaces three separate functions that each looped over the same fragment data:
@@ -1926,7 +1892,6 @@ def get_features(
     #   - num_lib_peaks_matched  (was: np.array([np.sum(i) for i in lib_peaks_matched]))
     #   - frac_lib_intensity     (was: [np.sum(i) for i in ref_spec_values_split])
     #   - frac_dia_intensity     (was: [np.sum(dia_spectrum[i,1])/tic for i in ...])
-    _t0 = time.perf_counter()
     n = len(ref_spec_row_indices_split)
     scribe_scores = np.zeros(n)
     gof_stats = np.zeros(n)
@@ -1947,10 +1912,8 @@ def get_features(
             num_lib_peaks_matched, frac_lib_intensity, frac_dia_intensity,
             tic
         )
-    _perf_add("gf:candidate_features_jit", time.perf_counter() - _t0)
 
     # mz tol
-    _t0 = time.perf_counter()
     rel_error = np.where(~np.isnan(ms1_error), np.abs(ms1_error), -1.0)
     rt_error = prec_rt-rt_mz[:,0]
 
@@ -1988,11 +1951,9 @@ def get_features(
             frac_unique_pred)
 
     frac_dia_intensity_pred = (frac_lib_intensity * coeffs[ref_spec_offset:ref_spec_offset + n]) / np.where(frac_dia_intensity > 0, frac_dia_intensity, 1.0)
-    _perf_add("gf:sparse_matmul+unique_frac", time.perf_counter() - _t0)
 
     #### stack spectrum features
     # Compute scalar feature values (broadcast to all candidates below in JIT)
-    _t0 = time.perf_counter()
     _sum_predicted = np.sum(predicted_spec)
     _sum_dia_spec_int = np.sum(dia_spec_int)
     _frac_int_matched_scalar = frac_int_matched  # already a scalar
@@ -2025,12 +1986,10 @@ def get_features(
         b_counts = np.zeros_like(num_lib_peaks_matched)
         y_counts = np.zeros_like(num_lib_peaks_matched)
         longest_y_ions = np.zeros_like(num_lib_peaks_matched)
-    _perf_add("gf:hyperscores", time.perf_counter() - _t0)
 
     # ── Assemble feature matrix in one pass (nogil) ──
     # Replaces ~5 np.ones_like*scalar broadcasts + np.stack of 26 arrays.
     # Each row is a feature column; transposed at the end via -1 axis.
-    _t0 = time.perf_counter()
     _prec_mz = rt_mz[:, 1].copy()  # contiguous for JIT
     features = _assemble_features_jit(
         num_lib_peaks_matched,          #  0: number of library peaks matched per candidate
@@ -2061,7 +2020,6 @@ def get_features(
         _prec_mz,                       # 25: calibrated precursor m/z
         tic                              # 26: total ion current (scalar → broadcast)
     )
-    _perf_add("gf:assemble_features_jit", time.perf_counter() - _t0)
     return features
 
 
@@ -2122,7 +2080,6 @@ def create_entries(centroid_breaks,
                 np.zeros(1, np.int32), np.empty(0, np.int32))
 
     # Flatten candidate spectra into contiguous arrays for JIT
-    _ce0 = time.perf_counter()
     stacked = np.concatenate(candidate_peaks)
     all_frag_mz = np.ascontiguousarray(stacked[:, 0])
     all_frag_int = np.ascontiguousarray(stacked[:, 1])
@@ -2137,10 +2094,8 @@ def create_entries(centroid_breaks,
     top_n_offsets = np.empty(n_cands + 1, dtype=np.int32)
     top_n_offsets[0] = 0
     np.cumsum(top_n_lengths, out=top_n_offsets[1:])
-    _perf_add("ce:flatten_inputs", time.perf_counter() - _ce0)
 
     # JIT core: searchsorted + filtering + flat array construction (nogil=True)
-    _ce0 = time.perf_counter()
     passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int = \
         _create_entries_core_jit(
             np.ascontiguousarray(centroid_breaks, dtype=np.float64),
@@ -2151,17 +2106,14 @@ def create_entries(centroid_breaks,
             float(ms1_tol),
             float(config.frac_lib_matched), int(atleast_m),
             bool(config.match_ms1))
-    _perf_add("ce:jit_core", time.perf_counter() - _ce0)
 
     # Reconstruct Python lists from JIT output
-    _ce0 = time.perf_counter()
     peaks_in_dia = passing.tolist()
     pep_cand_loc = [all_coords[frag_offsets[i]:frag_offsets[i + 1]] for i in peaks_in_dia]
     pep_cand_list = [candidate_peaks[i] for i in peaks_in_dia]
     pep_cand = [mass_window_candidates[i] for i in peaks_in_dia]
     norm_intensities = [all_norm_int[frag_offsets[i]:frag_offsets[i + 1]] for i in peaks_in_dia]
     lib_peaks_matched = [pep_cand_loc[j] % 2 == 1 for j in range(len(peaks_in_dia))]
-    _perf_add("ce:reconstruct_lists", time.perf_counter() - _ce0)
 
     return (peaks_in_dia,
             pep_cand,
@@ -2191,7 +2143,6 @@ def fit_to_lib2(dia_spec,
                im_bin_ms1=None):
     # spec_idx,dia_spec,library = inputs
     
-    _ft0 = time.perf_counter()
     spec_idx=dia_spec.scan_num
     top_n=config.top_n
     atleast_m=config.atleast_m
@@ -2222,10 +2173,8 @@ def fit_to_lib2(dia_spec,
     merged_mz, merged_int, centroid_breaks, bin_centers = _dia_prep_jit(
         dia_spectrum[:, 0].copy(), dia_spectrum[:, 1].copy(), mz_tol)
     dia_spectrum = np.stack([merged_mz, merged_int], axis=1)
-    _perf_add("ft:dia_prep", time.perf_counter() - _ft0)
 
     # Get candidates via fragment index or fallback to m/z + RT window
-    _ft0 = time.perf_counter()
     if frag_index is not None and not ms1_mz:
         win_lo = prec_mz - windowWidth / 2
         win_hi = prec_mz + windowWidth / 2
@@ -2243,16 +2192,12 @@ def fit_to_lib2(dia_spec,
                 _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
         window_idxs = np.where(_bool)[0]
 
-    _perf_add("ft:frag_index_query", time.perf_counter() - _ft0)
 
-    _ft0 = time.perf_counter()
     mass_window_candidates = [all_keys[i] for i in window_idxs]
     _ref_idxs = library.resolve_indices(mass_window_candidates)
-    _perf_add("ft:lib_resolve+batch", time.perf_counter() - _ft0)
 
     spec_frags = None
 
-    _ft0 = time.perf_counter()
     ref_peaks_in_dia,\
     ref_pep_cand,\
     ref_pep_cand_loc,\
@@ -2279,7 +2224,6 @@ def fit_to_lib2(dia_spec,
                                         prec_mzs=rt_mz[:,1][window_idxs],
                                         ms1_spec=ms1_spec,
                                         ms1_tol=ms1_tol)
-    _perf_add("ft:create_entries_ref", time.perf_counter() - _ft0)
     # Reconstruct split views where needed downstream
     ref_spec_row_indices_split = _split_flat(ref_flat_rows, ref_flat_offsets)
     ref_spec_col_indices_split = _split_flat(ref_flat_cols, ref_flat_offsets)
@@ -2287,7 +2231,6 @@ def fit_to_lib2(dia_spec,
 
 
     ### Generate eqivalent Decoy spectra
-    _ft0 = time.perf_counter()
     if decoy:
         # Get decoy candidates via fragment index or fallback to same as target
         if decoy_frag_index is not None and not ms1_mz:
@@ -2355,9 +2298,7 @@ def fit_to_lib2(dia_spec,
         decoy_spec_col_indices_split = _split_flat(decoy_flat_cols, decoy_flat_offsets)
         decoy_spec_values_split = _split_flat(decoy_flat_vals, decoy_flat_offsets)
 
-    _perf_add("ft:decoy_entries", time.perf_counter() - _ft0)
 
-    _ft0 = time.perf_counter()
     frag_errors = []
     lib_frag_mz = []
     decoy_col_offset = 0
@@ -2415,10 +2356,8 @@ def fit_to_lib2(dia_spec,
         decoy_frag_name_codes = []
         decoy_frag_matched_intensities = []
         
-    _perf_add("ft:frag_errors_setup", time.perf_counter() - _ft0)
 
     if len(ref_flat_rows) > 0 or (decoy and len(decoy_flat_rows) > 0):
-        _ft0 = time.perf_counter()
         # Single JIT call replaces ~14 GIL-acquiring numpy/scipy calls
         # (np.append ×6, np.concatenate ×3, np.unique, np.sort, rankdata, unmatched_peaks ×2)
         _dec_rows = decoy_flat_rows if (decoy and len(decoy_flat_rows) > 0) else np.empty(0, np.int32)
@@ -2439,20 +2378,16 @@ def fit_to_lib2(dia_spec,
                 dia_spectrum[:, 1],
                 1e-10)
 
-        _perf_add("ft:assemble_coo_jit", time.perf_counter() - _ft0)
 
         # Fit lib spectra to observed spectra (Huber loss via IRLS)
         # Pass flat COO arrays directly — avoids constructing scipy sparse matrix
-        _ft0 = time.perf_counter()
         _n_coo_rows = len(dia_spec_int)
         _n_coo_cols = int(sparse_col_indices.max()) + 1 if len(sparse_col_indices) > 0 else 0
         fit_results = huber_nnls_irls(sparse_values, sparse_row_indices, sparse_col_indices,
                                       _n_coo_rows, _n_coo_cols, dia_spec_int)
         lib_coefficients = fit_results['x']
-        _perf_add("ft:huber_nnls_irls", time.perf_counter() - _ft0)
 
         ####################################
-        _ft0 = time.perf_counter()
         # Compute single-matched rows via JIT (replaces sparse.coo_matrix + np.sum(matrix>0,1)==1)
         _sm_max = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
         single_match_lookup = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _sm_max)
@@ -2467,14 +2402,12 @@ def fit_to_lib2(dia_spec,
         _is_single = single_match_lookup[_reindexed[_valid_ri]]
         unique_lookup_dia[_orig_rows[_valid_ri][_is_single]] = True
 
-        _perf_add("ft:single_match_lookup", time.perf_counter() - _ft0)
 
         # Build decoy flat arrays for get_features (empty if no decoys)
         _dec_rows = decoy_flat_rows if (decoy and len(decoy_flat_rows) > 0) else np.empty(0, np.int32)
         _dec_vals = decoy_flat_vals if (decoy and len(decoy_flat_vals) > 0) else np.empty(0, np.float64)
         _dec_cols = decoy_flat_cols if (decoy and len(decoy_flat_cols) > 0) else np.empty(0, np.int32)
         _dec_offsets = decoy_flat_offsets if (decoy and len(decoy_flat_offsets) > 1) else np.zeros(1, np.int32)
-        _ft0 = time.perf_counter()
         features = get_features(rt_mz[window_idxs[ref_peaks_in_dia]],
                                 ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
                                 _dec_rows, _dec_vals, _dec_cols, _dec_offsets,
@@ -2498,7 +2431,6 @@ def fit_to_lib2(dia_spec,
                                 frag_name_codes,
                                 unique_lookup_dia=unique_lookup_dia)
 
-        _perf_add("ft:get_features_ref", time.perf_counter() - _ft0)
 
         unique_row_indices_split = [single_match_lookup[peak_idx_lookup[i]] for i in ref_spec_row_indices_split]
         unique_frags = [i[j] for i,j in zip(lib_frag_mz,unique_row_indices_split)]
@@ -2506,7 +2438,6 @@ def fit_to_lib2(dia_spec,
 
         ####################################
         if decoy:
-            _ft0 = time.perf_counter()
             decoy_features = get_features(np.stack([rt_mz[decoy_window_idxs[decoy_peaks_in_dia],0],decoy_mz[decoy_peaks_in_dia]],1),
                                             decoy_flat_rows, decoy_flat_vals, decoy_flat_cols, decoy_flat_offsets,
                                             ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
@@ -2530,7 +2461,6 @@ def fit_to_lib2(dia_spec,
                                             decoy_frag_name_codes,
                                             unique_lookup_dia=unique_lookup_dia)
 
-            _perf_add("ft:get_features_decoy", time.perf_counter() - _ft0)
 
             unique_row_indices_split_decoy = [single_match_lookup[peak_idx_lookup[i]] for i in decoy_spec_row_indices_split]
             unique_frags_decoy = [i[j] for i,j in zip(decoy_lib_frag_mz,unique_row_indices_split_decoy)]
@@ -2538,7 +2468,6 @@ def fit_to_lib2(dia_spec,
 
         ####################################
 
-    _ft0 = time.perf_counter()
     #Select non-zero coeffs
     # Note: many coeffs are non-zero but essentially zero!! Perhaps set less than 1e-7??
     non_zero_coeffs = [c for c in lib_coefficients if c!=0]
@@ -2626,8 +2555,6 @@ def fit_to_lib2(dia_spec,
         # lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
         # output = [[non_zero_coeffs[i],spec_idx,lib_spec_ids[i][0],lib_spec_ids[i][1],prec_mz,prec_rt,*features[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
     
-    _perf_add("ft:output_assembly", time.perf_counter() - _ft0)
-    _perf_tick_and_maybe_print()
 
     if return_frags:
         return output, [frag_errors,lib_frag_mz]

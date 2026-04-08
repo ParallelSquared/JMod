@@ -312,43 +312,6 @@ def _decoy_worker(args):
     return new_seq, new_frags, spectrum, ordered_frags
 
 
-def _decoy_mem():
-    """Return (current_rss_gb, peak_rss_gb, children_rss_gb) for memory tracking.
-
-    children_rss_gb sums RSS of all child processes (pool workers).
-    """
-    import sys, os, resource
-    # Peak RSS (parent only)
-    maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if sys.platform == 'darwin':
-        peak = maxrss / (1024**3)
-    else:
-        peak = maxrss / (1024**2)
-    # Current RSS (parent)
-    children = 0.0
-    try:
-        import psutil
-        proc = psutil.Process()
-        current = proc.memory_info().rss / (1024**3)
-        for child in proc.children(recursive=True):
-            try:
-                children += child.memory_info().rss / (1024**3)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-    except ImportError:
-        if sys.platform == 'darwin':
-            import subprocess
-            out = subprocess.check_output(['ps', '-o', 'rss=', '-p', str(os.getpid())])
-            current = int(out.strip()) / (1024**2)
-        else:
-            try:
-                with open(f'/proc/{os.getpid()}/statm') as f:
-                    current = int(f.read().split()[1]) * os.sysconf('SC_PAGE_SIZE') / (1024**3)
-            except Exception:
-                current = 0.0
-    return current, peak, children
-
-
 def create_decoy_lib(library,rules,tag,n_iso):
     from src.models.spec_lib.library_store import SpectrumLibraryStore
     import gc
@@ -361,39 +324,21 @@ def create_decoy_lib(library,rules,tag,n_iso):
     worker_args = [(key[0], library[key]["frags"], rules, tag, n_iso, use_iso)
                    for key in all_keys]
 
-    _c, _p, _ch = _decoy_mem()
-    logger.info(f"[MEM-DECOY] before imap: {_c:.2f} GB current, {_p:.2f} GB peak, {_ch:.2f} GB children")
-
     p = multiprocessing.Pool()
     results = []
     n_total = len(all_keys)
     for i, result in enumerate(tqdm.tqdm(p.imap(_decoy_worker, worker_args), total=n_total)):
         results.append(result)
-        if (i + 1) % max(1, n_total // 4) == 0:
-            _c, _p, _ch = _decoy_mem()
-            logger.info(f"[MEM-DECOY] imap {i+1}/{n_total}: {_c:.2f} GB current, {_p:.2f} GB peak, {_ch:.2f} GB children")
     p.close()
     p.join()
-
-    _c, _p, _ch = _decoy_mem()
-    logger.info(f"[MEM-DECOY] after imap (pool joined): {_c:.2f} GB current, {_p:.2f} GB peak, {_ch:.2f} GB children")
 
     del worker_args
     gc.collect()
 
-    _c, _p, _ch = _decoy_mem()
-    logger.info(f"[MEM-DECOY] after del worker_args: {_c:.2f} GB current, {_p:.2f} GB peak, {_ch:.2f} GB children")
-
     store = SpectrumLibraryStore.from_target_and_decoy_results(library, all_keys, results)
-
-    _c, _p, _ch = _decoy_mem()
-    logger.info(f"[MEM-DECOY] after from_target_and_decoy_results: {_c:.2f} GB current, {_p:.2f} GB peak, {_ch:.2f} GB children")
 
     del results
     gc.collect()
-
-    _c, _p, _ch = _decoy_mem()
-    logger.info(f"[MEM-DECOY] after del results: {_c:.2f} GB current, {_p:.2f} GB peak, {_ch:.2f} GB children")
 
     return store
             

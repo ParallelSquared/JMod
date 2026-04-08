@@ -342,13 +342,6 @@ def iso_library_multi(library, tag, n_iso):
     )
     p.close()
     p.join()
-    import resource, subprocess, sys as _sys
-    if _sys.platform == 'darwin':
-        _cur = int(subprocess.check_output(['ps', '-o', 'rss=', '-p', str(os.getpid())]).strip()) / (1024**2)
-        _peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**3)
-    else:
-        _cur = _peak = 0
-    logger.info(f"[MEM] after pool.join: {_cur:.2f} GB current, {_peak:.2f} GB peak")
 
     # Free the input lists before building output arrays
     del all_seqs, all_frags
@@ -370,12 +363,6 @@ def iso_library_multi(library, tag, n_iso):
         cursor += n_peaks
 
     del iso_out
-    if _sys.platform == 'darwin':
-        _cur2 = int(subprocess.check_output(['ps', '-o', 'rss=', '-p', str(os.getpid())]).strip()) / (1024**2)
-        _peak2 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**3)
-    else:
-        _cur2 = _peak2 = 0
-    logger.info(f"[MEM] after encoding loop: {_cur2:.2f} GB current, {_peak2:.2f} GB peak")
 
     spectrum_data = np.concatenate(all_spec_peaks, axis=0) if all_spec_peaks else np.empty((0, 2), dtype=np.float64)
     del all_spec_peaks

@@ -14,14 +14,6 @@ from src.logger import logger
 from src.models.spec_lib.spec_lib import python_lib_to_diann_df
 from src.utils.io.load_files import Spectrum
 
-import os, resource, subprocess
-def _log_mem_ps(label):
-    if sys.platform == 'darwin':
-        cur = int(subprocess.check_output(['ps', '-o', 'rss=', '-p', str(os.getpid())]).strip()) / (1024**2)
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**3)
-    else:
-        cur = peak = 0
-    logger.info(f"[MEM] {label}: {cur:.2f} GB current, {peak:.2f} GB peak")
 
 
 def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=10):
@@ -50,14 +42,10 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     mod_dict.update(diann_mods)
 
     # Construct polars df from python lib
-    import time as _time
-    _t0 = _time.time()
     pl_lib = python_lib_to_diann_df(library_spectra)
-    logger.info(f"  to_diann_df: {_time.time()-_t0:.1f}s")
 
     # Add modification array to the polars dataframe
     # Deduplicate: compute on unique ModifiedPeptide values, then join back
-    _t0 = _time.time()
     unique_peps = pl_lib.select("ModifiedPeptide").unique()
     unique_peps = unique_peps.with_columns(
         pl.col("ModifiedPeptide")
@@ -66,11 +54,8 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         .alias("Modifications")
     )
     pl_lib = pl_lib.join(unique_peps, on="ModifiedPeptide", how="left")
-    logger.info(f"  peptide_to_mod_array (unique): {_time.time()-_t0:.1f}s")
 
-    _log_mem_ps("after building polars lib")
     # Build mod_array lookup from the unique peptides we already computed
-    _t0 = _time.time()
     _mod_array_map = dict(zip(
         unique_peps["ModifiedPeptide"].to_list(),
         unique_peps["Modifications"].to_list(),
@@ -81,9 +66,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     for ms in _mod_array_map:
         observed_mods.update(extract_mod_names(ms))
     rev_map = {round(mod_dict[m], 4): m for m in observed_mods}
-    logger.info(f"  mod_array_map + observed_mods: {_time.time()-_t0:.1f}s")
 
-    _t0 = _time.time()
     db = ps.IndexedDatabase.from_library(
         library=pl_lib,
         bucket_size=4096,
@@ -94,7 +77,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         peptide_min_mass=0.0,
         peptide_max_mass=5000.0,
     )
-    logger.info(f"  IndexedDatabase.from_library: {_time.time()-_t0:.1f}s")
 
     # Create scorer
     # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are annotated as
@@ -111,7 +93,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         report_psms=int(5*plex)
     )
 
-    _log_mem_ps("after building indexed DB + scorer")
+
     # Convert spectra into a Rust-friendly format
     logger.info("Converting spectra")
     rust_specs = []
@@ -119,7 +101,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     for spec in tqdm(dia_spectra.ms2scans):
         rust_specs += [spec.to_rust_spectrum()]
 
-    _log_mem_ps("after converting spectra to rust")
+
 
     # Process spectra in chunks of 1000
     # Smaller chunks increases the amount of time spent passing things back and forth between Python and Rust
@@ -141,19 +123,12 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # Realistically these should be zero copy in the first place
     #del rust_specs
 
-    _log_mem_ps("after scoring")
+
     # Make Polars dataframe directly from Rust
-    logger.info("Building results dataframe")
-    # Log both old and new column names for comparison
-    old_cols = hits.get_column_names()
-    logger.info(f"  old columns (get_column_names): {old_cols}")
     df = hits.to_polars()
-    logger.info(f"  new columns (to_polars):        {df.columns}")
-    logger.info(f"  to_polars dtypes: {dict(zip(df.columns, df.dtypes))}")
-    logger.info(f"  to_polars shape: {df.shape}")
     del hits
 
-    _log_mem_ps("after building results df + freeing hits")
+
 
     # 2. Vectorized Calculation of Theoretical m/z (using Polars UDF)
     # The UDF will run the Python function but is integrated into Polars' execution engine.
@@ -189,9 +164,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     df = df.drop("mz_diff")
 
     # 5. Filter out large MS1 errors (Polars syntax)
-    logger.info(f"  rows before ms1 ppm filter: {df.shape[0]}")
     df = df.filter(pl.col('ppm_error_ms1').abs() < ms1_ppm_error)
-    logger.info(f"  rows after ms1 ppm filter: {df.shape[0]}")
 
     # Get RTs for alignment
     lib_rts = {v['mod_seq'] : v['iRT'] for v in library_spectra.values()}
@@ -268,7 +241,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         .alias('matched_lib_pct')
     )
 
-    _log_mem_ps("end of preliminary search")
+
     return df
 
 
