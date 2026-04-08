@@ -1190,8 +1190,8 @@ class SpectrumLibraryStore:
     def to_diann_df(self):
         """Convert to a one-row-per-fragment Polars DataFrame (DIA-NN format).
 
-        Replaces the Python-loop-based python_lib_to_diann_df() with
-        vectorized numpy operations — no per-fragment Python iteration.
+        Uses a join strategy to avoid numpy fancy indexing on object arrays
+        (which is extremely slow for large libraries).
         """
         import polars as pl
         from src.utils.frag_encoding import (
@@ -1216,25 +1216,30 @@ class SpectrumLibraryStore:
         codes = self.frag_keys_data[gather_idx]
 
         # Decode packed int32 codes into separate fields
-        _ION_NAMES = np.array(['b', 'y', 'a', 'c', 'x', 'z'], dtype=object)
-        _LOSS_NAMES = np.array(['noloss', 'H2O', 'NH3', 'H3PO4'], dtype=object)
+        _ION_NAMES = pl.Series(values=['b', 'y', 'a', 'c', 'x', 'z'])
+        _LOSS_NAMES = pl.Series(values=['noloss', 'H2O', 'NH3', 'H3PO4'])
 
-        frag_type = _ION_NAMES[get_ion_type(codes)]
-        frag_num = get_index(codes)
-        frag_charge = get_charge(codes)
-        frag_loss = _LOSS_NAMES[get_loss(codes)]
+        # -- Gather index as a polars series for .gather() calls --
+        entry_idx_pl = pl.Series(values=entry_idx, dtype=pl.UInt32)
 
-        # -- Scalar columns expanded to per-fragment rows --
-        mod_seq = self.mod_seq[:N][entry_idx]
-        seq = self.seq[:N][entry_idx]
+        # -- Precursor string columns: build polars series once at N level,
+        #    then expand via gather (all in Rust, no Python object arrays) --
+        mod_seq = pl.Series("ModifiedPeptide", self.mod_seq[:N]).gather(entry_idx_pl)
+        seq = pl.Series("StrippedPeptide", self.seq[:N]).gather(entry_idx_pl)
+        protein_group = pl.Series("ProteinGroup", self.protein_group[:N]).gather(entry_idx_pl)
+        protein_name = pl.Series("ProteinName", self.protein_name[:N]).gather(entry_idx_pl)
+        genes = pl.Series("Genes", self.genes[:N]).gather(entry_idx_pl)
+        uniprot_id = pl.Series("ProteinID", self.uniprot_id[:N]).gather(entry_idx_pl)
+
+        # -- Numeric precursor columns: numpy repeat is fast on contiguous arrays --
         prec_mz = self.prec_mz[:N][entry_idx]
         prec_z = self.prec_z[:N][entry_idx]
         iRT = self.iRT[:N][entry_idx]
         ion_mob = self.ion_mob[:N][entry_idx]
-        protein_group = self.protein_group[:N][entry_idx]
-        protein_name = self.protein_name[:N][entry_idx]
-        genes = self.genes[:N][entry_idx]
-        uniprot_id = self.uniprot_id[:N][entry_idx]
+
+        # -- Fragment-level columns --
+        ion_type_codes = get_ion_type(codes)
+        loss_codes = get_loss(codes)
 
         return pl.DataFrame({
             "ModifiedPeptide": mod_seq,
@@ -1245,10 +1250,10 @@ class SpectrumLibraryStore:
             "PrecursorMz": prec_mz,
             "FragmentMz": frag_mz,
             "RelativeIntensity": frag_int,
-            "FragmentType": frag_type,
-            "FragmentCharge": frag_charge.astype(np.int32),
-            "FragmentSeriesNumber": frag_num.astype(np.int32),
-            "FragmentLossType": frag_loss,
+            "FragmentType": _ION_NAMES.gather(ion_type_codes.astype(np.uint32)),
+            "FragmentCharge": get_charge(codes).astype(np.int32),
+            "FragmentSeriesNumber": get_index(codes).astype(np.int32),
+            "FragmentLossType": _LOSS_NAMES.gather(loss_codes.astype(np.uint32)),
             "ProteinID": uniprot_id,
             "ProteinGroup": protein_group,
             "ProteinName": protein_name,
