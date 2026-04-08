@@ -577,7 +577,6 @@ def empirical_fit(output_df, results_folder=None):
         plt.scatter(output_df.lib_rt[cor_filter],
                     f(output_df.lib_rt[cor_filter]),edgecolor="none", s=1)
         plt.title(str(feature_percentile))
-        plt.show()
         if results_folder is not None:
             plt.savefig(results_folder + f"/Percentile_{feature_percentile}.png",
                         dpi=600, bbox_inches="tight")

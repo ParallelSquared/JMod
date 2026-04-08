@@ -1021,7 +1021,8 @@ class SpectrumLibraryStore:
         else:
             all_frag_charges = np.empty(0, dtype=np.float64)
 
-        for i in tqdm.tqdm(range(N), desc="Computing tag positions"):
+        logger.info("Computing tag positions")
+        for i in tqdm.tqdm(range(N)):
             mod_seq_str = target_store.mod_seq[i]
             peptide = (
                 mod_seq_str
@@ -1115,8 +1116,9 @@ class SpectrumLibraryStore:
                 key_to_idx[(new_seq, orig_charge)] = out_idx
 
         # --- Phase 3: Fill variable-length arrays ---
+        logger.info("Tagging library")
         cursor = 0
-        for i in tqdm.tqdm(range(N), desc="Tagging library"):
+        for i in tqdm.tqdm(range(N)):
             foff = int(target_store.frag_offsets[i])
             flen = int(target_store.frag_lengths[i])
 
