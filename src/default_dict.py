@@ -181,7 +181,7 @@ default_dict = {
         'widget': '',
         'tk_handle': None,
         'special_upload': False,
-        'values': ['rev', 'shuffle']
+        'values': ['rev', 'rev_nc', 'shuffle']
     },
     'mTRAQ': {
         'flags': ('--mTRAQ',),

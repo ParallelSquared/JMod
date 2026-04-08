@@ -322,18 +322,23 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
         new_split_seq = [diann_rules[aa] for aa in seq]
     elif rules=="rev":
         new_split_seq = seq[:-1][::-1]+seq[-1:]
+    elif rules=="rev_nc":
+        new_split_seq = seq[:1] + seq[1:-1][::-1] + seq[-1:]
     elif rules=="shuffle":
         # Shuffle body (all but C-term), keeping mods attached to their AA.
         # Seed on the tag-stripped sequence so all channels get the same shuffle.
         seed_str = "decoy:" + "".join(seq)
         base_seed = int(hashlib.md5(seed_str.encode()).hexdigest(), 16)
         if len(seq) > 2 and len(set(seq[:-1])) > 1:
-            rng = random.Random(base_seed)
-            body = list(seq[:-1])
-            rng.shuffle(body)
-            new_split_seq = body + [seq[-1]]
-            # Fall back to reversal if shuffle == original
-            if new_split_seq == list(seq):
+            for attempt in range(3):
+                rng = random.Random(base_seed + attempt)
+                body = list(seq[:-1])
+                rng.shuffle(body)
+                new_split_seq = body + [seq[-1]]
+                if new_split_seq != list(seq):
+                    break
+            else:
+                # All 3 attempts matched original — fall back to reversal
                 new_split_seq = seq[:-1][::-1] + seq[-1:]
         else:
             # Not enough unique residues to shuffle — reverse instead

@@ -136,6 +136,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
+    # TODO: validate all config.args values against default_dict['values'] lists here
     ####  Load Libraries   ######################
     set_seeds(config.RANDOM_SEED)
     mzml_file = config.args.mzml.replace("\\","/")
