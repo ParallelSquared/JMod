@@ -13,11 +13,6 @@ import src.config as config
 import pandas as pd
 from src.utils.parse_peptides import split_frag_name
 
-# no-op @profile when not running under kernprof
-try:
-    profile
-except NameError:
-    profile = lambda f: f
 from src.logger import logger
 import math
 
@@ -719,7 +714,6 @@ class p_result:
         return f"PearsonRResult(statistic={self.statistic}, pvalue={self.pvalue})"
     
 ## source https://cancerdatascience.org/blog/posts/pearson-correlation/
-@profile
 def np_pearson_cor(x: list[float], y: list[float]) -> p_result:
     """
     Notes:
