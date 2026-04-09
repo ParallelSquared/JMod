@@ -150,7 +150,8 @@ def fast_modal_lowess(x, y,
     y = np.asarray(y)
 
     # Sort
-    order = np.argsort(x)
+    # order = np.argsort(x)
+    order = np.lexsort((y, x))
     x = x[order]
     y = y[order]
     n = len(x)
@@ -635,7 +636,7 @@ def empirical_fit(output_df, results_folder=None):
         np.abs(first_rt_diffs) < first_rt_tolerance
     )
 
-    emp_rt_spl = lowess_fit(
+    emp_rt_spl = fast_modal_lowess(
         np.array(output_df.lib_rt)[cor_filter],
         np.array(output_df.rt)[cor_filter],
         .01
@@ -1114,8 +1115,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         validation_rts = convertor(np.mean([model.predict(np.array(data_split[1])) for model in models],axis=0).flatten())
         validation_rt_diffs = data_split[3]-validation_rts
         
-        pred_rt_spl = lowess_fit(predicted_rts[cor_filter],
-                               np.array(output_df.rt)[cor_filter] ,frac=.2)
+        pred_rt_spl = fast_modal_lowess(predicted_rts[cor_filter],
+                               np.array(output_df.rt)[cor_filter] ,.2)
         
         all_pred_diffs = (pred_rt_spl(predicted_rts) - np.array(output_df.rt))[cor_filter]
         
@@ -1238,10 +1239,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
 
     
-    f_rt_mz = lowess_fit(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],.02)
+    f_rt_mz = fast_modal_lowess(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],.02)
     
     # mz_spl = twostepfit(np.array(id_mzs)[rt_filter_bool],(diffs-f_rt_mz(dia_rt))[r t_filter_bool],1)
-    mz_spl = lowess_fit(np.array(output_df.mz)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter])
+    mz_spl = fast_modal_lowess(np.array(output_df.mz)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter])
 
 
     def mz_func(mz,rt):
