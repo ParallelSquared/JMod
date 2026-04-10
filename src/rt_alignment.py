@@ -193,14 +193,18 @@ def fast_modal_lowess(x, y,
     modal_full = np.interp(x, x[anchor_idx], modal_vals)
 
     # Post smooth
-    smooth = lowess(modal_vals, x[anchor_idx], frac=post_smooth_frac, it=3)[:, 1]
+    smooth = lowess(modal_vals, x[anchor_idx], frac=post_smooth_frac, it=0)[:, 1]
 
     # Build interpolator
-    return interp1d(
+    itp = interp1d(
         x[anchor_idx], smooth,
         bounds_error=False,
         fill_value=(modal_full.min(), modal_full.max())
     )
+    # Expose raw anchors for diagnostic plotting (pre-smoothing modal estimates)
+    itp.anchor_x = x[anchor_idx]
+    itp.anchor_y = modal_vals
+    return itp
 
     
     
@@ -570,13 +574,17 @@ def empirical_fit(output_df, results_folder=None):
         
         f = fast_modal_lowess(output_df.lib_rt[cor_filter],
                         output_df.rt[cor_filter],
-                        .01)
+                        .01,
+                        anchors=1000,
+                        grid_size=1000,
+                        post_smooth_frac=0.01)
 
         plt.subplots()
         plt.scatter(output_df.lib_rt[cor_filter],
                     output_df.rt[cor_filter], s=1,alpha=.2)
         plt.scatter(output_df.lib_rt[cor_filter],
                     f(output_df.lib_rt[cor_filter]),edgecolor="none", s=1)
+        plt.scatter(f.anchor_x, f.anchor_y, color="red", s=8, edgecolor="none")
         plt.title(str(feature_percentile))
         if results_folder is not None:
             plt.savefig(results_folder + f"/Percentile_{feature_percentile}.png",
@@ -639,7 +647,10 @@ def empirical_fit(output_df, results_folder=None):
     emp_rt_spl = fast_modal_lowess(
         np.array(output_df.lib_rt)[cor_filter],
         np.array(output_df.rt)[cor_filter],
-        .01
+        .01,
+        anchors=1000,
+        grid_size=1000,
+        post_smooth_frac=0.01
     )
 
     return cor_filter, emp_rt_spl
@@ -1116,7 +1127,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         validation_rt_diffs = data_split[3]-validation_rts
         
         pred_rt_spl = fast_modal_lowess(predicted_rts[cor_filter],
-                               np.array(output_df.rt)[cor_filter] ,.2)
+                               np.array(output_df.rt)[cor_filter],
+                               local_frac=.01,
+                               anchors=1000,
+                               grid_size=1000,
+                               post_smooth_frac=0.01)
         
         all_pred_diffs = (pred_rt_spl(predicted_rts) - np.array(output_df.rt))[cor_filter]
         
@@ -1239,7 +1254,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
 
     
-    f_rt_mz = fast_modal_lowess(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],.02)
+    f_rt_mz = fast_modal_lowess(new_lib_rt[cor_filter],np.array(diffs)[cor_filter],
+                                local_frac=.01,
+                                anchors=1000,
+                                grid_size=1000,
+                                post_smooth_frac=0.01)
     
     # mz_spl = twostepfit(np.array(id_mzs)[rt_filter_bool],(diffs-f_rt_mz(dia_rt))[r t_filter_bool],1)
     mz_spl = fast_modal_lowess(np.array(output_df.mz)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter])
