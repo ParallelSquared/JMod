@@ -154,7 +154,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False):
     logger.info("")
     logger.info("Performing MS1 Quantitation") 
     
-    fdc = dat[dat["decoy"] == False].copy().reset_index(drop=True)  #remove decoys
+    fdc = dat[~dat["is_decoy"]].copy().reset_index(drop=True)  #remove decoys
     
     #only quantify confident precs
     if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
@@ -650,11 +650,11 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
 
     ## Only decoys are negatives - all targets are positives
-    y = np.array(~fdc["decoy"], dtype=int)
+    y = np.array(~fdc["is_decoy"], dtype=int)
 
     # exclude necessary columns
     drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz', 'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq',
-                  'untag_seq', 'decoy','all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals',
+                  'untag_seq', 'is_decoy', 'all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals',
                   'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
                   "plexfittrace_ps_all",
                   "unique_frag_mz", "untag_prec",
@@ -699,13 +699,13 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
             sc_model = score_model(model_type, folder=folder)
             pred = sc_model.run_model(X, y, groups=fdc.stripped_seq)
         else:
-            pep_values = estimate_pep(pred, fdc["decoy"].values)
+            pep_values = estimate_pep(pred, fdc["is_decoy"].values)
 
             y_filtered = y.copy()
             neg_mine_mask = (y_filtered == 1) & (pep_values >= 0.90)
             y_filtered[neg_mine_mask] = 0
 
-            keep_mask = fdc["decoy"].values | (fdc_qvalues <= 0.01) | neg_mine_mask
+            keep_mask = fdc["is_decoy"].values | (fdc_qvalues <= 0.01) | neg_mine_mask
 
             n_kept = keep_mask.sum()
             n_relabeled = neg_mine_mask[keep_mask].sum()
@@ -716,7 +716,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
         # Compute q-values for this iteration
         score_order = np.argsort(-pred, kind='stable')
-        decoy_order = fdc["decoy"].values[score_order]
+        decoy_order = fdc["is_decoy"].values[score_order]
         fdc_qvalues_ordered = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order)
         fdc_qvalues_ordered = np.minimum.accumulate(fdc_qvalues_ordered[::-1])[::-1]
         fdc_qvalues = np.empty_like(fdc_qvalues_ordered)
@@ -734,7 +734,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
     score_order = np.argsort(-output, kind='stable')
     orig_order = np.argsort(score_order, kind='stable')
-    decoy_order = fdc["decoy"][score_order]
+    decoy_order = fdc["is_decoy"][score_order]
     frac_decoy = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order)  # Unbiased FDR estimator: (1+d)/t
     frac_decoy = np.minimum.accumulate(frac_decoy[::-1])[::-1]  # Monotonize: q-value = min of downstream q-values
     T = output[score_order[min(len(score_order)-1,np.searchsorted(frac_decoy,0.01))]]
@@ -762,8 +762,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
         # plt.hist([],[])
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="Low Scoring")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.decoy]]),bins,alpha=.5,label="Decoy")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low Scoring")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
         plt.xlabel(feat)
         plt.ylabel("Frequency")
         plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
@@ -777,8 +777,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
         # plt.hist([],[])
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.decoy)]]),bins,alpha=.5,label="Low Scoring")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.decoy]]),bins,alpha=.5,label="Decoy")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low Scoring")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
         plt.xlabel(feat)
         plt.ylabel("Frequency")
         plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
@@ -808,19 +808,19 @@ def compute_protein_FDR(df,results_folder=None):
   
     df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)+ df["silac_channel"].astype(str)
     df_seqchargeqvals = df[df["Qvalue"] < 0.01].copy().reset_index(drop=True) #filter
-    df_seqchargeqvals["maxPredval"] = df_seqchargeqvals.groupby(["protein", "decoy"])["PredVal"].transform("max")
-    df_seqchargeqvals = df_seqchargeqvals.drop_duplicates(subset=["protein", "decoy"]).reset_index(drop=True)
-    
+    df_seqchargeqvals["maxPredval"] = df_seqchargeqvals.groupby(["protein", "is_decoy"])["PredVal"].transform("max")
+    df_seqchargeqvals = df_seqchargeqvals.drop_duplicates(subset=["protein", "is_decoy"]).reset_index(drop=True)
+
     # Rank by descending maxPredval and compute accum_decoys & Protein_Qvalue
     df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False).reset_index(drop=True)
     df_seqchargeqvals["prot_rank"] = df_seqchargeqvals.index + 1  # Equivalent to row_number()
-    df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["decoy"].cumsum()
-    df_seqchargeqvals["Protein_Qvalue"] = (1 + df_seqchargeqvals["accum_decoys"]) / (~df_seqchargeqvals["decoy"]).cumsum()  # Unbiased FDR estimator: (1+d)/t
+    df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["is_decoy"].cumsum()
+    df_seqchargeqvals["Protein_Qvalue"] = (1 + df_seqchargeqvals["accum_decoys"]) / (~df_seqchargeqvals["is_decoy"]).cumsum()  # Unbiased FDR estimator: (1+d)/t
     df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["Protein_Qvalue"].iloc[::-1].cummin().iloc[::-1]  # Monotonize: q-value = min of downstream q-values
     
     # Filter for non-decoy proteins and select distinct protein values
     df_seqchargeqvals_distinct = (
-        df_seqchargeqvals[df_seqchargeqvals["decoy"] == False]
+        df_seqchargeqvals[~df_seqchargeqvals["is_decoy"]]
         .drop_duplicates(subset=["protein"])
         [["protein", "Protein_Qvalue"]]
     )
@@ -829,7 +829,7 @@ def compute_protein_FDR(df,results_folder=None):
     df = df.merge(df_seqchargeqvals_distinct, on="protein", how="left")
         
     df_counts_prec = (
-        df[(df["decoy"] == False) & (df["Qvalue"] < 0.01)]
+        df[(df["is_decoy"] == False) & (df["Qvalue"] < 0.01)]
         .drop_duplicates(subset=["run_chan", "untag_prec"])
         .groupby(["file_name", "channel", "silac_channel"])
         .size()
@@ -843,7 +843,7 @@ def compute_protein_FDR(df,results_folder=None):
     
 
     df_counts_prots = (
-        df[(df["Protein_Qvalue"] < 0.01) & (df["decoy"] == False) & (df["Qvalue"] < 0.01)]
+        df[(df["Protein_Qvalue"] < 0.01) & (df["is_decoy"] == False) & (df["Qvalue"] < 0.01)]
         .drop_duplicates(subset=["run_chan", "protein"])
         .groupby(["file_name", "channel", "silac_channel"])
         .size()
@@ -877,7 +877,7 @@ def compute_protein_FDR(df,results_folder=None):
         
         # Compute number of precursor IDs at 1% FDR
         df_counts_prec = (
-            df[(df["decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
+            df[(df["is_decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
             .drop_duplicates(subset=["run_chan", "untag_prec"])
             .groupby(["file_name", "channel", "silac_channel"])
             .size()
@@ -893,7 +893,7 @@ def compute_protein_FDR(df,results_folder=None):
         
         # Compute number of protein IDs at 1% FDR
         df_counts_prots = (
-            df[(df["Protein_Qvalue"] < 0.01) & (df["decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
+            df[(df["Protein_Qvalue"] < 0.01) & (df["is_decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
             .drop_duplicates(subset=["run_chan", "protein"])
             .groupby(["file_name", "channel", "silac_channel"])
             .size()
@@ -970,7 +970,7 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     
     return result_df
 
-def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
+def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):  # TODO: library param is unused — remove or use
     
     results_folder = os.path.dirname(file)
     mz_ppm = config.opt_ms1_tol
@@ -1040,10 +1040,6 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
     median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
     fdc["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
 
-    ## What precursors are labeled as decoys
-    fdc["decoy"] = np.array(["Decoy" in i for i in fdc["seq"]])
-
-    
     minfraclib_toscore = getattr(config.args, "score_lib_frac", 0) 
     fdx_toscore = fdc[fdc['frac_lib_int'].fillna(0) >= minfraclib_toscore].reset_index(drop=True)
     
@@ -1063,7 +1059,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
     #         fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a plexDIA set
     
     if config.args.plexDIA or config.args.timeplex:
-        fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a run
+        fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "is_decoy"])["Qvalue"].transform("min") #within a run
     else:
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
 
@@ -1082,10 +1078,10 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
     fdx_quant.to_csv(results_folder+"/all_IDs.csv",index=False)
-    fdx_quant[np.logical_and(~fdx_quant["decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
-    
+    fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
+
     ### select minimum columns for parquet
-    parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","decoy","Qvalue", "Protein_Qvalue","PredVal",
+    parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
                        "protein",'BestChannel_Qvalue', 'plex_Area', 'seq', 'silac_channel', 'untag_seq',"rt","mz"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/all_IDs_filtered.parquet")

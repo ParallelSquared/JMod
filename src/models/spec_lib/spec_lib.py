@@ -312,16 +312,20 @@ def _decoy_worker(args):
     return new_seq, new_frags, spectrum, ordered_frags
 
 
-def create_decoy_lib(library,rules,tag,n_iso):
+def create_decoy_lib(library, rules, tag=None, n_iso=0):
+    """Generate decoys and return a combined target+decoy SpectrumLibraryStore.
+
+    Decoys are generated without tagging or isotope expansion — those
+    operations should be applied to the combined store afterward.
+
+    Returns a combined store with targets at [0, N) and decoys at [N, N+M).
+    """
     from src.models.spec_lib.library_store import SpectrumLibraryStore
     import gc
 
-    for key in library:
-        library[key]["parent_key"] = key
-
     all_keys = list(library.keys())
-    use_iso = config.args.iso
-    worker_args = [(key[0], library[key]["frags"], rules, tag, n_iso, use_iso)
+    # Decoys generated without tag/isotope — applied later to combined store
+    worker_args = [(key[0], library[key]["frags"], rules, tag, n_iso, False)
                    for key in all_keys]
 
     p = multiprocessing.Pool()

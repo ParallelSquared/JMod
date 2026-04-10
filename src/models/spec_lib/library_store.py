@@ -33,6 +33,108 @@ def _ensure_frag_codes(value):
     return encode_frag_names(arr)
 
 
+class _TargetView:
+    """Lightweight proxy that restricts iteration to target entries only.
+
+    Shares all underlying numpy arrays with the parent store — no copies.
+    ``__getitem__`` delegates to the full store so any key (including decoy)
+    still works for direct lookups.
+
+    ``copy.deepcopy`` returns a target-only ``SpectrumLibraryStore`` so that
+    ``MZRTfit`` can safely mutate the copy without affecting the combined store.
+    """
+
+    __slots__ = ('_store', '_target_keys')
+
+    def __init__(self, store):
+        self._store = store
+        # Build ordered list of target keys (indices < n_targets)
+        self._target_keys = [
+            k for k, idx in store.key_to_idx.items()
+            if idx < store.n_targets
+        ]
+
+    def __len__(self):
+        return len(self._target_keys)
+
+    def __iter__(self):
+        return iter(self._target_keys)
+
+    def __contains__(self, key):
+        return key in self._store.key_to_idx and self._store.key_to_idx[key] < self._store.n_targets
+
+    def __getitem__(self, key):
+        return self._store[key]
+
+    def __setitem__(self, key, value):
+        self._store[key] = value
+
+    def keys(self):
+        return iter(self._target_keys)
+
+    def values(self):
+        store = self._store
+        for key in self._target_keys:
+            yield store[key]
+
+    def items(self):
+        store = self._store
+        for key in self._target_keys:
+            yield key, store[key]
+
+    def get(self, key, default=None):
+        if key in self:
+            return self._store[key]
+        return default
+
+    def to_diann_df(self):
+        """Export only target entries as a DIA-NN-format Polars DataFrame."""
+        return self._store.to_diann_df(n=self._store.n_targets)
+
+    def __getattr__(self, name):
+        """Delegate attribute access to the underlying store for methods
+        not explicitly overridden (e.g. resolve_indices)."""
+        return getattr(self._store, name)
+
+    def __deepcopy__(self, memo):
+        """Return a target-only SpectrumLibraryStore (independent copy)."""
+        import copy
+        s = self._store
+        n = s.n_targets
+        # Target-only key_to_idx
+        k2i = {k: idx for k, idx in s.key_to_idx.items() if idx < n}
+        # Slice spectrum data for target entries
+        target_spec_total = int(s.spectrum_lengths[:n].sum())
+        target_frag_total = int(s.frag_lengths[:n].sum())
+        target_topn_total = int(s.top_n_lengths[:n].sum())
+        return SpectrumLibraryStore(
+            key_to_idx=copy.deepcopy(k2i, memo),
+            mod_seq=s.mod_seq[:n].copy(),
+            seq=s.seq[:n].copy(),
+            prec_mz=s.prec_mz[:n].copy(),
+            prec_z=s.prec_z[:n].copy(),
+            iRT=s.iRT[:n].copy(),
+            ion_mob=s.ion_mob[:n].copy(),
+            protein_group=s.protein_group[:n].copy(),
+            protein_name=s.protein_name[:n].copy(),
+            genes=s.genes[:n].copy(),
+            uniprot_id=s.uniprot_id[:n].copy(),
+            spectrum_mz=s.spectrum_mz[:target_spec_total].copy(),
+            spectrum_int=s.spectrum_int[:target_spec_total].copy(),
+            spectrum_offsets=s.spectrum_offsets[:n].copy(),
+            spectrum_lengths=s.spectrum_lengths[:n].copy(),
+            frag_names_data=s.frag_names_data[:target_spec_total].copy(),
+            frag_data=s.frag_data[:target_frag_total].copy(),
+            frag_keys_data=s.frag_keys_data[:target_frag_total].copy(),
+            frag_offsets=s.frag_offsets[:n].copy(),
+            frag_lengths=s.frag_lengths[:n].copy(),
+            top_n_data=s.top_n_data[:target_topn_total].copy(),
+            top_n_offsets=s.top_n_offsets[:n].copy(),
+            top_n_lengths=s.top_n_lengths[:n].copy(),
+            parent_key=s.parent_key[:n].copy(),
+        )
+
+
 class SpectrumLibraryStore:
     """Columnar store for spectral library data.
 
@@ -62,6 +164,8 @@ class SpectrumLibraryStore:
         'top_n_data', 'top_n_offsets', 'top_n_lengths',
         # parent_key (object array, None when not set)
         'parent_key',
+        # target/decoy tracking
+        'n_targets', 'n_decoys', 'is_decoy',
     )
 
     def __init__(
@@ -74,6 +178,7 @@ class SpectrumLibraryStore:
         frag_data, frag_keys_data, frag_offsets, frag_lengths,
         top_n_data, top_n_offsets, top_n_lengths,
         parent_key,
+        n_targets=None, n_decoys=None, is_decoy=None,
     ):
         self.key_to_idx = key_to_idx
         self.mod_seq = mod_seq
@@ -99,10 +204,30 @@ class SpectrumLibraryStore:
         self.top_n_offsets = top_n_offsets
         self.top_n_lengths = top_n_lengths
         self.parent_key = parent_key
+        # Target/decoy tracking — defaults to all-target
+        n = len(key_to_idx)
+        self.n_targets = n_targets if n_targets is not None else n
+        self.n_decoys = n_decoys if n_decoys is not None else 0
+        self.is_decoy = is_decoy if is_decoy is not None else np.zeros(n, dtype=bool)
 
     # ------------------------------------------------------------------
     # Backward-compat property for spectrum_data
     # ------------------------------------------------------------------
+
+    @property
+    def target_decoy_ratio(self):
+        """Ratio of n_targets / n_decoys, for FDR correction."""
+        if self.n_decoys == 0:
+            return float('inf')
+        return self.n_targets / self.n_decoys
+
+    def target_view(self):
+        """Return a lightweight proxy that only exposes target entries.
+
+        Shares underlying arrays — no copies.  Used to restrict the
+        preliminary search to targets only.
+        """
+        return _TargetView(self)
 
     @property
     def spectrum_data(self):
@@ -531,6 +656,9 @@ class SpectrumLibraryStore:
             top_n_offsets=self.top_n_offsets.copy(),
             top_n_lengths=self.top_n_lengths.copy(),
             parent_key=self.parent_key.copy(),
+            n_targets=self.n_targets,
+            n_decoys=self.n_decoys,
+            is_decoy=self.is_decoy.copy(),
         )
 
     def __copy__(self):
@@ -572,6 +700,9 @@ class SpectrumLibraryStore:
             top_n_offsets=self.top_n_offsets.copy(),
             top_n_lengths=self.top_n_lengths.copy(),
             parent_key=self.parent_key.copy(),
+            n_targets=self.n_targets,
+            n_decoys=self.n_decoys,
+            is_decoy=self.is_decoy,
         )
 
     # ------------------------------------------------------------------
@@ -605,6 +736,9 @@ class SpectrumLibraryStore:
             top_n_offsets=self.top_n_offsets,
             top_n_lengths=self.top_n_lengths,
             parent_key=self.parent_key,
+            n_targets=np.array(self.n_targets),
+            n_decoys=np.array(self.n_decoys),
+            is_decoy=self.is_decoy,
         )
 
     @classmethod
@@ -655,6 +789,17 @@ class SpectrumLibraryStore:
         elif frag_keys_data.dtype != np.int32:
             frag_keys_data = frag_keys_data.astype(np.int32)
 
+        # Handle target/decoy fields (may be absent in old caches)
+        n_total = len(data['mod_seq'])
+        if 'n_targets' in data:
+            n_targets = int(data['n_targets'])
+            n_decoys = int(data['n_decoys'])
+            is_decoy_arr = data['is_decoy']
+        else:
+            n_targets = n_total
+            n_decoys = 0
+            is_decoy_arr = np.zeros(n_total, dtype=bool)
+
         store = cls(
             key_to_idx={},
             mod_seq=data['mod_seq'],
@@ -680,6 +825,9 @@ class SpectrumLibraryStore:
             top_n_offsets=data['top_n_offsets'],
             top_n_lengths=data['top_n_lengths'],
             parent_key=data['parent_key'],
+            n_targets=n_targets,
+            n_decoys=n_decoys,
+            is_decoy=is_decoy_arr,
         )
         store.build_key_index()
         return store
@@ -858,95 +1006,172 @@ class SpectrumLibraryStore:
 
     @classmethod
     def from_target_and_decoy_results(cls, target_store, all_keys, results):
-        """Build a decoy SpectrumLibraryStore directly from the target store's
-        arrays and per-entry worker results, skipping intermediate dicts.
+        """Build a combined target+decoy SpectrumLibraryStore.
 
-        Only ``seq``, ``frags``, ``spectrum``, and ``ordered_frags`` differ
-        between target and decoy; all other fields are copied from
-        *target_store*.
+        Targets occupy indices [0, N) and non-colliding decoys occupy
+        [N, N+M).  Decoys whose shuffled sequence matches any target
+        sequence are discarded.
 
         Parameters
         ----------
         target_store : SpectrumLibraryStore
-            The target library whose scalar/top-n arrays are reused.
+            The target library (entries at indices 0..N-1).
         all_keys : list[tuple]
-            Ordered precursor keys (same order as *results*).
+            Ordered target keys (same order as *results*).
         results : list[tuple]
             Per-entry ``(new_seq, new_frags, spectrum, ordered_frags)``
             from the decoy worker pool.
+
+        Returns
+        -------
+        SpectrumLibraryStore
+            Combined store with N targets + M decoys.
         """
-        n = len(all_keys)
-        key_to_idx = {key: i for i, key in enumerate(all_keys)}
+        from src.logger import logger
 
-        # Scalar arrays — copy unchanged from target
-        mod_seq = target_store.mod_seq.copy()
-        prec_mz = target_store.prec_mz.copy()
-        prec_z = target_store.prec_z.copy()
-        iRT = target_store.iRT.copy()
-        ion_mob = target_store.ion_mob.copy()
-        protein_group = target_store.protein_group.copy()
-        protein_name = target_store.protein_name.copy()
-        genes = target_store.genes.copy()
-        uniprot_id = target_store.uniprot_id.copy()
+        N = len(all_keys)
+        target_seqs = set(target_store.seq)
 
-        # seq — replaced from worker results
-        seq = np.empty(n, dtype=object)
-        # parent_key — set to original keys
-        parent_key = np.empty(n, dtype=object)
-
-        # Compute actual sizes from results (decoy may differ from target)
-        spec_lengths = np.empty(n, dtype=np.int32)
-        frag_lengths = np.empty(n, dtype=np.int32)
+        # --- Filter collisions ---
+        valid = []  # (original_index, result) for non-colliding decoys
+        n_collisions = 0
         for i, result in enumerate(results):
+            new_seq = result[0]
+            if new_seq in target_seqs:
+                n_collisions += 1
+            else:
+                valid.append((i, result))
+            results[i] = None  # free eagerly
+        M = len(valid)
+        if n_collisions > 0:
+            logger.info(f"Decoy collision removal: {n_collisions} decoys matched "
+                        f"target sequences and were discarded ({M} decoys kept)")
+
+        total = N + M
+
+        # --- Build key_to_idx ---
+        # Decoy keys use the shuffled mod_seq (new_seq from worker), not "Decoy_" prefix.
+        # The is_decoy flag is the sole discriminator.
+        key_to_idx = {}
+        for i, key in enumerate(all_keys):
+            key_to_idx[key] = i  # target keys → [0, N)
+        for j, (orig_idx, result) in enumerate(valid):
+            key = all_keys[orig_idx]
+            decoy_mod_seq = result[0]  # shuffled modified sequence
+            decoy_key = (decoy_mod_seq, *key[1:])
+            key_to_idx[decoy_key] = N + j  # decoy keys → [N, N+M)
+
+        # --- Scalar arrays: target then decoy (shared fields) ---
+        valid_indices = np.array([vi for vi, _ in valid], dtype=np.intp)
+
+        # Decoy mod_seq is the shuffled modified sequence (not the target's)
+        decoy_mod_seqs = np.empty(M, dtype=object)
+        for j, (_, result) in enumerate(valid):
+            decoy_mod_seqs[j] = result[0]
+        mod_seq = np.concatenate([target_store.mod_seq, decoy_mod_seqs])
+        prec_mz = np.concatenate([target_store.prec_mz, target_store.prec_mz[valid_indices]])
+        prec_z = np.concatenate([target_store.prec_z, target_store.prec_z[valid_indices]])
+        iRT = np.concatenate([target_store.iRT, target_store.iRT[valid_indices]])
+        ion_mob = np.concatenate([target_store.ion_mob, target_store.ion_mob[valid_indices]])
+        protein_group = np.concatenate([target_store.protein_group, target_store.protein_group[valid_indices]])
+        protein_name = np.concatenate([target_store.protein_name, target_store.protein_name[valid_indices]])
+        genes = np.concatenate([target_store.genes, target_store.genes[valid_indices]])
+        uniprot_id = np.concatenate([target_store.uniprot_id, target_store.uniprot_id[valid_indices]])
+
+        # seq: target seqs + decoy seqs
+        decoy_seqs = np.empty(M, dtype=object)
+        for j, (_, result) in enumerate(valid):
+            decoy_seqs[j] = result[0]
+        seq = np.concatenate([target_store.seq, decoy_seqs])
+
+        # parent_key: None for targets, original key for decoys
+        parent_key = np.empty(total, dtype=object)
+        parent_key[:N] = None
+        for j, (orig_idx, _) in enumerate(valid):
+            parent_key[N + j] = all_keys[orig_idx]
+
+        # --- Spectrum arrays: target then decoy ---
+        # Compute decoy spectrum sizes
+        decoy_spec_lengths = np.empty(M, dtype=np.int32)
+        decoy_frag_lengths = np.empty(M, dtype=np.int32)
+        for j, (_, result) in enumerate(valid):
             _, new_frags, spectrum, _ = result
             spec_arr = np.asarray(spectrum)
-            spec_lengths[i] = spec_arr.shape[0] if spec_arr.ndim == 2 else 0
-            frag_lengths[i] = len(new_frags)
+            decoy_spec_lengths[j] = spec_arr.shape[0] if spec_arr.ndim == 2 else 0
+            decoy_frag_lengths[j] = len(new_frags)
 
-        spec_offsets = np.empty(n, dtype=np.int64)
-        spec_offsets[0] = 0
-        np.cumsum(spec_lengths[:-1], out=spec_offsets[1:])
-        frag_offsets = np.empty(n, dtype=np.int64)
-        frag_offsets[0] = 0
-        np.cumsum(frag_lengths[:-1], out=frag_offsets[1:])
+        # Combined spectrum offsets/lengths
+        target_total_spec = int(target_store.spectrum_lengths.sum()) if N > 0 else 0
+        decoy_spec_offsets = np.empty(M, dtype=np.int64)
+        if M > 0:
+            decoy_spec_offsets[0] = target_total_spec
+            if M > 1:
+                np.cumsum(decoy_spec_lengths[:-1], out=decoy_spec_offsets[1:])
+                decoy_spec_offsets[1:] += target_total_spec
 
-        total_spec = int(spec_lengths.sum())
-        total_frag = int(frag_lengths.sum())
-        spectrum_mz = np.empty(total_spec, dtype=np.float64)
-        spectrum_int = np.empty(total_spec, dtype=np.float64)
-        frag_names_data = np.empty(total_spec, dtype=np.int32)
-        frag_data = np.empty((total_frag, 2), dtype=np.float64)
-        frag_keys_data = np.empty(total_frag, dtype=np.int32)
+        spectrum_offsets = np.concatenate([target_store.spectrum_offsets, decoy_spec_offsets])
+        spectrum_lengths = np.concatenate([target_store.spectrum_lengths, decoy_spec_lengths])
 
-        for i, (key, result) in enumerate(zip(all_keys, results)):
-            new_seq, new_frags, spectrum, ordered_frags = result
-            seq[i] = new_seq
-            parent_key[i] = key
+        # Pre-allocate and fill decoy spectrum data
+        total_decoy_spec = int(decoy_spec_lengths.sum())
+        decoy_spectrum_mz = np.empty(total_decoy_spec, dtype=np.float64)
+        decoy_spectrum_int = np.empty(total_decoy_spec, dtype=np.float64)
+        decoy_frag_names = np.empty(total_decoy_spec, dtype=np.int32)
 
-            # Spectrum — write into pre-allocated slice
+        cursor = 0
+        for j, (_, result) in enumerate(valid):
+            _, _, spectrum, ordered_frags = result
             spec_arr = np.asarray(spectrum, dtype=np.float64)
-            off = spec_offsets[i]
-            length = spec_lengths[i]
-            spectrum_mz[off:off + length] = spec_arr[:, 0]
-            spectrum_int[off:off + length] = spec_arr[:, 1]
-            frag_names_data[off:off + length] = _ensure_frag_codes(ordered_frags)
+            length = decoy_spec_lengths[j]
+            decoy_spectrum_mz[cursor:cursor + length] = spec_arr[:, 0]
+            decoy_spectrum_int[cursor:cursor + length] = spec_arr[:, 1]
+            decoy_frag_names[cursor:cursor + length] = _ensure_frag_codes(ordered_frags)
+            cursor += length
 
-            # Original frags — write into pre-allocated slice
-            foff = frag_offsets[i]
-            flength = frag_lengths[i]
+        spectrum_mz = np.concatenate([target_store.spectrum_mz, decoy_spectrum_mz])
+        spectrum_int = np.concatenate([target_store.spectrum_int, decoy_spectrum_int])
+        frag_names_data = np.concatenate([target_store.frag_names_data, decoy_frag_names])
+
+        # --- Frag arrays: target then decoy ---
+        target_total_frag = int(target_store.frag_lengths.sum()) if N > 0 else 0
+        decoy_frag_offsets = np.empty(M, dtype=np.int64)
+        if M > 0:
+            decoy_frag_offsets[0] = target_total_frag
+            if M > 1:
+                np.cumsum(decoy_frag_lengths[:-1], out=decoy_frag_offsets[1:])
+                decoy_frag_offsets[1:] += target_total_frag
+
+        frag_offsets = np.concatenate([target_store.frag_offsets, decoy_frag_offsets])
+        frag_lengths_arr = np.concatenate([target_store.frag_lengths, decoy_frag_lengths])
+
+        total_decoy_frag = int(decoy_frag_lengths.sum())
+        decoy_frag_data = np.empty((total_decoy_frag, 2), dtype=np.float64)
+        decoy_frag_keys = np.empty(total_decoy_frag, dtype=np.int32)
+
+        cursor = 0
+        for j, (_, result) in enumerate(valid):
+            _, new_frags, _, _ = result
+            flength = decoy_frag_lengths[j]
             if flength > 0:
                 fk = encode_frag_names(list(new_frags.keys()))
                 fv = np.array(list(new_frags.values()), dtype=np.float64)
-                frag_keys_data[foff:foff + flength] = fk
-                frag_data[foff:foff + flength] = fv
+                decoy_frag_keys[cursor:cursor + flength] = fk
+                decoy_frag_data[cursor:cursor + flength] = fv
+            cursor += flength
 
-            # Free eagerly
-            results[i] = None
+        frag_data = np.concatenate([target_store.frag_data, decoy_frag_data], axis=0)
+        frag_keys_data = np.concatenate([target_store.frag_keys_data, decoy_frag_keys])
 
-        # Top-N — copy from target
+        # --- Top-N: target top_n + empty for decoys (recomputed by bulk_set_top_n) ---
         top_n_data = target_store.top_n_data.copy()
-        top_n_offsets = target_store.top_n_offsets.copy()
-        top_n_lengths = target_store.top_n_lengths.copy()
+        decoy_top_n_offsets = np.full(M, len(top_n_data), dtype=np.int64)
+        decoy_top_n_lengths = np.zeros(M, dtype=np.int32)
+        top_n_offsets = np.concatenate([target_store.top_n_offsets, decoy_top_n_offsets])
+        top_n_lengths = np.concatenate([target_store.top_n_lengths, decoy_top_n_lengths])
+
+        # --- Target/decoy tracking ---
+        is_decoy = np.zeros(total, dtype=bool)
+        is_decoy[N:] = True
 
         return cls(
             key_to_idx=key_to_idx,
@@ -962,17 +1187,20 @@ class SpectrumLibraryStore:
             uniprot_id=uniprot_id,
             spectrum_mz=spectrum_mz,
             spectrum_int=spectrum_int,
-            spectrum_offsets=spec_offsets,
-            spectrum_lengths=spec_lengths,
+            spectrum_offsets=spectrum_offsets,
+            spectrum_lengths=spectrum_lengths,
             frag_names_data=frag_names_data,
             frag_data=frag_data,
             frag_keys_data=frag_keys_data,
             frag_offsets=frag_offsets,
-            frag_lengths=frag_lengths,
+            frag_lengths=frag_lengths_arr,
             top_n_data=top_n_data,
             top_n_offsets=top_n_offsets,
             top_n_lengths=top_n_lengths,
             parent_key=parent_key,
+            n_targets=N,
+            n_decoys=M,
+            is_decoy=is_decoy,
         )
 
     # ------------------------------------------------------------------
@@ -1158,6 +1386,12 @@ class SpectrumLibraryStore:
         out_top_n_offsets = np.zeros(NM, dtype=np.int64)
         out_top_n_lengths = np.zeros(NM, dtype=np.int32)
 
+        # Propagate target/decoy info: each entry is replicated M times
+        # is_decoy for entry i is at indices i*M .. i*M+M-1
+        out_is_decoy = np.repeat(target_store.is_decoy, M)
+        out_n_targets = target_store.n_targets * M
+        out_n_decoys = target_store.n_decoys * M
+
         return cls(
             key_to_idx=key_to_idx,
             mod_seq=out_mod_seq,
@@ -1183,24 +1417,32 @@ class SpectrumLibraryStore:
             top_n_offsets=out_top_n_offsets,
             top_n_lengths=out_top_n_lengths,
             parent_key=out_parent_key,
+            n_targets=out_n_targets,
+            n_decoys=out_n_decoys,
+            is_decoy=out_is_decoy,
         )
 
     # ------------------------------------------------------------------
     # Export: vectorized DIA-NN-format Polars DataFrame
     # ------------------------------------------------------------------
 
-    def to_diann_df(self):
+    def to_diann_df(self, n=None):
         """Convert to a one-row-per-fragment Polars DataFrame (DIA-NN format).
 
         Uses a join strategy to avoid numpy fancy indexing on object arrays
         (which is extremely slow for large libraries).
+
+        Parameters
+        ----------
+        n : int, optional
+            Number of entries to export (from the start). Defaults to all.
         """
         import polars as pl
         from src.utils.frag_encoding import (
             get_ion_type, get_index, get_charge, get_loss,
         )
 
-        N = len(self)
+        N = n if n is not None else len(self)
         frag_lens = self.frag_lengths[:N].astype(np.intp)
         total_frags = int(frag_lens.sum())
 

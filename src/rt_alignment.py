@@ -1139,12 +1139,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         emp_data, emp_p, emp_cdf_auc = cdf_data(all_emp_diffs,limit=limit)
         pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs,limit=limit)
-        
-        
+
+        # TODO: deepcopy is expensive — we only need to compare predicted vs
+        # empirical iRTs, then write the winner's values. No need to duplicate
+        # the entire library; just compute both iRT arrays and pick one.
         updatedLibrary = copy.deepcopy(librarySpectra)
         all_lib_keys = list(librarySpectra)
-        
-        
+
+
         ###### Check if fine-tuning iproves alignment
         
         if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
@@ -1201,10 +1203,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     ###############################################################
     ####### NO fine tuning
     ###############################################################
-    
+
     else:
 
         logger.info("Using Empirical w/o Fine Tuning")
+        # TODO: no iRT mutation in this branch — deepcopy is unnecessary here
         updatedLibrary = copy.deepcopy(librarySpectra)
         all_lib_keys = list(librarySpectra)
         rt_spl = emp_rt_spl

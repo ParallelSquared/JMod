@@ -31,7 +31,7 @@ def test_score_precursors_minimal_fixed(tmp_path):
     # Minimal valid input
     fdc = pd.DataFrame({
         "coeff": [2.0, 0.5, 2.1, 0.7, 1.5],
-        "decoy": [False, True, False, True, False],
+        "is_decoy": [False, True, False, True, False],
         "stripped_seq": ["AAA", "BBB", "CCC", "DDD", "EEE"],
         "rt_error": [0.1, 0.2, 0.3, 0.4, 0.5],
         "mz_error": [0.01, 0.02, 0.03, 0.04, 0.05],
@@ -155,7 +155,7 @@ def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
         "silac_channel": [0, 0],
         "Qvalue": [0.005, 0.005],
         "PredVal": [0.9, 0.8],
-        "decoy": [False, True],
+        "is_decoy": [False, True],
         "protein": ["P1", "DECOY_P1"],
         "untag_prec": ["p1", "p2"],
     })

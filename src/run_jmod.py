@@ -229,12 +229,18 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     else:
         spectra_to_fit = DIAspectra.ms2scans
     ######################################################
-    #### RT/MZ Alignment #####
-    
-    # rtSpl = RTfit(spectra_to_fit,spectrumLibrary,config.mz_tol)
-    # rt_mz = np.array([[rtSpl(i["iRT"]), i["prec_mz"]] for i in spectrumLibrary.values()])
-    # rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in spectrumLibrary.values()])
-    
+    #### Generate decoys (before tagging/isotopes so they apply to both)
+    logger.info("Creating Decoy Library")
+    spectrumLibrary = spec_lib.create_decoy_lib(spectrumLibrary, rules=config.args.decoy)
+    config.target_decoy_ratio = spectrumLibrary.target_decoy_ratio
+    logger.info(f"Combined library: {spectrumLibrary.n_targets} targets, "
+                f"{spectrumLibrary.n_decoys} decoys "
+                f"(ratio={config.target_decoy_ratio:.4f})")
+    # TODO: use target_decoy_ratio to correct FDR calculation
+
+    ######################################################
+    #### Tagging #####
+
     if config.args.SILAC:
         # Find the tag object based on the tag name
         if config.args.SILAC in available_tags:
@@ -253,7 +259,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     else:
         SILAC = None
         config.SILAC = None
-        
+
     if config.args.tag:
         # Find the tag object based on the tag name
         if config.args.tag in available_tags:
@@ -273,21 +279,35 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         mass_tag = None
         config.tag = None
 
+    ######################################################
+    #### RT/MZ Alignment (initial search uses target entries only) #####
+
+    target_view = spectrumLibrary.target_view()
+
     if config.args.timeplex:
-        ## now ooutputs library as we finetune RT
-        # With this:
         if config.args.use_features and os.path.exists(feature_path):
             logger.info("Loading Dinosaur features")
             dino_features = pd.read_csv(feature_path, delimiter="\t")
-            funcs, spectrumLibrary = MZRTfit_timeplex(DIAspectra, spectrumLibrary, dino_features, config.mz_tol, results_folder=results_folder_path,
+            funcs, updated_targets = MZRTfit_timeplex(DIAspectra, target_view, dino_features, config.mz_tol, results_folder=results_folder_path,
                                             ms2=config.args.ms2_align)
         else:
             logger.info("Not using features")
-            funcs, spectrumLibrary = MZRTfit_timeplex(DIAspectra, spectrumLibrary, None, config.mz_tol, results_folder=results_folder_path,
+            funcs, updated_targets = MZRTfit_timeplex(DIAspectra, target_view, None, config.mz_tol, results_folder=results_folder_path,
                                             ms2=config.args.ms2_align)
 
+        # Propagate updated iRT from aligned targets back to combined store
+        for key in updated_targets:
+            idx = spectrumLibrary.key_to_idx[key]
+            spectrumLibrary.iRT[idx] = updated_targets[key]["iRT"]
+        # Copy updated iRT to decoy entries from their parent targets
+        for i in range(spectrumLibrary.n_targets, len(spectrumLibrary)):
+            parent = spectrumLibrary.parent_key[i]
+            if parent is not None and parent in spectrumLibrary.key_to_idx:
+                spectrumLibrary.iRT[i] = spectrumLibrary.iRT[spectrumLibrary.key_to_idx[parent]]
+        del updated_targets
+
         rt_spls,mz_func = funcs[:2]
-        
+
         plex_lib = {}
         rt_mz = []
         for idx in range(len(rt_spls)):
@@ -297,12 +317,27 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         rt_mz = np.concatenate(rt_mz)
         spectrumLibrary = plex_lib
     else:
-        funcs,spectrumLibrary = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
+        funcs, updated_targets = MZRTfit(DIAspectra, target_view, dino_features, config.mz_tol,results_folder=results_folder_path,
                                         ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC)
-        rt_spl,mz_func = funcs[:2]
-        # rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
-        rt_mz = np.array([[rt_spl(i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()]) # TODO QQQXXX Input should have at least 1 dimension, got scalar array(-16.) instead
+        # Propagate updated iRT from aligned targets back to combined store
+        for key in updated_targets:
+            idx = spectrumLibrary.key_to_idx[key]
+            spectrumLibrary.iRT[idx] = updated_targets[key]["iRT"]
+        # Copy updated iRT to decoy entries from their parent targets
+        for i in range(spectrumLibrary.n_targets, len(spectrumLibrary)):
+            parent = spectrumLibrary.parent_key[i]
+            if parent is not None and parent in spectrumLibrary.key_to_idx:
+                spectrumLibrary.iRT[i] = spectrumLibrary.iRT[spectrumLibrary.key_to_idx[parent]]
+        del updated_targets
 
+        rt_spl,mz_func = funcs[:2]
+        # Build rt_mz for ALL entries (target + decoy)
+        rt_mz = np.array([[rt_spl(spectrumLibrary.iRT[i]), mz_func(spectrumLibrary.prec_mz[i], spectrumLibrary.iRT[i])]
+                          for i in range(len(spectrumLibrary))])
+        # Apply decoy m/z offset to decoy entries
+        rt_mz[spectrumLibrary.n_targets:, 1] -= config.decoy_mz_offset
+
+    del target_view
 
     ## Merge peaks in spectra
     for spec in DIAspectra.ms1scans:
@@ -314,12 +349,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     spectra_to_fit = DIAspectra.ms2scans
 
     all_keys = list(spectrumLibrary)
-     
 
 
     if config.args.ms2_align:
         ms2_func = funcs[2]
-        
+
         for key in all_keys:
             spectrumLibrary[key]["spectrum"][:,0] = ms2_func(spectrumLibrary[key]["spectrum"][:,0])
     else:
@@ -327,35 +361,21 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
 
     if config.args.iso:
-        # spectrumLibrary = iso_f.iso_library(spectrumLibrary,
-        #                                            tag=config.tag,
-        #                                            n_iso=config.num_iso_peaks)
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
                                                   tag=config.tag,
                                                   n_iso=config.num_iso_peaks)
 
-    # with open(results_folder_path+"/slib","wb") as dill_file:
-    #     slib = dill.dump(spectrumLibrary,dill_file)
-
-    logger.info("Creating Decoy Library")
-    decoy_lib = spec_lib.create_decoy_lib(spectrumLibrary,rules=config.args.decoy,tag=config.tag,n_iso=config.num_iso_peaks)
     spectrumLibrary.bulk_set_top_n(config.top_n)
-    decoy_lib.bulk_set_top_n(config.top_n)
-    logger.info("Finished Decoy Library")
+    logger.info("Finished Library Setup")
 
-    # Build fragment indices (non-timeplex only)
+    # Build fragment index (single unified index for targets + decoys)
     if not config.args.timeplex:
         from src.fragment_index import FragmentIndex
         logger.info("Building fragment ion index")
         frag_index = FragmentIndex.build(spectrumLibrary, all_keys, rt_mz, config.mz_ppm)
-        decoy_frag_index = FragmentIndex.build(
-            decoy_lib, all_keys, rt_mz, config.mz_ppm,
-            prec_mz_offset=-config.decoy_mz_offset
-        )
         logger.info("Fragment index built")
     else:
         frag_index = None
-        decoy_frag_index = None
 
     ######################################################
     ### Write search params to file
@@ -446,10 +466,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                    ms1_spectra=DIAspectra.ms1scans,
                                    return_frags=False,
                                    decoy=True,
-                                   decoy_library=decoy_lib,
                                    output_folder=results_folder_path,
                                    frag_index=frag_index,
-                                   decoy_frag_index=decoy_frag_index,
                                    ms1_rt=_ms1_rt,
                                    im_bin_ms1=_im_bin_ms1): i
                       for i, dia_spec in enumerate(batch_spectra)}
@@ -484,7 +502,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 f"Effective cores: {_search_cpu/100:.1f}/{n_threads}")
 
     # Free large objects no longer needed after search
-    del decoy_lib, frag_index, decoy_frag_index, _ms1_rt, spectra_to_fit
+    del spectrumLibrary, frag_index, _ms1_rt, spectra_to_fit
     del rt_mz, all_keys, funcs, dino_features
     import gc as _gc2
     _gc2.collect()
@@ -506,7 +524,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         os.remove(bf)
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
-                 library=spectrumLibrary,
+                 library=None,
                  mass_tag=mass_tag,
                  SILAC=SILAC,
                  timeplex=config.args.timeplex)
