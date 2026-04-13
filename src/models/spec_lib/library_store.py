@@ -1030,22 +1030,32 @@ class SpectrumLibraryStore:
         from src.logger import logger
 
         N = len(all_keys)
-        target_seqs = set(target_store.seq)
+        existing_keys = set(target_store.key_to_idx.keys())
 
         # --- Filter collisions ---
-        valid = []  # (original_index, result) for non-colliding decoys
-        n_collisions = 0
+        # A decoy is invalid if its (shuffled_mod_seq, charge[, ...]) key collides
+        # with any target key OR with another already-accepted decoy key.
+        valid = []  # (original_index, result, decoy_key) for non-colliding decoys
+        n_target_collisions = 0
+        n_decoy_collisions = 0
+        seen_decoy_keys = set()
         for i, result in enumerate(results):
-            new_seq = result[0]
-            if new_seq in target_seqs:
-                n_collisions += 1
+            decoy_mod_seq = result[0]
+            decoy_key = (decoy_mod_seq, *all_keys[i][1:])
+            if decoy_key in existing_keys:
+                n_target_collisions += 1
+            elif decoy_key in seen_decoy_keys:
+                n_decoy_collisions += 1
             else:
-                valid.append((i, result))
+                seen_decoy_keys.add(decoy_key)
+                valid.append((i, result, decoy_key))
             results[i] = None  # free eagerly
         M = len(valid)
-        if n_collisions > 0:
-            logger.info(f"Decoy collision removal: {n_collisions} decoys matched "
-                        f"target sequences and were discarded ({M} decoys kept)")
+        if n_target_collisions > 0 or n_decoy_collisions > 0:
+            logger.info(
+                f"Decoy collision removal: {n_target_collisions} matched target keys, "
+                f"{n_decoy_collisions} duplicate decoy keys discarded ({M} decoys kept)"
+            )
 
         total = N + M
 
@@ -1055,18 +1065,15 @@ class SpectrumLibraryStore:
         key_to_idx = {}
         for i, key in enumerate(all_keys):
             key_to_idx[key] = i  # target keys → [0, N)
-        for j, (orig_idx, result) in enumerate(valid):
-            key = all_keys[orig_idx]
-            decoy_mod_seq = result[0]  # shuffled modified sequence
-            decoy_key = (decoy_mod_seq, *key[1:])
+        for j, (_, _, decoy_key) in enumerate(valid):
             key_to_idx[decoy_key] = N + j  # decoy keys → [N, N+M)
 
         # --- Scalar arrays: target then decoy (shared fields) ---
-        valid_indices = np.array([vi for vi, _ in valid], dtype=np.intp)
+        valid_indices = np.array([vi for vi, _, _ in valid], dtype=np.intp)
 
         # Decoy mod_seq is the shuffled modified sequence (not the target's)
         decoy_mod_seqs = np.empty(M, dtype=object)
-        for j, (_, result) in enumerate(valid):
+        for j, (_, result, _) in enumerate(valid):
             decoy_mod_seqs[j] = result[0]
         mod_seq = np.concatenate([target_store.mod_seq, decoy_mod_seqs])
         prec_mz = np.concatenate([target_store.prec_mz, target_store.prec_mz[valid_indices]])
@@ -1080,21 +1087,21 @@ class SpectrumLibraryStore:
 
         # seq: target seqs + decoy seqs
         decoy_seqs = np.empty(M, dtype=object)
-        for j, (_, result) in enumerate(valid):
+        for j, (_, result, _) in enumerate(valid):
             decoy_seqs[j] = result[0]
         seq = np.concatenate([target_store.seq, decoy_seqs])
 
         # parent_key: None for targets, original key for decoys
         parent_key = np.empty(total, dtype=object)
         parent_key[:N] = None
-        for j, (orig_idx, _) in enumerate(valid):
+        for j, (orig_idx, _, _) in enumerate(valid):
             parent_key[N + j] = all_keys[orig_idx]
 
         # --- Spectrum arrays: target then decoy ---
         # Compute decoy spectrum sizes
         decoy_spec_lengths = np.empty(M, dtype=np.int32)
         decoy_frag_lengths = np.empty(M, dtype=np.int32)
-        for j, (_, result) in enumerate(valid):
+        for j, (_, result, _) in enumerate(valid):
             _, new_frags, spectrum, _ = result
             spec_arr = np.asarray(spectrum)
             decoy_spec_lengths[j] = spec_arr.shape[0] if spec_arr.ndim == 2 else 0
@@ -1119,7 +1126,7 @@ class SpectrumLibraryStore:
         decoy_frag_names = np.empty(total_decoy_spec, dtype=np.int32)
 
         cursor = 0
-        for j, (_, result) in enumerate(valid):
+        for j, (_, result, _) in enumerate(valid):
             _, _, spectrum, ordered_frags = result
             spec_arr = np.asarray(spectrum, dtype=np.float64)
             length = decoy_spec_lengths[j]
@@ -1149,7 +1156,7 @@ class SpectrumLibraryStore:
         decoy_frag_keys = np.empty(total_decoy_frag, dtype=np.int32)
 
         cursor = 0
-        for j, (_, result) in enumerate(valid):
+        for j, (_, result, _) in enumerate(valid):
             _, new_frags, _, _ = result
             flength = decoy_frag_lengths[j]
             if flength > 0:
