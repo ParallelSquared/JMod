@@ -500,9 +500,45 @@ def process_prelim_search(fit_outputs,
         #     return np.nan
         # else:
         return librarySpectra[(outputs[max_id][3],outputs[max_id][4])]["iRT"]
+
+    timeplex_cols = ["coeff", "spec_id", "Ms1_spec_id",
+         "seq", "z", "window_mz", "rt",
+         "num_lib",
+         "frac_lib_int",
+         "frac_dia_int",
+         "mz_error",
+         "rt_error",
+         "frac_int_matched",
+         "frac_int_pred",
+         "spec_r2",
+         "prec_r2",
+         "prec_r2_uniq",
+         "frac_int_uniq",
+         "frac_int_uniq_pred",
+         "hyperscore",
+         "b_counts",
+         "y_counts",
+         "longest_y_ions",
+         "scribe_scores",
+         "max_unmatched_residuals",
+         "max_matched_residuals",
+         "gof_stats",
+         "manhattan_distances",
+         "fitted_spectral_contrasts",
+         "frac_int_matched_pred",
+         "frac_int_matched_pred_sigcoeff",
+         "cosine",
+         "mz",
+         "frag_names",
+         "frag_errors",
+         "frag_mz",
+         "frag_int",
+         "obs_int",
+         "file_name",
+         "protein"]
     
-    
-    all_output_df = pd.DataFrame([j for i in output for j in i if j[0]>min_int],columns=names[:len(output[0][0])])
+    # all_output_df = pd.DataFrame([j for i in output for j in i if j[0]>min_int],columns=names[:len(output[0][0])])
+    all_output_df = pd.DataFrame([j for i in output for j in i if j[0]>min_int],columns=timeplex_cols[:len(output[0][0])])
     all_output_df["lib_rt"] = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
     
     all_frag_cosines = np.array([fragment_cor(all_output_df,i) for i in range(len(all_output_df))])
@@ -517,8 +553,8 @@ def process_prelim_search(fit_outputs,
     all_output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in all_output_df["seq"]])
     all_output_df["last_aa"]=[i[-1] for i in all_output_df.stripped_seq]
 
-    
-    output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
+    #output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
+    output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=timeplex_cols[:len(output[0][0])])
     output_df["lib_rt"] = np.array([max_coeff_rt(i) for i in output])
     
     frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
