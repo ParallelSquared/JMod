@@ -149,6 +149,8 @@ _SCHEMA_SPEC = [
     # 2 string metadata columns
     ("file_name",                   pl.Utf8,                ""),
     ("protein",                     pl.Utf8,                ""),
+    # target/decoy flag
+    ("is_decoy",                    pl.Boolean,             False),
 ]
 
 

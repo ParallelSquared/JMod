@@ -312,16 +312,20 @@ def _decoy_worker(args):
     return new_seq, new_frags, spectrum, ordered_frags
 
 
-def create_decoy_lib(library,rules,tag,n_iso):
+def create_decoy_lib(library, rules, tag=None, n_iso=0):
+    """Generate decoys and return a combined target+decoy SpectrumLibraryStore.
+
+    Decoys are generated without tagging or isotope expansion — those
+    operations should be applied to the combined store afterward.
+
+    Returns a combined store with targets at [0, N) and decoys at [N, N+M).
+    """
     from src.models.spec_lib.library_store import SpectrumLibraryStore
     import gc
 
-    for key in library:
-        library[key]["parent_key"] = key
-
     all_keys = list(library.keys())
-    use_iso = config.args.iso
-    worker_args = [(key[0], library[key]["frags"], rules, tag, n_iso, use_iso)
+    # Decoys generated without tag/isotope — applied later to combined store
+    worker_args = [(key[0], library[key]["frags"], rules, tag, n_iso, False)
                    for key in all_keys]
 
     p = multiprocessing.Pool()
@@ -383,136 +387,6 @@ def write_speclib_tsv(library,filename):
                 writer.writerow([precursor[i] if i in precursor else "" for i in diann_names])
                 
 
-import re
-import polars as pl
-
-# matches: y5, b12, y7-H2O, etc.
-FRAG_KEY_RE = re.compile(r"^([A-Za-z]+)(\d+)(?:-(.+))?$")
-
-def _parse_frag_key(frag_key: str):
-    """
-    Parse your internal frag_type key:
-        y5, y5-H2O_2, b10_1, b10-NH3_2, etc.
-
-    Returns:
-        FragmentType (str),
-        FragmentNumber (int),
-        FragmentLossType (str or ""),
-        FragmentCharge (int)
-    """
-    try:
-        ion_part, charge_part = frag_key.split("_", 1)
-    except ValueError:
-        raise ValueError(f"Fragment key '{frag_key}' does not contain '_' for charge")
-
-    m = FRAG_KEY_RE.match(ion_part)
-    if not m:
-        raise ValueError(f"Fragment key '{frag_key}' does not match expected pattern")
-
-    frag_type = m.group(1)
-    frag_num = int(m.group(2))
-    loss_type = m.group(3) or ""   # empty string = no loss
-
-    frag_charge = int(charge_part)
-    return frag_type, frag_num, loss_type, frag_charge
-
-
-def python_lib_to_diann_df(python_lib) -> pl.DataFrame:
-    """
-    Convert internal python_lib representation back to a DIA-NN-style
-    spectral library (one row per fragment) as a Polars DataFrame.
-
-    Column names follow the inverse of diann_to_jmod:
-        prec_mz       -> PrecursorMz
-        mod_seq       -> ModifiedPeptide
-        prec_z        -> PrecursorCharge
-        iRT           -> RT
-        seq           -> StrippedPeptide
-        IonMob        -> IonMobility
-        protein_group -> ProteinGroup
-        protein_name  -> ProteinName
-        genes         -> Genes
-    """
-    return python_lib.to_diann_df()
-    # Pre-allocate column lists (much more memory efficient than list of dicts)
-    prec_mz_col = []
-    mod_seq_col = []
-    prec_z_col = []
-    rt_col = []
-    seq_col = []
-    ionmob_col = []
-    protid_col = []
-    protein_group_col = []
-    protein_name_col = []
-    genes_col = []
-    frag_type_col = []
-    frag_num_col = []
-    frag_loss_col = []
-    frag_charge_col = []
-    frag_mz_col = []
-    frag_intensity_col = []
-
-    for (modpep, prec_charge), entry in python_lib.items():
-        # precursor-level fields (with safe .get so it doesn't explode)
-        prec_mz = entry.get("prec_mz")
-        mod_seq = entry.get("mod_seq", modpep)
-        prec_z = entry.get("prec_z", prec_charge)
-        iRT = entry.get("iRT")
-        seq = entry.get("seq")
-        ionmob = entry.get("IonMob")
-        protein_group = entry.get("protein_group")
-        protein_name = entry.get("protein_name")
-        genes = entry.get("genes")
-        protid = entry.get("UniprotID")
-
-        frags = entry.get("frags", {})
-
-        for frag_key, (frag_mz, frag_intensity) in frags.items():
-            frag_type, frag_num, frag_loss, frag_charge = _parse_frag_key(frag_key)
-
-            # For no-loss case, DIA-NN often uses "noloss" or empty string;
-            # we can't distinguish original, so choose one convention:
-            loss_val = frag_loss if frag_loss != "" else "noloss"
-
-            # Append to each column list
-            prec_mz_col.append(float(prec_mz) if prec_mz is not None else None)
-            mod_seq_col.append(mod_seq)
-            prec_z_col.append(int(prec_z) if prec_z is not None else None)
-            rt_col.append(float(iRT) if iRT is not None else None)
-            seq_col.append(seq)
-            ionmob_col.append(float(ionmob) if ionmob is not None else None)
-            protid_col.append(protid)
-            protein_group_col.append(protein_group)
-            protein_name_col.append(protein_name)
-            genes_col.append(genes)
-            frag_type_col.append(frag_type)
-            frag_num_col.append(frag_num)
-            frag_loss_col.append(loss_val)
-            frag_charge_col.append(frag_charge)
-            frag_mz_col.append(float(frag_mz))
-            frag_intensity_col.append(float(frag_intensity))
-
-    # Create DataFrame from columns (much more efficient than list of dicts)
-    df = pl.DataFrame({
-        "ModifiedPeptide": mod_seq_col,
-        "StrippedPeptide": seq_col,
-        "PrecursorCharge": prec_z_col,
-        "RT": rt_col,
-        "IonMobility": ionmob_col,
-        "PrecursorMz": prec_mz_col,
-        "FragmentMz": frag_mz_col,
-        "RelativeIntensity": frag_intensity_col,
-        "FragmentType": frag_type_col,
-        "FragmentCharge": frag_charge_col,
-        "FragmentSeriesNumber": frag_num_col,
-        "FragmentLossType": frag_loss_col,
-        "ProteinID": protid_col,
-        "ProteinGroup": protein_group_col,
-        "ProteinName": protein_name_col,
-        "Genes": genes_col,
-    })
-
-    return df
 
 
 class LibrarySpectrum():

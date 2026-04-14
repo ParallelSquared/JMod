@@ -2135,10 +2135,8 @@ def fit_to_lib2(dia_spec,
                ms1_spectra = None,
                return_frags = False,
                decoy=False,
-               decoy_library=None,
                output_folder=None,
                frag_index=None,
-               decoy_frag_index=None,
                ms1_rt=None,
                im_bin_ms1=None):
     # spec_idx,dia_spec,library = inputs
@@ -2175,10 +2173,11 @@ def fit_to_lib2(dia_spec,
     dia_spectrum = np.stack([merged_mz, merged_int], axis=1)
 
     # Get candidates via fragment index or fallback to m/z + RT window
+    # Single query returns both target and decoy candidates from unified index
     if frag_index is not None and not ms1_mz:
         win_lo = prec_mz - windowWidth / 2
         win_hi = prec_mz + windowWidth / 2
-        window_idxs = frag_index.query(
+        all_window_idxs = frag_index.query(
             dia_spectrum[:, 0], win_lo, win_hi,
             prec_rt, rt_tol, atleast_m
         )
@@ -2190,8 +2189,14 @@ def fit_to_lib2(dia_spec,
                 _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
             else:
                 _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
-        window_idxs = np.where(_bool)[0]
+        all_window_idxs = np.where(_bool)[0]
 
+    # Split into target and decoy candidates
+    # TODO: unify target/decoy processing paths to eliminate this split
+    n_targets = library.n_targets
+    target_mask = all_window_idxs < n_targets
+    window_idxs = all_window_idxs[target_mask]
+    decoy_window_idxs = all_window_idxs[~target_mask] if decoy else np.empty(0, dtype=all_window_idxs.dtype)
 
     mass_window_candidates = [all_keys[i] for i in window_idxs]
     _ref_idxs = library.resolve_indices(mass_window_candidates)
@@ -2230,40 +2235,14 @@ def fit_to_lib2(dia_spec,
     ref_spec_values_split = _split_flat(ref_flat_vals, ref_flat_offsets)
 
 
-    ### Generate eqivalent Decoy spectra
+    ### Generate equivalent Decoy spectra
     if decoy:
-        # Get decoy candidates via fragment index or fallback to same as target
-        if decoy_frag_index is not None and not ms1_mz:
-            win_lo = prec_mz - windowWidth / 2
-            win_hi = prec_mz + windowWidth / 2
-            decoy_window_idxs = decoy_frag_index.query(
-                dia_spectrum[:, 0], win_lo, win_hi,
-                prec_rt, rt_tol, atleast_m
-            )
-        else:
-            decoy_window_idxs = window_idxs
-        decoy_mass_window_candidates = [all_keys[i] for i in decoy_window_idxs]
-
-        mass_window_decoy_candidates = [("Decoy_"+i[0],*i[1:]) for i in decoy_mass_window_candidates]
-        # print("old")
-        # converted_seqs = [change_seq(i[0],config.args.decoy) for i in mass_window_candidates]
-        # decoy_mz = np.array([convert_prec_mz(i, z=j[1]) for i,j in zip(converted_seqs, mass_window_candidates)])
-        # if config.args.decoy=="rev": ## this will have the same mz as many correct mathces and therefore a really good ms1 isotope corr
-        #     decoy_mz -= config.decoy_mz_offset
-        # ## NB: Below needs to change to ibcorporate iso frags!!
-        # converted_frags = [convert_frags(i[0], library[i]["frags"],config.args.decoy) for i in mass_window_candidates]
-        # decoy_sorted_frags = [sorted(converted_frags[i],key = lambda x: converted_frags[i][x][0]) for i in range(len(converted_frags))]
-        # if config.args.iso:
-        #     candidate_decoy_peaks = [gen_isotopes(i,j) for i,j in zip(converted_seqs,converted_frags)]
-        # else:
-        #     candidate_decoy_peaks = [frag_to_peak(i) for i in converted_frags]
-
-        # ## if using decoy_library
-        # print("new")
-        _decoy_idxs = decoy_library.resolve_indices(decoy_mass_window_candidates)
-        converted_frag_codes = decoy_library.get_frag_codes_batch(_decoy_idxs)
-        # decoy_mz = np.array([decoy_library[i]["prec_mz"] for i in mass_window_candidates])
-        decoy_mz = rt_mz[:,1][decoy_window_idxs] - config.decoy_mz_offset
+        # Decoy candidates already extracted from unified index above
+        mass_window_decoy_candidates = [all_keys[i] for i in decoy_window_idxs]
+        _decoy_idxs = library.resolve_indices(mass_window_decoy_candidates)
+        converted_frag_codes = library.get_frag_codes_batch(_decoy_idxs)
+        # Decoy m/z offset already pre-applied in rt_mz
+        decoy_mz = rt_mz[:,1][decoy_window_idxs]
 
         decoy_spec_frags = None
 
@@ -2280,13 +2259,13 @@ def fit_to_lib2(dia_spec,
                                 decoy_ms1_error, \
                                     dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_passing = create_entries_direct(
                                                                     centroid_breaks=centroid_breaks,
-                                                                    spec_data_mz=decoy_library.spectrum_mz,
-                                                                    spec_data_int=decoy_library.spectrum_int,
-                                                                    spec_offsets=decoy_library.spectrum_offsets,
-                                                                    spec_lengths=decoy_library.spectrum_lengths,
-                                                                    topn_data=decoy_library.top_n_data,
-                                                                    topn_offsets=decoy_library.top_n_offsets,
-                                                                    topn_lengths=decoy_library.top_n_lengths,
+                                                                    spec_data_mz=library.spectrum_mz,
+                                                                    spec_data_int=library.spectrum_int,
+                                                                    spec_offsets=library.spectrum_offsets,
+                                                                    spec_lengths=library.spectrum_lengths,
+                                                                    topn_data=library.top_n_data,
+                                                                    topn_offsets=library.top_n_offsets,
+                                                                    topn_lengths=library.top_n_lengths,
                                                                     candidate_indices=_decoy_idxs,
                                                                     mass_window_candidates=mass_window_decoy_candidates,
                                                                     atleast_m=atleast_m,
@@ -2476,12 +2455,13 @@ def fit_to_lib2(dia_spec,
     output = []
 
     if len(non_zero_coeffs)>0:
-        lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
+        target_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
         if decoy:
             updated_decoy_offset = decoy_col_offset
             decoy_spec_ids = [decoy_pep_cand[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
 
-            all_spec_ids = lib_spec_ids+decoy_spec_ids
+            all_spec_ids = target_spec_ids+decoy_spec_ids
+            n_target_hits = len(target_spec_ids)
             all_features = np.concatenate((features,decoy_features))
             # Store raw arrays instead of stringified — parquet handles list columns
             all_ms2_frags = [list(i) for i in zip(frag_name_codes+decoy_frag_name_codes,
@@ -2494,7 +2474,8 @@ def fit_to_lib2(dia_spec,
 
 
         else:
-            all_spec_ids = lib_spec_ids
+            all_spec_ids = target_spec_ids
+            n_target_hits = len(target_spec_ids)
             all_features = features
             all_ms2_frags = [list(i) for i in zip(frag_name_codes,
                                                   frag_errors,
@@ -2512,14 +2493,9 @@ def fit_to_lib2(dia_spec,
         return_prot = _prot_arr is not None and _prot_arr[_first_idx] not in (None, '')
 
         # Pre-resolve protein column values for non-zero coefficients
+        # Decoy entries have protein info copied from their parent target
         if return_prot:
-            _prot_keys = []
-            for sid in all_spec_ids:
-                if config.args.timeplex:
-                    _prot_keys.append((re.sub("Decoy_", "", sid[0]), sid[1], sid[2]))
-                else:
-                    _prot_keys.append((re.sub("Decoy_", "", sid[0]), sid[1]))
-            _prot_idxs = library.resolve_indices(_prot_keys)
+            _prot_idxs = library.resolve_indices(all_spec_ids)
             _prot_vals = library.get_scalar_batch(_prot_idxs, config.protein_column)
 
         if config.args.timeplex:
@@ -2534,7 +2510,8 @@ def fit_to_lib2(dia_spec,
                        *all_features[j],
                        *all_ms2_frags[j],
                        config.args.mzml,
-                       _prot_vals[i] if return_prot else "NA" ]
+                       _prot_vals[i] if return_prot else "NA",
+                       i >= n_target_hits]
                        for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
 
         else:
@@ -2549,7 +2526,8 @@ def fit_to_lib2(dia_spec,
                        *all_features[j],
                        *all_ms2_frags[j],
                        config.args.mzml,
-                       _prot_vals[i] if return_prot else "NA" ]
+                       _prot_vals[i] if return_prot else "NA",
+                       i >= n_target_hits]
                        for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
             
         # lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]

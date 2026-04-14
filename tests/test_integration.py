@@ -109,7 +109,7 @@ class TestJModIntegration:
 
         expected_files = [
             'ms2scans.csv',
-            'decoylibsearch_coeffs.csv',
+            'decoylibsearch_coeffs.parquet',
             'all_IDs.csv',
             'filtered_IDs.csv',
             'params.txt'
@@ -173,3 +173,85 @@ class TestJModIntegration:
             decoy_seqs = filtered_ids['seq'].str.startswith('Decoy_').sum()
             assert decoy_seqs == 0, \
                 f"filtered_IDs contains {decoy_seqs} sequences starting with 'Decoy_'"
+
+
+@pytest.fixture(scope="class")
+def silac_pipeline_results(request):
+    """
+    Run the JMod pipeline with SILAC K_6C13 tagging and share
+    results across all tests in the class.
+    """
+    temp_dir = tempfile.mkdtemp(prefix='jmod_test_silac_')
+
+    with open(TEST_CONFIG, 'r') as f:
+        config = json.load(f)
+
+    config['mzml'] = os.path.abspath(TEST_MZML)
+    config['speclib'] = os.path.abspath(TEST_LIBRARY)
+    config['output_folder'] = temp_dir
+    config['test_mode'] = False
+    config['SILAC'] = 'K_6C13'
+
+    temp_config_path = os.path.join(temp_dir, 'test_config.json')
+    with open(temp_config_path, 'w') as f:
+        json.dump(config, f)
+
+    from src.run_jmod import main
+    import src.config as config_module
+
+    config_module.args.config_json = temp_config_path
+
+    exit_code = None
+    try:
+        main()
+    except SystemExit as e:
+        exit_code = e.code
+
+    results_folders = [d for d in os.listdir(temp_dir)
+                      if os.path.isdir(os.path.join(temp_dir, d))]
+    results_folder = os.path.join(temp_dir, results_folders[0]) if results_folders else None
+
+    yield {
+        'output_dir': temp_dir,
+        'config_path': temp_config_path,
+        'results_folder': results_folder,
+        'exit_code': exit_code,
+    }
+
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@pytest.mark.slow
+class TestSILACIntegration:
+    """Integration tests for SILAC K_6C13 tagging pipeline."""
+
+    def test_main_runs_without_error(self, silac_pipeline_results):
+        """Test that main() completes with SILAC K_6C13 tagging."""
+        exit_code = silac_pipeline_results['exit_code']
+        if exit_code is not None and exit_code != 0:
+            pytest.fail(f"main() exited with code {exit_code}")
+
+    def test_results_folder_created(self, silac_pipeline_results):
+        """Test that a results folder was created."""
+        results_folder = silac_pipeline_results['results_folder']
+        assert results_folder is not None, "No results folder created"
+        assert os.path.isdir(results_folder), "Results folder is not a directory"
+        assert not os.path.basename(results_folder).startswith('run_failed'), \
+            "Pipeline run failed (results folder prefixed with 'run_failed')"
+
+    def test_output_files_created(self, silac_pipeline_results):
+        """Test that expected output files are created."""
+        results_folder = silac_pipeline_results['results_folder']
+        assert results_folder is not None, "No results folder"
+
+        expected_files = [
+            'ms2scans.csv',
+            'decoylibsearch_coeffs.parquet',
+            'all_IDs.csv',
+            'filtered_IDs.csv',
+            'params.txt'
+        ]
+
+        for filename in expected_files:
+            filepath = os.path.join(results_folder, filename)
+            assert os.path.exists(filepath), f"Expected output file not found: {filename}"

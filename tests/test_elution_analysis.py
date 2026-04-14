@@ -98,7 +98,8 @@ class TestComputeScanGapMode:
         df = pl.DataFrame({
             'file_id': [1, 1, 1, 1, 1],
             'seq': ['A', 'A', 'A', 'A', 'A'],
-            'scan': [100, 110, 120, 130, 140]
+            'scan': [100, 110, 120, 130, 140],
+            'rt': [10.0, 11.0, 12.0, 13.0, 14.0],
         })
         result = _compute_scan_gap_mode(df)
         assert result == 10
@@ -108,7 +109,8 @@ class TestComputeScanGapMode:
         df = pl.DataFrame({
             'file_id': [1, 1, 1, 1, 1, 1],
             'seq': ['A', 'A', 'A', 'A', 'A', 'A'],
-            'scan': [100, 110, 120, 130, 140, 155]  # gaps: 10, 10, 10, 10, 15
+            'scan': [100, 110, 120, 130, 140, 155],  # gaps: 10, 10, 10, 10, 15
+            'rt': [10.0, 11.0, 12.0, 13.0, 14.0, 15.5],
         })
         result = _compute_scan_gap_mode(df)
         assert result == 10
@@ -118,7 +120,8 @@ class TestComputeScanGapMode:
         df = pl.DataFrame({
             'file_id': [1, 2, 3],
             'seq': ['A', 'B', 'C'],
-            'scan': [100, 200, 300]
+            'scan': [100, 200, 300],
+            'rt': [10.0, 20.0, 30.0],
         })
         result = _compute_scan_gap_mode(df)
         assert result == 25  # Default fallback
@@ -128,7 +131,8 @@ class TestComputeScanGapMode:
         df = pl.DataFrame({
             'file_id': [1, 1, 1, 1, 1, 1],
             'seq': ['A', 'A', 'A', 'B', 'B', 'B'],
-            'scan': [100, 120, 140, 200, 220, 240]  # All gaps are 20
+            'scan': [100, 120, 140, 200, 220, 240],  # All gaps are 20
+            'rt': [10.0, 12.0, 14.0, 20.0, 22.0, 24.0],
         })
         result = _compute_scan_gap_mode(df)
         assert result == 20

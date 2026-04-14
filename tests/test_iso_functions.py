@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.iso_functions import get_seq_comp, precursor_isotopes, fragment_seq, gen_isotopes_dict, iso_library, iso_library_multi
 from brainpy._c.isotopic_distribution import TheoreticalPeak as Peak
 from src.mass_tags import massTag, read_json_to_massTag
+from src.models.spec_lib.library_store import SpectrumLibraryStore
 import src.iso_functions as iso
 import copy
 
@@ -587,7 +588,7 @@ class Test_iso_library():
 
         n_iso = 3
 
-        new_library_output = iso_library(new_library,tag,n_iso)
+        new_library_output = iso_library(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {
@@ -749,7 +750,7 @@ class Test_iso_library():
 
         n_iso = 2
 
-        new_library_output = iso_library(new_library,tag,n_iso)
+        new_library_output = iso_library(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {
@@ -898,7 +899,7 @@ class Test_iso_library_multi():
 
         n_iso = 3
 
-        new_library_output = iso_library_multi(new_library,tag,n_iso)
+        new_library_output = iso_library_multi(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {
@@ -1060,7 +1061,7 @@ class Test_iso_library_multi():
 
         n_iso = 2
 
-        new_library_output = iso_library_multi(new_library,tag,n_iso)
+        new_library_output = iso_library_multi(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {

@@ -195,7 +195,7 @@ class FragmentIndex:
 
     @classmethod
     def build(cls, library, all_keys, rt_mz, mz_tol_ppm,
-              prec_mz_offset=0.0, max_frags_per_partition=312_000):
+              max_frags_per_partition=312_000):
         """Build a FragmentIndex from a spectrum library.
 
         Args:
@@ -203,8 +203,8 @@ class FragmentIndex:
                      library[key]['top_n'] is array of indices into spectrum.
             all_keys: list of keys into library (tuples of (mod_seq, charge, ...)).
             rt_mz: ndarray shape (len(all_keys), 2) — col 0 = calibrated RT, col 1 = calibrated precursor m/z.
+                   Any precursor m/z offsets (e.g. for decoys) should be pre-applied.
             mz_tol_ppm: float — fragment m/z tolerance in ppm.
-            prec_mz_offset: float — offset applied to precursor m/z (e.g. -decoy_mz_offset for decoys).
             max_frags_per_partition: int — max fragments per partition (~312K for L3 cache fit).
         """
         idx = cls(mz_tol_ppm)
@@ -235,7 +235,7 @@ class FragmentIndex:
             n_prec = len(p_indices)
 
             prec_rts = rt_mz[p_indices, 0].astype(np.float32)
-            prec_mzs = (rt_mz[p_indices, 1] + prec_mz_offset).astype(np.float32)
+            prec_mzs = rt_mz[p_indices, 1].astype(np.float32)
 
             # Gather all fragment data
             all_frag_mz = []
