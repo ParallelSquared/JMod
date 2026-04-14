@@ -13,7 +13,7 @@ import pytest
 import polars as pl
 
 from src.utils.io.load_files import SpectrumFile
-from src.models.spec_lib.spec_lib import load_tsv_speclib
+from src.models.spec_lib.spec_lib import loadSpecLib
 from src.preliminary_search import fit_with_features
 
 
@@ -32,7 +32,7 @@ def dia_spectra():
 @pytest.fixture(scope="module")
 def library_spectra():
     """Load library spectra from test TSV file."""
-    return load_tsv_speclib(TEST_LIBRARY)
+    return loadSpecLib(TEST_LIBRARY)
 
 
 class TestFitWithFeatures:

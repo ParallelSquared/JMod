@@ -28,20 +28,23 @@ def test_score_model_minimal_fixed():
         pass
 
 def test_score_precursors_minimal_fixed(tmp_path):
-    # Minimal valid input
+    # Need enough samples for 5-fold CV with iterative negative mining
+    np.random.seed(42)
+    n = 30
+    is_decoy = [False, True] * (n // 2)
     fdc = pd.DataFrame({
-        "coeff": [2.0, 0.5, 2.1, 0.7, 1.5],
-        "is_decoy": [False, True, False, True, False],
-        "stripped_seq": ["AAA", "BBB", "CCC", "DDD", "EEE"],
-        "rt_error": [0.1, 0.2, 0.3, 0.4, 0.5],
-        "mz_error": [0.01, 0.02, 0.03, 0.04, 0.05],
-        "feature1": [1.0, 2.0, 3.0, 4.0, 5.0],
-        "feature2": [5.0, 4.0, 3.0, 2.0, 1.0],
+        "coeff": np.random.uniform(0.5, 3.0, n),
+        "is_decoy": is_decoy,
+        "stripped_seq": [f"SEQ{i}" for i in range(n)],
+        "rt_error": np.random.uniform(0.0, 1.0, n),
+        "mz_error": np.random.uniform(0.0, 0.1, n),
+        "feature1": np.random.uniform(1.0, 5.0, n),
+        "feature2": np.random.uniform(1.0, 5.0, n),
     })
 
     out = score_precursors(
         fdc,
-        model_type="lda",
+        model_type="xg",
         fdr_t=0.01,
         folder=str(tmp_path)  # ensures the plot-saving code runs
     )
@@ -97,6 +100,8 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                                                  pd.DataFrame({
                                                      "seq": ["AAAA", "BBBB"],
                                                      "z": [2, 2],
+                                                     "rt": [10.0, 20.0],
+                                                     "mz": [500.0, 600.0],
                                                      "rt_error": [0.1, -0.2],
                                                      "mz_error": [5, -10],
                                                      "gof_stats": [0.1, 0.2],
@@ -107,7 +112,9 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                                                      "frac_lib_int": [1, 1],
                                                      "file_name": ["f", "f"],
                                                      "time_channel": [0, 0],
-                                                     "silac_channel": ["NA", "NA"]
+                                                     "silac_channel": [np.nan, np.nan],
+                                                     "is_decoy": [False, False],
+                                                     "stripped_seq": ["AAAA", "BBBB"],
                                                  }),
                                                  None))
 
@@ -115,7 +122,7 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                         lambda *args, **kwargs: pd.DataFrame({
                             "untag_prec": ["AAAA_2", "BBBB_2"],
                             "channel": [0, 0],
-                            "silac_channel": ["NA", "NA"],
+                            "silac_channel": [np.nan, np.nan],
                             "PredVal": [0.5, 0.7],
                             "Qvalue": [0.01, 0.02],
                         }))

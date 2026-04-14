@@ -316,5 +316,6 @@ class TestDeepCopyStore:
         # iRT should be independent
         store2[('ACD', 2.0)]['iRT'] = 999.0
         assert store[('ACD', 2.0)]['iRT'] == pytest.approx(32.5)
-        # But spectrum data is shared
-        assert store.spectrum_data is store2.spectrum_data
+        # But underlying spectrum arrays are shared
+        assert store.spectrum_mz is store2.spectrum_mz
+        assert store.spectrum_int is store2.spectrum_int
