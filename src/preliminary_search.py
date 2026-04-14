@@ -11,7 +11,6 @@ from numpy import linalg as la
 
 from src.config import diann_mods
 from src.logger import logger
-from src.models.spec_lib.spec_lib import python_lib_to_diann_df
 from src.utils.io.load_files import Spectrum
 
 
@@ -42,7 +41,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     mod_dict.update(diann_mods)
 
     # Construct polars df from python lib
-    pl_lib = python_lib_to_diann_df(library_spectra)
+    pl_lib = library_spectra.to_diann_df()
 
     # Add modification array to the polars dataframe
     # Deduplicate: compute on unique ModifiedPeptide values, then join back
