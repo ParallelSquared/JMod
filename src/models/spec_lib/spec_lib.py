@@ -387,38 +387,6 @@ def write_speclib_tsv(library,filename):
                 writer.writerow([precursor[i] if i in precursor else "" for i in diann_names])
                 
 
-import re
-import polars as pl
-
-# matches: y5, b12, y7-H2O, etc.
-FRAG_KEY_RE = re.compile(r"^([A-Za-z]+)(\d+)(?:-(.+))?$")
-
-def _parse_frag_key(frag_key: str):
-    """
-    Parse your internal frag_type key:
-        y5, y5-H2O_2, b10_1, b10-NH3_2, etc.
-
-    Returns:
-        FragmentType (str),
-        FragmentNumber (int),
-        FragmentLossType (str or ""),
-        FragmentCharge (int)
-    """
-    try:
-        ion_part, charge_part = frag_key.split("_", 1)
-    except ValueError:
-        raise ValueError(f"Fragment key '{frag_key}' does not contain '_' for charge")
-
-    m = FRAG_KEY_RE.match(ion_part)
-    if not m:
-        raise ValueError(f"Fragment key '{frag_key}' does not match expected pattern")
-
-    frag_type = m.group(1)
-    frag_num = int(m.group(2))
-    loss_type = m.group(3) or ""   # empty string = no loss
-
-    frag_charge = int(charge_part)
-    return frag_type, frag_num, loss_type, frag_charge
 
 
 class LibrarySpectrum():
