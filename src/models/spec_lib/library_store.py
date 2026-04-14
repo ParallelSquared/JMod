@@ -1240,7 +1240,6 @@ class SpectrumLibraryStore:
 
         N = len(target_store.key_to_idx)
         M = tag.n_channels
-        NM = N * M
 
         # --- Phase 1: Pre-compute per-entry tag info ---
         total_target_frag = len(target_store.frag_data)
@@ -1300,22 +1299,55 @@ class SpectrumLibraryStore:
                     ].astype(np.float64)
                 frag_n_tags[foff:foff + flen] = local
 
-        # --- Phase 2: Pre-allocate output arrays ---
-        target_frag_lengths = target_store.frag_lengths
-        total_out_frag = int(np.sum(target_frag_lengths)) * M
+        # --- Phase 2: Pre-compute keys and filter collisions ---
+        # Peptides with zero tag sites produce identical keys across channels.
+        # Deduplicate so key_to_idx and arrays stay in sync.
+        idx_to_key = {v: k for k, v in target_store.key_to_idx.items()}
 
-        # Scalar arrays (tile from target)
-        out_mod_seq = np.empty(NM, dtype=object)
-        out_seq = np.repeat(target_store.seq, M)
-        out_prec_mz = np.repeat(target_store.prec_mz, M)
-        out_prec_z = np.repeat(target_store.prec_z, M)
-        out_iRT = np.repeat(target_store.iRT, M)
-        out_ion_mob = np.repeat(target_store.ion_mob, M)
-        out_protein_group = np.repeat(target_store.protein_group, M)
-        out_protein_name = np.repeat(target_store.protein_name, M)
-        out_genes = np.repeat(target_store.genes, M)
-        out_uniprot_id = np.repeat(target_store.uniprot_id, M)
-        out_parent_key = np.empty(NM, dtype=object)
+        # valid: list of (entry_idx, channel_idx, new_seq, orig_charge)
+        valid = []
+        seen_keys = set()
+        n_collisions = 0
+        for i in range(N):
+            orig_charge = idx_to_key[i][1]
+            for c in range(M):
+                tag_n = tag.channel_names[c]
+                replacement = tag.name + "-" + str(tag_n)
+                new_seq = tagged_templates[i].replace(
+                    tag.name, replacement
+                )
+                key = (new_seq, orig_charge)
+                if key in seen_keys:
+                    n_collisions += 1
+                else:
+                    seen_keys.add(key)
+                    valid.append((i, c, new_seq, orig_charge))
+
+        V = len(valid)
+        if n_collisions > 0:
+            logger.info(
+                f"Tag collision removal: {n_collisions} duplicate tagged keys "
+                f"discarded ({V} entries kept)"
+            )
+
+        # --- Phase 3: Pre-allocate output arrays ---
+        # Compute total frag length for valid entries only
+        total_out_frag = sum(
+            int(target_store.frag_lengths[i]) for i, _, _, _ in valid
+        )
+
+        # Scalar arrays
+        out_mod_seq = np.empty(V, dtype=object)
+        out_seq = np.empty(V, dtype=object)
+        out_prec_mz = np.empty(V, dtype=np.float64)
+        out_prec_z = np.empty(V, dtype=np.float64)
+        out_iRT = np.empty(V, dtype=np.float64)
+        out_ion_mob = np.empty(V, dtype=np.float64)
+        out_protein_group = np.empty(V, dtype=object)
+        out_protein_name = np.empty(V, dtype=object)
+        out_genes = np.empty(V, dtype=object)
+        out_uniprot_id = np.empty(V, dtype=object)
+        out_parent_key = np.empty(V, dtype=object)
 
         # Variable-length arrays
         out_spectrum_mz = np.empty(total_out_frag, dtype=np.float64)
@@ -1323,39 +1355,42 @@ class SpectrumLibraryStore:
         out_frag_names_data = np.empty(total_out_frag, dtype=np.int32)
         out_frag_data = np.empty((total_out_frag, 2), dtype=np.float64)
         out_frag_keys_data = np.empty(total_out_frag, dtype=np.int32)
-        out_spec_offsets = np.empty(NM, dtype=np.int64)
-        out_spec_lengths = np.empty(NM, dtype=np.int32)
-        out_frag_offsets = np.empty(NM, dtype=np.int64)
-        out_frag_lengths = np.empty(NM, dtype=np.int32)
+        out_spec_offsets = np.empty(V, dtype=np.int64)
+        out_spec_lengths = np.empty(V, dtype=np.int32)
+        out_frag_offsets = np.empty(V, dtype=np.int64)
+        out_frag_lengths = np.empty(V, dtype=np.int32)
 
-        # Adjust prec_mz per channel (vectorised over entries)
-        for c in range(M):
-            tag_mass = tag.channel_masses[c]
-            out_prec_mz[c::M] += tag_mass * n_tag_sites / target_store.prec_z
-
-        # Build mod_seq per channel and key_to_idx
-        # Recover original key charge values for key construction
-        idx_to_key = {v: k for k, v in target_store.key_to_idx.items()}
-
+        # Fill scalar arrays and build key_to_idx
         key_to_idx = {}
-        for i in range(N):
-            orig_charge = idx_to_key[i][1]
-            for c in range(M):
-                tag_n = tag.channel_names[c]
-                replacement = tag.name + "-" + str(tag_n)
-                out_idx = i * M + c
-                new_seq = tagged_templates[i].replace(
-                    tag.name, replacement
-                )
-                out_mod_seq[out_idx] = new_seq
-                key_to_idx[(new_seq, orig_charge)] = out_idx
+        for out_idx, (i, c, new_seq, orig_charge) in enumerate(valid):
+            tag_mass = tag.channel_masses[c]
+            out_mod_seq[out_idx] = new_seq
+            out_seq[out_idx] = target_store.seq[i]
+            out_prec_mz[out_idx] = (
+                target_store.prec_mz[i]
+                + tag_mass * n_tag_sites[i] / target_store.prec_z[i]
+            )
+            out_prec_z[out_idx] = target_store.prec_z[i]
+            out_iRT[out_idx] = target_store.iRT[i]
+            out_ion_mob[out_idx] = target_store.ion_mob[i]
+            out_protein_group[out_idx] = target_store.protein_group[i]
+            out_protein_name[out_idx] = target_store.protein_name[i]
+            out_genes[out_idx] = target_store.genes[i]
+            out_uniprot_id[out_idx] = target_store.uniprot_id[i]
+            out_parent_key[out_idx] = target_store.parent_key[i] if hasattr(target_store, 'parent_key') and target_store.parent_key is not None else None
+            key_to_idx[(new_seq, orig_charge)] = out_idx
 
-        # --- Phase 3: Fill variable-length arrays ---
+        # --- Phase 4: Fill variable-length arrays ---
         logger.info("Tagging library")
         cursor = 0
-        for i in tqdm.tqdm(range(N)):
+        for out_idx, (i, c, _, _) in enumerate(tqdm.tqdm(valid)):
             foff = int(target_store.frag_offsets[i])
             flen = int(target_store.frag_lengths[i])
+
+            out_spec_offsets[out_idx] = cursor
+            out_spec_lengths[out_idx] = flen
+            out_frag_offsets[out_idx] = cursor
+            out_frag_lengths[out_idx] = flen
 
             if flen > 0:
                 src_mz = target_store.frag_data[foff:foff + flen, 0]
@@ -1364,40 +1399,34 @@ class SpectrumLibraryStore:
                 local_n_tags = frag_n_tags[foff:foff + flen]
                 local_charges = all_frag_charges[foff:foff + flen]
 
-            for c in range(M):
-                out_idx = i * M + c
-                out_spec_offsets[out_idx] = cursor
-                out_spec_lengths[out_idx] = flen
-                out_frag_offsets[out_idx] = cursor
-                out_frag_lengths[out_idx] = flen
+                tag_mass = tag.channel_masses[c]
+                new_mz = src_mz + (tag_mass * local_n_tags / local_charges)
 
-                if flen > 0:
-                    tag_mass = tag.channel_masses[c]
-                    new_mz = src_mz + (tag_mass * local_n_tags / local_charges)
+                # Frag data (original ordering)
+                out_frag_data[cursor:cursor + flen, 0] = new_mz
+                out_frag_data[cursor:cursor + flen, 1] = src_int
+                out_frag_keys_data[cursor:cursor + flen] = src_keys
 
-                    # Frag data (original ordering)
-                    out_frag_data[cursor:cursor + flen, 0] = new_mz
-                    out_frag_data[cursor:cursor + flen, 1] = src_int
-                    out_frag_keys_data[cursor:cursor + flen] = src_keys
+                # Spectrum data (sorted by m/z)
+                order = np.argsort(new_mz)
+                out_spectrum_mz[cursor:cursor + flen] = new_mz[order]
+                out_spectrum_int[cursor:cursor + flen] = src_int[order]
+                out_frag_names_data[cursor:cursor + flen] = src_keys[order]
 
-                    # Spectrum data (sorted by m/z)
-                    order = np.argsort(new_mz)
-                    out_spectrum_mz[cursor:cursor + flen] = new_mz[order]
-                    out_spectrum_int[cursor:cursor + flen] = src_int[order]
-                    out_frag_names_data[cursor:cursor + flen] = src_keys[order]
-
-                cursor += flen
+            cursor += flen
 
         # Top-N: empty (recomputed downstream when needed)
         out_top_n_data = np.empty(0, dtype=np.int32)
-        out_top_n_offsets = np.zeros(NM, dtype=np.int64)
-        out_top_n_lengths = np.zeros(NM, dtype=np.int32)
+        out_top_n_offsets = np.zeros(V, dtype=np.int64)
+        out_top_n_lengths = np.zeros(V, dtype=np.int32)
 
-        # Propagate target/decoy info: each entry is replicated M times
-        # is_decoy for entry i is at indices i*M .. i*M+M-1
-        out_is_decoy = np.repeat(target_store.is_decoy, M)
-        out_n_targets = target_store.n_targets * M
-        out_n_decoys = target_store.n_decoys * M
+        # Propagate target/decoy info
+        out_is_decoy = np.array(
+            [target_store.is_decoy[i] for i, _, _, _ in valid],
+            dtype=bool,
+        )
+        out_n_targets = int(np.sum(~out_is_decoy))
+        out_n_decoys = int(np.sum(out_is_decoy))
 
         return cls(
             key_to_idx=key_to_idx,

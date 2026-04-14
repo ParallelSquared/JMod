@@ -6,6 +6,7 @@ import copy
 import os
 
 from src.models.spec_lib.library_store import SpectrumLibraryStore, _EntryView
+from src.mass_tags import massTag, tag_library
 
 
 def _make_sample_dict():
