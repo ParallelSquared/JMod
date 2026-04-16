@@ -293,6 +293,17 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    'predict_decoys': {
+        'flags': ('--predict_decoys',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': True,
+        'type': '',
+        'widget': 'checkbutton',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'unfiltered_quant': {
         'flags': ('--unfiltered_quant',),
         'default': True,

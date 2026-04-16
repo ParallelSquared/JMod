@@ -20,7 +20,7 @@ _SCALAR_FLOAT_FIELDS = frozenset({
 _ALL_SCALAR_FIELDS = _SCALAR_STR_FIELDS | _SCALAR_FLOAT_FIELDS
 _ALL_KNOWN_FIELDS = _ALL_SCALAR_FIELDS | frozenset({
     'spectrum', 'ordered_frags', 'ordered_frag_codes', 'frag_intensities',
-    'frags', 'top_n', 'parent_key', 'spec_frags',
+    'frags', 'top_n', 'parent_idx', 'spec_frags',
 })
 
 
@@ -131,7 +131,7 @@ class _TargetView:
             top_n_data=s.top_n_data[:target_topn_total].copy(),
             top_n_offsets=s.top_n_offsets[:n].copy(),
             top_n_lengths=s.top_n_lengths[:n].copy(),
-            parent_key=s.parent_key[:n].copy(),
+            parent_idx=s.parent_idx[:n].copy(),
         )
 
 
@@ -162,8 +162,8 @@ class SpectrumLibraryStore:
         'frag_data', 'frag_keys_data', 'frag_offsets', 'frag_lengths',
         # concatenated variable-length top_n data
         'top_n_data', 'top_n_offsets', 'top_n_lengths',
-        # parent_key (object array, None when not set)
-        'parent_key',
+        # parent_idx (int64 array, -1 for targets, parent's index for decoys)
+        'parent_idx',
         # target/decoy tracking
         'n_targets', 'n_decoys', 'is_decoy',
     )
@@ -177,8 +177,9 @@ class SpectrumLibraryStore:
         frag_names_data,
         frag_data, frag_keys_data, frag_offsets, frag_lengths,
         top_n_data, top_n_offsets, top_n_lengths,
-        parent_key,
+        parent_idx,
         n_targets=None, n_decoys=None, is_decoy=None,
+        parent_key=None,  # deprecated, ignored
     ):
         self.key_to_idx = key_to_idx
         self.mod_seq = mod_seq
@@ -203,7 +204,7 @@ class SpectrumLibraryStore:
         self.top_n_data = top_n_data
         self.top_n_offsets = top_n_offsets
         self.top_n_lengths = top_n_lengths
-        self.parent_key = parent_key
+        self.parent_idx = parent_idx
         # Target/decoy tracking — defaults to all-target
         n = len(key_to_idx)
         self.n_targets = n_targets if n_targets is not None else n
@@ -512,8 +513,8 @@ class SpectrumLibraryStore:
                 val = entry_dict[field]
                 arr[idx] = np.nan if val is None else float(val)
 
-        if 'parent_key' in entry_dict:
-            self.parent_key[idx] = entry_dict['parent_key']
+        if 'parent_idx' in entry_dict:
+            self.parent_idx[idx] = entry_dict['parent_idx']
 
         if 'frags' in entry_dict:
             self.set_frags(idx, entry_dict['frags'])
@@ -555,11 +556,11 @@ class SpectrumLibraryStore:
             new_arr[idx] = np.nan if val is None else float(val)
             self._set_float_array(field, new_arr)
 
-        # parent_key
-        new_pk = np.empty(idx + 1, dtype=object)
-        new_pk[:idx] = self.parent_key
-        new_pk[idx] = entry_dict.get('parent_key')
-        self.parent_key = new_pk
+        # parent_idx
+        new_pi = np.empty(idx + 1, dtype=np.int64)
+        new_pi[:idx] = self.parent_idx
+        new_pi[idx] = entry_dict.get('parent_idx', -1)
+        self.parent_idx = new_pi
 
         # spectrum offsets / lengths
         self.spectrum_offsets = np.append(self.spectrum_offsets, len(self.spectrum_mz))
@@ -655,7 +656,7 @@ class SpectrumLibraryStore:
             top_n_data=self.top_n_data.copy(),
             top_n_offsets=self.top_n_offsets.copy(),
             top_n_lengths=self.top_n_lengths.copy(),
-            parent_key=self.parent_key.copy(),
+            parent_idx=self.parent_idx.copy(),
             n_targets=self.n_targets,
             n_decoys=self.n_decoys,
             is_decoy=self.is_decoy.copy(),
@@ -674,7 +675,7 @@ class SpectrumLibraryStore:
 
     def shallow_copy(self):
         """Return a new store sharing spectrum data but with independent
-        scalar arrays for fields that may be mutated (iRT, parent_key)."""
+        scalar arrays for fields that may be mutated (iRT, parent_idx)."""
         return SpectrumLibraryStore(
             key_to_idx=dict(self.key_to_idx),
             mod_seq=self.mod_seq,
@@ -699,7 +700,7 @@ class SpectrumLibraryStore:
             top_n_data=self.top_n_data,
             top_n_offsets=self.top_n_offsets.copy(),
             top_n_lengths=self.top_n_lengths.copy(),
-            parent_key=self.parent_key.copy(),
+            parent_idx=self.parent_idx.copy(),
             n_targets=self.n_targets,
             n_decoys=self.n_decoys,
             is_decoy=self.is_decoy,
@@ -735,7 +736,7 @@ class SpectrumLibraryStore:
             top_n_data=self.top_n_data,
             top_n_offsets=self.top_n_offsets,
             top_n_lengths=self.top_n_lengths,
-            parent_key=self.parent_key,
+            parent_idx=self.parent_idx,
             n_targets=np.array(self.n_targets),
             n_decoys=np.array(self.n_decoys),
             is_decoy=self.is_decoy,
@@ -824,7 +825,7 @@ class SpectrumLibraryStore:
             top_n_data=data['top_n_data'],
             top_n_offsets=data['top_n_offsets'],
             top_n_lengths=data['top_n_lengths'],
-            parent_key=data['parent_key'],
+            parent_idx=data['parent_idx'] if 'parent_idx' in data else np.full(n_total, -1, dtype=np.int64),
             n_targets=n_targets,
             n_decoys=n_decoys,
             is_decoy=is_decoy_arr,
@@ -856,7 +857,7 @@ class SpectrumLibraryStore:
         protein_name_list = []
         genes_list = []
         uniprot_id_list = []
-        parent_key_list = []
+        parent_idx_list = []
 
         # Variable-length accumulators for spectrum
         all_spec_peaks = []
@@ -899,7 +900,7 @@ class SpectrumLibraryStore:
             protein_name_list.append(entry.get('protein_name', ''))
             genes_list.append(entry.get('genes', ''))
             uniprot_id_list.append(entry.get('UniprotID', ''))
-            parent_key_list.append(entry.get('parent_key'))
+            parent_idx_list.append(entry.get('parent_idx', -1))
 
             # Original frags data
             frags = entry.get('frags')
@@ -997,7 +998,7 @@ class SpectrumLibraryStore:
             top_n_data=top_n_data,
             top_n_offsets=np.array(top_n_offsets, dtype=np.int64),
             top_n_lengths=np.array(top_n_lengths, dtype=np.int32),
-            parent_key=np.array(parent_key_list, dtype=object),
+            parent_idx=np.array(parent_idx_list, dtype=np.int64),
         )
 
     # ------------------------------------------------------------------
@@ -1091,11 +1092,10 @@ class SpectrumLibraryStore:
             decoy_seqs[j] = result[0]
         seq = np.concatenate([target_store.seq, decoy_seqs])
 
-        # parent_key: None for targets, original key for decoys
-        parent_key = np.empty(total, dtype=object)
-        parent_key[:N] = None
+        # parent_idx: -1 for targets, parent target's index for decoys
+        parent_idx = np.full(total, -1, dtype=np.int64)
         for j, (orig_idx, _, _) in enumerate(valid):
-            parent_key[N + j] = all_keys[orig_idx]
+            parent_idx[N + j] = orig_idx
 
         # --- Spectrum arrays: target then decoy ---
         # Compute decoy spectrum sizes
@@ -1204,7 +1204,7 @@ class SpectrumLibraryStore:
             top_n_data=top_n_data,
             top_n_offsets=top_n_offsets,
             top_n_lengths=top_n_lengths,
-            parent_key=parent_key,
+            parent_idx=parent_idx,
             n_targets=N,
             n_decoys=M,
             is_decoy=is_decoy,
@@ -1347,7 +1347,9 @@ class SpectrumLibraryStore:
         out_protein_name = np.empty(V, dtype=object)
         out_genes = np.empty(V, dtype=object)
         out_uniprot_id = np.empty(V, dtype=object)
-        out_parent_key = np.empty(V, dtype=object)
+        out_parent_idx = np.full(V, -1, dtype=np.int64)
+        # Map (source_index, channel) → output_index for resolving parent indices
+        source_channel_to_out_idx = {}
 
         # Variable-length arrays
         out_spectrum_mz = np.empty(total_out_frag, dtype=np.float64)
@@ -1377,8 +1379,14 @@ class SpectrumLibraryStore:
             out_protein_name[out_idx] = target_store.protein_name[i]
             out_genes[out_idx] = target_store.genes[i]
             out_uniprot_id[out_idx] = target_store.uniprot_id[i]
-            out_parent_key[out_idx] = target_store.parent_key[i] if hasattr(target_store, 'parent_key') and target_store.parent_key is not None else None
             key_to_idx[(new_seq, orig_charge)] = out_idx
+            source_channel_to_out_idx[(i, c)] = out_idx
+
+            # Resolve parent_idx: find the parent target's output index in the same channel
+            old_parent = target_store.parent_idx[i] if hasattr(target_store, 'parent_idx') else -1
+            if old_parent >= 0:
+                out_parent_idx[out_idx] = source_channel_to_out_idx.get((old_parent, c), -1)
+
 
         # --- Phase 4: Fill variable-length arrays ---
         logger.info("Tagging library")
@@ -1452,7 +1460,7 @@ class SpectrumLibraryStore:
             top_n_data=out_top_n_data,
             top_n_offsets=out_top_n_offsets,
             top_n_lengths=out_top_n_lengths,
-            parent_key=out_parent_key,
+            parent_idx=out_parent_idx,
             n_targets=out_n_targets,
             n_decoys=out_n_decoys,
             is_decoy=out_is_decoy,
@@ -1661,7 +1669,7 @@ class SpectrumLibraryStore:
         protein_name_arr = np.empty(n, dtype=object)
         genes_arr = np.empty(n, dtype=object)
         uniprot_id_arr = np.empty(n, dtype=object)
-        parent_key_arr = np.empty(n, dtype=object)
+        parent_idx_arr = np.full(n, -1, dtype=np.int64)
 
         all_spec_peaks = []
         all_spec_frag_names = []
@@ -1691,7 +1699,7 @@ class SpectrumLibraryStore:
             protein_name_arr[i] = pdata['protein_name']
             genes_arr[i] = pdata['genes']
             uniprot_id_arr[i] = pdata['uniprot_id']
-            parent_key_arr[i] = None
+            # parent_idx_arr already initialized to -1
 
             # Original frags
             frags = pdata['frags']
@@ -1749,7 +1757,7 @@ class SpectrumLibraryStore:
             top_n_data=np.empty(0, dtype=np.int32),
             top_n_offsets=np.zeros(n, dtype=np.int64),
             top_n_lengths=np.zeros(n, dtype=np.int32),
-            parent_key=parent_key_arr,
+            parent_idx=parent_idx_arr,
         )
 
     # ------------------------------------------------------------------
@@ -1835,7 +1843,7 @@ class SpectrumLibraryStore:
             top_n_data=np.empty(0, dtype=np.int32),
             top_n_offsets=np.empty(n, dtype=np.int64),
             top_n_lengths=np.empty(n, dtype=np.int32),
-            parent_key=np.empty(n, dtype=object),
+            parent_idx=np.full(n, -1, dtype=np.int64),
         )
 
 
@@ -1869,8 +1877,8 @@ class _EntryView:
             return store.get_frags(idx)
         if field == 'top_n':
             return store.get_top_n(idx)
-        if field == 'parent_key':
-            return store.parent_key[idx]
+        if field == 'parent_idx':
+            return int(store.parent_idx[idx])
         if field == 'spec_frags':
             return None
 
@@ -1926,8 +1934,8 @@ class _EntryView:
         if field == 'top_n':
             store.set_top_n(idx, value)
             return
-        if field == 'parent_key':
-            store.parent_key[idx] = value
+        if field == 'parent_idx':
+            store.parent_idx[idx] = value
             return
 
         # Scalar string fields
@@ -1979,8 +1987,8 @@ class _EntryView:
                 return False
             if field == 'top_n':
                 return self._store.top_n_lengths[self._idx] > 0
-            if field == 'parent_key':
-                return self._store.parent_key[self._idx] is not None
+            if field == 'parent_idx':
+                return self._store.parent_idx[self._idx] >= 0
             return True
         return False
 
@@ -2004,8 +2012,8 @@ class _EntryView:
             result.append('UniprotID')
         if self._store.top_n_lengths[self._idx] > 0:
             result.append('top_n')
-        if self._store.parent_key[self._idx] is not None:
-            result.append('parent_key')
+        if self._store.parent_idx[self._idx] >= 0:
+            result.append('parent_idx')
         return result
 
     def get(self, field, default=None):

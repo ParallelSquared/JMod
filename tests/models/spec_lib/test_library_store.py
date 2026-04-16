@@ -175,12 +175,12 @@ class TestEntryView:
         store[('ACD', 2.0)]['iRT'] = 99.9
         assert store[('ACD', 2.0)]['iRT'] == pytest.approx(99.9)
 
-    def test_setitem_parent_key(self):
+    def test_setitem_parent_idx(self):
         d = _make_sample_dict()
         store = SpectrumLibraryStore.from_dict(d)
         key = ('ACD', 2.0)
-        store[key]['parent_key'] = key
-        assert store[key]['parent_key'] == key
+        store[key]['parent_idx'] = 0
+        assert store[key]['parent_idx'] == 0
 
     def test_setitem_top_n(self):
         d = _make_sample_dict()
@@ -250,9 +250,9 @@ class TestSerialization:
             entry = store[key]
             spec = entry['spectrum']
             entry['top_n'] = np.argsort(-spec[:, 1])
-        # Set parent_key
-        for key in store:
-            store[key]['parent_key'] = key
+        # Set parent_idx
+        for i, key in enumerate(store):
+            store[key]['parent_idx'] = i
 
         path = str(tmp_path / "test_store.npz")
         store.save(path)

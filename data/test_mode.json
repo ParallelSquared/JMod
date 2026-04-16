@@ -2,6 +2,7 @@
     "mzml": "data/test_mode_filtered.mzML",
     "speclib": "data/filtered_library.tsv",
     "use_emp_rt": true,
+    "predict_decoys": false,
     "use_features": true,
     "atleast_m": 3,
     "threads": 10,

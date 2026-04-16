@@ -459,5 +459,63 @@ def fine_tune_rt(grouped_df,
                 plt.close()
             except Exception as e:
                 logger.warning(f"Error creating fine-tuned model plot: {e}")
-        
+
     return data_split, models, model_to_obs
+
+
+def predict_decoy_rts(decoy_seqs, models, convertor):
+    """
+    Predict iRT values for decoy sequences using fine-tuned CNN models.
+
+    Parameters
+    ----------
+    decoy_seqs : list of str
+        Decoy peptide sequences (shuffled/reversed).
+    models : list
+        CNN models returned from fine_tune_rt().
+    convertor : callable
+        LOWESS calibration function (model_to_obs) from fine_tune_rt().
+
+    Returns
+    -------
+    np.ndarray
+        Predicted iRT values for each decoy sequence.
+    """
+    logger.info(f"Predicting RTs for {len(decoy_seqs)} decoy sequences")
+
+    # Deduplicate sequences to avoid redundant predictions
+    unique_seqs = list(set(decoy_seqs))
+    unique_encoded = np.array([one_hot_encode_sequence(s) for s in unique_seqs], dtype=np.float32)
+
+    # Ensemble predictions from all models
+    model_outputs = []
+    for model in models:
+        try:
+            if hasattr(model, 'predict'):
+                pred = model.predict(unique_encoded, batch_size=4096)
+            else:
+                pred = model(unique_encoded)
+                if isinstance(pred, dict):
+                    for key in pred:
+                        if hasattr(pred[key], 'numpy'):
+                            pred = pred[key].numpy()
+                            break
+            if hasattr(pred, 'numpy'):
+                pred = pred.numpy()
+            model_outputs.append(pred)
+        except Exception as e:
+            logger.warning(f"Error predicting decoy RTs with model: {e}")
+
+    if not model_outputs:
+        logger.warning("No valid predictions for decoys, returning None")
+        return None
+
+    # Average predictions and calibrate to observed scale
+    unique_rts = convertor(np.mean(model_outputs, axis=0).flatten())
+    seq_to_rt = dict(zip(unique_seqs, unique_rts))
+
+    # Map back to original order
+    predicted_rts = np.array([seq_to_rt[s] for s in decoy_seqs])
+
+    logger.info(f"Updated iRT values for {len(decoy_seqs)} decoys")
+    return predicted_rts

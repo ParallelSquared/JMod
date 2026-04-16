@@ -1010,7 +1010,7 @@ def cdf_plots(emp_data,emp_p,percentile,boundary,pred_data=None,pred_p=None,resu
         
         plt.close("all")
 
-def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None, SILAC=None):
+def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None, SILAC=None, return_rt_models=False):
     """
     Perform a preliminary search of the specrta to align the library mz and RT values
 
@@ -1183,16 +1183,19 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         all_lib_keys = list(librarySpectra)
 
 
-        ###### Check if fine-tuning iproves alignment
-        
-        if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
-            # boundary = elbow_pred_x
-            logger.info("Fine Tuned Library Chosen")
+        ###### Check if fine-tuning improves alignment
+        use_predictions = pred_cdf_auc > emp_cdf_auc or return_rt_models
+
+        if use_predictions:
+            if pred_cdf_auc > emp_cdf_auc:
+                logger.info("Fine Tuned Library Chosen")
+            else:
+                logger.info(f"Fine Tuned Library Chosen (forced for decoy prediction; empirical AUC={emp_cdf_auc:.4f} vs pred AUC={pred_cdf_auc:.4f})")
             # Fit 2-component zero-mean GMM to residuals
             weights, sigmas = fit_zero_mean_gmm_1d(all_pred_diffs, n_components=2)
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
-            
+
             plot_rt_residuals_mixture(
                 residuals=all_pred_diffs,
                 feat="- Fine Tuned Final",
@@ -1200,7 +1203,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                 sigmas=sigmas,
                 results_folder=results_folder
             )
-            
+
             # Combine elution width and GMM sigma, take 4th standard deviation
             boundary = 4 * sigmas[0] + 8 * elution_sd
             rt_spl = pred_rt_spl
@@ -1212,15 +1215,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
             for key in all_lib_keys:
                 updatedLibrary[key]["iRT"] = seq_to_rt[updatedLibrary[key]["seq"]]
-                
-        else: ### empirical are better
-            # boundary = elbow_emp_x
+
+        else:
             logger.info("Empirical Library Chosen")
             # Fit 2-component zero-mean GMM to residuals
             weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
-            
+
             plot_rt_residuals_mixture(
                 residuals=all_emp_diffs,
                 feat="- Empirical Final",
@@ -1228,10 +1230,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                 sigmas=sigmas,
                 results_folder=results_folder
             )
-            
+
             # Combine elution width and GMM sigma, take 4th standard deviation
             boundary = 4 * sigmas[0] + 8 * elution_sd
-            ## keep the library RTs and splines the same
             rt_spl = emp_rt_spl
         
         
@@ -1538,6 +1539,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # if ms2:
     #     return (rt_spl, mz_func, ms2_func), updatedLibrary
     # else:
+    if return_rt_models and not config.args.use_emp_rt:
+        return (rt_spl, mz_func), updatedLibrary, (models, convertor)
     return (rt_spl, mz_func), updatedLibrary
 
 ###################################################################################################

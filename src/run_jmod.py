@@ -29,6 +29,7 @@ from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
+from src.finetune_funs import predict_decoy_rts
 
 from src.logger import logger, set_log_filepath, log_exceptions
 import logging
@@ -301,9 +302,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             spectrumLibrary.iRT[idx] = updated_targets[key]["iRT"]
         # Copy updated iRT to decoy entries from their parent targets
         for i in range(spectrumLibrary.n_targets, len(spectrumLibrary)):
-            parent = spectrumLibrary.parent_key[i]
-            if parent is not None and parent in spectrumLibrary.key_to_idx:
-                spectrumLibrary.iRT[i] = spectrumLibrary.iRT[spectrumLibrary.key_to_idx[parent]]
+            parent = spectrumLibrary.parent_idx[i]
+            if parent >= 0:
+                spectrumLibrary.iRT[i] = spectrumLibrary.iRT[parent]
         del updated_targets
 
         rt_spls,mz_func = funcs[:2]
@@ -321,17 +322,34 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary = SpectrumLibraryStore.from_dict(plex_lib)
         del plex_lib
     else:
-        funcs, updated_targets = MZRTfit(DIAspectra, target_view, dino_features, config.mz_tol,results_folder=results_folder_path,
-                                        ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC)
+        mzrt_result = MZRTfit(DIAspectra, target_view, dino_features, config.mz_tol,results_folder=results_folder_path,
+                              ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
+                              return_rt_models=config.args.predict_decoys)
+        funcs, updated_targets = mzrt_result[0], mzrt_result[1]
+        rt_models_data = mzrt_result[2] if len(mzrt_result) > 2 else None
+
         # Propagate updated iRT from aligned targets back to combined store
         for key in updated_targets:
             idx = spectrumLibrary.key_to_idx[key]
             spectrumLibrary.iRT[idx] = updated_targets[key]["iRT"]
-        # Copy updated iRT to decoy entries from their parent targets
+        # Copy updated iRT to decoy entries from their parent targets (default)
         for i in range(spectrumLibrary.n_targets, len(spectrumLibrary)):
-            parent = spectrumLibrary.parent_key[i]
-            if parent is not None and parent in spectrumLibrary.key_to_idx:
-                spectrumLibrary.iRT[i] = spectrumLibrary.iRT[spectrumLibrary.key_to_idx[parent]]
+            parent = spectrumLibrary.parent_idx[i]
+            if parent >= 0:
+                spectrumLibrary.iRT[i] = spectrumLibrary.iRT[parent]
+
+        # Predict independent RTs for decoy sequences using CNN
+        if config.args.predict_decoys and rt_models_data is not None:
+            models, convertor = rt_models_data
+            decoy_seqs = [spectrumLibrary.seq[i] for i in range(spectrumLibrary.n_targets, len(spectrumLibrary))]
+            predicted_rts = predict_decoy_rts(decoy_seqs, models, convertor)
+            if predicted_rts is not None:
+                for i, rt in enumerate(predicted_rts):
+                    spectrumLibrary.iRT[spectrumLibrary.n_targets + i] = rt
+            del models, convertor
+        elif config.args.predict_decoys:
+            logger.warning("Decoy RT prediction requested but no RT models available (using empirical RT?)")
+
         del updated_targets
 
         rt_spl,mz_func = funcs[:2]

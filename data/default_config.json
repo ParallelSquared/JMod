@@ -2,6 +2,7 @@
     "mzml": "/Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML",
     "speclib": "/Users/nathanwamsley/Data/JMOD_TESTS/Jmod/Lib_PSMTag_JD_05112025_jmod_works.tsv",
     "use_emp_rt": true,
+    "predict_decoys": false,
     "use_features": false,
     "atleast_m": 3,
     "threads": 10,
