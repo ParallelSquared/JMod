@@ -289,11 +289,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         if config.args.use_features and os.path.exists(feature_path):
             logger.info("Loading Dinosaur features")
             dino_features = pd.read_csv(feature_path, delimiter="\t")
-            funcs, updated_targets = MZRTfit_timeplex(DIAspectra, target_view, dino_features, config.mz_tol, results_folder=results_folder_path,
+            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, dino_features, config.mz_tol, results_folder=results_folder_path,
                                             ms2=config.args.ms2_align)
         else:
             logger.info("Not using features")
-            funcs, updated_targets = MZRTfit_timeplex(DIAspectra, target_view, None, config.mz_tol, results_folder=results_folder_path,
+            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, None, config.mz_tol, results_folder=results_folder_path,
                                             ms2=config.args.ms2_align)
 
         # Propagate updated iRT from aligned targets back to combined store
@@ -322,11 +322,12 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary = SpectrumLibraryStore.from_dict(plex_lib)
         del plex_lib
     else:
-        mzrt_result = MZRTfit(DIAspectra, target_view, dino_features, config.mz_tol,results_folder=results_folder_path,
-                              ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
-                              return_rt_models=config.args.predict_decoys)
-        funcs, updated_targets = mzrt_result[0], mzrt_result[1]
-        rt_models_data = mzrt_result[2] if len(mzrt_result) > 2 else None
+        funcs, updated_targets, rt_models_data, elution_fwhm = MZRTfit(
+            DIAspectra, target_view, dino_features, config.mz_tol,
+            results_folder=results_folder_path,
+            ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
+            return_rt_models=config.args.predict_decoys,
+        )
 
         # Propagate updated iRT from aligned targets back to combined store
         for key in updated_targets:
@@ -523,8 +524,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 f"CPU: {_search_cpu:.0f}%, "
                 f"Effective cores: {_search_cpu/100:.1f}/{n_threads}")
 
-    # Free large objects no longer needed after search
-    del spectrumLibrary, frag_index, _ms1_rt, spectra_to_fit
+    # Free large objects no longer needed after search (keep spectrumLibrary
+    # alive for fragment correlation features computed inside process_data).
+    del frag_index, _ms1_rt, spectra_to_fit
     del rt_mz, all_keys, funcs, dino_features
     import gc as _gc2
     _gc2.collect()
@@ -546,8 +548,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         os.remove(bf)
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
-                 library=None,
+                 library=spectrumLibrary,
                  mass_tag=mass_tag,
                  SILAC=SILAC,
-                 timeplex=config.args.timeplex)
+                 timeplex=config.args.timeplex,
+                 elution_fwhm=elution_fwhm)
+    del spectrumLibrary
+    _gc2.collect()
     # """

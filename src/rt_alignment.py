@@ -1540,8 +1540,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     #     return (rt_spl, mz_func, ms2_func), updatedLibrary
     # else:
     if return_rt_models and not config.args.use_emp_rt:
-        return (rt_spl, mz_func), updatedLibrary, (models, convertor)
-    return (rt_spl, mz_func), updatedLibrary
+        return (rt_spl, mz_func), updatedLibrary, (models, convertor), fwhm
+    return (rt_spl, mz_func), updatedLibrary, None, fwhm
 
 ###################################################################################################
 ###################################################################################################
@@ -2470,7 +2470,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # if ms2:
     #     return (rt_spls, mz_func, ms2_func), updatedLibrary
     # else:
-    return (rt_spls, mz_func), updatedLibrary
+    return (rt_spls, mz_func), updatedLibrary, None
 
 
 

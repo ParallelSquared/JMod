@@ -970,7 +970,7 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     
     return result_df
 
-def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None):  # TODO: library param is unused — remove or use
+def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None):
     
     results_folder = os.path.dirname(file)
     mz_ppm = config.opt_ms1_tol
@@ -1040,7 +1040,19 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None): 
     median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
     fdc["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
 
-    minfraclib_toscore = getattr(config.args, "score_lib_frac", 0) 
+    # Fragment-ion correlation features (pairwise Pearson across MS2 scans)
+    from src.fragment_correlation import compute_fragment_correlations
+    corr_features = compute_fragment_correlations(
+        spectra=spectra,
+        library=library,
+        fdc=fdc,
+        fwhm=elution_fwhm,
+        mz_tol=config.mz_tol,
+    )
+    for col in corr_features.columns:
+        fdc[col] = corr_features[col].values
+
+    minfraclib_toscore = getattr(config.args, "score_lib_frac", 0)
     fdx_toscore = fdc[fdc['frac_lib_int'].fillna(0) >= minfraclib_toscore].reset_index(drop=True)
     
     fin = score_precursors(fdx_toscore,config.score_model,config.fdr_threshold,folder=results_folder)
