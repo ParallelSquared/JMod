@@ -1297,7 +1297,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                                 post_smooth_frac=0.01)
     
     # mz_spl = twostepfit(np.array(id_mzs)[rt_filter_bool],(diffs-f_rt_mz(dia_rt))[r t_filter_bool],1)
-    mz_spl = fast_modal_lowess(np.array(output_df.mz)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter])
+    mz_spl = fast_modal_lowess(np.array(output_df.mz)[cor_filter],(diffs-f_rt_mz(new_lib_rt))[cor_filter],)
 
 
     def mz_func(mz,rt):
@@ -1644,7 +1644,11 @@ def split_timePlex(output_df,n_timeplex,rt_mz, id_keys, multiples_idxs):
         t_df = output_df.iloc[[i[idx] for i in multiples_idxs if len(i)==n_timeplex and output_df.lib_rt[i[idx]]>lib_rt_range[0] and output_df.lib_rt[i[idx]]<lib_rt_range[1]]]
         new_filter = get_df_filter(t_df,50)
         filters.append(new_filter)
-        rt_spl = lowess_fit(t1[:,1][new_filter],t1[:,0][new_filter])
+        rt_spl = fast_modal_lowess(t1[:,1][new_filter],t1[:,0][new_filter], 
+                               local_frac=.01,
+                               anchors=1000,
+                               grid_size=1000,
+                               post_smooth_frac=0.01)
         rt_spls.append(rt_spl)
         t_vals.append(t1)
         t_seqs.append(t1_s)
@@ -1992,7 +1996,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # plt.ylim(0,60)
     
     ## fit to the "zeroth" column
-    f = lowess_fit(np.array([i[1] for i in t_vals[1]])[diff_bool],np.array([i[0] for i in t_vals[0]])[diff_bool])
+    f = fast_modal_lowess(np.array([i[1] for i in t_vals[1]])[diff_bool],np.array([i[0] for i in t_vals[0]])[diff_bool], local_frac=.01,
+                               anchors=1000,
+                               grid_size=1000,
+                               post_smooth_frac=0.01)
     
     # plt.scatter([i[1] for i in t_vals[0]],[i[0] for i in t_vals[0]],s=1)
     # plt.scatter([i[1] for i in t_vals[0]],f([i[1] for i in t_vals[0]]),s=1)
@@ -2012,8 +2019,11 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     emp_rt_spls = []
     for idx in range(n_timeplex):
         # rt_spl = threestepfit([updatedLibrary[key]["iRT"] for key in keys],[i[0] for i in t_vals[0]],1)
-        rt_spl = lowess_fit(np.array(t_vals[idx][:,1])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
-                            np.array(t_vals[idx][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],frac=.1)
+        rt_spl = fast_modal_lowess(np.array(t_vals[idx][:,1])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
+                            np.array(t_vals[idx][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])], local_frac=.01,
+                               anchors=1000,
+                               grid_size=1000,
+                               post_smooth_frac=0.01)
         emp_rt_spls.append(rt_spl)
     
     all_emp_diffs = np.concatenate([emp_rt_spls[i](np.array(t_vals[idx][:,1]))[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array(t_vals[i][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])] for i in range(n_timeplex)])
@@ -2053,8 +2063,11 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         rt_spls = []
         for idx in range(n_timeplex):
             # rt_spl = threestepfit([updatedLibrary[key]["iRT"] for key in keys],[i[0] for i in t_vals[0]],1)
-            rt_spl = lowess_fit(t0_rts[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
-                                np.array([i[0] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],frac=.2)
+            rt_spl = fast_modal_lowess(t0_rts[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
+                                np.array([i[0] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],local_frac=.02,
+                               anchors=1000,
+                               grid_size=1000,
+                               post_smooth_frac=0.01)
             rt_spls.append(rt_spl)
         
         # for idx in range(n_timeplex):
@@ -2186,7 +2199,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # rt_filter_bool = filter_rts_by_dense(rts,30)
     # rt_filter_bool = np.logical_and(rts>15,rts<30)
     rt_mz_filter_bool = np.array(output_df.frac_lib_int)>.9 # use as proxy for correct IDs
-    f_rt_mz = lowess_fit(rts[rt_mz_filter_bool],np.array(diffs)[rt_mz_filter_bool],.2)
+    f_rt_mz = fast_modal_lowess(rts[rt_mz_filter_bool],np.array(diffs)[rt_mz_filter_bool],local_frac=.02,
+                               anchors=1000,
+                               grid_size=1000,
+                               post_smooth_frac=0.01)
     # plt.scatter(rts[rt_mz_filter_bool],np.array(diffs)[rt_mz_filter_bool],label="Original_MZ",s=1,alpha=.1)
     # plt.scatter(output_df.rt,f_rt_mz(output_df.rt),s=1,alpha=.2)
     
@@ -2194,7 +2210,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     # plt.scatter(id_mzs,diffs-f_rt_mz(output_df.rt),label="Original_MZ",s=1,alpha=.1)
     
     # mz_spl = twostepfit(np.array(id_mzs)[rt_mz_filter_bool],(diffs-f_rt_mz(output_df.rt))[rt_mz_filter_bool],1)
-    mz_spl = lowess_fit(np.array(output_df.mz)[rt_mz_filter_bool],(diffs-f_rt_mz(output_df.rt))[rt_mz_filter_bool])
+    mz_spl = fast_modal_lowess(np.array(output_df.mz)[rt_mz_filter_bool],(diffs-f_rt_mz(output_df.rt))[rt_mz_filter_bool])
     # plt.scatter(id_mzs,diffs-f_rt_mz(output_df.rt),label="Original_MZ",s=1,alpha=.1)
     # plt.scatter(id_mzs,mz_spl(id_mzs),label="Original_MZ",s=1,alpha=.1)
     # plt.hlines(0,400,900)
@@ -2230,6 +2246,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         logger.info("Using user specified RT tolerance")
         new_rt_tol = np.abs(config.args.rt_tol)
     logger.info(f"Optimized RT tolerance: {new_rt_tol}")
+
     
     # ## ensure there is no overlap
     # obs_rt_range = [min(output_df.rt),max(output_df.rt)]
