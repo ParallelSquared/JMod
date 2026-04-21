@@ -295,7 +295,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 plex_lib[key+(idx,)] = spectrumLibrary[key]
             rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.concatenate(rt_mz)
-        spectrumLibrary = plex_lib
+        
+        from src.models.spec_lib.library_store import SpectrumLibraryStore
+        spectrumLibrary = SpectrumLibraryStore.from_dict(plex_lib)
+        del plex_lib
+
     else:
         funcs,spectrumLibrary = MZRTfit(DIAspectra, spectrumLibrary, dino_features, config.mz_tol,results_folder=results_folder_path,
                                         ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC)
