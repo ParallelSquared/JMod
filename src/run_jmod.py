@@ -316,11 +316,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 plex_lib[key+(idx,)] = spectrumLibrary[key]
             rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.concatenate(rt_mz)
-        # TODO: plex expansion should be a SpectrumLibraryStore method (like from_tagged)
-        # that preserves n_targets/n_decoys/is_decoy metadata. from_dict loses this.
+        
         from src.models.spec_lib.library_store import SpectrumLibraryStore
         spectrumLibrary = SpectrumLibraryStore.from_dict(plex_lib)
         del plex_lib
+
     else:
         funcs, updated_targets, rt_models_data, elution_fwhm = MZRTfit(
             DIAspectra, target_view, dino_features, config.mz_tol,
