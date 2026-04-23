@@ -623,7 +623,7 @@ def empirical_fit(output_df, results_folder=None):
         plt.scatter(f.anchor_x, f.anchor_y, color="red", s=8, edgecolor="none")
         plt.title(str(feature_percentile))
         if results_folder is not None:
-            plt.savefig(results_folder + f"/Percentile_{feature_percentile}.png",
+            plt.savefig(results_folder + f"/first_search/Percentile_{feature_percentile}.png",
                         dpi=600, bbox_inches="tight")
         plt.close()
 
@@ -816,10 +816,11 @@ def plot_rt_residuals_mixture(residuals,
 
     if results_folder is not None:
         plt.savefig(
-            results_folder + f"/rt_residuals_p{feat}.png",
+            results_folder + f"/first_search/rt_residuals_p{feat}.png",
             dpi=600,
             bbox_inches="tight",
         )
+        plt.close()
 
     else:
         plt.close()
@@ -872,7 +873,8 @@ def alignment_plots(filtered_output,
         plt.ylabel("Observed RT")
         # plt.show()
         if results_folder is not None:
-            plt.savefig(results_folder+"/OriginalRTfit.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder+"/first_search/OriginalRTfit.png",dpi=600,bbox_inches="tight")
+            plt.close()
         
         
         ##plot RT alignment
@@ -884,7 +886,8 @@ def alignment_plots(filtered_output,
         plt.ylabel("Observed RT")
         # plt.show()
         if results_folder is not None:
-            plt.savefig(results_folder+"/RTfit.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder+"/first_search/RTfit.png",dpi=600,bbox_inches="tight")
+            plt.close()
         
         
         plt.subplots()
@@ -904,7 +907,8 @@ def alignment_plots(filtered_output,
         plt.ylabel("RT Residuals")
         # plt.show()
         if results_folder is not None:
-            plt.savefig(results_folder+"/RtResidual.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder+"/first_search/RtResidual.png",dpi=600,bbox_inches="tight")
+            plt.close()
         
         
         plt.subplots()
@@ -919,7 +923,8 @@ def alignment_plots(filtered_output,
         plt.legend()
         # plt.show()
         if results_folder is not None:
-            plt.savefig(results_folder+"/RTdiff.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder+"/first_search/RTdiff.png",dpi=600,bbox_inches="tight")
+            plt.close()
         
 
         ##plot mz rt alignment
@@ -931,7 +936,8 @@ def alignment_plots(filtered_output,
         plt.ylabel("m/z difference (relative)")
         # plt.show()
         if results_folder is not None:
-            plt.savefig(results_folder+"/MZrtfit.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder+"/first_search/MZrtfit.png",dpi=600,bbox_inches="tight")
+            plt.close()
         
 
         ##plot mz alignment
@@ -943,7 +949,8 @@ def alignment_plots(filtered_output,
         plt.ylabel("m/z difference (relative)")
         # plt.show()
         if results_folder is not None:
-            plt.savefig(results_folder+"/MZfit.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder+"/first_search/MZfit.png",dpi=600,bbox_inches="tight")
+            plt.close()
         
         
         
@@ -961,7 +968,8 @@ def alignment_plots(filtered_output,
         plt.legend()
         # plt.show()
         if results_folder is not None:
-            plt.savefig(results_folder+"/MZdiff.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder+"/first_search/MZdiff.png",dpi=600,bbox_inches="tight")
+            plt.close()
     
     
         plt.close("all")
@@ -1006,7 +1014,9 @@ def cdf_plots(emp_data,emp_p,percentile,boundary,pred_data=None,pred_p=None,resu
         plt.legend()
         plt.title("Finding an optimal RT library")
         if results_folder is not None:
-            plt.savefig(results_folder+"/RTelbows.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_folder+"/first_search/RTelbows.png",dpi=600,bbox_inches="tight")
+        
+        plt.close()
         
         plt.close("all")
 
@@ -1116,7 +1126,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
 
     if results_folder is not None:
-        output_df.to_csv(results_folder+"/firstSearch.tsv", index=False,sep='\t')
+        output_df.to_csv(results_folder+"/first_search/firstSearch.tsv", index=False,sep='\t')
     # output_df = pd.DataFrame([j for i in output for j in i  if j[0]>min_int],columns=names[:len(output[0][0])])
 
 
@@ -1198,7 +1208,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
             plot_rt_residuals_mixture(
                 residuals=all_pred_diffs,
-                feat="- Fine Tuned Final",
+                feat="_fine_tuned_final",
                 weights=weights,
                 sigmas=sigmas,
                 results_folder=results_folder
@@ -1225,7 +1235,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
             plot_rt_residuals_mixture(
                 residuals=all_emp_diffs,
-                feat="- Empirical Final",
+                feat="_empirical_final",
                 weights=weights,
                 sigmas=sigmas,
                 results_folder=results_folder
@@ -1370,10 +1380,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     if results_folder is not None:
         
         ### Save functions
-        with open(results_folder+"/rt_spl","wb") as dill_file:
+        with open(results_folder+"/first_search/rt_spl","wb") as dill_file:
             dill.dump(rt_spl,dill_file)
             
-        with open(results_folder+"/mz_func","wb") as dill_file:
+        with open(results_folder+"/first_search/mz_func","wb") as dill_file:
             dill.dump(mz_func,dill_file)
         
         # if ms2:
@@ -2338,7 +2348,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.xlabel("Library RT")
         plt.ylabel("Observed RT")
         # plt.show()
-        plt.savefig(results_folder+"/OriginalRTfit.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/OriginalRTfit.png",dpi=600,bbox_inches="tight")
+        plt.close()
             
         ### want this later
         plt.subplots()
@@ -2352,7 +2363,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.legend(markerscale=10)
         plt.xlabel("Updated Library RT")
         plt.ylabel("Observed RT")
-        plt.savefig(results_folder+"/RTfit.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/RTfit.png",dpi=600,bbox_inches="tight")
+        plt.close()
         
         plt.subplots()
         for idx in range(n_timeplex):
@@ -2365,7 +2377,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.xlabel("RT difference")
         plt.ylabel("Frequency") 
         # plt.show()
-        plt.savefig(results_folder+"/RTdiff.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/RTdiff.png",dpi=600,bbox_inches="tight")
+        plt.close()
         
         
         plt.subplots()
@@ -2383,7 +2396,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.legend()  
         plt.xlabel("RT difference")
         plt.ylabel("Frequency") 
-        plt.savefig(results_folder+"/Rterrors.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/Rterrors.png",dpi=600,bbox_inches="tight")
+        plt.close()
         
         
         plt.subplots()
@@ -2392,7 +2406,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.plot(np.linspace(-5,5,100),gaussian(np.linspace(-5,5,100), rt_amplitude, rt_mean, rt_stddev),label="Updated RT fit")
         plt.legend()
         plt.xlabel("RT alignment errors")
-        plt.savefig(results_folder+"/RtAlignmentErrors.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/RtAlignmentErrors.png",dpi=600,bbox_inches="tight")
+        plt.close()
         # plt.show()
         
         fig, ax = plt.subplots(nrows = n_timeplex, figsize=(7.2, 3.6*n_timeplex))        
@@ -2408,7 +2423,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.xlabel("Updated Library RT")
         # plt.ylabel("RT Residuals")
         # plt.show()
-        plt.savefig(results_folder+"/RtResidual.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/RtResidual.png",dpi=600,bbox_inches="tight")
+        plt.close()
         
         
         # Plot the CDFs with elbow points
@@ -2442,7 +2458,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.ylabel("Cumulative Probability")
         plt.legend()
         plt.title("Finding an optimal RT library")
-        plt.savefig(results_folder+"/RTelbows.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/RTelbows.png",dpi=600,bbox_inches="tight")
+        plt.close()
         
         
         
@@ -2454,7 +2471,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.xlabel("Updated RT")
         plt.ylabel("m/z difference (relative)")
         # plt.show()
-        plt.savefig(results_folder+"/MZrtfit.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/MZrtfit.png",dpi=600,bbox_inches="tight")
+        plt.close()
         
         ##plot mz alignment
         plt.subplots()
@@ -2464,7 +2482,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.xlabel("m/z")
         plt.ylabel("m/z difference (relative)")
         # plt.show()
-        plt.savefig(results_folder+"/MZfit.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/MZfit.png",dpi=600,bbox_inches="tight")
+        plt.close()
         
         
         ## plot mz alignment
@@ -2479,7 +2498,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         plt.xlabel("m/z difference (relative)")
         plt.ylabel("Frequency")
         # plt.show()
-        plt.savefig(results_folder+"/MZdiff.png",dpi=600,bbox_inches="tight")
+        plt.savefig(results_folder+"/first_search/MZdiff.png",dpi=600,bbox_inches="tight")
+        plt.close()
 
         plt.close("all")
     

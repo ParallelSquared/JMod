@@ -119,6 +119,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     if not os.path.exists(results_folder_path):
         try:
             os.mkdir(results_folder_path)
+            os.mkdir(os.path.join(results_folder_path, "first_search"))
+            os.mkdir(os.path.join(results_folder_path, "first_search/fine_tuning"))
+            os.mkdir(os.path.join(results_folder_path, "scoring"))
         except FileNotFoundError as e:
             if not os.path.exists(os.path.dirname(results_folder_path)):
                 from src.utils.gui_utils import send_raise_to_TK
@@ -423,8 +426,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     logger.info("Starting Main Search")
     # write dia spectra meta data
     ms2scans_info = [[i.prec_mz,i.RT,i.scan_num,*i.ms1window] for i in spectra_to_fit]
-    ms2_info_path = results_folder_path+"/ms2scans.csv"
-    write_to_csv(ms2scans_info,ms2_info_path)
+    # ms2_info_path = results_folder_path+"/ms2scans.csv"
+    # write_to_csv(ms2scans_info,ms2_info_path)
     
     ## process in batches
     num_batches = 10

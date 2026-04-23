@@ -108,7 +108,7 @@ class TestJModIntegration:
         assert results_folder is not None, "No results folder"
 
         expected_files = [
-            'ms2scans.csv',
+            # 'ms2scans.csv',
             'decoylibsearch_coeffs.parquet',
             'all_IDs.csv',
             'filtered_IDs.csv',
@@ -245,7 +245,7 @@ class TestSILACIntegration:
         assert results_folder is not None, "No results folder"
 
         expected_files = [
-            'ms2scans.csv',
+           # 'ms2scans.csv',
             'decoylibsearch_coeffs.parquet',
             'all_IDs.csv',
             'filtered_IDs.csv',

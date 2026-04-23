@@ -396,7 +396,7 @@ class score_model():
                         ax.set_title("Feature Importance")
                     
                         # Save plot
-                        plt.savefig(self.folder + f"/RF{idx}_feature_importance.png", dpi=600, bbox_inches="tight")
+                        plt.savefig(self.folder + f"/scoring/RF{idx}_feature_importance.png", dpi=600, bbox_inches="tight")
                         # For RF models, log feature importance
                         plt.close(fig)
                     return m
@@ -463,7 +463,7 @@ class score_model():
                         fig, ax = plt.subplots(figsize=(8, len(X.columns)*0.3))
                         ax.barh(sorted_features, sorted_importance)
                         ax.set_title("Feature Importance")
-                        plt.savefig(self.folder+f"/XGBoost{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
+                        plt.savefig(self.folder+f"/scoring/XGBoost{idx}_feature_importance.png",dpi=600,bbox_inches="tight")
                         plt.close(fig)
 
                     return m
@@ -693,7 +693,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     fdc_qvalues = None
 
     for itr in range(n_iterations):
-        logger.info(f"  Scoring iteration {itr + 1}/{n_iterations}")
+        logger.info(f"  scoring iteration {itr + 1}/{n_iterations}")
 
         if itr == 0:
             sc_model = score_model(model_type, folder=folder)
@@ -752,7 +752,8 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         plt.legend()
         plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
         plt.vlines(T,0,max(vals))
-        plt.savefig(folder+"/ModelScore.png",dpi=600,bbox_inches="tight")
+        plt.savefig(folder+"/scoring/ModelScore.png",dpi=600,bbox_inches="tight")
+        plt.close()
 
 
 
@@ -762,13 +763,15 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
         # plt.hist([],[])
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low Scoring")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low scoring")
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
         plt.xlabel(feat)
         plt.ylabel("Frequency")
-        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        # plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        plt.title(model_name)
         plt.legend()
-        plt.savefig(folder+"/RT_error.png",dpi=600,bbox_inches="tight")
+        plt.savefig(folder+"/scoring/RT_error.png",dpi=600,bbox_inches="tight")
+        plt.close()
 
 
         feat = 'mz_error'
@@ -777,14 +780,22 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
         # plt.hist([],[])
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low Scoring")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low scoring")
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
+
+        # putting a xlim so that you can see entire distribution of the mz errors better
+        xmin, xmax = plt.xlim()
+        max_abs = max(abs(xmin), abs(xmax))
+        plt.xlim(-max_abs, max_abs)
+
         plt.xlabel(feat)
         plt.ylabel("Frequency")
-        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        # plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        plt.title(model_name)
         plt.legend()
-        plt.savefig(folder+"/mz_error.png",dpi=600,bbox_inches="tight")
+        plt.savefig(folder+"/scoring/mz_error.png",dpi=600,bbox_inches="tight")
 
+        plt.close()
         plt.close("all")
 
     return fdc
