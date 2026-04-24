@@ -1215,13 +1215,13 @@ class SpectrumLibraryStore:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_tagged(cls, target_store, tag):
+    def from_tagged(cls, target_store, tag, var_tags=False):
         """Build a tagged SpectrumLibraryStore by pre-allocating arrays.
-
-        For each entry in *target_store*, creates M copies (one per tag
-        channel), with modified ``mod_seq``, ``prec_mz``, and fragment
-        m/z values.  No deepcopy, no intermediate dicts.
-
+    
+        For each entry in *target_store*, creates copies for each tag channel
+        combination, with modified ``mod_seq``, ``prec_mz``, and fragment
+        m/z values. No deepcopy, no intermediate dicts.
+    
         Parameters
         ----------
         target_store : SpectrumLibraryStore
@@ -1229,114 +1229,105 @@ class SpectrumLibraryStore:
         tag : massTag
             Mass tag with ``channel_names``, ``channel_masses``,
             ``rules``, ``name``.
+        var_tags : bool
+            If True, generate all combinations of channels across tag sites
+            (e.g. mixed mTRAQ channels on the same peptide).
+            Automatically set to True for tags that do not label the
+            N-terminus (e.g. SILAC/heavy K), since those sites are
+            inherently independent.
         """
         from src.utils.parse_peptides import parse_peptide
         from src.mass_tags import get_tag_pos
         from src.utils.frag_encoding import get_ion_type, get_index, get_charge
         from src.logger import logger
         import tqdm
-
-        logger.info(f"Building tagged library (pre-allocated) with tag: {tag.name}")
-
+        import itertools
+    
+        logger.info(
+            f"Building tagged library (pre-allocated) with tag: {tag.name}, "
+            f"var_tags={var_tags}"
+        )
+    
+    
         N = len(target_store.key_to_idx)
-        M = tag.n_channels
-
-        # --- Phase 1: Pre-compute per-entry tag info ---
-        total_target_frag = len(target_store.frag_data)
-        frag_n_tags = np.empty(total_target_frag, dtype=np.float64)
-        n_tag_sites = np.empty(N, dtype=np.float64)
-        tagged_templates = np.empty(N, dtype=object)
-
+        idx_to_key = {v: k for k, v in target_store.key_to_idx.items()}
+    
         # Pre-compute frag charges for all frags at once
+        total_target_frag = len(target_store.frag_data)
         if total_target_frag > 0:
-            all_frag_charges = get_charge(
-                target_store.frag_keys_data
-            ).astype(np.float64)
+            all_frag_charges = get_charge(target_store.frag_keys_data).astype(np.float64)
         else:
             all_frag_charges = np.empty(0, dtype=np.float64)
-
+    
+        # --- Phase 1: Per-entry tag position info ---
+        # Store full-peptide-length cumsum arrays so fragment index lookups
+        # are always in-bounds regardless of number of tag sites.
+        entry_tag_pos = []       # list of N: list of tag site positions
+        entry_n_tag_sites = []   # list of N: int, number of tag sites
+        entry_add_tag_masses = [] # list of N: full-length per-residue tag count array
+    
         logger.info("Computing tag positions")
         for i in tqdm.tqdm(range(N)):
             mod_seq_str = target_store.mod_seq[i]
-            peptide = (
-                mod_seq_str
-                if isinstance(mod_seq_str, str)
-                else "".join(mod_seq_str)
-            )
+            peptide = mod_seq_str if isinstance(mod_seq_str, str) else "".join(mod_seq_str)
             split_peptide = parse_peptide(peptide)
-
-            all_tag_pos, additional_tag_masses = get_tag_pos(
-                split_peptide, tag.rules
-            )
-            n_tag_sites[i] = len(all_tag_pos)
-
-            num_tags_n = np.cumsum(additional_tag_masses, dtype=int)
-            num_tags_c = np.cumsum(additional_tag_masses[::-1], dtype=int)
-
-            for pos in all_tag_pos:
-                split_peptide[pos] += "(" + tag.name + ")"
-            tagged_templates[i] = "".join(split_peptide)
-
-            foff = int(target_store.frag_offsets[i])
-            flen = int(target_store.frag_lengths[i])
-            if flen > 0:
-                codes = target_store.frag_keys_data[foff:foff + flen]
-                ion_types = get_ion_type(codes)
-                indices = get_index(codes)
-                local = np.empty(flen, dtype=np.float64)
-                # N-terminal ions: b=0, a=2, c=3
-                n_term = (
-                    (ion_types == 0) | (ion_types == 2) | (ion_types == 3)
-                )
-                c_term = ~n_term  # y=1, x=4, z=5
-                if n_term.any():
-                    local[n_term] = num_tags_n[
-                        indices[n_term] - 1
-                    ].astype(np.float64)
-                if c_term.any():
-                    local[c_term] = num_tags_c[
-                        indices[c_term] - 1
-                    ].astype(np.float64)
-                frag_n_tags[foff:foff + flen] = local
-
-        # --- Phase 2: Pre-compute keys and filter collisions ---
-        # Peptides with zero tag sites produce identical keys across channels.
-        # Deduplicate so key_to_idx and arrays stay in sync.
-        idx_to_key = {v: k for k, v in target_store.key_to_idx.items()}
-
-        # valid: list of (entry_idx, channel_idx, new_seq, orig_charge)
-        valid = []
+            all_tag_pos, additional_tag_masses = get_tag_pos(split_peptide, tag.rules)
+            entry_tag_pos.append(all_tag_pos)
+            entry_n_tag_sites.append(len(all_tag_pos))
+            # additional_tag_masses is full-peptide-length — safe to index by frag index
+            entry_add_tag_masses.append(additional_tag_masses)
+    
+        # --- Phase 2: Enumerate valid (entry, combination) pairs ---
+        valid = []   # (entry_idx, combo tuple, new_seq, orig_charge)
         seen_keys = set()
         n_collisions = 0
+    
+        logger.info("Enumerating tag combinations")
         for i in range(N):
             orig_charge = idx_to_key[i][1]
-            for c in range(M):
-                tag_n = tag.channel_names[c]
-                replacement = tag.name + "-" + str(tag_n)
-                new_seq = tagged_templates[i].replace(
-                    tag.name, replacement
-                )
+            mod_seq_str = target_store.mod_seq[i]
+            peptide = mod_seq_str if isinstance(mod_seq_str, str) else "".join(mod_seq_str)
+            split_peptide = parse_peptide(peptide)
+            all_tag_pos = entry_tag_pos[i]
+            n_positions = len(all_tag_pos)
+    
+            if n_positions == 0:
+                # No tag sites: single entry, sequence and masses unchanged
+                combinations = [()]
+            elif tag.var_tags:
+                # Each site independently chooses a channel — covers both
+                combinations = list(itertools.product(range(tag.n_channels), repeat=n_positions))
+            else:
+                # Uniform: all sites get the same channel (one entry per channel)
+                combinations = [tuple([c] * n_positions) for c in range(tag.n_channels)]
+    
+            for combo in combinations:
+                # Build new_seq for this combination.
+                # Skip annotation for zero-mass channels (unlabeled state).
+                split_tagged = split_peptide.copy()
+                for pos_idx, channel_idx in enumerate(combo):
+                    tag_pos = all_tag_pos[pos_idx]
+                    tag_name_c = f"{tag.name}-{tag.channel_names[channel_idx]}"
+                    split_tagged[tag_pos] += f"({tag_name_c})"
+                new_seq = "".join(split_tagged)
                 key = (new_seq, orig_charge)
+    
                 if key in seen_keys:
                     n_collisions += 1
                 else:
                     seen_keys.add(key)
-                    valid.append((i, c, new_seq, orig_charge))
-
+                    valid.append((i, combo, new_seq, orig_charge))
+    
         V = len(valid)
         if n_collisions > 0:
             logger.info(
                 f"Tag collision removal: {n_collisions} duplicate tagged keys "
                 f"discarded ({V} entries kept)"
             )
-
+    
         # --- Phase 3: Pre-allocate output arrays ---
-        # Compute total frag length for valid entries only
-        total_out_frag = sum(
-            int(target_store.frag_lengths[i]) for i, _, _, _ in valid
-        )
-
-        # Scalar arrays
+        total_out_frag = sum(int(target_store.frag_lengths[i]) for i, _, _, _ in valid)
+    
         out_mod_seq = np.empty(V, dtype=object)
         out_seq = np.empty(V, dtype=object)
         out_prec_mz = np.empty(V, dtype=np.float64)
@@ -1348,8 +1339,6 @@ class SpectrumLibraryStore:
         out_genes = np.empty(V, dtype=object)
         out_uniprot_id = np.empty(V, dtype=object)
         out_parent_key = np.empty(V, dtype=object)
-
-        # Variable-length arrays
         out_spectrum_mz = np.empty(total_out_frag, dtype=np.float64)
         out_spectrum_int = np.empty(total_out_frag, dtype=np.float64)
         out_frag_names_data = np.empty(total_out_frag, dtype=np.int32)
@@ -1359,16 +1348,19 @@ class SpectrumLibraryStore:
         out_spec_lengths = np.empty(V, dtype=np.int32)
         out_frag_offsets = np.empty(V, dtype=np.int64)
         out_frag_lengths = np.empty(V, dtype=np.int32)
-
+    
         # Fill scalar arrays and build key_to_idx
         key_to_idx = {}
-        for out_idx, (i, c, new_seq, orig_charge) in enumerate(valid):
-            tag_mass = tag.channel_masses[c]
+        for out_idx, (i, combo, new_seq, orig_charge) in enumerate(valid):
+            # Total prec_mz shift: sum of per-position channel masses
+            total_tag_mass = sum(
+                float(tag.channel_masses[channel_idx]) for channel_idx in combo
+            )
             out_mod_seq[out_idx] = new_seq
             out_seq[out_idx] = target_store.seq[i]
             out_prec_mz[out_idx] = (
                 target_store.prec_mz[i]
-                + tag_mass * n_tag_sites[i] / target_store.prec_z[i]
+                + total_tag_mass / target_store.prec_z[i]
             )
             out_prec_z[out_idx] = target_store.prec_z[i]
             out_iRT[out_idx] = target_store.iRT[i]
@@ -1377,57 +1369,89 @@ class SpectrumLibraryStore:
             out_protein_name[out_idx] = target_store.protein_name[i]
             out_genes[out_idx] = target_store.genes[i]
             out_uniprot_id[out_idx] = target_store.uniprot_id[i]
-            out_parent_key[out_idx] = target_store.parent_key[i] if hasattr(target_store, 'parent_key') and target_store.parent_key is not None else None
+            out_parent_key[out_idx] = (
+                target_store.parent_key[i]
+                if hasattr(target_store, 'parent_key') and target_store.parent_key is not None
+                else None
+            )
             key_to_idx[(new_seq, orig_charge)] = out_idx
-
+    
         # --- Phase 4: Fill variable-length arrays ---
         logger.info("Tagging library")
         cursor = 0
-        for out_idx, (i, c, _, _) in enumerate(tqdm.tqdm(valid)):
+        for out_idx, (i, combo, _, _) in enumerate(tqdm.tqdm(valid)):
             foff = int(target_store.frag_offsets[i])
             flen = int(target_store.frag_lengths[i])
-
+    
             out_spec_offsets[out_idx] = cursor
             out_spec_lengths[out_idx] = flen
             out_frag_offsets[out_idx] = cursor
             out_frag_lengths[out_idx] = flen
-
+    
             if flen > 0:
                 src_mz = target_store.frag_data[foff:foff + flen, 0]
                 src_int = target_store.frag_data[foff:foff + flen, 1]
                 src_keys = target_store.frag_keys_data[foff:foff + flen]
-                local_n_tags = frag_n_tags[foff:foff + flen]
                 local_charges = all_frag_charges[foff:foff + flen]
-
-                tag_mass = tag.channel_masses[c]
-                new_mz = src_mz + (tag_mass * local_n_tags / local_charges)
-
-                # Frag data (original ordering)
+                ion_types = get_ion_type(src_keys)
+                indices = get_index(src_keys)
+                all_tag_pos = entry_tag_pos[i]
+    
+                if len(all_tag_pos) == 0:
+                    # No tag sites — no mass shift on any fragment
+                    frag_mass_shift = np.zeros(flen, dtype=np.float64)
+                else:
+                    # Build full-peptide-length per-residue actual mass array
+                    # from this combination's channel assignments.
+                    # Zero-mass channels contribute 0.0 naturally.
+                    per_residue_mass = np.zeros(
+                        len(entry_add_tag_masses[i]), dtype=np.float64
+                    )
+                    for pos_idx, channel_idx in enumerate(combo):
+                        per_residue_mass[all_tag_pos[pos_idx]] += float(
+                            tag.channel_masses[channel_idx]
+                        )
+    
+                    # Cumulative mass sums over full peptide length —
+                    # safe to index directly by fragment index
+                    tag_mass_n = np.cumsum(per_residue_mass)
+                    tag_mass_c = np.cumsum(per_residue_mass[::-1])
+    
+                    frag_mass_shift = np.empty(flen, dtype=np.float64)
+                    n_term = (ion_types == 0) | (ion_types == 2) | (ion_types == 3)
+                    c_term = ~n_term
+                    if n_term.any():
+                        frag_mass_shift[n_term] = tag_mass_n[indices[n_term] - 1]
+                    if c_term.any():
+                        frag_mass_shift[c_term] = tag_mass_c[indices[c_term] - 1]
+    
+                new_mz = src_mz + frag_mass_shift / local_charges
+    
+                # Frag data stored in original order
                 out_frag_data[cursor:cursor + flen, 0] = new_mz
                 out_frag_data[cursor:cursor + flen, 1] = src_int
                 out_frag_keys_data[cursor:cursor + flen] = src_keys
-
-                # Spectrum data (sorted by m/z)
+    
+                # Spectrum data stored sorted by m/z
                 order = np.argsort(new_mz)
                 out_spectrum_mz[cursor:cursor + flen] = new_mz[order]
                 out_spectrum_int[cursor:cursor + flen] = src_int[order]
                 out_frag_names_data[cursor:cursor + flen] = src_keys[order]
-
+    
             cursor += flen
-
-        # Top-N: empty (recomputed downstream when needed)
+    
+        # Top-N: empty, recomputed downstream by bulk_set_top_n
         out_top_n_data = np.empty(0, dtype=np.int32)
         out_top_n_offsets = np.zeros(V, dtype=np.int64)
         out_top_n_lengths = np.zeros(V, dtype=np.int32)
-
-        # Propagate target/decoy info
+    
+        # Propagate target/decoy flags from source entries
         out_is_decoy = np.array(
-            [target_store.is_decoy[i] for i, _, _, _ in valid],
-            dtype=bool,
+            [target_store.is_decoy[i] for i, _, _, _ in valid], dtype=bool
         )
         out_n_targets = int(np.sum(~out_is_decoy))
         out_n_decoys = int(np.sum(out_is_decoy))
-
+    
         return cls(
             key_to_idx=key_to_idx,
             mod_seq=out_mod_seq,
@@ -1457,7 +1481,6 @@ class SpectrumLibraryStore:
             n_decoys=out_n_decoys,
             is_decoy=out_is_decoy,
         )
-
     # ------------------------------------------------------------------
     # Export: vectorized DIA-NN-format Polars DataFrame
     # ------------------------------------------------------------------

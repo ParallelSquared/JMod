@@ -245,6 +245,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # Find the tag object based on the tag name
         if config.args.SILAC in available_tags:
             config.SILAC = available_tags[config.args.SILAC]
+            config.SILAC.var_tags=True
             logger.info(f"Using SILAC: {config.SILAC.name} - {config.SILAC.n_channels} channels")
             spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
             SILAC = config.SILAC
@@ -264,6 +265,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # Find the tag object based on the tag name
         if config.args.tag in available_tags:
             config.tag = available_tags[config.args.tag]
+            config.tag.var_tags=False
             logger.info(f"Using tag: {config.tag.name} - {config.tag.n_channels} channels")
             spectrumLibrary = tag_library(spectrumLibrary, config.tag)
             mass_tag = config.tag
