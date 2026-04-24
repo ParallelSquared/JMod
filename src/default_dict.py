@@ -297,7 +297,7 @@ default_dict = {
         'flags': ('--predict_decoys',),
         'default': False,
         'takes_value': False,
-        'in_GUI': True,
+        'in_GUI': False,
         'type': '',
         'widget': 'checkbutton',
         'tk_handle': None,
