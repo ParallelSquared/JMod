@@ -362,10 +362,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     del target_view
 
-    ## Merge peaks in spectra
-    for spec in DIAspectra.ms1scans:
-        merge_spectrum_peaks(spec, config.opt_ms1_tol)
-
+    ## Merge peaks in spectra (MS2 only; MS1 peaks are summed within
+    ## tolerance during matrix construction in fit_channel_isotopes_numba)
     for spec in DIAspectra.ms2scans:
         merge_spectrum_peaks(spec, config.mz_tol)
 

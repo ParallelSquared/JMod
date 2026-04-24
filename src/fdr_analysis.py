@@ -110,7 +110,9 @@ def _compute_frac_shared_intensity(fdc, mz_tol):
     return result
 
 
-def area(x):max_idx = np.argmax(x);top_3 = x[np.maximum(0,max_idx-1):max_idx+2];return np.sum(top_3)#auc(range(len(top_3)),top_3)
+def area(x, apex_idx):
+    top_3 = x[max(0, apex_idx-1):apex_idx+2]
+    return np.sum(top_3)
 
 
 
@@ -209,6 +211,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False):
                             group_fitted,
                             new_output_dict,
                             fake_fdc_dict,
+                            DIAspectra,
                             fit_whole_MS1=fit_whole_MS1
                             )
 
@@ -216,7 +219,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False):
 
 
 
-def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group_ms2_traces, group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict, fit_whole_MS1=False):
+def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group_ms2_traces, group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict, DIAspectra, fit_whole_MS1=False):
     
     ## create dictionary  that links keys to data so we can match the order of "fdc"
     linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}
@@ -266,12 +269,20 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    #fdc["plex_Area"]=[area(list(map(float,fdc.plexfittrace.iloc[idx].split(";")))) for idx in range(len(fdc))]
-    fdc["plex_Area"] = [
-        area(extracted_fitted[idx])
-        if len(extracted_fitted[idx]) > 0 else np.nan
-        for idx in range(len(fdc))
-    ]
+    # Anchor plex_Area at the MS1 scan where the interpolated MS2 signal is highest
+    plex_areas = []
+    apex_scans = []
+    for idx in range(len(fdc)):
+        trace = ms2_traces[idx]  # {ms1_scan_id: interpolated_ms2_coeff}
+        fitted = extracted_fitted[idx]
+        specs = extracted_fitted_specs[idx]
+        ms1_scan = max(trace, key=trace.get)
+        specs_list = list(specs) if not isinstance(specs, list) else specs
+        apex_pos = specs_list.index(ms1_scan)
+        plex_areas.append(area(fitted, apex_pos))
+        apex_scans.append(int(ms1_scan))
+    fdc["plex_Area"] = plex_areas
+    fdc["ms1_apex_scan"] = apex_scans
        
 
 
@@ -312,7 +323,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     selected_cols = [
         "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps",
         "plexfittrace_spec_all", "plexfittrace_all", "plexfittrace_ps_all",
-        "plex_Area", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
+        "plex_Area", "ms1_apex_scan", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
         "all_ms1_specs", "MS1_Area"
     ] + [f"all_ms1_iso{i}vals" for i in range(config.num_iso_ms1)]
     
@@ -970,6 +981,7 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     
     return result_df
 
+
 def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None):
     
     results_folder = os.path.dirname(file)
@@ -1077,7 +1089,6 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
 
     
     fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, timeplex)
-
 
     fdx_quant["last_aa"] = [i[-1] for i in fdx_quant["stripped_seq"]]
     fdx_quant["seq_len"] = [len(i) for i in fdx_quant["stripped_seq"]]
