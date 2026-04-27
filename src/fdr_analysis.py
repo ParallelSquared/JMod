@@ -269,52 +269,17 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    # Channel-voted apex: each channel votes for its MS2-apex scan, majority wins
-    from collections import Counter
-
-    groups_to_fdc = {}
-    for idx, key in enumerate(all_keys):
-        g_idx = linker_dict[key][0]
-        if g_idx not in groups_to_fdc:
-            groups_to_fdc[g_idx] = []
-        groups_to_fdc[g_idx].append(idx)
-
-    group_apex_scan = {}
-    for g_idx, fdc_indices in groups_to_fdc.items():
-        votes = []
-        for idx in fdc_indices:
-            trace = ms2_traces[idx]
-            votes.append(max(trace, key=trace.get))
-
-        vote_counts = Counter(votes)
-        max_count = max(vote_counts.values())
-        tied_scans = [s for s, c in vote_counts.items() if c == max_count]
-
-        if len(tied_scans) == 1:
-            winning_scan = tied_scans[0]
-        else:
-            best_scan = tied_scans[0]
-            best_total = -1.0
-            for s in tied_scans:
-                total = sum(ms2_traces[idx].get(s, 0) for idx in fdc_indices)
-                if total > best_total:
-                    best_total = total
-                    best_scan = s
-            winning_scan = best_scan
-
-        group_apex_scan[g_idx] = winning_scan
-
+    # The voted apex and scan restriction already happened in ms1_cor_channels.
+    # extracted_fitted_specs is centered on the voted apex with ± 1 scan.
+    # The apex is at the center position; area() sums the full window.
     plex_areas = []
     apex_scans = []
     for idx in range(len(fdc)):
-        g_idx = linker_dict[all_keys[idx]][0]
-        ms1_scan = group_apex_scan[g_idx]
         fitted = extracted_fitted[idx]
         specs = extracted_fitted_specs[idx]
-        specs_list = list(specs) if not isinstance(specs, list) else specs
-        apex_pos = specs_list.index(ms1_scan)
+        apex_pos = len(fitted) // 2
         plex_areas.append(area(fitted, apex_pos))
-        apex_scans.append(int(ms1_scan))
+        apex_scans.append(int(specs[apex_pos]))
     fdc["plex_Area"] = plex_areas
     fdc["ms1_apex_scan"] = apex_scans
        

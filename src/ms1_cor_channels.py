@@ -158,9 +158,32 @@ def ms1_cor_channels(all_spectra,
                 all_pearson.append(all_pearson_to_append)
                 iso_ratios.append(iso_ratios_to_append)
 
-        ### need to reduce the number of spectra we fit to
-        ### fit to those from each channel
-        scans_to_search = select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width)
+        ### Compute voted apex from MS2 traces, then restrict to ± 1 scan
+        from collections import Counter
+        channel_votes = []
+        for ch_trace in coeff_traces:
+            if len(ch_trace) > 0:
+                channel_votes.append(max(ch_trace, key=ch_trace.get))
+        vote_counts = Counter(channel_votes)
+        max_count = max(vote_counts.values())
+        tied_scans = [s for s, c in vote_counts.items() if c == max_count]
+        if len(tied_scans) == 1:
+            voted_apex = tied_scans[0]
+        else:
+            best_scan = tied_scans[0]
+            best_total = -1.0
+            for s in tied_scans:
+                total = sum(ch_trace.get(s, 0) for ch_trace in coeff_traces)
+                if total > best_total:
+                    best_total = total
+                    best_scan = s
+            voted_apex = best_scan
+
+        all_candidate_scans = select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width)
+        apex_idx = int(np.searchsorted(all_candidate_scans, voted_apex))
+        lo = max(0, apex_idx - 1)
+        hi = min(len(all_candidate_scans), apex_idx + 2)
+        scans_to_search = all_candidate_scans[lo:hi]
 
         group_pred, group_obs_peaks, group_matrices, group_fit_cor, group_kept_mz = ([] for _ in range(5))
 
