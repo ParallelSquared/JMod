@@ -335,7 +335,7 @@ def iso_library_multi(library, tag, n_iso):
     all_frags = [library[k]["frags"] for k in all_keys]
 
     logger.info("Generating isotopes for library:")
-    p = multiprocessing.get_context('spawn').Pool()
+    p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), 61))
     iso_out = p.starmap(
         gen_isotopes_dict,
         tqdm.tqdm(zip(all_seqs, all_frags, [tag]*n, [n_iso]*n), total=n)

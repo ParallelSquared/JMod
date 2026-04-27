@@ -328,7 +328,7 @@ def create_decoy_lib(library, rules, tag=None, n_iso=0):
     worker_args = [(key[0], library[key]["frags"], rules, tag, n_iso, False)
                    for key in all_keys]
 
-    p = multiprocessing.Pool()
+    p = multiprocessing.Pool(min(multiprocessing.cpu_count(), 61))
     results = []
     n_total = len(all_keys)
     for i, result in enumerate(tqdm.tqdm(p.imap(_decoy_worker, worker_args), total=n_total)):
