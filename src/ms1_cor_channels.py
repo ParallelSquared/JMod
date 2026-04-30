@@ -102,7 +102,6 @@ def ms1_cor_channels(all_spectra,
         fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z"])
 
     all_ms1, all_coeff, all_iso, all_group_pearson, all_trace, all_fitted, all_group_keys, all_scans_len = ([] for _ in range(8))
-    diag_rows = []
     dump_data = {"ms1_ppm": mz_ppm, "num_iso": num_iso, "precursors": {}} if dump_precursors else None
 
     #these are for fit_whole_ms1
@@ -158,26 +157,25 @@ def ms1_cor_channels(all_spectra,
                 all_pearson.append(all_pearson_to_append)
                 iso_ratios.append(iso_ratios_to_append)
 
-        ### Compute voted apex from MS2 traces, then restrict to ± 1 scan
-        from collections import Counter
-        channel_votes = []
-        for ch_trace in coeff_traces:
-            if len(ch_trace) > 0:
-                channel_votes.append(max(ch_trace, key=ch_trace.get))
-        vote_counts = Counter(channel_votes)
-        max_count = max(vote_counts.values())
-        tied_scans = [s for s, c in vote_counts.items() if c == max_count]
-        if len(tied_scans) == 1:
-            voted_apex = tied_scans[0]
-        else:
-            best_scan = tied_scans[0]
-            best_total = -1.0
-            for s in tied_scans:
-                total = sum(ch_trace.get(s, 0) for ch_trace in coeff_traces)
-                if total > best_total:
-                    best_total = total
-                    best_scan = s
-            voted_apex = best_scan
+        ### Compute voted apex: iteratively drop outliers until convergence
+        candidates = []
+        for seq in tag_group["seq"].unique():
+            ch_rows = tag_group[tag_group["seq"] == seq]
+            best_row = ch_rows.loc[ch_rows["coeff"].idxmax()]
+            candidates.append((int(best_row["Ms1_spec_id"]), float(best_row["coeff"]), seq))
+
+        while len(candidates) > 2:
+            scans = np.array([c[0] for c in candidates], dtype=np.float64)
+            median_scan = np.median(scans)
+            dists = np.abs(scans - median_scan)
+            max_dist_idx = int(np.argmax(dists))
+            # Stop if the worst outlier is within 1 cycle of the median
+            if dists[max_dist_idx] <= np.median(np.diff(np.sort(scans))) * 2:
+                break
+            candidates.pop(max_dist_idx)
+
+        # From remaining candidates, pick the one with the highest coeff
+        voted_apex = max(candidates, key=lambda c: c[1])[0]
 
         all_candidate_scans = select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width)
         apex_idx = int(np.searchsorted(all_candidate_scans, voted_apex))
@@ -194,22 +192,6 @@ def ms1_cor_channels(all_spectra,
             group_matrices.append(fit_matrix)
             group_fit_cor.append(fit_cor)
             group_kept_mz.append(kept_mz)
-
-            # Accumulate per-row diagnostics: one entry per channel contribution
-            if len(obs_peaks) > 0:
-                cooks_d, residuals = _compute_cooks_d(fit_matrix, obs_peaks, pred_coeff)
-                for row_i in range(len(obs_peaks)):
-                    ch_idx = int(np.argmax(fit_matrix[row_i, :]))
-                    iso_idx = -1
-                    if ch_idx < len(group_iso):
-                        if kept_mz[row_i] != 0:
-                            diffs = [abs(kept_mz[row_i] - p.mz) for p in group_iso[ch_idx]]
-                        else:
-                            diffs = [abs(fit_matrix[row_i, ch_idx] - p.intensity) for p in group_iso[ch_idx]]
-                        iso_idx = int(np.argmin(diffs))
-                    ch_name = prec_seqs[ch_idx] if ch_idx < len(prec_seqs) else ""
-                    diag_rows.append((ms1_spec_idx, group_protein, ch_name, iso_idx,
-                                      obs_peaks[row_i], residuals[row_i], cooks_d[row_i]))
 
         # Collect dump data for matching precursors
         if dump_precursors is not None:
@@ -272,14 +254,6 @@ def ms1_cor_channels(all_spectra,
     new_output_dict = {}
     # if fit_whole_MS1:
     #     new_output_dict = fit_all_ms1_specs(ms1_spec_dict, new_output_dict, mz_ppm)
-
-    # Write diagnostics TSV
-    diag_path = os.path.join(os.getcwd(), "ms1_fit_diagnostics.tsv")
-    with open(diag_path, "w", newline="") as f:
-        w = csv.writer(f, delimiter="\t")
-        w.writerow(["scan_num", "protein", "channel", "isotope", "intensity", "residual", "cooks_d"])
-        w.writerows(diag_rows)
-    logger.info(f"Wrote MS1 fit diagnostics to {diag_path}")
 
     if dump_data is not None and dump_data["precursors"]:
         dump_path = os.path.join(os.getcwd(), "ms1_fitting_data.pkl")
