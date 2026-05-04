@@ -80,6 +80,9 @@ deps = [
   "tensorboard",
   "tensorboard-data-server",
   "tensorflow-io-gcs-filesystem",
+
+  # Testing
+  "pytest",
 ]
 dev = [
     "pyside6<6.8",
