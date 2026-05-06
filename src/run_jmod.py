@@ -122,6 +122,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             os.mkdir(os.path.join(results_folder_path, "first_search"))
             os.mkdir(os.path.join(results_folder_path, "first_search/fine_tuning"))
             os.mkdir(os.path.join(results_folder_path, "scoring"))
+            os.mkdir(os.path.join(results_folder_path, "outputs"))
         except FileNotFoundError as e:
             if not os.path.exists(os.path.dirname(results_folder_path)):
                 from src.utils.gui_utils import send_raise_to_TK
@@ -156,7 +157,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
 
     args_dict = vars(config.args)
-    json_path = os.path.join(results_folder_path, "config.json")
+    json_path = os.path.join(results_folder_path, "outputs/config.json")
     with open(json_path, "w") as f:
         json.dump(args_dict, f, indent=4)
     
@@ -405,7 +406,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     ######################################################
     ### Write search params to file
-    param_file = results_folder_path + "/params.txt"
+    param_file = results_folder_path + "/outputs/params.txt"
     with open(param_file,"w+") as write_file:
         write_file.writelines("Args\n")
         for key,item in vars(config.args).items():
@@ -537,7 +538,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     # Merge batch parquets into single file (streaming, one batch at a time)
     import glob as _glob
     batch_files = sorted(_glob.glob(results_folder_path + "/decoylibsearch_coeffs_batch*.parquet"))
-    decoylib_search_path = results_folder_path + "/decoylibsearch_coeffs.parquet"
+    decoylib_search_path = results_folder_path + "/outputs/decoylibsearch_coeffs.parquet"
     merge_writer = None
     for bf in batch_files:
         table = pq.read_table(bf)

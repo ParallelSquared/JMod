@@ -454,6 +454,7 @@ class score_model():
                     m.__predict_fn__ = xg_predict
                     
                     if self.folder:
+                        os.makedirs(os.path.join(self.folder, "scoring"), exist_ok=True)
                         fi = m.model.get_score(importance_type="gain")
                         feature_importance = np.array([fi.get(c, 0) for c in X.columns])
                         sorted_indices = np.argsort(feature_importance, kind='stable')
@@ -709,7 +710,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
             n_kept = keep_mask.sum()
             n_relabeled = neg_mine_mask[keep_mask].sum()
-            logger.info(f"    Kept {n_kept}/{len(keep_mask)} samples, relabeled {n_relabeled} as decoys")
+            logger.info(f" f   Kept {n_kept}/{len(keep_mask)} samples, relabeled {n_relabeled} as decoys")
 
             sc_model = score_model(model_type, folder=folder)
             pred = sc_model.run_model_filtered(X, y, keep_mask, y_filtered, groups=fdc.stripped_seq)
@@ -983,7 +984,8 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
 
 def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None):
     
-    results_folder = os.path.dirname(file)
+    # results_folder = os.path.dirname(file)
+    results_folder = os.path.dirname(os.path.dirname(file))
     mz_ppm = config.opt_ms1_tol
     rt_tol = config.opt_rt_tol
     
@@ -1100,7 +1102,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
-    fdx_quant.to_csv(results_folder+"/all_IDs.csv",index=False)
+    fdx_quant.to_csv(results_folder+"/outputs/all_IDs.csv",index=False)
     filtered = fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold)]
     filtered.to_csv(results_folder+"/filtered_IDs.csv",index=False)
     # fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
@@ -1109,7 +1111,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
                        "protein",'BestChannel_Qvalue', 'plex_Area', 'seq', 'silac_channel', 'untag_seq',"rt","mz"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
-    fdx_quant[parquet_columns].to_parquet(results_folder+"/all_IDs_filtered.parquet")
+    fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")
 
     # filtered IDs with parquet columns 
     filtered[parquet_columns].to_parquet(results_folder + "/filtered_IDs_parquet_columns.parquet", index=False)
