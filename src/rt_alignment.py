@@ -815,12 +815,20 @@ def plot_rt_residuals_mixture(residuals,
     plt.tight_layout()
 
     if results_folder is not None:
-        plt.savefig(
-            results_folder + f"/first_search/rt_residuals_p{feat}.png",
+        if feat == "_empirical_final":
+            plt.savefig(
+            results_folder + f"/first_search/rt_residuals{feat}.png",
             dpi=600,
             bbox_inches="tight",
-        )
-        plt.close()
+            )
+            plt.close()
+        else:
+            plt.savefig(
+                results_folder + f"/first_search/rt_residuals_p{feat}.png",
+                dpi=600,
+                bbox_inches="tight",
+            )
+            plt.close()
 
     else:
         plt.close()
