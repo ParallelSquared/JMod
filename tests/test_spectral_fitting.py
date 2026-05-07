@@ -13,7 +13,7 @@ from scipy import sparse
 
 # Import the functions we want to test
 from src.spectral_fitting import (
-    get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, unmatched_peaks, gof_stat, huber_nnls_irls
+    get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, gof_stat, huber_nnls_irls
 )
 
 class TestGetClosestMS1:
