@@ -152,6 +152,7 @@ class TestCdfPlots:
     def test_cdf_plots_runs_without_error(self, sample_cdf_data, monkeypatch, tmp_path):
         """Test that cdf_plots runs and generates a valid matplotlib figure."""
         emp_data, emp_p, pred_data, pred_p = sample_cdf_data
+        (tmp_path / "first_search").mkdir(exist_ok=True)
 
         monkeypatch.setitem(globals(), "colours", ["blue", "orange"])
 
@@ -161,8 +162,8 @@ class TestCdfPlots:
         # Call the plotting function
         cdf_plots(emp_data, emp_p, percentile=0.999, boundary=5,
                 pred_data=pred_data, pred_p=pred_p, results_folder=results_folder)
-
-        out_file = tmp_path / "firs_search/RTelbows.png"
+        
+        out_file = tmp_path / "first_search/RTelbows.png"
         assert out_file.exists(), "Expected output plot file to be created."
 
     def test_cdf_data_computation(self):
@@ -210,6 +211,7 @@ class TestAlignmentPlots:
 
     def test_alignment_plots_creates_files(self, sample_filtered_output, dummy_splines, tmp_path):
         orig_spl, rt_spl, f_rt_mz, mz_spl = dummy_splines
+        (tmp_path / "first_search").mkdir(exist_ok=True)
 
         alignment_plots(
             filtered_output=sample_filtered_output,
@@ -236,7 +238,7 @@ class TestAlignmentPlots:
             assert out_file.exists(), f"Expected plot file {fname} to be created."
 
         # Optional: assert all files exist
-        assert len(list(tmp_path.iterdir())) == len(expected_files)
+        assert len(list((tmp_path / 'first_search').iterdir())) == len(expected_files)
 
 
 class TestGetMultiplesAndFilter:
@@ -311,8 +313,13 @@ class TestEmpiricalFit:
         cls.temp_dir.cleanup()
 
     def test_empirical_fit_runs_without_error(self):
+        os.makedirs(os.path.join(self.test_results_dir, "first_search"), exist_ok=True)
+
         try:
-            cor_filter, emp_rt_spl = empirical_fit(self.output_df, self.test_results_dir)
+            cor_filter, emp_rt_spl = empirical_fit(
+                self.output_df,
+                self.test_results_dir
+            )
 
         except RuntimeError as e:
             if "Optimal parameters not found" in str(e):
@@ -320,11 +327,10 @@ class TestEmpiricalFit:
             else:
                 raise
 
-        # Basic type and behavior assertions
-        assert hasattr(cor_filter, 'dtype')  # works for both ndarray and Series
+        assert hasattr(cor_filter, "dtype")
         assert cor_filter.dtype == bool
         assert callable(emp_rt_spl)
-        assert os.path.exists(self.test_results_dir)
+        assert os.path.isdir(self.test_results_dir)
 
 class TestFilterRtsByDense:
     def test_filter_rts_by_dense_basic(self):
