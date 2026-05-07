@@ -220,7 +220,7 @@ def train_models(models,train_data,results_folder=None):
         all_history.append(history)
         if results_folder:        
             try:
-                model.save(results_folder+f'/iRT_updated_model{i}')
+                model.save(results_folder+f'/first_search/fine_tuning/iRT_updated_model{i}')
             except:
                 from src.utils.gui_utils import send_raise_to_TK
                 send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
@@ -389,7 +389,7 @@ def fine_tune_rt(grouped_df,
         plt.xlabel("Observed Values")
         plt.ylabel("Base model predictions")
         if results_path:
-            plt.savefig(results_path+"/RT_finetune_ObsvsOld.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_ObsvsOld.png",dpi=600,bbox_inches="tight")
         plt.close()
             
         
@@ -398,7 +398,7 @@ def fine_tune_rt(grouped_df,
         plt.xlabel("Observed Values")
         plt.ylabel("Aligned observed Values")
         if results_path:
-            plt.savefig(results_path+"/RT_finetune_ObsvsOldAlign.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_ObsvsOldAlign.png",dpi=600,bbox_inches="tight")
         plt.close()
         
         if len(grouped_df)>config.FT_minimum and ('history' in locals() or 'history' in globals()):
@@ -411,7 +411,7 @@ def fine_tune_rt(grouped_df,
             plt.xlabel("Aligned observed Values")
             plt.ylabel("Old model predictions")
             if results_path:
-                plt.savefig(results_path+"/RT_finetune_AlignObsvsOld.png",dpi=600,bbox_inches="tight")
+                plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_AlignObsvsOld.png",dpi=600,bbox_inches="tight")
             plt.close()
             
         
@@ -420,7 +420,7 @@ def fine_tune_rt(grouped_df,
                 plt.plot(h.history["loss"],color="tab:blue",alpha=.5)
                 plt.plot(h.history["val_loss"],color="tab:orange",alpha=.5) 
             if results_path:
-                plt.savefig(results_path+"/RT_finetune_training.png",dpi=600,bbox_inches="tight")
+                plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_training.png",dpi=600,bbox_inches="tight")
             plt.close()
                  
             
@@ -455,7 +455,7 @@ def fine_tune_rt(grouped_df,
                 plt.xlabel("Aligned observed Values")
                 plt.ylabel("New model predictions")
                 if results_path:
-                    plt.savefig(results_path+"/RT_finetune_AlignObsvsNew.png",dpi=600,bbox_inches="tight")
+                    plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_AlignObsvsNew.png",dpi=600,bbox_inches="tight")
                 plt.close()
             except Exception as e:
                 logger.warning(f"Error creating fine-tuned model plot: {e}")
