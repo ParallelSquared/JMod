@@ -109,10 +109,10 @@ class TestJModIntegration:
 
         expected_files = [
             # 'ms2scans.csv',
-            'decoylibsearch_coeffs.parquet',
-            'all_IDs.csv',
+            'outputs/decoylibsearch_coeffs.parquet',
+            'outputs/all_IDs.csv',
             'filtered_IDs.csv',
-            'params.txt'
+            'outputs/params.txt'
         ]
 
         for filename in expected_files:
@@ -125,11 +125,11 @@ class TestJModIntegration:
         assert results_folder is not None, "No results folder"
 
         # Check all_IDs.csv has expected columns
-        all_ids_path = os.path.join(results_folder, 'all_IDs.csv')
+        all_ids_path = os.path.join(results_folder, 'outputs/all_IDs.csv')
         assert os.path.exists(all_ids_path), "all_IDs.csv not found"
 
         df = pd.read_csv(all_ids_path)
-        assert len(df) > 0, "all_IDs.csv is empty"
+        assert len(df) > 0, "outputs/all_IDs.csv is empty"
 
         # Check for key columns
         expected_columns = ['seq', 'z', 'coeff']
@@ -141,10 +141,10 @@ class TestJModIntegration:
         results_folder = pipeline_results['results_folder']
         assert results_folder is not None, "No results folder"
 
-        all_ids_path = os.path.join(results_folder, 'all_IDs.csv')
+        all_ids_path = os.path.join(results_folder, 'outputs/all_IDs.csv')
         filtered_ids_path = os.path.join(results_folder, 'filtered_IDs.csv')
 
-        assert os.path.exists(all_ids_path), "all_IDs.csv not found"
+        assert os.path.exists(all_ids_path), "outputs/all_IDs.csv not found"
         assert os.path.exists(filtered_ids_path), "filtered_IDs.csv not found"
 
         all_ids = pd.read_csv(all_ids_path)
@@ -246,10 +246,10 @@ class TestSILACIntegration:
 
         expected_files = [
            # 'ms2scans.csv',
-            'decoylibsearch_coeffs.parquet',
-            'all_IDs.csv',
+            'outputs/decoylibsearch_coeffs.parquet',
+            'outputs/all_IDs.csv',
             'filtered_IDs.csv',
-            'params.txt'
+            'outputs/params.txt'
         ]
 
         for filename in expected_files:

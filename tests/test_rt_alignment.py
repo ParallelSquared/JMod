@@ -162,7 +162,7 @@ class TestCdfPlots:
         cdf_plots(emp_data, emp_p, percentile=0.999, boundary=5,
                 pred_data=pred_data, pred_p=pred_p, results_folder=results_folder)
 
-        out_file = tmp_path / "RTelbows.png"
+        out_file = tmp_path / "firs_search/RTelbows.png"
         assert out_file.exists(), "Expected output plot file to be created."
 
     def test_cdf_data_computation(self):
@@ -222,13 +222,13 @@ class TestAlignmentPlots:
         )
 
         expected_files = [
-            "OriginalRTfit.png",
-            "RTfit.png",
-            "RtResidual.png",
-            "RTdiff.png",
-            "MZrtfit.png",
-            "MZfit.png",
-            "MZdiff.png"
+            "first_search/OriginalRTfit.png",
+            "first_search/RTfit.png",
+            "first_search/RtResidual.png",
+            "first_search/RTdiff.png",
+            "first_search/MZrtfit.png",
+            "first_search/MZfit.png",
+            "first_search/MZdiff.png"
         ]
 
         for fname in expected_files:
