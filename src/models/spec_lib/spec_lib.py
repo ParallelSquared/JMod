@@ -312,6 +312,12 @@ def _decoy_worker(args):
     return new_seq, new_frags, spectrum, ordered_frags
 
 
+def _decoy_arg_gen(library, all_keys, rules, tag, n_iso):
+    """Lazily yield decoy worker args to avoid materializing all frag dicts."""
+    for key in all_keys:
+        yield (key[0], library[key]["frags"], rules, tag, n_iso, False)
+
+
 def create_decoy_lib(library, rules, tag=None, n_iso=0):
     """Generate decoys and return a combined target+decoy SpectrumLibraryStore.
 
@@ -324,19 +330,17 @@ def create_decoy_lib(library, rules, tag=None, n_iso=0):
     import gc
 
     all_keys = list(library.keys())
-    # Decoys generated without tag/isotope — applied later to combined store
-    worker_args = [(key[0], library[key]["frags"], rules, tag, n_iso, False)
-                   for key in all_keys]
+    n_total = len(all_keys)
 
     p = multiprocessing.Pool(min(multiprocessing.cpu_count(), 61))
     results = []
-    n_total = len(all_keys)
-    for i, result in enumerate(tqdm.tqdm(p.imap(_decoy_worker, worker_args), total=n_total)):
+    chunksize = 1000
+    arg_gen = _decoy_arg_gen(library, all_keys, rules, tag, n_iso)
+    for result in tqdm.tqdm(p.imap(_decoy_worker, arg_gen, chunksize=chunksize), total=n_total):
         results.append(result)
     p.close()
     p.join()
 
-    del worker_args
     gc.collect()
 
     store = SpectrumLibraryStore.from_target_and_decoy_results(library, all_keys, results)

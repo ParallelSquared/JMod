@@ -246,8 +246,9 @@ def gen_isotopes_dict(seq,frags, tag, n_iso):
     return frag_to_peak(new_frags,return_frags=True)
 
 
-def _gen_isotopes_encoded(seq, frags, tag, n_iso):
+def _gen_isotopes_encoded(args):
     """Wrapper that encodes frag names to int32 inside the worker process."""
+    seq, frags, tag, n_iso = args
     from src.utils.frag_encoding import encode_frag_names
     spectrum, ordered_frags = gen_isotopes_dict(seq, frags, tag, n_iso)
     return spectrum, encode_frag_names(ordered_frags)
@@ -303,6 +304,15 @@ def iso_library(library, tag, n_iso):
     return library
 
 import multiprocessing
+def _iso_arg_gen(library, all_keys, tag, n_iso):
+    """Lazily yield (seq, frags, tag, n_iso) tuples one at a time.
+
+    This avoids materializing all fragment dicts in memory at once.
+    """
+    for k in all_keys:
+        yield (k[0], library[k]["frags"], tag, n_iso)
+
+
 def iso_library_multi(library, tag, n_iso):
     """
     Generate isotopes for library fragments (multiprocessed).
@@ -329,40 +339,31 @@ def iso_library_multi(library, tag, n_iso):
     n = len(library)
     all_keys = list(library)
 
-    # Extract only what gen_isotopes_dict needs: seq string and frags dict.
-    # These are small relative to the full library — no scalar/spectrum copies.
-    all_seqs = [k[0] for k in all_keys]
-    all_frags = [library[k]["frags"] for k in all_keys]
-
     logger.info("Generating isotopes for library:")
     p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), 61))
-    iso_out = p.starmap(
-        gen_isotopes_dict,
-        tqdm.tqdm(zip(all_seqs, all_frags, [tag]*n, [n_iso]*n), total=n)
-    )
-    p.close()
-    p.join()
 
-    # Free the input lists before building output arrays
-    del all_seqs, all_frags
-
-    # Build new spectrum_data and frag_names_data from the results.
-    # Each iso_out[i] is (spectrum_array, ordered_frags_list).
+    # Process results incrementally via imap to avoid holding all inputs
+    # and outputs in memory simultaneously.
     all_spec_peaks = []
     all_frag_codes = []
     spec_offsets = np.empty(n, dtype=np.int64)
     spec_lengths = np.empty(n, dtype=np.int32)
     cursor = 0
 
-    for i, (spectrum, ordered_frags) in enumerate(iso_out):
+    chunksize = 1000
+    arg_gen = _iso_arg_gen(library, all_keys, tag, n_iso)
+    for i, (spectrum, ordered_frags) in enumerate(
+        tqdm.tqdm(p.imap(_gen_isotopes_encoded, arg_gen, chunksize=chunksize), total=n)
+    ):
         n_peaks = len(spectrum)
         spec_offsets[i] = cursor
         spec_lengths[i] = n_peaks
         all_spec_peaks.append(np.asarray(spectrum, dtype=np.float64))
-        all_frag_codes.append(encode_frag_names(ordered_frags))
+        all_frag_codes.append(ordered_frags)
         cursor += n_peaks
 
-    del iso_out
+    p.close()
+    p.join()
 
     spectrum_data = np.concatenate(all_spec_peaks, axis=0) if all_spec_peaks else np.empty((0, 2), dtype=np.float64)
     del all_spec_peaks
