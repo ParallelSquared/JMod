@@ -125,38 +125,6 @@ def ms1_cor_channels(all_spectra,
         prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC)
         all_scans, spectra_subset = minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width)
 
-        ms1_traces, coeff_traces, is_traces, all_pearson, iso_ratios = ([] for _ in range(5))
-        obs_ratios, group_iso, group_keys, all_channel_scans, interp_funcs, best_coeff = ([] for _ in range(6))
-
-        for prec_mz,prec_seq in zip(prec_mzs,prec_seqs):
-
-            ms2_vals, highest_ranked_spec, channel_key = get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_decoy_coeffs, ms2_rt, rt_tol, prec_mz, bottom_of_window, top_of_window, ms2_spec_idxs)
-            group_keys.append(channel_key)
-
-            interp_func = build_ms2_interpolator(ms2_vals)
-            interp_funcs.append(interp_func)
-
-            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, [tag,SILAC], all_scans, prec_mz, mz_ppm, spectra_subset, interp_func)
-            group_iso.append(isotopes)
-
-            ## use monoiso ms1 prec mz to find the elution ms1 peak
-            ms1_index_of_max = get_ms1_index_of_max(ms2_vals, top_ms1_spec_idx, highest_ranked_spec)
-
-            ms1_peak_idx,ms1_peak_edge_idxs = get_ms1_peak(list(all_ms1_vals.keys()), moving_average(list(all_ms1_vals.values())), ms1_index_of_max, additional_scans)
-
-            ## redefine all_scans to keep only thoe from the above peak
-            channel_scans, all_ms1_vals, all_iso_vals, all_ms2_vals = filter_all_scans(all_scans, ms1_peak_edge_idxs, all_ms1_vals, all_iso_vals, all_ms2_vals)
-            all_channel_scans.append(channel_scans)
-            ms1_traces.append([all_ms1_vals,*all_iso_vals])
-            coeff_traces.append(all_ms2_vals)
-
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-
-                all_pearson_to_append, iso_ratios_to_append = compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
-                all_pearson.append(all_pearson_to_append)
-                iso_ratios.append(iso_ratios_to_append)
-
         ### Compute voted apex: iteratively drop outliers until convergence
         candidates = []
         for seq in tag_group["seq"].unique():
@@ -177,11 +145,42 @@ def ms1_cor_channels(all_spectra,
         # From remaining candidates, pick the one with the highest coeff
         voted_apex = max(candidates, key=lambda c: c[1])[0]
 
-        all_candidate_scans = select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, window_half_width)
-        apex_idx = int(np.searchsorted(all_candidate_scans, voted_apex))
-        lo = max(0, apex_idx - 1)
-        hi = min(len(all_candidate_scans), apex_idx + 2)
-        scans_to_search = all_candidate_scans[lo:hi]
+        apex_idx = int(np.searchsorted(all_scans, voted_apex))
+        lo = max(0, apex_idx - additional_scans - 1)
+        hi = min(len(all_scans), apex_idx + additional_scans + 2)
+        apex_scans = all_scans[lo:hi]
+
+        ms1_traces, coeff_traces, is_traces, all_pearson, iso_ratios = ([] for _ in range(5))
+        obs_ratios, group_iso, group_keys, all_channel_scans, interp_funcs, best_coeff = ([] for _ in range(6))
+
+        for prec_mz,prec_seq in zip(prec_mzs,prec_seqs):
+
+            ms2_vals, highest_ranked_spec, channel_key = get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_decoy_coeffs, ms2_rt, rt_tol, prec_mz, bottom_of_window, top_of_window, ms2_spec_idxs)
+            group_keys.append(channel_key)
+
+            interp_func = build_ms2_interpolator(ms2_vals)
+            interp_funcs.append(interp_func)
+
+            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, [tag,SILAC], all_scans, prec_mz, mz_ppm, spectra_subset, interp_func)
+            group_iso.append(isotopes)
+
+            ## filter to voted apex neighborhood
+            channel_scans = apex_scans
+            all_ms1_vals = {s: all_ms1_vals[s] for s in channel_scans}
+            all_iso_vals = [{s: iso[s] for s in channel_scans} for iso in all_iso_vals]
+            all_ms2_vals = {s: all_ms2_vals[s] for s in channel_scans}
+            all_channel_scans.append(channel_scans)
+            ms1_traces.append([all_ms1_vals,*all_iso_vals])
+            coeff_traces.append(all_ms2_vals)
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+
+                all_pearson_to_append, iso_ratios_to_append = compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
+                all_pearson.append(all_pearson_to_append)
+                iso_ratios.append(iso_ratios_to_append)
+
+        scans_to_search = apex_scans
 
         group_pred, group_obs_peaks, group_matrices, group_fit_cor, group_kept_mz = ([] for _ in range(5))
 
@@ -1223,6 +1222,21 @@ def fit_channel_isotopes_numba(spec, all_iso, mz_ppm):
 
     dense_matrix, dia_spec_int, lib_peaks_matched, fdc_idxs, grp_lengths = get_matrix_to_fit_numba(ms1_iso_patterns, group_lengths, dia_spectrum, len(all_iso), mz_ppm)
 
+    # Exclude channels where neither of the two most intense expected peaks
+    # was observed.  ms1_iso_patterns[ch, :, 1] gives the theoretical
+    # intensities for channel ch; the top-2 indices into that array identify
+    # the two most intense peaks.  lib_peaks_matched is flat (one entry per
+    # peak across all channels), so we slice it per channel using group_lengths.
+    n_iso_per_ch = ms1_iso_patterns.shape[1]
+    offset = 0
+    for ch in range(len(all_iso)):
+        intensities = ms1_iso_patterns[ch, :, 1]
+        top2 = np.argsort(intensities)[-2:]  # indices of two most intense peaks
+        matched_slice = lib_peaks_matched[offset:offset + group_lengths[ch]]
+        if not np.any(matched_slice[top2]):
+            dense_matrix[:, ch] = 0.0
+        offset += group_lengths[ch]
+
     # Replicate the spectrum windowing from get_matrix_to_fit_numba to get mz values
     mz_full = dia_spectrum[:, 0]
     lo = np.searchsorted(mz_full, ms1_iso_patterns[:, :, 0].min() - 1, side="right")
@@ -1238,6 +1252,7 @@ def fit_channel_isotopes_numba(spec, all_iso, mz_ppm):
     kept_mz = all_mz[keep]
 
     lib_coefficients, _ = optimize.nnls(dense_matrix, dia_spec_int)
+    lib_coefficients[lib_coefficients < 1] = 0.0
 
     return lib_coefficients, dia_spec_int, dense_matrix, kept_mz
 
