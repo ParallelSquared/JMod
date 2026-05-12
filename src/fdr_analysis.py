@@ -714,7 +714,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
             n_kept = keep_mask.sum()
             n_relabeled = neg_mine_mask[keep_mask].sum()
-            logger.info(f" f   Kept {n_kept}/{len(keep_mask)} samples, relabeled {n_relabeled} as decoys")
+            logger.info(f"    Kept {n_kept}/{len(keep_mask)} samples, relabeled {n_relabeled} as decoys")
 
             sc_model = score_model(model_type, folder=folder)
             pred = sc_model.run_model_filtered(X, y, keep_mask, y_filtered, groups=fdc.stripped_seq)
