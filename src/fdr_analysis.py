@@ -524,22 +524,16 @@ class score_model():
             # k_orders = [i for i in gfk.split(X_shuffled,y_shuffled,groups=groups_shuffled)]
             # rev_order = np.argsort(np.concatenate([i[1] for i in k_orders])) # collapse test sets and get order
 
-        if sample_weight is not None:
-            data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]],sample_weight[i[0]]] for i in k_orders] # put data into folds
-    
-        else:
-            data_splits = [[X.iloc[i[0]],X.iloc[i[1]],y[i[0]],y[i[1]],None] for i in k_orders] # put data into folds
-        
-
         self.models = []
         self.predictions=[]
-        model_idx=0
-        for X_train, X_test, y_train, y_test,weights in tqdm.tqdm(data_splits):
-            m = fit_model(X_train,y_train,sample_weight=weights,idx=model_idx)
+        for model_idx, (train_idx, test_idx) in enumerate(tqdm.tqdm(k_orders)):
+            X_train = X.iloc[train_idx]
+            y_train = y[train_idx]
+            weights = sample_weight[train_idx] if sample_weight is not None else None
+            m = fit_model(X_train, y_train, sample_weight=weights, idx=model_idx)
             self.models.append(m)
-            self.predictions.append(m.predict(X_test))
-            model_idx+=1
-            
+            self.predictions.append(m.predict(X.iloc[test_idx]))
+
         return np.concatenate(self.predictions)[rev_order]
 
     def run_model_filtered(self, X, y, keep_mask, y_filtered, sample_weight=None, groups=None):
