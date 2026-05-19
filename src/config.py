@@ -165,6 +165,8 @@ tree_max_depth = 20
 
 fdr_threshold = 0.01
 
+target_decoy_ratio = 1 # added to get the tests working
+
 
 #############################################
 
