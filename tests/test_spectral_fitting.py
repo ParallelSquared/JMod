@@ -15,6 +15,7 @@ from scipy import sparse
 from src.spectral_fitting import (
     get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, gof_stat, huber_nnls_irls
 )
+from src.utils.frag_encoding import encode_frag_name
 
 class TestGetClosestMS1:
     def test_get_closest_ms1(self):
@@ -81,9 +82,9 @@ class TestGetManhattanDistance:
 
 class TestHyperscore2:
     def test_hyperscore2(self):
-        frags = {"b1": 100, "y1": 200, "b2":50}
-        frag_names_matched = ["b1", "y1", "b2"]
-        score, num_b, num_y = hyperscore2(frags, frag_names_matched)
+        frag_codes = np.array([encode_frag_name("b1_1"), encode_frag_name("y1_1"), encode_frag_name("b2_1")])
+        frags = np.array([100, 200, 50])
+        score, num_b, num_y = hyperscore2(frags, frag_codes)
         assert score >= 0
         assert num_b == 2
         assert num_y == 1
@@ -155,18 +156,6 @@ class TestMergeSpectrumPeaks:
         output = np.array(dia_spec.peak_list(), dtype=np.float64).T
         assert np.all(output == expected), f"Expected {expected}, got {output}"
 
-class TestUnmatchedPeaks:
-    def test_unmatched_peaks_minimal(self):
-        norm_intensities = [np.array([0.1, 0.9])]
-        pep_cand_loc = [np.array([1, 0])]
-        last_row = 0
-
-        for ft in ["a", "b", "c"]:
-            rows, cols, values = unmatched_peaks(norm_intensities, pep_cand_loc, last_row, fit_type=ft)
-            assert isinstance(rows, np.ndarray)
-            assert isinstance(cols, np.ndarray)
-            assert isinstance(values, np.ndarray)
-
 class TestCreateEntries:
     def test_create_entries_minimal(self):
         centroid_breaks = np.array([100, 200, 300])
@@ -197,7 +186,7 @@ class TestCreateEntries:
 
         # check that it returns a tuple with the expected number of elements
         assert isinstance(out, tuple)
-        assert len(out) == 10
+        assert len(out) == 15
 
 class TestGofStat:
     def test_gof_stat_basic(self):
@@ -231,6 +220,10 @@ class TestGofStat:
 class TestHuberNnlsIrls:
     """Smoke tests for huber_nnls_irls function."""
 
+    def _to_coo_args(self, A):
+        coo = A.tocoo()
+        return coo.data.astype(np.float64), coo.row.astype(np.int32), coo.col.astype(np.int32), coo.shape[0], coo.shape[1]
+
     def test_basic_sparse_input(self):
         """Test with simple sparse matrix."""
         # Create a simple sparse matrix (10 peaks, 3 candidates)
@@ -238,7 +231,7 @@ class TestHuberNnlsIrls:
         A = sparse.random(10, 3, density=0.5, format='csr')
         b = np.abs(np.random.rand(10))  # Observed intensities (non-negative)
 
-        result = huber_nnls_irls(A, b)
+        result = huber_nnls_irls(*self._to_coo_args(A), b)
 
         assert 'x' in result
         x = np.array(result['x']).flatten()
@@ -254,7 +247,7 @@ class TestHuberNnlsIrls:
         ]))
         b = np.array([1.0, 1.0, 2.0])
 
-        result = huber_nnls_irls(A, b)
+        result = huber_nnls_irls(*self._to_coo_args(A), b)
 
         x = np.array(result['x']).flatten()
         assert x.shape == (2,)
@@ -272,7 +265,7 @@ class TestHuberNnlsIrls:
         ]))
         b = np.array([1.0, 1.0, 2.0, 100.0])  # Last value is outlier
 
-        result = huber_nnls_irls(A, b, max_iter=50)
+        result = huber_nnls_irls(*self._to_coo_args(A), b, max_iter=50)
 
         x = np.array(result['x']).flatten()
         assert x.shape == (2,)
@@ -284,7 +277,7 @@ class TestHuberNnlsIrls:
         A = sparse.random(20, 5, density=0.3, format='csr')
         b = np.abs(np.random.rand(20))
 
-        result = huber_nnls_irls(A, b, max_iter=100, tol=1e-6)
+        result = huber_nnls_irls(*self._to_coo_args(A), b, max_iter=100, tol=1e-6)
 
         assert 'x' in result
         x = np.array(result['x']).flatten()
