@@ -115,6 +115,37 @@ def area(x, apex_idx):
     return np.sum(top_3)
 
 
+def walk_to_local_max(fitted, start_pos):
+    """Slide the apex from ``start_pos`` toward a local maximum, one cycle at a
+    time, while strictly increasing. Capped one position in from either edge so
+    the picked apex always has both neighbors available for ``area`` to sum the
+    top-3 window.
+
+    Returns the new apex index. Identical to ``start_pos`` when the voted apex
+    is already a local maximum.
+    """
+    n = len(fitted)
+    if n < 3:
+        return start_pos
+    lo_cap = 1
+    hi_cap = n - 2
+    i = start_pos
+    while True:
+        left_ok = (i - 1 >= lo_cap)
+        right_ok = (i + 1 <= hi_cap)
+        left_higher = left_ok and (fitted[i - 1] > fitted[i])
+        right_higher = right_ok and (fitted[i + 1] > fitted[i])
+        if not (left_higher or right_higher):
+            return i
+        if left_higher and right_higher:
+            # Voted apex is in a saddle — step toward the higher side.
+            i = i - 1 if fitted[i - 1] >= fitted[i + 1] else i + 1
+        elif left_higher:
+            i -= 1
+        else:
+            i += 1
+
+
 
 # lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=bool(params["timeplex"]))
 
@@ -149,7 +180,7 @@ def area(x, apex_idx):
 #     return fdc
 
 
-def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False):
+def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False,vote_sigma=1.0):
     # X = fdc.iloc[:,6:-5]
     fit_whole_MS1 = False
    
@@ -197,7 +228,8 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False):
                                 num_iso = config.num_iso_ms1,
                                 num_iso_r = config.num_iso_r,
                                 additional_scans = config.additional_scans,
-                                fit_whole_MS1=fit_whole_MS1                                           
+                                vote_sigma = vote_sigma,
+                                fit_whole_MS1=fit_whole_MS1
                                 )
     
     dat = process_ms1_quant(dat,
@@ -269,15 +301,18 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    # The voted apex and scan restriction already happened in ms1_cor_channels.
-    # extracted_fitted_specs is centered on the voted apex with ± 1 scan.
-    # The apex is at the center position; area() sums the full window.
+    # ms1_cor_channels fit a ±fit_radius window around the group's voted apex.
+    # The voted apex is at the center of fitted/specs. Each channel can drift
+    # away from that center monotonically (only while values are strictly
+    # increasing), capped one position in from the edge so area() always has
+    # both neighbors for its top-3 sum.
     plex_areas = []
     apex_scans = []
     for idx in range(len(fdc)):
         fitted = extracted_fitted[idx]
         specs = extracted_fitted_specs[idx]
-        apex_pos = len(fitted) // 2
+        center = len(fitted) // 2
+        apex_pos = walk_to_local_max(fitted, center)
         plex_areas.append(area(fitted, apex_pos))
         apex_scans.append(int(specs[apex_pos]))
     fdc["plex_Area"] = plex_areas
@@ -987,7 +1022,7 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     return result_df
 
 
-def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None):
+def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0):
     
     # results_folder = os.path.dirname(file)
     results_folder = os.path.dirname(os.path.dirname(file))
@@ -1094,7 +1129,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
 
     
-    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, timeplex)
+    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, timeplex, vote_sigma=vote_sigma)
 
     fdx_quant["last_aa"] = [i[-1] for i in fdx_quant["stripped_seq"]]
     fdx_quant["seq_len"] = [len(i) for i in fdx_quant["stripped_seq"]]

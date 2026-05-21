@@ -44,6 +44,7 @@ def ms1_cor_channels(all_spectra,
                      num_iso = None,
                      num_iso_r = None,
                      additional_scans = None,
+                     vote_sigma = 1.0,
                      fit_whole_MS1 = False,
                      dump_precursors = None
                      ):
@@ -125,29 +126,30 @@ def ms1_cor_channels(all_spectra,
         prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC)
         all_scans, spectra_subset = minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width)
 
-        ### Compute voted apex: iteratively drop outliers until convergence
-        candidates = []
+        ### Gaussian-weighted voting: each channel contributes its max-coeff scan
+        # as a Gaussian centered on that scan, with sigma = vote_sigma cycles
+        # (derived from the global elution SD). Adjacent-cycle votes reinforce
+        # instead of competing, and outlier channels only contribute weakly far
+        # from the consensus region.
+        all_scans_arr = np.asarray(all_scans)
+        positions = np.arange(len(all_scans_arr), dtype=np.float64)
+        votes = np.zeros(len(all_scans_arr), dtype=np.float64)
         for seq in tag_group["seq"].unique():
             ch_rows = tag_group[tag_group["seq"] == seq]
             best_row = ch_rows.loc[ch_rows["coeff"].idxmax()]
-            candidates.append((int(best_row["Ms1_spec_id"]), float(best_row["coeff"]), seq))
+            s_idx = float(np.searchsorted(all_scans_arr, int(best_row["Ms1_spec_id"])))
+            votes += float(best_row["coeff"]) * np.exp(-0.5 * ((positions - s_idx) / vote_sigma) ** 2)
+        voted_apex_idx = int(np.argmax(votes))
+        voted_apex = int(all_scans_arr[voted_apex_idx])
 
-        while len(candidates) > 2:
-            scans = np.array([c[0] for c in candidates], dtype=np.float64)
-            median_scan = np.median(scans)
-            dists = np.abs(scans - median_scan)
-            max_dist_idx = int(np.argmax(dists))
-            # Stop if the worst outlier is within 1 cycle of the median
-            if dists[max_dist_idx] <= np.median(np.diff(np.sort(scans))) * 2:
-                break
-            candidates.pop(max_dist_idx)
-
-        # From remaining candidates, pick the one with the highest coeff
-        voted_apex = max(candidates, key=lambda c: c[1])[0]
-
+        # Fit a wider ±fit_radius window around voted_apex so process_ms1_quant
+        # can monotonically slide each channel's apex away from the group's voted
+        # apex toward a local maximum. The slide is capped at the second-from-edge
+        # position so area() can still sum a 3-scan top around the picked apex.
+        fit_radius = max(5, additional_scans + 1)
         apex_idx = int(np.searchsorted(all_scans, voted_apex))
-        lo = max(0, apex_idx - additional_scans - 1)
-        hi = min(len(all_scans), apex_idx + additional_scans + 2)
+        lo = max(0, apex_idx - fit_radius)
+        hi = min(len(all_scans), apex_idx + fit_radius + 1)
         apex_scans = all_scans[lo:hi]
 
         ms1_traces, coeff_traces, is_traces, all_pearson, iso_ratios = ([] for _ in range(5))

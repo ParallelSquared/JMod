@@ -1096,6 +1096,18 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     fwhm, elution_sd, output_df = elution_analysis.calculate_elution_width(output_df)
     logger.info("Mean elution width: FWHM {fwhm:.4f}, SD {elution_sd:.4f}".format(fwhm=fwhm, elution_sd=elution_sd))
 
+    # Vote sigma for MS1 quant Gaussian apex voting: elution SD expressed in MS1
+    # cycles. Floored at 0.5 so the Gaussian doesn't collapse to a delta when MS1
+    # cycles are coarse relative to the peak.
+    ms1_rts = np.array([s.RT for s in dia_spectra.ms1scans])
+    if len(ms1_rts) >= 2:
+        ms1_cycle_time = float(np.median(np.diff(np.sort(ms1_rts))))
+        vote_sigma = max(0.5, elution_sd / ms1_cycle_time) if ms1_cycle_time > 0 else 1.0
+        logger.info(f"MS1 cycle time: {ms1_cycle_time:.4f} min, vote sigma: {vote_sigma:.2f} cycles")
+    else:
+        vote_sigma = 1.0
+        logger.info("vote sigma: 1.0 cycles (fallback — fewer than 2 MS1 scans)")
+
     # Collapse to most intense MS1 per peptide ion
     output_df = output_df.sort("closest_peak_intensity_ms1", descending=True).unique(subset=["seq", "z"], keep="first")
     import polars as pl
@@ -1558,8 +1570,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     #     return (rt_spl, mz_func, ms2_func), updatedLibrary
     # else:
     if return_rt_models and not config.args.use_emp_rt:
-        return (rt_spl, mz_func), updatedLibrary, (models, convertor), fwhm
-    return (rt_spl, mz_func), updatedLibrary, None, fwhm
+        return (rt_spl, mz_func), updatedLibrary, (models, convertor), fwhm, vote_sigma
+    return (rt_spl, mz_func), updatedLibrary, None, fwhm, vote_sigma
 
 ###################################################################################################
 ###################################################################################################

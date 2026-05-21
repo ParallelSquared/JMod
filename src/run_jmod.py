@@ -299,6 +299,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             logger.info("Not using features")
             funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, None, config.mz_tol, results_folder=results_folder_path,
                                             ms2=config.args.ms2_align)
+        # Timeplex path doesn't compute elution SD yet — use the historical default.
+        vote_sigma = 1.0
 
         # Propagate updated iRT from aligned targets back to combined store
         for key in updated_targets:
@@ -326,7 +328,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         del plex_lib
 
     else:
-        funcs, updated_targets, rt_models_data, elution_fwhm = MZRTfit(
+        funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma = MZRTfit(
             DIAspectra, target_view, dino_features, config.mz_tol,
             results_folder=results_folder_path,
             ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
@@ -554,7 +556,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                  mass_tag=mass_tag,
                  SILAC=SILAC,
                  timeplex=config.args.timeplex,
-                 elution_fwhm=elution_fwhm)
+                 elution_fwhm=elution_fwhm,
+                 vote_sigma=vote_sigma)
     del spectrumLibrary
     _gc2.collect()
     # """
