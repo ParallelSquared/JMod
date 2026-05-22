@@ -1031,7 +1031,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     
     # After loading data and adding basic features
     lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=timeplex)
-    
+
     # Add standard features
     fdc["stripped_seq"] = np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in fdc["seq"]])
     fdc["pep_len"] = [len(re.findall("([A-Z](?:\(.*?\))?)",re.sub("Decoy","",i))) for i in fdc["stripped_seq"]]
@@ -1142,7 +1142,20 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
     fdx_quant.to_csv(results_folder+"/outputs/all_IDs.csv",index=False)
-    filtered = fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold)]
+    filtered = fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold)].copy()
+
+    # Decode packed int32 frag codes into "y5_1" / "b3-H2O_2" strings, only for
+    # the FDR-passing rows since decoding is expensive. In-place reassignment
+    # keeps frag_names in its parquet position adjacent to the other six
+    # fragment list columns (frag_errors, frag_mz, frag_int, obs_int,
+    # unique_frag_mz, unique_obs_int).
+    if "frag_names" in filtered.columns:
+        from src.utils.frag_encoding import decode_frag_names
+        filtered["frag_names"] = [
+            list(decode_frag_names(np.asarray(codes, dtype=np.int32)))
+            if codes is not None and len(codes) > 0 else []
+            for codes in filtered["frag_names"]
+        ]
     filtered.to_csv(results_folder+"/filtered_IDs.csv",index=False)
     # fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
 
