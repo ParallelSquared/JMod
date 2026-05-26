@@ -84,6 +84,17 @@ default_dict = {
         'special_upload': False,
         'values': '+<10'
     },
+    'apex_jitter': {
+        'flags': ('--apex_jitter',),
+        'default': 0,
+        'takes_value': True,
+        'in_GUI': True,
+        'type': 'int',
+        'widget': 'dropdown',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+<10'
+    },
     'threads': {
         'flags': ('-t', '--threads'),
         'default': 10,
