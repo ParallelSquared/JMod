@@ -19,6 +19,7 @@ deps = [
   "numba",
   "pyteomics",
   "pymzml",
+  "psims",
   "brain-isotopic-distribution",
   "biosaur2",
   "lxml",
