@@ -22,8 +22,8 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
   - [Library Structure](#library-structure)
-  - [Command Line Interface (CLI)](#running-jmod-with-the-graphic-user-interface-gui)
-  - [Graphic User Interface (GUI)](#running-jmod-with-the-command-line-cli)
+  - [Graphic User Interface (GUI)](#running-jmod-with-the-graphic-user-interface-gui)
+  - [Command Line Interface (CLI)](#running-jmod-with-the-command-line-cli)
 - [Output Files](#output-files)
 
 ###
@@ -87,7 +87,7 @@ More detailed instructions on how to run JMod from the GUI can be found
 
 
 ###
-### Running JMod with Command Line Interface (CLI) 
+### Running JMod with the Command Line Interface (CLI) 
 
 JMod can be run through the command line with various search parameters. An example command is shown below:
 ```
