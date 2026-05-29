@@ -4,7 +4,7 @@
 
 **JMod is an open and flexible software for increasing the throughput of sensitive proteomics by supporting multiplexing in the mass and time domains.**
 
-
+###
 ## Reference
 
 **JMod: Joint modeling of mass spectra for empowering multiplexed DIA proteomics**
@@ -14,18 +14,19 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 
 <!-- TODO: Boil abstract down to bullet points and insert here -->
 
+###
 ## Table of Contents
 - [Setting up JMod](#environment-setup)
   - [Windows Batch Script](#setting-up-jmod-with-windows-gui-batch-script)
   - [Command Line Setup](#setting-up-a-jmod-uv-environment-via-the-command-line)
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
-  - [Command Line Args](#command-line-args)
-  - [JSON Configuration File](#json-configuration-file)
-  - [Graphic User Interface (GUI)](#graphic-user-interface-gui)
+  - [Library Structure](#library-structure)
+  - [Command Line Interface (CLI)](#running-jmod-with-the-graphic-user-interface-(gui))
+  - [Graphic User Interface (GUI)](#running-jmod-with-the-command-line-(cli)) )
 - [Output Files](#output-files)
-- [Reference](#reference)
 
+###
 ## Setting up JMod
 
 ### Setting up JMod with Windows GUI Batch Script
@@ -56,7 +57,7 @@ This `.bat` executable is only compatible with Windows computers. If your comput
 
 5. You can now launch the JMod GUI with ```python run_jmod_from_GUI.py``` or run a search using the command line with ```python run_jmod.py <args>```.
 
-
+###
 ## Running a Search
 
 To run a JMod search, both a .mzML spectrum file and a .tsv spectral library are required.
@@ -73,12 +74,20 @@ JMod requires specific library columns in a .tsv for searches to run successfull
 <!-- TODO: Image of the library headings (?) or something similar -->
 
 ###
-### Command Line Interface (CLI) & Graphic User Interface (GUI)
+### Running JMod with the Graphic User Interface (GUI)
 
-JMod can be run via either a CLI or a GUI. Tutorials on how to do both can be found below.
+JMod can be run through a GUI. To launch the GUI, use:
+
+```
+python path/to/run_jmod_from_GUI.py 
+```
+
+More detailed instructions on how to run JMod from the GUI can be found
+[here.](/Help/JMod_Tutorial.pdf)
+
 
 ###
-### Command Line Interface (CLI) 
+### Running JMod with Command Line Interface (CLI) 
 
 JMod can be run through the command line with various search parameters. An example command is shown below:
 ```
@@ -135,18 +144,6 @@ JMod can also be run with a preset configuration file. That configuration file w
 python path/to/run_jmod.py --config_json path/to/config.json
 ```
 
-
- 
-### Graphic User Interface (GUI)
-
-JMod can be run through a GUI. To launch the GUI, use:
-
-```
-python path/to/run_jmod_from_GUI.py 
-```
-
-More detailed instructions on how to run JMod from the GUI can be found
-[here.](/Help/JMod_Tutorial.pdf)
 
 ###
 ### Output Files
