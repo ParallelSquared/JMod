@@ -23,7 +23,7 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
   - [File Conversion](#file-conversion)
   - [Library Structure](#library-structure)
   - [Graphic User Interface (GUI)](#running-jmod-with-the-graphic-user-interface-gui)
-  - [Command Line Interface (CLI)](#running-jmod-with-the-command-line-cli)
+  - [Command Line Interface (CLI)](#running-jmod-with-the-command-line-interface-cli)
 - [Output Files](#output-files)
 
 ###
