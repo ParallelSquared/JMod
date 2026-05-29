@@ -65,16 +65,19 @@ To run a JMod search, both a .mzML spectrum file and a .tsv spectral library are
 
 JMod currently supports `.mzML` files. Direct support for `.d` and `.raw` files will be added in future releases. In the meantime, please convert `.raw` files to `.mzML` files. When converting files to `.mzML`, the data should be centroided. This can be done with MSConvert with the command `--filter peakPicking true 1-`
 
+###
 ### Library Structure  
 
 JMod requires specific library columns in a .tsv for searches to run successfully. An example library with the required columns can be found [here](/data/filtered_library.tsv).
 
 <!-- TODO: Image of the library headings (?) or something similar -->
 
+###
 ### Command Line Interface (CLI) & Graphic User Interface (GUI)
 
 JMod can be run via either a CLI or a GUI. Tutorials on how to do both can be found below.
 
+###
 ### Command Line Interface (CLI) 
 
 JMod can be run through the command line with various search parameters. An example command is shown below:
@@ -145,7 +148,7 @@ python path/to/run_jmod_from_GUI.py
 More detailed instructions on how to run JMod from the GUI can be found
 [here.](/Help/JMod_Tutorial.pdf)
 
-
+###
 ### Output Files
 
 <!-- TODO: Fix wording -->
