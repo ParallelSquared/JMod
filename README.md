@@ -146,7 +146,7 @@ python path/to/run_jmod.py --config_json path/to/config.json
 
 
 ###
-### Output Files
+## Output Files
 
 <!-- TODO: Fix wording -->
 
