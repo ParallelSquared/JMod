@@ -275,14 +275,6 @@ class JModGUI(ThemedTk):
         default_dict["lib_frac"]["tk_handle"] = self.min_lib_int_entry
         self.min_lib_int_entry.insert(0, "0.5")
 
-        # self.min_lib_int_score_lab = ttk.Label(self.ms_frame, text="Lib Match Score:")
-        # self.min_lib_int_score_lab.grid(row=2, column=2, padx=20, pady=5, sticky="e")
-        # Hovertip(self.min_lib_int_score_lab, "Minimum fraction library intensity matched to score")
-        # self.min_lib_int_score_entry = ttk.Entry(self.ms_frame, width=6)
-        # self.min_lib_int_score_entry.grid(row=2, column=3, padx=5, pady=5, sticky="w")
-        # default_dict["score_lib_frac"]["tk_handle"] = self.min_lib_int_score_entry
-        # self.min_lib_int_score_entry.insert(0, "0.5")
-
 
         # RT Tolerance (label + checkbox + entry)
         self.rt_tolerance_lab = ttk.Label(self.ms_frame, text="RT Tolerance:")

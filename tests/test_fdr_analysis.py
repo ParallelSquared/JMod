@@ -108,13 +108,10 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                                                  None))
 
     monkeypatch.setattr("src.fdr_analysis.score_precursors",
-                        lambda *args, **kwargs: pd.DataFrame({
-                            "untag_prec": ["AAAA_2", "BBBB_2"],
-                            "channel": [0, 0],
-                            "silac_channel": [np.nan, np.nan],
-                            "PredVal": [0.5, 0.7],
-                            "Qvalue": [0.01, 0.02],
-                        }))
+                        lambda fdc, *args, **kwargs: fdc.assign(
+                            PredVal=[0.5, 0.7],
+                            Qvalue=[0.01, 0.02],
+                        ))
 
     monkeypatch.setattr("src.fdr_analysis.ms1_quant",
                         lambda *args, **kwargs: args[0])

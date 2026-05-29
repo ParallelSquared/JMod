@@ -25,7 +25,6 @@
     "use_emp_rt": false,
     "predict_decoys": false,
     "unfiltered_quant": true,
-    "score_lib_frac": 0.5,
     "user_rt_tol": false,
     "rt_tol": 0.5,
     "initial_percentile": 50,

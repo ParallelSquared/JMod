@@ -326,17 +326,6 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
-'score_lib_frac': {
-        'flags': ('--score_lib_frac',),
-        'default': 0.5,
-        'takes_value': True,
-        'in_GUI': False,
-        'type': 'float',
-        'widget': 'entry',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': '+<1'
-    },
     'user_rt_tol': {
         'flags': ('--user_rt_tol',),
         'default': False,

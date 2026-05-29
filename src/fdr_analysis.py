@@ -1105,16 +1105,10 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     for col in corr_features.columns:
         fdc[col] = corr_features[col].values
 
-    minfraclib_toscore = getattr(config.args, "score_lib_frac", 0)
-    fdx_toscore = fdc[fdc['frac_lib_int'].fillna(0) >= minfraclib_toscore].reset_index(drop=True)
-    
-    fin = score_precursors(fdx_toscore,config.score_model,config.fdr_threshold,folder=results_folder)
-    new_columns = [col for col in fin.columns if col not in fdc.columns and col not in ["untag_prec", "channel"]]
-    fdx = fdc.merge(fin[["untag_prec", "channel","silac_channel"] + new_columns], how="left", on=["untag_prec", "channel","silac_channel"])
+    fdx = score_precursors(fdc.reset_index(drop=True), config.score_model, config.fdr_threshold, folder=results_folder)
 
-    ##fill NA's appropriately
-    fdx['PredVal'] = fdx['PredVal'].fillna(0)  
-    fdx['Qvalue'] = fdx['Qvalue'].fillna(1)     
+    fdx['PredVal'] = fdx['PredVal'].fillna(0)
+    fdx['Qvalue'] = fdx['Qvalue'].fillna(1)
 
 
     # if config.args.plexDIA:
