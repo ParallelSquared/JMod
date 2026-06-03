@@ -64,7 +64,14 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     observed_mods: set[str] = set()
     for ms in _mod_array_map:
         observed_mods.update(extract_mod_names(ms))
-    rev_map = {round(mod_dict[m], 4): m for m in observed_mods}
+    rev_map = {}
+    for m in observed_mods:
+        if m.startswith('[') and m.endswith(']'):
+            inner = m[1:-1]
+            mass = mod_dict[inner] if inner in mod_dict else float(inner)
+        else:
+            mass = mod_dict[m]
+        rev_map[round(mass, 4)] = m
 
     db = ps.IndexedDatabase.from_library(
         library=pl_lib,
@@ -654,8 +661,12 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFr
 def peptide_to_mod_array(peptide_str, mod_dict):
     """
     Convert peptide string with modifications to a float array.
+
+    Supports two modification notations:
+      - Parenthesized names, looked up in ``mod_dict``:  ``K(UniMod:4)PEPTIDE``
+      - Bracketed numeric masses (sign required):        ``K[+57.0]PEPTIDE``
     """
-    mod_pattern = re.compile(r'\(([^\)]+)\)')
+    mod_pattern = re.compile(r'\([^\)]+\)|\[[^\]]+\]')
     clean_seq = mod_pattern.sub('', peptide_str)
     mod_array = np.zeros(len(clean_seq) + 2, dtype=float)
 
@@ -671,12 +682,23 @@ def peptide_to_mod_array(peptide_str, mod_dict):
         if char.isalpha():
             seq_index += 1
             i += 1
-        elif char == '(':
-            j = peptide_str.index(')', i)
-            mod_name = peptide_str[i + 1:j]
-            if mod_name not in mod_dict:
-                raise ValueError(f"Unknown modification: {mod_name}")
-            mod_mass = mod_dict[mod_name]
+        elif char == '(' or char == '[':
+            close = ')' if char == '(' else ']'
+            j = peptide_str.index(close, i)
+            mod_token = peptide_str[i + 1:j]
+            # Prefer the dict's exact monoisotopic mass when the token is a
+            # known key (e.g. "+57.0" → 57.021464, "UniMod:4" → 57.021464);
+            # fall back to parsing as a raw numeric mass.
+            if mod_token in mod_dict:
+                mod_mass = mod_dict[mod_token]
+            else:
+                try:
+                    mod_mass = float(mod_token)
+                except ValueError:
+                    raise ValueError(f"Unknown modification: {mod_token}")
+
+            next_char = peptide_str[j + 1] if j + 1 < len(peptide_str) else ''
+            next_is_mod = next_char == '(' or next_char == '['
 
             # --- N-terminal logic ---
             if seq_index == 1 and mods_after_first_aa == 0:
@@ -686,8 +708,6 @@ def peptide_to_mod_array(peptide_str, mod_dict):
 
             # --- C-terminal logic ---
             elif seq_index == seq_len:
-                # Check if next char(s) are also '(' (another mod at the C-term)
-                next_is_mod = j + 1 < len(peptide_str) and peptide_str[j + 1] == '('
                 if next_is_mod and mods_after_last_aa == 0:
                     # first of the final two mods → last residue
                     mod_array[seq_index] += mod_mass
@@ -712,11 +732,14 @@ def peptide_to_mod_array(peptide_str, mod_dict):
 
 def extract_mod_names(mod_seq: str):
     """
-    From a mod_seq like 'ACD(Phospho)EFG(ox)', return ['Phospho', 'ox'].
-    Duplicates removed automatically.
+    From a mod_seq like 'ACD(Phospho)EFG(ox)K[+57.0]', return
+    ['Phospho', 'ox', '[+57.0]']. Paren-mods are returned as bare names;
+    bracket-mods are returned with their brackets so the caller can tell
+    the two notations apart. Duplicates removed automatically.
     """
-    mod_pattern = re.compile(r'\(([^\)]+)\)')
-    return list(set(mod_pattern.findall(mod_seq)))
+    paren = re.compile(r'\(([^\)]+)\)')
+    bracket = re.compile(r'(\[[^\]]+\])')
+    return list(set(paren.findall(mod_seq)) | set(bracket.findall(mod_seq)))
 
 
 if __name__ == '__main__':
