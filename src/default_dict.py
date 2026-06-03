@@ -104,7 +104,7 @@ default_dict = {
         'widget': 'checkbox',
         'tk_handle': None,
         'special_upload': False,
-        'values': None
+        'values': "+"
     },
     'additional_scans': {
         'flags': ('--additional_scans',),
