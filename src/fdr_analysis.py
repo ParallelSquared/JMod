@@ -115,6 +115,23 @@ def area(x, apex_idx):
     return np.sum(top_3)
 
 
+def argmax_within_radius(fitted, start_pos, radius=None):
+    """Pick the index with the highest ``fitted`` value within
+    ``start_pos ± radius`` cycles, capped one position in from either edge so
+    ``area`` always has both neighbors for the top-3 sum. When ``radius`` is
+    ``None`` the cap is the full interior of ``fitted``.
+    """
+    n = len(fitted)
+    if n < 3:
+        return start_pos
+    lo = 1
+    hi = n - 2
+    if radius is not None:
+        lo = max(lo, start_pos - radius)
+        hi = min(hi, start_pos + radius)
+    return lo + int(np.argmax(fitted[lo:hi + 1]))
+
+
 def walk_to_local_max(fitted, start_pos, apex_jitter=None):
     """Slide the apex from ``start_pos`` toward a local maximum, one cycle at a
     time, while strictly increasing. Capped one position in from either edge so
@@ -317,7 +334,16 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         fitted = extracted_fitted[idx]
         specs = extracted_fitted_specs[idx]
         center = len(fitted) // 2
-        apex_pos = walk_to_local_max(fitted, center, apex_jitter=int(config.args.apex_jitter))
+        # Per-channel apex selection: optionally argmax-pick a seed within
+        # ±additional_scans of the group-voted center, then let the monotonic
+        # walk drift from that seed within ±apex_jitter. The two knobs are
+        # independent — apex_jitter still matters when free_apex is on, and
+        # vice versa.
+        if config.args.free_apex:
+            seed = argmax_within_radius(fitted, center, radius=int(config.additional_scans))
+        else:
+            seed = center
+        apex_pos = walk_to_local_max(fitted, seed, apex_jitter=int(config.args.apex_jitter))
         plex_areas.append(area(fitted, apex_pos))
         apex_scans.append(int(specs[apex_pos]))
     fdc["plex_Area"] = plex_areas

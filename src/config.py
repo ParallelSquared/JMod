@@ -124,8 +124,8 @@ decoy_mz_offset = 0
 ### moving average window MS1 trace
 smoothing_window = 3
 
-### additional scans beyond MS1 peak found
-additional_scans = 0
+### additional scans beyond MS1 peak found (CLI: --additional_scans)
+additional_scans = args.additional_scans
 
 ## min number of scans???
 

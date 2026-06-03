@@ -93,7 +93,29 @@ default_dict = {
         'widget': 'dropdown',
         'tk_handle': None,
         'special_upload': False,
-        'values': '+<10'
+        'values': '+'
+    },
+    'free_apex': {
+        'flags': ('--free_apex',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': False,
+        'type': 'bool',
+        'widget': 'checkbox',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': None
+    },
+    'additional_scans': {
+        'flags': ('--additional_scans',),
+        'default': 0,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': 'dropdown',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
     },
     'threads': {
         'flags': ('-t', '--threads'),
