@@ -115,11 +115,13 @@ def area(x, apex_idx):
     return np.sum(top_3)
 
 
-def walk_to_local_max(fitted, start_pos):
+def walk_to_local_max(fitted, start_pos, apex_jitter=None):
     """Slide the apex from ``start_pos`` toward a local maximum, one cycle at a
     time, while strictly increasing. Capped one position in from either edge so
     the picked apex always has both neighbors available for ``area`` to sum the
-    top-3 window.
+    top-3 window. When ``apex_jitter`` is given, the walk additionally stops
+    once it has moved ``apex_jitter`` cycles from ``start_pos`` in either
+    direction.
 
     Returns the new apex index. Identical to ``start_pos`` when the voted apex
     is already a local maximum.
@@ -129,6 +131,9 @@ def walk_to_local_max(fitted, start_pos):
         return start_pos
     lo_cap = 1
     hi_cap = n - 2
+    if apex_jitter is not None:
+        lo_cap = max(lo_cap, start_pos - apex_jitter)
+        hi_cap = min(hi_cap, start_pos + apex_jitter)
     i = start_pos
     while True:
         left_ok = (i - 1 >= lo_cap)
@@ -312,7 +317,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         fitted = extracted_fitted[idx]
         specs = extracted_fitted_specs[idx]
         center = len(fitted) // 2
-        apex_pos = walk_to_local_max(fitted, center)
+        apex_pos = walk_to_local_max(fitted, center, apex_jitter=int(config.args.apex_jitter))
         plex_areas.append(area(fitted, apex_pos))
         apex_scans.append(int(specs[apex_pos]))
     fdc["plex_Area"] = plex_areas
