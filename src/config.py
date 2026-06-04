@@ -57,12 +57,8 @@ error_already_handled = False
 GUI_result_queue = None
 
 
-mz_ppm = args.ppm
-mz_tol = mz_ppm*10**(-6)
 ms1_ppm = 20
 ms1_tol = ms1_ppm*10**(-6)
-
-num_timeplex = args.num_timeplex
 
 rt_tol = 9
 im_tol = 0.5
@@ -74,8 +70,6 @@ top_n_pasef = 10
 atleast_m_pasef = 3
 
 max_window_offset = None
-
-numProc = args.threads
 
 
 chunksize = 10
@@ -108,7 +102,6 @@ FT_minimum = 1e3
 ### minimum ms1 tolerance; set to 0 to ignore
 min_ms1_tol = 0#3e-6
 
-num_iso_peaks = args.num_iso
 min_iso_intensity = 1e-3 ## derived empirically
 
 ## how many isotope pearsonR corr to collect
@@ -124,9 +117,6 @@ decoy_mz_offset = 0
 ### moving average window MS1 trace
 smoothing_window = 3
 
-### additional scans beyond MS1 peak found (CLI: --additional_scans)
-additional_scans = args.additional_scans
-
 ## min number of scans???
 
 
@@ -134,16 +124,7 @@ additional_scans = args.additional_scans
 test_var = "test_1"
 
 ### filters for picking spectra to fit
-frac_lib_matched = args.lib_frac
-match_ms1 = args.no_ms1_req
 top_n = 10
-atleast_m = args.atleast_m
-
-
-
-
-## How to deal with unmatched intensity:
-unmatched_fit_type = args.unmatched
 """
 3 fit_types:
     a: All summed unmatched intensities are fit to a single zero intensity "obs peak"
@@ -259,21 +240,13 @@ def load_config_from_json(json_path):
         with open(json_path, 'r') as f:
             config_data = json.load(f)
         
-        # Update args with values from JSON
+        # Update args with values from JSON. Downstream code reads
+        # ``config.args.X`` directly, so there is no module-level alias to
+        # re-sync — mutating the Namespace is enough.
         for key, value in config_data.items():
             if hasattr(args, key):
                 setattr(args, key, value)
 
-        globals()['mz_ppm'] = args.ppm
-        globals()['mz_tol'] = args.ppm * 10**(-6)
-        globals()['num_timeplex'] = args.num_timeplex
-        globals()['numProc'] = args.threads
-        globals()['num_iso_peaks'] = args.num_iso
-        globals()['frac_lib_matched'] = args.lib_frac
-        globals()['match_ms1'] = args.no_ms1_req
-        globals()['atleast_m'] = args.atleast_m
-        globals()['unmatched_fit_type'] = args.unmatched
-        
         # Set additional config variables if present
         if 'additional_config' in config_data:
             for key, value in config_data['additional_config'].items():

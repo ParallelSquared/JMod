@@ -249,7 +249,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False,v
                                 timeplex=timeplex,
                                 num_iso = config.num_iso_ms1,
                                 num_iso_r = config.num_iso_r,
-                                additional_scans = config.additional_scans,
+                                additional_scans = config.args.additional_scans,
                                 vote_sigma = vote_sigma,
                                 fit_whole_MS1=fit_whole_MS1
                                 )
@@ -340,7 +340,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         # independent — apex_jitter still matters when free_apex is on, and
         # vice versa.
         if config.args.free_apex:
-            seed = argmax_within_radius(fitted, center, radius=int(config.additional_scans))
+            seed = argmax_within_radius(fitted, center, radius=int(config.args.additional_scans))
         else:
             seed = center
         apex_pos = walk_to_local_max(fitted, seed, apex_jitter=int(config.args.apex_jitter))
@@ -821,7 +821,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         plt.hist(output[y.astype(bool)],bins,alpha=.5,log=y_log,label="Targets")
         plt.hist(output[~y.astype(bool)],bins,alpha=.5,log=y_log,label="Decoys")
         plt.legend()
-        plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        plt.title(model_name+ f" - Type {config.args.unmatched}")
         plt.vlines(T,0,max(vals))
         plt.savefig(folder+"/scoring/ModelScore.png",dpi=600,bbox_inches="tight")
         plt.close()
@@ -838,7 +838,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
         plt.xlabel(feat)
         plt.ylabel("Frequency")
-        # plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        # plt.title(model_name+ f" - Type {config.args.unmatched}")
         plt.title(model_name)
         plt.legend()
         plt.savefig(folder+"/scoring/RT_error.png",dpi=600,bbox_inches="tight")
@@ -861,7 +861,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
         plt.xlabel(feat)
         plt.ylabel("Frequency")
-        # plt.title(model_name+ f" - Type {config.unmatched_fit_type}")
+        # plt.title(model_name+ f" - Type {config.args.unmatched}")
         plt.title(model_name)
         plt.legend()
         plt.savefig(folder+"/scoring/mz_error.png",dpi=600,bbox_inches="tight")
@@ -1092,7 +1092,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     fdc = add_median_based_features(fdc, metrics_to_process)
 
     # Compute frac_shared_intensity: fraction of library intensity from fragments shared across channels
-    fdc["frac_shared_intensity"] = _compute_frac_shared_intensity(fdc, mz_tol=config.mz_tol)
+    fdc["frac_shared_intensity"] = _compute_frac_shared_intensity(fdc, mz_tol=(config.args.ppm * 1e-6))
 
     if timeplex:
         if mass_tag:
@@ -1131,7 +1131,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         library=library,
         fdc=fdc,
         fwhm=elution_fwhm,
-        mz_tol=config.mz_tol,
+        mz_tol=(config.args.ppm * 1e-6),
     )
     for col in corr_features.columns:
         fdc[col] = corr_features[col].values

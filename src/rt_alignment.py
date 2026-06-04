@@ -435,7 +435,7 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
                                     frac_matched=.8, ## NB: this may be selcting for smaller peptides
                                     rt_tol = config.rt_tol,
                                     ms1_tol = config.ms1_tol,
-                                    mz_tol = config.mz_tol
+                                    mz_tol = (config.args.ppm * 1e-6)
                                     )
         fit_outputs.append(fit_output)
         
@@ -1943,10 +1943,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     multiples, num_multiples, multiples_idxs = get_multiples(id_keys, output_df)
     
-    if config.num_timeplex==0:
+    if config.args.num_timeplex==0:
         n_timeplex = stats.mode(num_multiples).mode
     else:
-        n_timeplex = config.num_timeplex
+        n_timeplex = config.args.num_timeplex
         
     # while it may be nice to know, we are assuming that this is not constant and therfore not necessary to know
     time_diffs = np.concatenate([np.diff(i) for i in multiples if len(i)==n_timeplex])

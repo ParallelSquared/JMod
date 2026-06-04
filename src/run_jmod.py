@@ -80,7 +80,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
 
     use_rt = "RT" if config.args.use_rt else ""
-    iso = f"iso{config.num_iso_peaks}" if config.args.iso else ""
+    iso = f"iso{config.args.num_iso}" if config.args.iso else ""
     lib_frac = f"iso{config.args.lib_frac}"
     mTRAQ = "mTRAQ" if config.args.mTRAQ else ""
     plexDIA = "plexDIA" if config.args.plexDIA else ""
@@ -221,7 +221,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # Note: This is a rough filter that will be refined after RT alignment
         filtered_library = {}
         rt_tolerance = config.rt_tol * 2  # Use a wider tolerance initially
-        mz_tolerance = config.mz_tol * 2
+        mz_tolerance = (config.args.ppm * 1e-6) * 2
         
         for key, entry in spectrumLibrary.items():
             #if (config.args.test_rt_min - rt_tolerance <= entry["iRT"] <= config.args.test_rt_max + rt_tolerance and
@@ -293,11 +293,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         if config.args.use_features and os.path.exists(feature_path):
             logger.info("Loading Dinosaur features")
             dino_features = pd.read_csv(feature_path, delimiter="\t")
-            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, dino_features, config.mz_tol, results_folder=results_folder_path,
+            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6), results_folder=results_folder_path,
                                             ms2=config.args.ms2_align)
         else:
             logger.info("Not using features")
-            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, None, config.mz_tol, results_folder=results_folder_path,
+            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, None, (config.args.ppm * 1e-6), results_folder=results_folder_path,
                                             ms2=config.args.ms2_align)
         # Timeplex path doesn't compute elution SD yet — use the historical default.
         vote_sigma = 1.0
@@ -329,7 +329,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     else:
         funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma = MZRTfit(
-            DIAspectra, target_view, dino_features, config.mz_tol,
+            DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6),
             results_folder=results_folder_path,
             ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
             return_rt_models=config.args.predict_decoys,
@@ -371,7 +371,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ## Merge peaks in spectra (MS2 only; MS1 peaks are summed within
     ## tolerance during matrix construction in fit_channel_isotopes_numba)
     for spec in DIAspectra.ms2scans:
-        merge_spectrum_peaks(spec, config.mz_tol)
+        merge_spectrum_peaks(spec, (config.args.ppm * 1e-6))
 
     spectra_to_fit = DIAspectra.ms2scans
 
@@ -390,7 +390,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     if config.args.iso:
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
                                                   tag=config.tag,
-                                                  n_iso=config.num_iso_peaks)
+                                                  n_iso=config.args.num_iso)
 
     spectrumLibrary.bulk_set_top_n(config.top_n)
     logger.info("Finished Library Setup")
@@ -399,7 +399,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     if not config.args.timeplex:
         from src.fragment_index import FragmentIndex
         logger.info("Building fragment ion index")
-        frag_index = FragmentIndex.build(spectrumLibrary, all_keys, rt_mz, config.mz_ppm)
+        frag_index = FragmentIndex.build(spectrumLibrary, all_keys, rt_mz, config.args.ppm)
         logger.info("Fragment index built")
     else:
         frag_index = None
@@ -489,7 +489,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                    rt_filter=True,
                                    rt_tol=config.opt_rt_tol,
                                    ms1_tol=config.opt_ms1_tol,
-                                   mz_tol=config.mz_tol,
+                                   mz_tol=(config.args.ppm * 1e-6),
                                    ms1_spectra=DIAspectra.ms1scans,
                                    return_frags=False,
                                    decoy=True,

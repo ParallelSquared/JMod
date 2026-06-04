@@ -1186,8 +1186,8 @@ def create_entries_direct(centroid_breaks,
             np.ascontiguousarray(prec_mzs, dtype=np.float64),
             np.ascontiguousarray(ms1_spec.mz, dtype=np.float64),
             float(ms1_tol),
-            float(config.frac_lib_matched), int(atleast_m),
-            bool(config.match_ms1))
+            float(config.args.lib_frac), int(atleast_m),
+            bool(config.args.no_ms1_req))
 
     # Reconstruct Python lists from JIT output — only for passing candidates
     peaks_in_dia = passing.tolist()
@@ -2104,8 +2104,8 @@ def create_entries(centroid_breaks,
             np.ascontiguousarray(prec_mzs, dtype=np.float64),
             np.ascontiguousarray(ms1_spec.mz, dtype=np.float64),
             float(ms1_tol),
-            float(config.frac_lib_matched), int(atleast_m),
-            bool(config.match_ms1))
+            float(config.args.lib_frac), int(atleast_m),
+            bool(config.args.no_ms1_req))
 
     # Reconstruct Python lists from JIT output
     peaks_in_dia = passing.tolist()
@@ -2143,7 +2143,7 @@ def fit_to_lib2(dia_spec,
     
     spec_idx=dia_spec.scan_num
     top_n=config.top_n
-    atleast_m=config.atleast_m
+    atleast_m=config.args.atleast_m
     spec = dia_spec
     dia_spectrum = np.stack(spec.peak_list(),1)
     prec_mz = spec.prec_mz
@@ -2559,7 +2559,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
     # rt_tol = min(config.rt_tol,config.opt_rt_tol)
     # ms1_tol = min(config.ms1_tol,config.opt_ms1_tol)
     top_n=config.top_n
-    atleast_m=config.atleast_m
+    atleast_m=config.args.atleast_m
     spec = dia_spec#spectra.ms2scans[spec_idx]
     dia_spectrum = np.stack(spec.peak_list(),1)
     prec_mz = spec.prec_mz
@@ -2941,7 +2941,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
 #     # rt_tol = min(config.rt_tol,config.opt_rt_tol)
 #     # ms1_tol = min(config.ms1_tol,config.opt_ms1_tol)
 #     top_n=config.top_n
-#     atleast_m=config.atleast_m
+#     atleast_m=config.args.atleast_m
 
 #     spec = dia_spec#spectra.ms2scans[spec_idx]
 #     dia_spectrum = np.stack(spec.peak_list(),1)
