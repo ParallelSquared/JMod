@@ -1,0 +1,31 @@
+{
+    "mzml": "data/test_mode_filtered.mzML",
+    "speclib": "data/filtered_library.tsv",
+    "use_emp_rt": true,
+    "predict_decoys": false,
+    "use_features": true,
+    "atleast_m": 3,
+    "threads": 10,
+    "ppm": 20,
+    "output_folder": null,
+    "ms2_align":false,
+    "timeplex": false,
+    "num_timeplex": 0,
+    "iso": true,
+    "unmatched": "c",
+    "decoy": "rev",
+    "tag": "",
+    "num_iso": 5,
+    "lib_frac": 0.5,
+    "test_mode": true,
+    "additional_config": {
+      "mz_tol": 0.00001,
+      "rt_tol": 5,
+      "im_tol": 0.5,
+      "rt_width": 1.5,
+      "numProc": 10,
+      "top_n": 10,
+      "atleast_m": 3,
+      "FT_minimum": 1000
+    }
+  }
