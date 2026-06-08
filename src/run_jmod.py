@@ -476,48 +476,50 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         logger.info(f"Fitting batch {batch_idx+1} of {num_batches}")
 
         batch_parquet_path = results_folder_path + f"/decoylibsearch_coeffs_batch{batch_idx}.parquet"
-        writer = pq.ParquetWriter(batch_parquet_path, _pa_schema)
-        buffer = []
         n_results = 0
 
-        with ThreadPoolExecutor(max_workers=n_threads) as pool:
-            futures = {pool.submit(fit_to_lib2, dia_spec,
-                                   library=spectrumLibrary,
-                                   rt_mz=rt_mz,
-                                   all_keys=all_keys,
-                                   dino_features=None,
-                                   rt_filter=True,
-                                   rt_tol=config.opt_rt_tol,
-                                   ms1_tol=config.opt_ms1_tol,
-                                   mz_tol=(config.args.ppm * 1e-6),
-                                   ms1_spectra=DIAspectra.ms1scans,
-                                   return_frags=False,
-                                   decoy=True,
-                                   output_folder=results_folder_path,
-                                   frag_index=frag_index,
-                                   ms1_rt=_ms1_rt,
-                                   im_bin_ms1=_im_bin_ms1): i
-                      for i, dia_spec in enumerate(batch_spectra)}
+        # ``with`` guarantees ``writer.close()`` even when a worker crashes or
+        # a network write fails — otherwise the OS handle (and the server-side
+        # SMB/NFS oplock on network mounts like Synology) leaks and the file
+        # stays "Resource busy" until the next mount cycle.
+        with pq.ParquetWriter(batch_parquet_path, _pa_schema) as writer:
+            buffer = []
+            with ThreadPoolExecutor(max_workers=n_threads) as pool:
+                futures = {pool.submit(fit_to_lib2, dia_spec,
+                                       library=spectrumLibrary,
+                                       rt_mz=rt_mz,
+                                       all_keys=all_keys,
+                                       dino_features=None,
+                                       rt_filter=True,
+                                       rt_tol=config.opt_rt_tol,
+                                       ms1_tol=config.opt_ms1_tol,
+                                       mz_tol=(config.args.ppm * 1e-6),
+                                       ms1_spectra=DIAspectra.ms1scans,
+                                       return_frags=False,
+                                       decoy=True,
+                                       output_folder=results_folder_path,
+                                       frag_index=frag_index,
+                                       ms1_rt=_ms1_rt,
+                                       im_bin_ms1=_im_bin_ms1): i
+                          for i, dia_spec in enumerate(batch_spectra)}
 
-            for f in tqdm.tqdm(as_completed(futures), total=len(futures)):
-                result = f.result()
-                if result:
-                    buffer.extend(result)
-                    n_results += len(result)
-                    if len(buffer) >= _BUFFER_SIZE:
-                        _col_data = {col: [row[i] for row in buffer]
-                                     for i, col in enumerate(_pl_schema)}
-                        writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
-                        buffer.clear()
+                for f in tqdm.tqdm(as_completed(futures), total=len(futures)):
+                    result = f.result()
+                    if result:
+                        buffer.extend(result)
+                        n_results += len(result)
+                        if len(buffer) >= _BUFFER_SIZE:
+                            _col_data = {col: [row[i] for row in buffer]
+                                         for i, col in enumerate(_pl_schema)}
+                            writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+                            buffer.clear()
 
-        # Flush remaining buffered results
-        if buffer:
-            _col_data = {col: [row[i] for row in buffer]
-                         for i, col in enumerate(_pl_schema)}
-            writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
-            buffer.clear()
-
-        writer.close()
+            # Flush remaining buffered results
+            if buffer:
+                _col_data = {col: [row[i] for row in buffer]
+                             for i, col in enumerate(_pl_schema)}
+                writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+                buffer.clear()
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         logger.info(f"Batch {batch_idx+1}: {n_results} results written")
 
@@ -540,14 +542,18 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     batch_files = sorted(_glob.glob(results_folder_path + "/decoylibsearch_coeffs_batch*.parquet"))
     decoylib_search_path = results_folder_path + "/outputs/decoylibsearch_coeffs.parquet"
     merge_writer = None
-    for bf in batch_files:
-        table = pq.read_table(bf)
-        if merge_writer is None:
-            merge_writer = pq.ParquetWriter(decoylib_search_path, table.schema)
-        merge_writer.write_table(table)
-        del table
-    if merge_writer:
-        merge_writer.close()
+    try:
+        for bf in batch_files:
+            table = pq.read_table(bf)
+            if merge_writer is None:
+                merge_writer = pq.ParquetWriter(decoylib_search_path, table.schema)
+            merge_writer.write_table(table)
+            del table
+    finally:
+        # Guarantee close even on read/write failure mid-merge — same Synology
+        # oplock leak story as the batch writer above.
+        if merge_writer is not None:
+            merge_writer.close()
     for bf in batch_files:
         os.remove(bf)
     process_data(file=decoylib_search_path,

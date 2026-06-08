@@ -395,8 +395,19 @@ def get_large_prec(file,
         "obs_int", "unique_frag_mz", "unique_obs_int"
     ]
 
-    decoy_coeffs_lf = pl.scan_parquet(file)
-
+    # Drop list columns from the lazy chain so the polars sort buffer holds
+    # only scalar columns. Sorting 37M rows with all 7 list cols intact OOMs
+    # at ~30-40 GB (no explicit projection means no pushdown). List cols are
+    # re-fetched after collect via a second parquet scan joined on a row
+    # index, then attached to fdx_quant just before to_csv.
+    _LIST_COLS = ["frag_names", "frag_errors", "frag_mz", "frag_int",
+                  "obs_int", "unique_frag_mz", "unique_obs_int"]
+    _scan = pl.scan_parquet(file)
+    _scan_cols = set(_scan.collect_schema().names())
+    _present_list_cols = [c for c in _LIST_COLS if c in _scan_cols]
+    decoy_coeffs_lf = (_scan
+                        .with_row_index("__parquet_row")
+                        .drop(_present_list_cols))
     decoy_coeffs_lf = find_extrema_in_nearby_scans(
         decoy_coeffs_lf,
         ["manhattan_distances", "max_matched_residuals", "gof_stats", "scribe_scores"],
@@ -464,14 +475,48 @@ def get_large_prec(file,
             for i, j, k in large_prec_lf.collect().iter_rows()
         }
 
-    # Collect lazy frames
-    filtered_decoy_coeffs = filtered_decoy_coeffs_lf.collect().to_pandas()
-    decoy_coeffs = decoy_coeffs_lf.collect().to_pandas()
+    # Collect the slim frame (list cols already dropped at the top of the
+    # lazy chain, so the sort buffer is scalar-only).
+    _fdc_polars = filtered_decoy_coeffs_lf.collect()
+    _fdc_polars = _fdc_polars.with_row_index("__fdc_idx")
+
+    # Re-fetch list cols for the kept rows only. Inner-join on the original
+    # parquet row index (added to the slim chain via with_row_index above)
+    # bounds the materialized list cols to ~1.83M rows instead of 37M.
+    if _present_list_cols:
+        _row_keys = _fdc_polars.select(["__parquet_row", "__fdc_idx"]).lazy()
+        fdc_list_cols = (pl.scan_parquet(file)
+                           .with_row_index("__parquet_row")
+                           .select(["__parquet_row"] + _present_list_cols)
+                           .join(_row_keys, on="__parquet_row", how="inner")
+                           .drop("__parquet_row")
+                           .collect())
+    else:
+        fdc_list_cols = pl.DataFrame({"__fdc_idx": []})
+
+    filtered_decoy_coeffs = _fdc_polars.drop("__parquet_row").to_pandas()
+    del _fdc_polars
+
+    # ``dc`` (decoy_coeffs) is consumed only by ms1_cor_channels, which reads a
+    # handful of numeric columns and groups by (seq, z[, time_channel]). Drop
+    # the list columns and the lazy-frame feature augmentations here — full
+    # pandas materialization of the augmented frame OOMs at ~60GB on multiplexed
+    # low-input runs. Re-scan the parquet directly to skip the augmentation
+    # passes that the slim frame doesn't need.
+    dc_cols = ["seq", "z", "coeff", "rt", "Ms1_spec_id", "spec_id"]
+    dc_sort_keys = ["seq", "z"]
+    if timeplex:
+        dc_cols.append("time_channel")
+        dc_sort_keys.append("time_channel")
+    decoy_coeffs = (pl.scan_parquet(file)
+                      .select(dc_cols)
+                      .sort(dc_sort_keys)
+                      .collect())
 
     if condense_output:
         return large_prec, filtered_decoy_coeffs
     else:
-        return large_prec, filtered_decoy_coeffs, decoy_coeffs
+        return large_prec, filtered_decoy_coeffs, decoy_coeffs, fdc_list_cols
 
 
 

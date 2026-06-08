@@ -19,6 +19,7 @@ from scipy import stats
 import xgboost as xgb
 
 import numpy as np
+import polars as pl
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -108,6 +109,67 @@ def _compute_frac_shared_intensity(fdc, mz_tol):
             result[idx] = _compute_shared_frac_jit(target_mz, target_int, other_mz_flat, mz_tol)
 
     return result
+
+
+def _compute_frac_shared_intensity_from_polars(fdc, fdc_list_cols, mz_tol):
+    """Variant that reads frag_mz/frag_int from a polars list-cols frame.
+
+    Avoids materializing the list columns as pandas (which inflates 4-5× over
+    polars). Per-group iteration converts only the small per-precursor slice
+    to numpy arrays — the inner JIT function is unchanged.
+    """
+    n = len(fdc)
+    result = np.full(n, -1.0)
+
+    # Join untag_prec into the list-cols frame so we can group_by in polars.
+    untag_lookup = pl.from_pandas(fdc[["__fdc_idx", "untag_prec"]])
+    joined = fdc_list_cols.join(untag_lookup, on="__fdc_idx").select(
+        "__fdc_idx", "untag_prec", "frag_mz", "frag_int"
+    )
+
+    for _, group in joined.group_by("untag_prec"):
+        indices = group["__fdc_idx"].to_list()
+        if len(indices) < 2:
+            continue
+        mz_lists = group["frag_mz"].to_list()
+        int_lists = group["frag_int"].to_list()
+        mz_arrays = [np.asarray(x, dtype=np.float64) if x else np.array([], dtype=np.float64)
+                     for x in mz_lists]
+        int_arrays = [np.asarray(x, dtype=np.float64) if x else np.array([], dtype=np.float64)
+                      for x in int_lists]
+        for k, fdc_idx in enumerate(indices):
+            other_parts = [mz_arrays[j] for j in range(len(indices)) if j != k]
+            if len(other_parts) == 0 or all(len(p) == 0 for p in other_parts):
+                result[fdc_idx] = 0.0
+                continue
+            other_mz_flat = np.concatenate(other_parts)
+            target_mz = mz_arrays[k]
+            target_int = int_arrays[k]
+            if len(target_mz) == 0:
+                result[fdc_idx] = 0.0
+                continue
+            result[fdc_idx] = _compute_shared_frac_jit(
+                target_mz, target_int, other_mz_flat, mz_tol
+            )
+    return result
+
+
+def _compute_med_frag_error_from_polars(fdc_list_cols):
+    """Polars-native med_frag_error computation. Returns a pandas DataFrame
+    indexed by ``__fdc_idx`` with a single ``med_frag_error`` column."""
+    explode_frame = fdc_list_cols.select(
+        pl.col("frag_errors").explode().drop_nulls().alias("e")
+    )
+    if explode_frame.height > 0:
+        global_median = float(explode_frame["e"].median())
+    else:
+        global_median = 0.0
+    return fdc_list_cols.select(
+        pl.col("__fdc_idx"),
+        pl.col("frag_errors").list.eval(
+            (pl.element() - global_median).abs()
+        ).list.median().alias("med_frag_error")
+    ).to_pandas()
 
 
 def area(x, apex_idx):
@@ -1054,14 +1116,21 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
 
 
 def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0):
-    
+
     # results_folder = os.path.dirname(file)
     results_folder = os.path.dirname(os.path.dirname(file))
     mz_ppm = config.opt_ms1_tol
     rt_tol = config.opt_rt_tol
-    
+
     # After loading data and adding basic features
-    lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=timeplex)
+    _glp = get_large_prec(file, condense_output=False, timeplex=timeplex)
+    # Tests monkey-patch ``get_large_prec`` to return a legacy 3-tuple; the
+    # production path returns a 4-tuple with a separate polars list-cols frame.
+    if len(_glp) == 4:
+        lp, fdc, dc, fdc_list_cols = _glp
+    else:
+        lp, fdc, dc = _glp
+        fdc_list_cols = None
 
     # Add standard features
     fdc["stripped_seq"] = np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in fdc["seq"]])
@@ -1092,7 +1161,14 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     fdc = add_median_based_features(fdc, metrics_to_process)
 
     # Compute frac_shared_intensity: fraction of library intensity from fragments shared across channels
-    fdc["frac_shared_intensity"] = _compute_frac_shared_intensity(fdc, mz_tol=(config.args.ppm * 1e-6))
+    if fdc_list_cols is not None:
+        fdc["frac_shared_intensity"] = _compute_frac_shared_intensity_from_polars(
+            fdc, fdc_list_cols, mz_tol=(config.args.ppm * 1e-6)
+        )
+    else:
+        fdc["frac_shared_intensity"] = _compute_frac_shared_intensity(
+            fdc, mz_tol=(config.args.ppm * 1e-6)
+        )
 
     if timeplex:
         if mass_tag:
@@ -1119,10 +1195,15 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         
     #this was previously in ms1_quant function.. we need it for the target/decoy classification
     # frag_errors stored as list columns in parquet — convert to numpy arrays
-    frag_errors = [np.array(x, dtype=float) if x is not None and len(x) > 0 else np.array([]) for x in fdc.frag_errors]
-    non_empty = [i for i in frag_errors if len(i) > 0]
-    median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
-    fdc["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
+    if fdc_list_cols is not None:
+        _med_pd = _compute_med_frag_error_from_polars(fdc_list_cols)
+        fdc = fdc.merge(_med_pd, on="__fdc_idx", how="left")
+        del _med_pd
+    else:
+        frag_errors = [np.array(x, dtype=float) if x is not None and len(x) > 0 else np.array([]) for x in fdc.frag_errors]
+        non_empty = [i for i in frag_errors if len(i) > 0]
+        median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
+        fdc["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
 
     # Fragment-ion correlation features (pairwise Pearson across MS2 scans)
     from src.fragment_correlation import compute_fragment_correlations
@@ -1162,6 +1243,18 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     # have possible reannotate woth fasta here
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
     fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder)
+
+    # Re-attach the list columns we held back from fdc through the heavy
+    # in-memory phase. Done here, just before the CSV write, so the merge
+    # only happens once and the pipeline ran on a slim frame until now.
+    if fdc_list_cols is not None and "__fdc_idx" in fdx_quant.columns:
+        _list_cols_pd = fdc_list_cols.to_pandas()
+        fdx_quant = fdx_quant.merge(_list_cols_pd, on="__fdc_idx", how="left")
+        del _list_cols_pd
+        import gc as _gc_attach
+        _gc_attach.collect()
+    if "__fdc_idx" in fdx_quant.columns:
+        fdx_quant = fdx_quant.drop(columns=["__fdc_idx"])
 
     logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")

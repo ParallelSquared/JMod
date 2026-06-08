@@ -1,4 +1,5 @@
 import numpy as np
+import polars as pl
 import re
 import sys
 import os
@@ -55,21 +56,7 @@ def ms1_cor_channels(all_spectra,
         logger.info("Fitting tagged channels together")
     else:
         logger.info("Fitting Precursors Individually")
-    decoy_coeffs["untag_seq"] = [re.sub(rf"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
-    decoy_coeffs["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(decoy_coeffs["untag_seq"],decoy_coeffs["z"])]
-    
-    if "med_frag_error" not in decoy_coeffs.columns:
-        frag_errors = [np.array(x, dtype=float) if x is not None and len(x) > 0 else np.array([]) for x in decoy_coeffs.frag_errors]
-        non_empty = [i for i in frag_errors if len(i) > 0]
-        median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
-        decoy_coeffs["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
-    
-    if "abs_rt_error" not in decoy_coeffs.columns:
-        decoy_coeffs["abs_rt_error"] = np.abs(decoy_coeffs.rt_error)
-    
-    if "abs_mz_error" not in decoy_coeffs.columns:
-        decoy_coeffs["abs_mz_error"] = np.abs(decoy_coeffs.mz_error)
-    
+
     ms1_spectra = all_spectra.ms1scans
     ms2_spectra = all_spectra.ms2scans
     
@@ -96,11 +83,48 @@ def ms1_cor_channels(all_spectra,
 
     
     if timeplex:
-        grouped_decoy_coeffs = decoy_coeffs.groupby(["seq","z","time_channel"])
+        dc_group_keys = ["seq", "z", "time_channel"]
         fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z","time_channel"])
     else:
-        grouped_decoy_coeffs = decoy_coeffs.groupby(["seq","z"])
+        dc_group_keys = ["seq", "z"]
         fdc_group = filtered_decoy_coeffs.groupby(["untag_seq","z"])
+
+    if isinstance(decoy_coeffs, pl.DataFrame):
+        # Production path: ``decoy_coeffs`` is a slim polars frame pre-sorted
+        # by ``dc_group_keys`` (see read_output.get_large_prec). Build a {key:
+        # (start, length)} offsets dict so per-precursor lookups in
+        # get_ms2_vals slice a contiguous range and convert just that slice to
+        # pandas. Full pandas materialization of the post-NNLS frame OOMs at
+        # ~60GB on multiplexed low-input runs.
+        _bounds = (decoy_coeffs.with_row_index("__idx")
+                               .group_by(dc_group_keys, maintain_order=True)
+                               .agg(pl.col("__idx").min().alias("start"),
+                                    pl.col("__idx").len().alias("n")))
+        dc_offsets = {
+            tuple(row[:-2]): (int(row[-2]), int(row[-1]))
+            for row in _bounds.iter_rows()
+        }
+        dc_source = (decoy_coeffs, dc_offsets)
+    else:
+        # Legacy pandas path — kept for unit-test fixtures that pass small
+        # pandas frames directly. These mutations are dead within this
+        # function but exposed in test assertions.
+        decoy_coeffs["untag_seq"] = [re.sub(rf"(\({tag.name}-\d+\))?","",peptide) for peptide in decoy_coeffs["seq"]]
+        decoy_coeffs["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(decoy_coeffs["untag_seq"],decoy_coeffs["z"])]
+
+        if "med_frag_error" not in decoy_coeffs.columns:
+            frag_errors = [np.array(x, dtype=float) if x is not None and len(x) > 0 else np.array([]) for x in decoy_coeffs.frag_errors]
+            non_empty = [i for i in frag_errors if len(i) > 0]
+            median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
+            decoy_coeffs["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
+
+        if "abs_rt_error" not in decoy_coeffs.columns:
+            decoy_coeffs["abs_rt_error"] = np.abs(decoy_coeffs.rt_error)
+
+        if "abs_mz_error" not in decoy_coeffs.columns:
+            decoy_coeffs["abs_mz_error"] = np.abs(decoy_coeffs.mz_error)
+
+        dc_source = decoy_coeffs.groupby(dc_group_keys)
 
     all_ms1, all_coeff, all_iso, all_group_pearson, all_trace, all_fitted, all_group_keys, all_scans_len = ([] for _ in range(8))
     dump_data = {"ms1_ppm": mz_ppm, "num_iso": num_iso, "precursors": {}} if dump_precursors else None
@@ -158,7 +182,7 @@ def ms1_cor_channels(all_spectra,
 
         for prec_mz,prec_seq in zip(prec_mzs,prec_seqs):
 
-            ms2_vals, highest_ranked_spec, channel_key = get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_decoy_coeffs, ms2_rt, rt_tol, prec_mz, bottom_of_window, top_of_window, ms2_spec_idxs)
+            ms2_vals, highest_ranked_spec, channel_key = get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, dc_source, ms2_rt, rt_tol, prec_mz, bottom_of_window, top_of_window, ms2_spec_idxs)
             group_keys.append(channel_key)
 
             interp_func = build_ms2_interpolator(ms2_vals)
@@ -413,6 +437,25 @@ def minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spec
 
 
 
+def _lookup_group(source, key):
+    """Return a pandas DataFrame slice for ``key`` or ``None`` if absent.
+
+    Accepts either a pandas DataFrameGroupBy (legacy callers and tests) or a
+    ``(polars.DataFrame, offsets_dict)`` tuple. The tuple form avoids
+    materializing the full post-NNLS frame as pandas — only the per-precursor
+    slice gets converted.
+    """
+    if isinstance(source, tuple):
+        polars_df, offsets = source
+        if key not in offsets:
+            return None
+        start, n = offsets[key]
+        return polars_df.slice(start, n).to_pandas()
+    if key not in source.groups:
+        return None
+    return source.get_group(key)
+
+
 def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_decoy_coeffs, ms2_rt, rt_tol, prec_mz, bottom_of_window, top_of_window, ms2_spec_idxs):
     """
     For a given precursor, get the ms2 JMod coefficients at MS2 scan #s and return this dictionary,
@@ -430,9 +473,12 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
         Precursor time channel
     timeplex : bool
         Bool for timeplex
-    grouped_decoy_coeffs : pandas dataframe
-        Pandas dataframe grouped by unstripped_seq, z, time_channel (unlike similar df grouped by stripped_seq, z, time_channel)
-    ms2_rt : 1D Numpy array 
+    grouped_decoy_coeffs : pandas DataFrameGroupBy or (polars.DataFrame, dict)
+        Either a pandas groupby (legacy) or a ``(slim_polars_df, offsets)``
+        tuple where ``offsets`` maps the channel key to ``(start, length)`` row
+        ranges in the polars frame. The tuple form is used in production to
+        avoid materializing the full post-NNLS frame as pandas.
+    ms2_rt : 1D Numpy array
         Array of retention time of all ms2 scans in MS run
     rt_tol : float
         Retention time tolerance
@@ -444,8 +490,8 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
         Array of the top of the isolation window for every ms2 scan (same size as ms2_rt)
     ms2_spec_idxs: 1D Numpy array
         Array of the scan index of every ms2 scan (same size as ms2_rt)
-    
-    
+
+
     Returns
     -------
     ms2_vals : dict[int] == float
@@ -457,19 +503,19 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
 
     """
     offset = 0
-    
+
     if timeplex:
         channel_key = (prec_seq,prec_z,time_channel)
     else:
         channel_key = (prec_seq,prec_z)
-    
-    ## create dummy 
+
+    ## create dummy
     ms2_vals = {0:0}
-    
-    if channel_key in grouped_decoy_coeffs.groups:
+
+    group = _lookup_group(grouped_decoy_coeffs, channel_key)
+    if group is not None:
 
         # use coeff as rank score directly
-        group = grouped_decoy_coeffs.get_group(channel_key)
         highest_ranked_spec = group.loc[group["coeff"].idxmax(), "Ms1_spec_id"]
 
         # ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
