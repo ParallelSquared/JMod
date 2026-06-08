@@ -377,7 +377,6 @@ def get_large_prec(file,
     """
     Process peptide identification results to extract high-confidence precursors
     using Polars, converting to Pandas for external function calls.
-    ... (docstring continues as before) ...
     """
     col_names = list(names)
 
