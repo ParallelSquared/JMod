@@ -52,6 +52,9 @@ This `.bat` executable is only compatible with Windows computers. If your comput
 
 3. Open a new terminal window and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: ```uv sync --python 3.11```
 
+      - You may get an error saying ```libomp``` is not installed. This is a MacOS native file that ```xgboost``` requires to run. Please install this with the homebrew command ```brew install libomp```. If you do not have homebrew installed, you can install it with the following command: ```/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"```. After running, please restart the terminal window and run ```uv sync --python 3.11``` again.
+    
+
 4. Use the command ```source .venv/bin/activate``` to activate the UV environment. You should see the environment name (JMod-Main) appear at the beginning of the terminal prompt.
     - If you are on a Windows computer, run ```.venv/Scripts/activate``` to activate the UV environment.
 
