@@ -253,6 +253,80 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float, pl.DataFram
     return fwhm, sigma, df
 
 
+def collapse_to_cluster_apices(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Collapse each peptide's per-spectrum PSMs into one apex row per elution.
+
+    Uses the same adjacent-scan clustering as :func:`calculate_elution_width`,
+    but instead of keeping only the largest cluster it emits one representative
+    row per cluster: the highest-MS1-intensity PSM in that cluster (the apex).
+
+    A peptide eluting N times (e.g. once per timeplex window) therefore yields N
+    rows — one per elution — which is the "multiple RT entries per (seq, z)"
+    structure the timeplex aligner expects. peppy_sage's first search produces a
+    cluster of consecutive-scan matches per elution rather than a single row, so
+    this step reconstructs that structure before ``get_multiples``.
+
+    Args:
+        df: Polars DataFrame with columns: file_id, spec_name, rt, z, seq,
+            closest_peak_intensity_ms1 (the peppy_sage first-search output).
+
+    Returns:
+        Polars DataFrame containing a subset of ``df``'s rows (one apex per
+        elution cluster), with all original columns preserved.
+    """
+    required_cols = {'file_id', 'spec_name', 'rt', 'z', 'seq', 'closest_peak_intensity_ms1'}
+    missing_cols = required_cols - set(df.columns)
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+
+    # Extract scan numbers and tag each row so clusters can be mapped back.
+    df = df.with_columns(
+        pl.col('spec_name').str.extract(r'scan=(\d+)', 1).cast(pl.Int64).alias('scan')
+    )
+    df = df.drop_nulls(subset=['scan', 'rt', 'seq'])
+    df = df.with_row_index('__row')
+
+    if df.height == 0:
+        return df.drop(['scan', '__row'])
+
+    max_scan_gap = _compute_scan_gap_mode(df) + 1  # extra scan just in case
+
+    grouped = df.group_by(['file_id', 'seq', 'z']).agg([
+        pl.col('scan'),
+        pl.col('rt'),
+        pl.col('closest_peak_intensity_ms1'),
+        pl.col('__row'),
+    ])
+
+    apex_rows: list[int] = []
+    for row in grouped.iter_rows(named=True):
+        scans = np.array(row['scan'])
+        rts = np.array(row['rt'])
+        intensities = np.array(row['closest_peak_intensity_ms1'])
+        rows = np.array(row['__row'])
+
+        if len(scans) == 1:
+            apex_rows.append(int(rows[0]))
+            continue
+
+        # Highest-intensity source row per scan (collapses IM-bin duplicates),
+        # used to map each cluster back to a single apex row.
+        best_row_for_scan: dict[int, int] = {}
+        best_int_for_scan: dict[int, float] = {}
+        for s, i, r in zip(scans, intensities, rows):
+            if s not in best_int_for_scan or i > best_int_for_scan[s]:
+                best_int_for_scan[s] = i
+                best_row_for_scan[s] = int(r)
+
+        clusters = _find_adjacent_clusters(list(zip(scans, rts)), max_scan_gap)
+        for cluster in clusters:
+            apex_scan = max((s for s, _ in cluster), key=lambda s: best_int_for_scan[s])
+            apex_rows.append(best_row_for_scan[apex_scan])
+
+    return df.filter(pl.col('__row').is_in(apex_rows)).drop(['scan', '__row'])
+
+
 if __name__ == '__main__':
     # Example usage / verification
     import sys

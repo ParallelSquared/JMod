@@ -87,18 +87,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     tag = config.args.tag
     is_timeplex = "timeplex" if config.args.timeplex else ""
     dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
-    use_feat = ""
-    dino_features=None
-    feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv" #TODO this breaks if you run from cd
-    if config.args.use_features and os.path.exists(feature_path):
-        use_feat = "Dino"
-        dino_features = pd.read_csv(feature_path,delimiter="\t")
-
-    if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
-        import subprocess
-        subprocess.run(["biosaur2", mzml_file], check=True)
-        use_feat = "Dino"
-        dino_features = pd.read_csv(feature_path,delimiter="\t")
+    dino_features = None
 
     results_folder_name = spec_file_name + "_results" + "_" + dummy_val
     results_folder_name = results_folder_name.rstrip("_")
@@ -187,12 +176,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     logger.info("")
 
 
-    if config.args.use_features and os.path.exists(feature_path) and config.args.timeplex:
-        logger.info("loading Dinosaur features")
-    if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
-        logger.info("Dinosaur feature file not found, running biosaur2")
-
-    
     overall_start_time = time.time()
     # python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
     logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
@@ -290,15 +273,12 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     target_view = spectrumLibrary.target_view()
 
     if config.args.timeplex:
-        if config.args.use_features and os.path.exists(feature_path):
-            logger.info("Loading Dinosaur features")
-            dino_features = pd.read_csv(feature_path, delimiter="\t")
-            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align)
-        else:
-            logger.info("Not using features")
-            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, None, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align)
+        funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(
+            DIAspectra, target_view, (config.args.ppm * 1e-6),
+            results_folder=results_folder_path,
+            ms2=config.args.ms2_align,
+            mass_tag=mass_tag, SILAC=SILAC,
+        )
         # Timeplex path doesn't compute elution SD yet — use the historical default.
         vote_sigma = 1.0
 

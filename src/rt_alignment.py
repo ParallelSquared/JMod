@@ -379,199 +379,6 @@ def fit_errors(errors,limit=10,percentile=.999):
 ##################################################################################################################################
 
 
-def fit_with_features(dia_spectra, librarySpectra, dino_features):
-    # TODO just search all of them, make sure the output is appropriate and has like MS1 intensities, etc
-    # biosaur gets used in
-    #   1. finding apex
-    #       do we have to know the apex? can we just sort by intensity and then only take the first instance of each pep?
-    #   2. selecting most intense peaks
-    #       do we need this for later processing? Or are intensities recalculated later?
-    #
-
-
-    all_keys = list(librarySpectra)
-    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
-    
-    all_dia_rt = [i.RT for i in dia_spectra.ms2scans]
-    all_dia_windows = np.array([i.ms1window for i in dia_spectra.ms2scans])
-    lowest_mz = np.min(all_dia_windows,0)[0] # assume window span is constant over time
-    largest_mz = np.max(all_dia_windows,0)[1]
-    mz_bins = np.linspace(lowest_mz,largest_mz,6)
-    
-    ## remove charge 1+ features
-    dino_features = dino_features[dino_features["charge"]!=1]
-    dino_features = dino_features.reset_index(drop=True)
-    sorted_features = np.argsort(-np.array(dino_features.intensityApex))
-    sorted_mz = dino_features.mz[sorted_features]
-    large_feature_indices = sorted_features[np.array(np.logical_and(sorted_mz>lowest_mz,sorted_mz<largest_mz))][:config.n_most_intense_features] 
-    
-    sorted_feature_mz_bins = [sorted_features[np.logical_and(sorted_mz>mz_bins[i],sorted_mz<mz_bins[i+1])] for i in range(len(mz_bins)-1)]
-    large_feature_indices = [j for i in sorted_feature_mz_bins for j in i[:(config.n_most_intense_features//(len(mz_bins)-1))]]
-    
-    lf_rt = np.array(dino_features.rtApex[large_feature_indices])
-    lf_mz = np.array(dino_features.mz[large_feature_indices])
-    # logger.info("Finding correct spectra")
-    # lf_spectra = [np.argmin(np.abs(np.array(all_dia_rt)-i)) for i in lf_rt]
-    dia_rt_mzwin = np.array([[i.RT,*i.ms1window] for i in dia_spectra.ms2scans])
-    lf_spectra = [closest_spec(dia_rt_mzwin,i,j) for i,j in zip(lf_mz,lf_rt)] 
-    
-    fit_outputs=[]
-    frags = []
-    GUI_print_idxs = [int(((len(lf_spectra)-1)/10)*y) for y in range(1,11)]
-    for idx in tqdm.trange(len(lf_spectra)):
-        if config.ran_from_GUI:
-            if idx in GUI_print_idxs:
-                frac_done = (GUI_print_idxs.index(idx)+1) * 10
-                logger.info(f"Initial Search - {frac_done}%")
-
-        fit_output = fit_to_lib(dia_spectra.ms2scans[int(lf_spectra[idx])],
-                                    library=librarySpectra,
-                                    rt_mz=rt_mz,
-                                    all_keys=all_keys,
-                                    dino_features=None,
-                                    rt_filter=False,
-                                    ms1_mz=lf_mz[idx],
-                                    ms1_spectra = dia_spectra.ms1scans,
-                                    frac_matched=.8, ## NB: this may be selcting for smaller peptides
-                                    rt_tol = config.rt_tol,
-                                    ms1_tol = config.ms1_tol,
-                                    mz_tol = (config.args.ppm * 1e-6)
-                                    )
-        fit_outputs.append(fit_output)
-        
-    top_n_spectra = [dia_spectra.ms2scans[i] for i in lf_spectra]
-    
-    return fit_outputs, top_n_spectra, large_feature_indices, lf_mz
-
-
-def process_prelim_search(fit_outputs,
-                          librarySpectra,
-                          top_n_spectra,
-                          dino_features,
-                          large_feature_indices,
-                          lf_mz
-                          ):
-    
-    dia_rt = []
-    lib_rt = []
-    output=[]
-    max_ids=[]
-    lc_frags_errors=[]
-    lc_frags=[]
-    feature_mzs = []
-    feature_idxs = []
-    for idx,fit_output in enumerate(fit_outputs):    
-        if fit_output[0][0]!=0:
-            lib_rt.append([librarySpectra[(i[3],i[4])]["iRT"] for i in fit_output])
-            dia_rt.append(top_n_spectra[idx].RT)
-            output.append(fit_output)
-            max_id = np.argmax([i[0] for i in fit_output])
-            max_ids.append(max_id)
-            # if ms2:
-            #     lc_frags_errors.append(frags[idx][0][max_id])
-            #     lc_frags.append(frags[idx][1][max_id])
-            if dino_features is not None:
-                feature_mzs.append(lf_mz[idx])
-                feature_idxs.append(large_feature_indices[idx])
-    # max_ids = [np.argmax([i[0] for i in j]) for j in output]
-    ms1windows = [i.ms1window for i in top_n_spectra]
-    id_keys = [(i[j][3],i[j][4]) for i,j in zip(output,max_ids)]
-    id_mzs = [librarySpectra[i]["prec_mz"] for i in id_keys]
-    
-    # plt.hist(np.log10([i[j][0] for i,j in zip(output,max_ids)]),np.arange(1,9,.3))
-    # plt.xlabel("log10(Coefficients)")
-    # plt.ylabel("Frequency")
-    
-    # plt.scatter(dino_features.mz,dino_features.rtApex,s=.1)
-    # plt.ylabel("Retention time")
-    # plt.xlabel("m/z")
-    
-    min_int = 100#np.median([j[0] for i in output for j in i])
-    
-    all_id_rt = [[(i[j][3],i[j][4]),i[j][6]] for i in output for j in range(len(i)) if i[j][0]>min_int]
-    all_coeff = [i[j][0] for i in output for j in range(len(i)) if i[j][0]>min_int]
-    all_id_mzs = [librarySpectra[i[0]]["prec_mz"] for i in all_id_rt]
-    
-    all_hyper = [i[j][19] for i in output for j in range(len(i)) if i[j][0]>min_int]
-    
-    def max_coeff_rt(outputs):
-        max_id = np.argmax([i[0] for i in outputs])
-        # if outputs[0][0]==0:
-        #     return np.nan
-        # else:
-        return librarySpectra[(outputs[max_id][3],outputs[max_id][4])]["iRT"]
-
-    timeplex_cols = ["coeff", "spec_id", "Ms1_spec_id",
-         "seq", "z", "window_mz", "rt",
-         "num_lib",
-         "frac_lib_int",
-         "frac_dia_int",
-         "mz_error",
-         "rt_error",
-         "frac_int_matched",
-         "frac_int_pred",
-         "spec_r2",
-         "prec_r2",
-         "prec_r2_uniq",
-         "frac_int_uniq",
-         "frac_int_uniq_pred",
-         "hyperscore",
-         "b_counts",
-         "y_counts",
-         "longest_y_ions",
-         "scribe_scores",
-         "max_unmatched_residuals",
-         "max_matched_residuals",
-         "gof_stats",
-         "manhattan_distances",
-         "fitted_spectral_contrasts",
-         "frac_int_matched_pred",
-         "frac_int_matched_pred_sigcoeff",
-         "cosine",
-         "mz",
-         "frag_names",
-         "frag_errors",
-         "frag_mz",
-         "frag_int",
-         "obs_int",
-         "file_name",
-         "protein"]
-    
-    # all_output_df = pd.DataFrame([j for i in output for j in i if j[0]>min_int],columns=names[:len(output[0][0])])
-    all_output_df = pd.DataFrame([j for i in output for j in i if j[0]>min_int],columns=timeplex_cols[:len(output[0][0])])
-    all_output_df["lib_rt"] = np.array([librarySpectra[i[0]]["iRT"] for i in all_id_rt])
-    
-    all_frag_cosines = np.array([fragment_cor(all_output_df,i) for i in range(len(all_output_df))])
-    all_frag_cosines_p = np.array([fragment_cor(all_output_df,i,fn="p") for i in range(len(all_output_df))])
-    # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
-    all_output_df["frag_cosines"] = all_frag_cosines
-    all_output_df["frag_cosines_p"] = all_frag_cosines_p
-
-    all_frag_errors = [unstring_floats(mz) for mz in all_output_df.frag_errors]
-    all_median  = np.median(np.concatenate([i for i in all_frag_errors]))
-    all_output_df["med_frag_error"] = [np.median(np.abs(all_median-i)) for i in all_frag_errors]
-    all_output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in all_output_df["seq"]])
-    all_output_df["last_aa"]=[i[-1] for i in all_output_df.stripped_seq]
-
-    #output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
-    output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=timeplex_cols[:len(output[0][0])])
-    output_df["lib_rt"] = np.array([max_coeff_rt(i) for i in output])
-    
-    frag_cosines = np.array([fragment_cor(output_df,i) for i in range(len(output_df))])
-    frag_cosines_p = np.array([fragment_cor(output_df,i,fn="p") for i in range(len(output_df))])
-
-    # plt.scatter(all_lib_rts,[i[1] for i in all_id_rt],label="Original_RT",s=1)
-    output_df["frag_cosines"] = frag_cosines
-    output_df["frag_cosines_p"] = frag_cosines_p
-
-    frag_errors = [unstring_floats(mz) for mz in output_df.frag_errors]
-    median  = np.median(np.concatenate([i for i in frag_errors]))
-    output_df["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
-    
-    output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in output_df["seq"]])
-    output_df["last_aa"]=[i[-1] for i in output_df.stripped_seq]
-
-    return output_df, all_output_df, id_keys, feature_mzs
 
 def empirical_fit(output_df, results_folder=None):
     """
@@ -1613,8 +1420,6 @@ def get_multiples(id_keys, output_df):
     multiples_idxs = []
     num_multiples = []
     channels = []
-    multiples_hyper = []
-    multiples_coeff = []
     multiples_seqs = []
     multiples_zs = []
     
@@ -1630,8 +1435,6 @@ def get_multiples(id_keys, output_df):
             key_pos = key_dict[key]##np.where([i==key for i in id_keys])[0]
             if len(key_pos)>1:
                 multiple_rts = np.array([output_df.rt[i] for i in key_pos])
-                multiples_hyper.append(np.array([output_df.hyperscore[i] for i in key_pos]))
-                multiples_coeff.append(np.array([output_df.coeff[i] for i in key_pos]))
                 order = np.argsort(multiple_rts)
                 order = np.arange(len(multiple_rts))
                 multiples.append(multiple_rts[order])
@@ -1644,23 +1447,6 @@ def get_multiples(id_keys, output_df):
     
     return multiples, num_multiples, multiples_idxs
 
-# feature_percentile = 50
-# if config.args.user_percentile:
-#     print("Using user specified feature percentile for first search")
-#     feature_percentile = config.args.initial_percentile
-def get_df_filter(df,p=50):
-    return np.logical_and.reduce([df[feat]>np.percentile(df[feat],p) for feat in ["hyperscore",
-                                                                                             "frag_cosines_p",
-                                                                                             "frag_cosines_p",
-                                                                                              "manhattan_distances",
-                                                                                             ]]+
-                                   [df[feat]<np.percentile(df[feat],100-p) for feat in [
-                                                                                                    "scribe_scores",
-                                                                                                    "gof_stats",
-                                                                                                    # "manhattan_distances",
-                                                                                                    "max_matched_residuals",
-                                                                                                    "med_frag_error"
-                                                                                                    ]])
 
 def split_timePlex(output_df,n_timeplex,rt_mz, id_keys, multiples_idxs):
     
@@ -1673,12 +1459,16 @@ def split_timePlex(output_df,n_timeplex,rt_mz, id_keys, multiples_idxs):
     gaussian_fits = []
     for idx in range(n_timeplex):
         lib_rt_range = [np.percentile(rt_mz[:,0],5),np.percentile(rt_mz[:,0],95)]
-        ### array of (obs_rt, lib_rt, hyperscore)
-        t1 = np.array([[output_df.rt[i[idx]],output_df.lib_rt[i[idx]],output_df.hyperscore[i[idx]],output_df.mz[i[idx]],output_df.coeff[i[idx]],output_df.frac_lib_int[i[idx]]] for i in multiples_idxs if len(i)==n_timeplex and output_df.lib_rt[i[idx]]>lib_rt_range[0] and output_df.lib_rt[i[idx]]<lib_rt_range[1]])
+        ### array of (obs_rt, lib_rt)
+        t1 = np.array([[output_df.rt[i[idx]],output_df.lib_rt[i[idx]]] for i in multiples_idxs if len(i)==n_timeplex and output_df.lib_rt[i[idx]]>lib_rt_range[0] and output_df.lib_rt[i[idx]]<lib_rt_range[1]])
         t1_s = [id_keys[i[idx]] for i in multiples_idxs if len(i)==n_timeplex and output_df.lib_rt[i[idx]]>lib_rt_range[0] and output_df.lib_rt[i[idx]]<lib_rt_range[1]]
-        # t1 = np.array([[output_df.rt[i[idx]],output_df.lib_rt[i[idx]],output_hyper[i[idx]]] for i in multiples_idxs if len(i)==n_timeplex])
-        t_df = output_df.iloc[[i[idx] for i in multiples_idxs if len(i)==n_timeplex and output_df.lib_rt[i[idx]]>lib_rt_range[0] and output_df.lib_rt[i[idx]]<lib_rt_range[1]]]
-        new_filter = get_df_filter(t_df,50)
+        # Quality-gate the spline points on scribe score, matching the non-timeplex
+        # first search (empirical_fit's cor_filter). Higher scribe = better.
+        t1_scribe = np.array([output_df.scribe_score[i[idx]] for i in multiples_idxs if len(i)==n_timeplex and output_df.lib_rt[i[idx]]>lib_rt_range[0] and output_df.lib_rt[i[idx]]<lib_rt_range[1]])
+        if len(t1_scribe) > 0:
+            new_filter = t1_scribe > np.percentile(t1_scribe, 50)
+        else:
+            new_filter = np.ones(len(t1), dtype=bool)
         filters.append(new_filter)
         rt_spl = fast_modal_lowess(t1[:,1][new_filter],t1[:,0][new_filter], 
                                local_frac=.01,
@@ -1866,7 +1656,7 @@ def timeplex_algnment_plots(n_timeplex, t_vals, results_folder = None):
         plt.savefig(results_folder+"/MZdiff.png",dpi=600,bbox_inches="tight")
 """
 
-def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False):
+def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=None,ms2=False,mass_tag=None,SILAC=None):
     """
     Perform a preliminary search of the timeplex spectra to align the library mz and RT values
 
@@ -1926,21 +1716,34 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     
     #################################################################################
-    
-    fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
-    
-    output_df, all_output_df, id_keys, feature_mzs =  process_prelim_search(fit_outputs,
-                                                                              librarySpectra,
-                                                                              top_n_spectra,
-                                                                              dino_features,
-                                                                              large_feature_indices,
-                                                                              lf_mz
-                                                                              )
-    
-   
-    
+
+    # Run the peppy_sage MS2 library search (same as the non-timeplex MZRTfit path)
+    import src.preliminary_search as preliminary_search
+    from src.elution_analysis import collapse_to_cluster_apices
+    output_df = preliminary_search.fit_with_features(
+        dia_spectra, librarySpectra, mass_tag, SILAC,
+        ms1_ppm_error=20, ms2_ppm_error=10,
+    )
+
+    # peppy_sage emits one PSM per matched spectrum, so a single elution is a
+    # cluster of consecutive-scan rows. Collapse each (seq, z) peptide's clusters
+    # to one apex row apiece — one row per elution = one timeplex position.
+    output_df = collapse_to_cluster_apices(output_df)
+
+    # Global RT sort so that within each (seq, z) the occurrences are RT-ascending.
+    # get_multiples preserves output_df order (its argsort is overwritten by
+    # np.arange), so this is what makes t_vals[0] = earliest elution, etc.
+    output_df = output_df.sort("rt").to_pandas().reset_index(drop=True)
+
+    id_keys = list(zip(output_df["seq"], output_df["z"]))
+
+    # Dump the first-search table (one apex row per elution cluster) for debugging,
+    # mirroring the non-timeplex MZRTfit path.
+    if results_folder is not None:
+        output_df.to_csv(results_folder+"/first_search/firstSearch.tsv", index=False, sep='\t')
+
     #### create dictionary for each key and it's positions
-    
+
     multiples, num_multiples, multiples_idxs = get_multiples(id_keys, output_df)
     
     if config.args.num_timeplex==0:
@@ -2234,7 +2037,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     rts = np.array([updatedLibrary[(i[0],float(i[1]))]["iRT"] for i in id_keys])#np.array([i[0] for i in t_vals[0]])
     # rt_filter_bool = filter_rts_by_dense(rts,30)
     # rt_filter_bool = np.logical_and(rts>15,rts<30)
-    rt_mz_filter_bool = np.array(output_df.frac_lib_int)>.9 # use as proxy for correct IDs
+    rt_mz_filter_bool = np.array(output_df.matched_lib_pct)>90 # use as proxy for correct IDs
     f_rt_mz = fast_modal_lowess(rts[rt_mz_filter_bool],np.array(diffs)[rt_mz_filter_bool],local_frac=.02,
                                anchors=1000,
                                grid_size=1000,

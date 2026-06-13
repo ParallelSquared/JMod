@@ -18,7 +18,7 @@ import os
 
 # Import the functions we want to test
 from src.rt_alignment import (
-    twostepfit, lowess_fit, closest_spec, gaussian, fit_errors, cdf_plots, alignment_plots, cdf_data, get_multiples, get_df_filter, empirical_fit, filter_rts_by_dense, MZRTfit
+    twostepfit, lowess_fit, closest_spec, gaussian, fit_errors, cdf_plots, alignment_plots, cdf_data, get_multiples, empirical_fit, filter_rts_by_dense, MZRTfit
 )
 
 from tests.fixtures.test_data import SAMPLE_LIBRARY_ENTRY, SAMPLE_MS2_SPECTRUM, SAMPLE_FEATURE
@@ -273,20 +273,6 @@ class TestGetMultiplesAndFilter:
         # Check that the RT values match expected
         expected_rts = np.array([10, 12, 15])
         assert np.all(multiples[0] == expected_rts)
-
-    def test_get_df_filter_boolean_mask(self, sample_output_df):
-        """Test get_df_filter returns a boolean mask and filters correctly."""
-        mask = get_df_filter(sample_output_df, p=50)
-        
-        # Check type
-        assert isinstance(mask, np.ndarray)
-        assert mask.dtype == bool
-
-        # Check length matches the dataframe
-        assert len(mask) == len(sample_output_df)
-
-        # Check at least one row passes
-        assert mask.any()
 
 
 class TestEmpiricalFit:
