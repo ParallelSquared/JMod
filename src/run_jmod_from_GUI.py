@@ -159,8 +159,10 @@ class JModGUI(ThemedTk):
         self.tk_handler.setFormatter(self.tk_formatter)
         self.tk_handler.setLevel(logging.INFO)
 
-        self.queue_listener = logging.handlers.QueueListener(self.log_queue, self.tk_handler)
-        self.queue_listener.start()
+        # self.queue_listener = logging.handlers.QueueListener(self.log_queue, self.tk_handler)
+        # self.queue_listener.start()
+
+        self.after(100, self.poll_log_queue)
 
         gui_logger = logging.getLogger("GUI")
         gui_logger.setLevel(logging.INFO)
@@ -557,6 +559,18 @@ class JModGUI(ThemedTk):
 
         
     ####         Logging Funcs      #######
+
+    def poll_log_queue(self):
+        while True:
+            try:
+                record = self.log_queue.get_nowait()
+            except Exception:
+                break
+            try:
+                self.tk_handler.emit(record)
+            except Exception:
+                pass
+        self.after(100, self.poll_log_queue)
 
     
     #######     input funcs      #######
