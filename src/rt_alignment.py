@@ -22,6 +22,8 @@ from statistics import quantiles
 from src.utils.misc_functions import within_tol
 from scipy import signal
 from scipy.optimize import curve_fit
+from scipy.optimize import linear_sum_assignment
+from scipy.ndimage import gaussian_filter
 from scipy import stats
 from sklearn.metrics import auc
 from threadpoolctl import threadpool_limits
@@ -672,74 +674,122 @@ def cdf_data(rt_diffs,limit=3):
     return data, p, cdf_auc
         
 
-def alignment_plots(filtered_output, 
-                    orig_spl, 
+def alignment_plots(filtered_output,
+                    orig_spl,
                     rt_spl,
                     f_rt_mz,
                     mz_spl,
                     rt_dist_params,
-                    results_folder=None):
-        ##plot RT alignment
-        plt.subplots()
-        plt.scatter(filtered_output.lib_rt,np.array(filtered_output.rt),label="Original_RT",s=.1)
-        plt.scatter(filtered_output.lib_rt,orig_spl(filtered_output.lib_rt),label="Predicted_RT",s=1)
-        # plt.legend()
-        plt.xlabel("Library RT")
-        plt.ylabel("Observed RT")
-        # plt.show()
-        if results_folder is not None:
-            plt.savefig(results_folder+"/first_search/OriginalRTfit.png",dpi=600,bbox_inches="tight")
-            plt.close()
+                    results_folder=None,
+                    channels=None,
+                    rt_spls=None,
+                    offsets=None):
+        if channels is not None:
+            lib = filtered_output["lib_rt"].to_numpy()
+            ulr = filtered_output["updated_lib_rt"].to_numpy()
+            obs = filtered_output["rt"].to_numpy()
+            xo = np.linspace(lib.min(), lib.max(), 500)
+            xu = np.linspace(ulr.min(), ulr.max(), 500)
+            tol = config.opt_rt_tol
+
+            plt.subplots()
+            for k in range(len(rt_spls)):
+                m = channels == k
+                plt.scatter(lib[m], obs[m], s=.5, c=colours[k], alpha=.3, label=f"T{k}")
+                plt.plot(xo, orig_spl(xo) + offsets[k], c=colours[k])
+            plt.xlabel("Library RT"); plt.ylabel("Observed RT"); plt.legend(markerscale=10)
+            if results_folder is not None:
+                plt.savefig(results_folder+"/first_search/OriginalRTfit.png",dpi=600,bbox_inches="tight"); plt.close()
+
+            plt.subplots()
+            for k in range(len(rt_spls)):
+                m = channels == k
+                plt.scatter(ulr[m], obs[m], s=.5, c=colours[k], alpha=.3, label=f"T{k}")
+                plt.plot(xu, rt_spls[k](xu), c=colours[k])
+            plt.xlabel("Updated Library RT"); plt.ylabel("Observed RT"); plt.legend(markerscale=10)
+            if results_folder is not None:
+                plt.savefig(results_folder+"/first_search/RTfit.png",dpi=600,bbox_inches="tight"); plt.close()
+
+            plt.subplots()
+            for k in range(len(rt_spls)):
+                m = channels == k
+                plt.scatter(ulr[m], obs[m] - rt_spls[k](ulr[m]), s=.5, c=colours[k], alpha=.3, label=f"T{k}")
+            for yv, col in ((0,"r"), (tol,"g"), (-tol,"g")):
+                plt.plot([ulr.min(), ulr.max()], [yv, yv], color=col, linestyle="--", alpha=.5)
+            plt.ylim(-5, 5); plt.xlabel("Updated Library RT"); plt.ylabel("RT Residuals"); plt.legend(markerscale=10)
+            if results_folder is not None:
+                plt.savefig(results_folder+"/first_search/RtResidual.png",dpi=600,bbox_inches="tight"); plt.close()
+
+            plt.subplots()
+            for k in range(len(rt_spls)):
+                m = channels == k
+                plt.hist(obs[m] - rt_spls[k](ulr[m]), 100, density=True, alpha=.5, label=f"T{k}")
+            plt.vlines([-tol, tol], 0, plt.ylim()[1], color="r")
+            plt.xlabel("RT difference"); plt.ylabel("Frequency"); plt.legend()
+            if results_folder is not None:
+                plt.savefig(results_folder+"/first_search/RTdiff.png",dpi=600,bbox_inches="tight"); plt.close()
+        else:
+            ##plot RT alignment
+            plt.subplots()
+            plt.scatter(filtered_output.lib_rt,np.array(filtered_output.rt),label="Original_RT",s=.1)
+            plt.scatter(filtered_output.lib_rt,orig_spl(filtered_output.lib_rt),label="Predicted_RT",s=1)
+            # plt.legend()
+            plt.xlabel("Library RT")
+            plt.ylabel("Observed RT")
+            # plt.show()
+            if results_folder is not None:
+                plt.savefig(results_folder+"/first_search/OriginalRTfit.png",dpi=600,bbox_inches="tight")
+                plt.close()
         
         
-        ##plot RT alignment
-        plt.subplots()
-        plt.scatter(filtered_output.updated_lib_rt,np.array(filtered_output.rt),label="Original_RT",s=.1)
-        plt.scatter(filtered_output.updated_lib_rt,rt_spl(filtered_output.updated_lib_rt),label="Predicted_RT",s=1)
-        # plt.legend()
-        plt.xlabel("Updated Library RT")
-        plt.ylabel("Observed RT")
-        # plt.show()
-        if results_folder is not None:
-            plt.savefig(results_folder+"/first_search/RTfit.png",dpi=600,bbox_inches="tight")
-            plt.close()
+            ##plot RT alignment
+            plt.subplots()
+            plt.scatter(filtered_output.updated_lib_rt,np.array(filtered_output.rt),label="Original_RT",s=.1)
+            plt.scatter(filtered_output.updated_lib_rt,rt_spl(filtered_output.updated_lib_rt),label="Predicted_RT",s=1)
+            # plt.legend()
+            plt.xlabel("Updated Library RT")
+            plt.ylabel("Observed RT")
+            # plt.show()
+            if results_folder is not None:
+                plt.savefig(results_folder+"/first_search/RTfit.png",dpi=600,bbox_inches="tight")
+                plt.close()
         
         
-        plt.subplots()
-        plt.scatter(filtered_output.updated_lib_rt,
-                    (filtered_output.rt-rt_spl(filtered_output.updated_lib_rt)),label="Original_RT",s=.1)
-        min_rt = np.min(filtered_output.updated_lib_rt)
-        max_rt = np.max(filtered_output.updated_lib_rt)
-        plt.plot([min_rt,max_rt],[0,0],color="r",linestyle="--",alpha=.5)
-        plt.plot([min_rt,max_rt],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
-        plt.plot([min_rt,max_rt],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
-        # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
-        # plt.legend()
-        lims = plt.ylim()
-        y_lim = min(10,np.max(np.abs(lims)))
-        # plt.ylim(-y_lim,y_lim)
-        plt.xlabel("Updated Library RT")
-        plt.ylabel("RT Residuals")
-        # plt.show()
-        if results_folder is not None:
-            plt.savefig(results_folder+"/first_search/RtResidual.png",dpi=600,bbox_inches="tight")
-            plt.close()
+            plt.subplots()
+            plt.scatter(filtered_output.updated_lib_rt,
+                        (filtered_output.rt-rt_spl(filtered_output.updated_lib_rt)),label="Original_RT",s=.1)
+            min_rt = np.min(filtered_output.updated_lib_rt)
+            max_rt = np.max(filtered_output.updated_lib_rt)
+            plt.plot([min_rt,max_rt],[0,0],color="r",linestyle="--",alpha=.5)
+            plt.plot([min_rt,max_rt],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
+            plt.plot([min_rt,max_rt],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
+            # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
+            # plt.legend()
+            lims = plt.ylim()
+            y_lim = min(10,np.max(np.abs(lims)))
+            # plt.ylim(-y_lim,y_lim)
+            plt.xlabel("Updated Library RT")
+            plt.ylabel("RT Residuals")
+            # plt.show()
+            if results_folder is not None:
+                plt.savefig(results_folder+"/first_search/RtResidual.png",dpi=600,bbox_inches="tight")
+                plt.close()
         
         
-        plt.subplots()
-        vals,bins,_ = plt.hist((filtered_output.rt-orig_spl(filtered_output.lib_rt)),100,density=True,alpha=.5,label="Original RT")
-        vals,bins,_ = plt.hist((filtered_output.rt-rt_spl(filtered_output.updated_lib_rt)),100,density=True,alpha=.5,label="Updated RT")
-        plt.plot(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100),gaussian(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100), *rt_dist_params),label="Updated RT fit")
-        plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
-        # plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
-        plt.text(config.opt_rt_tol,max(vals),np.round(config.opt_rt_tol,2))
-        plt.xlabel("RT difference")
-        plt.ylabel("Frequency")
-        plt.legend()
-        # plt.show()
-        if results_folder is not None:
-            plt.savefig(results_folder+"/first_search/RTdiff.png",dpi=600,bbox_inches="tight")
-            plt.close()
+            plt.subplots()
+            vals,bins,_ = plt.hist((filtered_output.rt-orig_spl(filtered_output.lib_rt)),100,density=True,alpha=.5,label="Original RT")
+            vals,bins,_ = plt.hist((filtered_output.rt-rt_spl(filtered_output.updated_lib_rt)),100,density=True,alpha=.5,label="Updated RT")
+            plt.plot(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100),gaussian(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100), *rt_dist_params),label="Updated RT fit")
+            plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
+            # plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
+            plt.text(config.opt_rt_tol,max(vals),np.round(config.opt_rt_tol,2))
+            plt.xlabel("RT difference")
+            plt.ylabel("Frequency")
+            plt.legend()
+            # plt.show()
+            if results_folder is not None:
+                plt.savefig(results_folder+"/first_search/RTdiff.png",dpi=600,bbox_inches="tight")
+                plt.close()
         
 
         ##plot mz rt alignment
@@ -1656,6 +1706,401 @@ def timeplex_algnment_plots(n_timeplex, t_vals, results_folder = None):
         plt.savefig(results_folder+"/MZdiff.png",dpi=600,bbox_inches="tight")
 """
 
+# --- timeplex ridge-tracker constants ---
+RIDGE_X_BINS = 140
+RIDGE_Y_BINS = 240
+RIDGE_SIGMA = (1.0, 2.5)     # (x, y) gaussian smoothing of the density image
+RIDGE_PEAK_PROM_FRAC = 0.05  # min peak prominence as a fraction of the column max
+RIDGE_WIGGLE = 0.30          # max per-channel deviation from the joint line, as a fraction of d
+RIDGE_CORE_PCT = 2           # trim this %% of points off each tail before fitting (dense core)
+
+
+def _extrap_spline(xg, curve, data_x, edge_frac=0.05):
+    """
+    Interpolate the modal-LOESS curve within the channel's data range; beyond it,
+    extrapolate linearly with a slope least-squares-fit over the outer ``edge_frac``
+    of the DATA POINTS (by count, so the window tracks point density rather than the
+    x-axis), clamped non-negative so RT stays monotone. Keeps the body intact —
+    unlike isotonic, the sparse tails don't reshape it.
+    """
+    xg = np.asarray(xg, float)
+    curve = np.asarray(curve, float)
+    dx = np.asarray(data_x, float)
+    inner = interp1d(xg, curve, bounds_error=False, fill_value=(curve[0], curve[-1]))
+    if dx.size < 2:
+        return inner
+    lo_x, hi_x = float(dx.min()), float(dx.max())
+    lo_edge = np.percentile(dx, 100 * edge_frac)        # first edge_frac of points
+    hi_edge = np.percentile(dx, 100 * (1 - edge_frac))  # last  edge_frac of points
+
+    def slope(a, b):
+        mask = (xg >= a) & (xg <= b)
+        return max(0.0, np.polyfit(xg[mask], curve[mask], 1)[0]) if mask.sum() >= 2 else 0.0
+
+    lo_slope, hi_slope = slope(lo_x, lo_edge), slope(hi_edge, hi_x)
+    y_lo, y_hi = float(inner(lo_x)), float(inner(hi_x))
+
+    def f(r):
+        r = np.asarray(r, float)
+        y = inner(r)
+        y = np.where(r < lo_x, y_lo + lo_slope * (r - lo_x), y)
+        return np.where(r > hi_x, y_hi + hi_slope * (r - hi_x), y)
+    return f
+
+
+def _relax_channels(x, y, shape, offsets, d, wiggle=RIDGE_WIGGLE):
+    """
+    Let each channel wiggle into its own local mode. The joint fit
+    (shape + offsets[k]) is the anchor: assign every point to its nearest joint
+    line (gated at half-spacing so it can't grab a neighbour), fit a per-channel
+    modal LOESS to those points, then soft-clamp the result so it can only
+    deviate ±wiggle*d from the joint line (tanh — linear for small deviations,
+    saturating smoothly toward the cap). Returns a list of per-channel callables
+    mapping the x-axis (library or predicted iRT) to observed RT.
+    """
+    K = len(offsets)
+    xg = np.linspace(float(np.min(x)), float(np.max(x)), 500)
+    base = np.asarray(shape(xg))
+    shape_x = np.asarray(shape(x))
+    joint_y = shape_x[None, :] + offsets[:, None]                 # (K, n)
+    assign = np.argmin(np.abs(y[None, :] - joint_y), axis=0)
+    within = np.abs(y - (shape_x + offsets[assign])) <= 0.5 * d   # never cross a neighbour
+    cap = wiggle * d
+    rt_spls = []
+    for k in range(K):
+        anchor = base + offsets[k]
+        m = (assign == k) & within
+        # Fit only the dense core of the channel's points: the sparse off-diagonal
+        # tails (e.g. CNN iRT-prediction errors after fine-tuning) otherwise hijack
+        # the modal LOESS and fold the curve back. Tails are handled by extrapolation.
+        xm, ym = x[m], y[m]
+        if xm.size >= 20:
+            lo = np.percentile(xm, RIDGE_CORE_PCT)
+            hi = np.percentile(xm, 100 - RIDGE_CORE_PCT)
+            c = (xm >= lo) & (xm <= hi)
+            xm, ym = xm[c], ym[c]
+        if xm.size >= 20:
+            res = min(100, int(xm.size))
+            itp = fast_modal_lowess(xm, ym, local_frac=0.01, anchors=res,
+                                    grid_size=res, post_smooth_frac=max(0.01, 5 / res))
+            curve = np.asarray(itp(xg))
+        else:
+            curve = anchor.copy()
+        curve = anchor + cap * np.tanh((curve - anchor) / cap)    # soft-limit the wiggle
+        # Body kept as-is; tails get a robust linear extrapolation (see _extrap_spline)
+        # so out-of-core / out-of-range iRTs don't flat-clamp or chase noise.
+        rt_spls.append(_extrap_spline(xg, curve, xm))
+        logger.info(f"Ridge channel {k}: {int(m.sum())} pts, "
+                    f"max wiggle {np.max(np.abs(curve - anchor)):.3f} (cap {cap:.3f})")
+    return rt_spls
+
+
+def _timeplex_scribe_filter(output_df, results_folder=None):
+    """
+    Scribe-score percentile sweep for the timeplex first search — a standalone
+    copy of empirical_fit's stepping so the non-timeplex path is left untouched.
+    Steps the scribe cutoff up (20→95) until the alignment residuals are clean
+    and returns the scribe-only cor_filter (no single-curve RT tolerance, which
+    would collapse the channel structure the ridge tracker needs).
+    """
+    for feature_percentile in range(20, 100, 5):
+
+        cor_filter = np.logical_and.reduce(
+            [output_df[feat] > np.percentile(output_df[feat], feature_percentile)
+             for feat in [
+                "scribe_score",
+             ]
+             ]
+        )
+
+        ## Only fit when fewer than this many peaks
+        if sum(cor_filter)>config.max_num_prelim_search:
+            continue
+
+        f = fast_modal_lowess(output_df.lib_rt[cor_filter],
+                        output_df.rt[cor_filter],
+                        .01,
+                        anchors=1000,
+                        grid_size=1000,
+                        post_smooth_frac=0.01)
+
+        plt.subplots()
+        plt.scatter(output_df.lib_rt[cor_filter],
+                    output_df.rt[cor_filter], s=1,alpha=.2)
+        plt.scatter(output_df.lib_rt[cor_filter],
+                    f(output_df.lib_rt[cor_filter]),edgecolor="none", s=1)
+        plt.scatter(f.anchor_x, f.anchor_y, color="red", s=8, edgecolor="none")
+        plt.title(str(feature_percentile))
+        if results_folder is not None:
+            plt.savefig(results_folder + f"/first_search/Percentile_{feature_percentile}.png",
+                        dpi=600, bbox_inches="tight")
+        plt.close()
+
+        first_rt_diffs = f(output_df.lib_rt) - output_df.rt
+
+        rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
+        first_rt_tolerance = 4 * np.abs(rt_stddev)
+
+        bad_IDs = (
+                np.abs(first_rt_diffs) >
+                np.min([first_rt_tolerance, np.ptp(output_df.rt) / 5])
+        )[cor_filter]
+        outside_ratio = bad_IDs.sum() / len(bad_IDs)
+
+        # GMM on residuals from current filter
+        res = first_rt_diffs[cor_filter]
+        weights, sigmas = fit_zero_mean_gmm_1d(res, n_components=2)
+
+        order = np.argsort(sigmas)
+        sigmas = sigmas[order]
+        weights = weights[order]
+
+        k = 3.29 * sigmas[0] # middle 99.9%
+        p_in = 2.0 * norm.cdf(k / sigmas) - 1.0
+        num = weights * p_in
+        partial_posterior = num[0] / num.sum()
+
+        plot_rt_residuals_mixture(
+            residuals=res,
+            feat=feature_percentile,
+            weights=weights,
+            sigmas=sigmas,
+            results_folder=results_folder
+        )
+
+        logger.info(
+            f"Testing Percentile: {feature_percentile}, "
+            f"Ratio: {outside_ratio:.4f}, #IDs: {cor_filter.sum()}, Partial Posterior: {partial_posterior:.4f}"
+        )
+
+        # new + existing stopping criteria
+        if (partial_posterior >= 0.99 or
+                outside_ratio < 0.05 or
+                (cor_filter.sum() - bad_IDs.sum()) < 800):
+            break
+
+    return cor_filter
+
+
+def fit_timeplex_ridges(output_df, n_timeplex, results_folder=None):
+    """
+    Align timeplex channels as ONE shared iRT->RT shape + K equally-spaced vertical
+    offsets (constant per-channel RT shift), recovered by 2D-density ridge tracking.
+
+    Unlike the old get_multiples/split_timePlex approach, this needs no per-peptide
+    completeness and no positional assignment: it finds the K parallel RT bands in
+    the (lib_rt, obs_rt) density and enforces a single shared shape with a common
+    channel gap d.
+
+    Parameters
+    ----------
+    output_df : pandas.DataFrame
+        First-search PSMs with columns: scribe_score, lib_rt, rt, mz,
+        relative_error_ms1.
+    n_timeplex : int
+        Number of channels K (>= 1).
+
+    Returns
+    -------
+    rt_spls : list[callable]
+        K callables mapping library iRT -> observed RT (shared_shape + offsets[k]).
+    shared_shape : callable
+        The single de-offset iRT->RT curve.
+    offsets : np.ndarray
+        Length-K, equally spaced (base + d*arange(K)).
+    d : float
+        Common channel gap (np.inf when K == 1).
+    filtered_output : pandas.DataFrame
+        Kept PSMs with lib_rt, rt (de-offset to the shared shape), mz_diffs, mz —
+        the shape alignment_plots expects.
+    residuals : np.ndarray
+        Signed residual of each kept PSM to its assigned ridge (for the GMM
+        tolerance, the residual mixture plot, and the CDF plot).
+    """
+    K = int(n_timeplex)
+    if K < 1:
+        raise RuntimeError("fit_timeplex_ridges requires n_timeplex >= 1")
+
+    # --- scribe-score quality gate: stepwise sweep (mirrors empirical_fit),
+    # scribe-only so the channel structure is preserved for ridge tracking ---
+    cor_filter = _timeplex_scribe_filter(output_df, results_folder)
+    kept = output_df.loc[cor_filter].reset_index(drop=True)
+    x = kept["lib_rt"].to_numpy(dtype=float)
+    y = kept["rt"].to_numpy(dtype=float)
+    logger.info(f"Ridge tracker: {len(kept)} IDs after scribe filtering")
+    if len(x) < 10:
+        raise RuntimeError(f"Ridge tracker: too few IDs ({len(x)}) after scribe filtering")
+
+    def make_spline(off):
+        def _f(r):
+            return np.asarray(shared_shape(np.asarray(r, dtype=float))) + off
+        return _f
+
+    if K == 1:
+        # Single channel: just the global modal trend, no offsets.
+        shared_shape = fast_modal_lowess(x, y, local_frac=.01, anchors=1000,
+                                         grid_size=1000, post_smooth_frac=0.01)
+        offsets = np.array([0.0])
+        d = float("inf")
+    else:
+        # --- build smoothed density image ---
+        H, xedges, yedges = np.histogram2d(x, y, bins=[RIDGE_X_BINS, RIDGE_Y_BINS])
+        H = gaussian_filter(H, sigma=RIDGE_SIGMA)
+        x_centers = 0.5 * (xedges[:-1] + xedges[1:])
+        y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+
+        def column_peaks(col, min_dist_bins):
+            """Up to K strongest, well-separated peak positions (sorted by y)."""
+            if col.max() <= 0:
+                return np.array([])
+            peaks, _ = signal.find_peaks(col, prominence=RIDGE_PEAK_PROM_FRAC * col.max(),
+                                         distance=max(1, min_dist_bins))
+            if len(peaks) == 0:
+                return np.array([])
+            top = peaks[np.argsort(col[peaks])[::-1][:K]]
+            return np.sort(y_centers[top])
+
+        min_dist_bins = int(0.02 * RIDGE_Y_BINS)
+        cols = [(x_centers[i], column_peaks(H[i], min_dist_bins))
+                for i in range(H.shape[0])]
+
+        npks = np.array([len(c[1]) for c in cols])
+        mid = np.median(x_centers)
+        lo = x_centers < mid
+        logger.info("Ridge peaks/col (low RT): "
+                    + str({k: int(((npks == k) & lo).sum()) for k in range(K + 1)}))
+        logger.info("Ridge peaks/col (high RT): "
+                    + str({k: int(((npks == k) & ~lo).sum()) for k in range(K + 1)}))
+
+        # --- global channel spacing d: mode of within-column adjacent peak gaps ---
+        gap_list = [np.diff(c[1]) for c in cols if len(c[1]) >= 2]
+        all_gaps = np.concatenate(gap_list) if gap_list else np.array([])
+        if all_gaps.size == 0:
+            raise RuntimeError("Ridge tracker: no column yielded >=2 peaks; "
+                               "lower RIDGE_PEAK_PROM_FRAC or check --num_timeplex")
+        gh, ge = np.histogram(all_gaps, bins=60)
+        gmode_lo, gmode_hi = ge[np.argmax(gh)], ge[np.argmax(gh) + 1]
+        d = float(np.median(all_gaps[(all_gaps >= gmode_lo) & (all_gaps <= gmode_hi)]))
+        logger.info(f"Ridge tracker: global spacing d={d:.4f} "
+                    f"(from {all_gaps.size} within-column gaps)")
+
+        # --- seed: densest K-peak column most consistent with equal spacing d ---
+        gap_tol = 0.35 * d
+        cand = []
+        for i in range(H.shape[0]):
+            m = cols[i][1]
+            if len(m) != K:
+                continue
+            if np.max(np.abs(np.diff(m) - d)) <= gap_tol:
+                cand.append((H[i].sum(), i))
+        if not cand:
+            raise RuntimeError(f"Ridge tracker: no column had K={K} equally-spaced "
+                               f"peaks (d={d:.4f}); check --num_timeplex / prominence")
+        seed_i = max(cand)[1]
+        seed_modes = cols[seed_i][1]
+        spacing = float(np.min(np.diff(seed_modes)))
+        link_thresh = 0.45 * spacing
+        logger.info(f"Ridge tracker: seed @ libRT={x_centers[seed_i]:.2f}, "
+                    f"modes={np.round(seed_modes,3)}, spacing={spacing:.3f} "
+                    f"({len(cand)} equal-spaced candidate columns)")
+
+        tracks = [[(x_centers[seed_i], seed_modes[k])] for k in range(K)]
+        rel = seed_modes - seed_modes.mean()   # fixed relative offset prior
+
+        def predict(h, xq):
+            """Predict a ridge's y at xq from its recent history h=[(x,y),...]."""
+            h = h[-5:]
+            if len(h) >= 2:
+                xs = np.array([p[0] for p in h]); ys = np.array([p[1] for p in h])
+                if xs.max() - xs.min() > 1e-9:
+                    sl, ic = np.polyfit(xs, ys, 1)
+                    return sl * xq + ic
+            return h[-1][1]
+
+        def walk(order):
+            hist = [[(x_centers[seed_i], seed_modes[k])] for k in range(K)]
+            for i in order:
+                m = cols[i][1]
+                if len(m) == 0:
+                    continue
+                xi = x_centers[i]
+                # match available peaks to ridges via each ridge's slope prediction
+                pred = np.array([predict(hist[k], xi) for k in range(K)])
+                cost = np.abs(pred[:, None] - m[None, :])
+                ri, ci = linear_sum_assignment(cost)
+                matched, used = {}, set()
+                for r, c in zip(ri, ci):
+                    if cost[r, c] <= link_thresh:
+                        matched[r] = m[c]; used.add(c)
+                # recover unmatched ridges from siblings via the fixed-offset prior
+                if matched:
+                    s = np.median([matched[r] - rel[r] for r in matched])
+                    for k in range(K):
+                        if k in matched:
+                            continue
+                        target = s + rel[k]
+                        avail = [c for c in range(len(m)) if c not in used]
+                        if avail:
+                            c = min(avail, key=lambda c: abs(m[c] - target))
+                            if abs(m[c] - target) <= link_thresh:
+                                matched[k] = m[c]; used.add(c)
+                for r, val in matched.items():
+                    tracks[r].append((xi, val))
+                    hist[r].append((xi, val))
+
+        walk(range(seed_i - 1, -1, -1))       # leftward
+        walk(range(seed_i + 1, H.shape[0]))   # rightward
+
+        # --- one shared shape: pool de-offset points, single lowess ---
+        pool_x, pool_s = [], []
+        for k in range(K):
+            for (xi, val) in tracks[k]:
+                pool_x.append(xi); pool_s.append(val - rel[k])
+        pool_x = np.asarray(pool_x); pool_s = np.asarray(pool_s)
+        o = np.argsort(pool_x)
+        shape_sm = lowess(pool_s[o], pool_x[o], frac=0.15, it=0)
+        shared_shape = interp1d(shape_sm[:, 0], shape_sm[:, 1], bounds_error=False,
+                                fill_value=(shape_sm[0, 1], shape_sm[-1, 1]))
+
+        # --- equal-spacing offsets: offset[k] = base + k*d, d fixed to global ---
+        order_k = np.argsort([
+            np.median([v - float(shared_shape(xi)) for (xi, v) in tracks[k]])
+            if tracks[k] else rel[k] for k in range(K)])
+        kk, rr = [], []
+        for ki, k in enumerate(order_k):
+            for (xi, val) in tracks[k]:
+                kk.append(ki); rr.append(val - float(shared_shape(xi)))
+        kk = np.asarray(kk, float); rr = np.asarray(rr, float)
+        base_off = float(np.mean(rr - d * kk))
+        offsets = base_off + d * np.arange(K)
+        logger.info(f"Ridge tracker: offsets={np.round(offsets,4)}, "
+                    f"gaps={np.round(np.diff(offsets),4)}")
+
+    # --- per-channel curves: joint shape+offset, relaxed into local modes (wiggle) ---
+    if K == 1:
+        rt_spls = [make_spline(0.0)]
+    else:
+        rt_spls = _relax_channels(x, y, shared_shape, offsets, d)
+
+    # --- per-PSM channel assignment (nearest ridge) + signed residual ---
+    shape_x = np.asarray(shared_shape(x))
+    ridge_vals = shape_x[None, :] + offsets[:, None]   # (K, N)
+    resid_all = y[None, :] - ridge_vals                # (K, N)
+    nearest = np.argmin(np.abs(resid_all), axis=0)     # (N,)
+    residuals = resid_all[nearest, np.arange(len(y))]  # signed residual to assigned ridge
+
+    filtered_output = pd.DataFrame({
+        "lib_rt": x,
+        "rt": y,                                       # original observed RT
+        "channel": nearest,
+        "stripped_seq": kept["stripped_seq"].to_numpy(),
+        "mz_diffs": kept["relative_error_ms1"].to_numpy(dtype=float),
+        "mz": kept["mz"].to_numpy(dtype=float),
+    })
+
+    return rt_spls, shared_shape, offsets, d, filtered_output, residuals
+
+
 def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=None,ms2=False,mass_tag=None,SILAC=None):
     """
     Perform a preliminary search of the timeplex spectra to align the library mz and RT values
@@ -1690,49 +2135,30 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
         
 
     """
-    ## for testing
-    # mz_tol,ms1,results_folder,ms2 = (config.ms1_tol,False,None,False)
-    # here spectra are both ms1 and ms2 
-    
-    config.n_most_intense_features = int(1e8) # larger than possible, essentually all
-    
-    scans_per_cycle = round(len(dia_spectra.ms2scans)/len(dia_spectra.ms1scans))
     logger.info("Initial search")
-    # print(f"Fitting the {config.n_most_intense} most intense spectra")
-    
-    ms1spectra = dia_spectra.ms1scans
-    ms2spectra = dia_spectra.ms2scans
-    
-    ### array of all MS1 RTs
-    ms1_rt = np.array([i.RT for i in ms1spectra])
-    
-    totalIC = np.array([np.sum(i.intens) for i in ms2spectra])
-    
-    top_n = np.argsort(-totalIC)[:config.n_most_intense]
-    top_n_ms1 = top_n//scans_per_cycle
-    all_keys = list(librarySpectra)
-    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
 
-    
-    
     #################################################################################
 
     # Run the peppy_sage MS2 library search (same as the non-timeplex MZRTfit path)
     import src.preliminary_search as preliminary_search
-    from src.elution_analysis import collapse_to_cluster_apices
+    from src.elution_analysis import calculate_elution_width, collapse_to_cluster_apices
     output_df = preliminary_search.fit_with_features(
         dia_spectra, librarySpectra, mass_tag, SILAC,
         ms1_ppm_error=20, ms2_ppm_error=10,
     )
+
+    # Elution width — provides elution_sd for the RT-tolerance GMM (same formula as
+    # the non-timeplex path). Also annotates cluster_size (ignored by the collapse).
+    _fwhm, elution_sd, output_df = calculate_elution_width(output_df)
+    logger.info(f"Mean elution width: FWHM {_fwhm:.4f}, SD {elution_sd:.4f}")
 
     # peppy_sage emits one PSM per matched spectrum, so a single elution is a
     # cluster of consecutive-scan rows. Collapse each (seq, z) peptide's clusters
     # to one apex row apiece — one row per elution = one timeplex position.
     output_df = collapse_to_cluster_apices(output_df)
 
-    # Global RT sort so that within each (seq, z) the occurrences are RT-ascending.
-    # get_multiples preserves output_df order (its argsort is overwritten by
-    # np.arange), so this is what makes t_vals[0] = earliest elution, etc.
+    # Sort by RT (not required by the ridge tracker, which is density-based) — keeps
+    # the debug firstSearch.tsv readable.
     output_df = output_df.sort("rt").to_pandas().reset_index(drop=True)
 
     id_keys = list(zip(output_df["seq"], output_df["z"]))
@@ -1742,289 +2168,61 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     if results_folder is not None:
         output_df.to_csv(results_folder+"/first_search/firstSearch.tsv", index=False, sep='\t')
 
-    #### create dictionary for each key and it's positions
+    n_timeplex = config.args.num_timeplex
+    updatedLibrary = copy.deepcopy(librarySpectra)
+    rt_spls, emp_shape, offsets, d, filtered_output, residuals = fit_timeplex_ridges(output_df, n_timeplex, results_folder)
 
-    multiples, num_multiples, multiples_idxs = get_multiples(id_keys, output_df)
-    
-    if config.args.num_timeplex==0:
-        n_timeplex = stats.mode(num_multiples).mode
-    else:
-        n_timeplex = config.args.num_timeplex
-        
-    # while it may be nice to know, we are assuming that this is not constant and therfore not necessary to know
-    time_diffs = np.concatenate([np.diff(i) for i in multiples if len(i)==n_timeplex])
-    # plt.hist(time_diffs,np.linspace(-1,5,40))
-    # plt.xlabel("TimePLEX offset")
-    
-    # plt.scatter(np.concatenate([i[0:2] for i in multiples if len(i)==timeplex]),time_diffs,s=1,edgecolors="none")
-    # plt.ylabel("TimePLEX offset")
-    # plt.xlabel("RT")
-    
-    
-    rt_spls, t_vals, t_seqs, filters = split_timePlex(output_df,n_timeplex,rt_mz, id_keys, multiples_idxs)
-    
-    # for idx in range(n_timeplex):
-    #     plt.scatter(t_vals[idx][:,1][filters[idx]],t_vals[idx][:,0][filters[idx]],s=1,c=colours[idx],edgecolor="none",label=f"T{str(idx)}")
-    #     plt.plot(sorted(t_vals[idx][:,1][filters[idx]]),rt_spls[idx](sorted(t_vals[idx][:,1][filters[idx]])),color=colours[idx],label=f"T{str(idx)}")
-    # plt.xlabel("Library RT")
-    # plt.ylabel("Observed RT")
-    # plt.ylim(0,60)
-    
-    
-    ### this may be useful to implement (requires more testing)
-    # for percentile in [20, 40, 60, 80]:
-    #     rt_spls = []
-    #     t_vals = []
-    #     t_seqs = []
-    #     t_dfs = []
-    #     filters = []
-    #     converted_rts = []
-    #     gaussian_fits = []
-    #     for idx in range(timeplex):
-    #         lib_rt_range = [np.percentile(rt_mz[:,0],5),np.percentile(rt_mz[:,0],95)]
-    #         ### array of (obs_rt, lib_rt, hyperscore)
-    #         t1 = np.array([[output_df.rt[i[idx]],output_df.lib_rt[i[idx]],output_df.hyperscore[i[idx]],output_df.mz[i[idx]],output_df.coeff[i[idx]],output_df.frac_lib_int[i[idx]]] for i in multiples_idxs if len(i)==timeplex and output_df.lib_rt[i[idx]]>lib_rt_range[0] and output_df.lib_rt[i[idx]]<lib_rt_range[1]])
-    #         t1_s = [id_keys[i[idx]] for i in multiples_idxs if len(i)==timeplex and output_df.lib_rt[i[idx]]>lib_rt_range[0] and output_df.lib_rt[i[idx]]<lib_rt_range[1]]
-    #         # t1 = np.array([[output_df.rt[i[idx]],output_df.lib_rt[i[idx]],output_hyper[i[idx]]] for i in multiples_idxs if len(i)==timeplex])
-    #         t_df = output_df.iloc[[i[idx] for i in multiples_idxs if len(i)==timeplex and output_df.lib_rt[i[idx]]>lib_rt_range[0] and output_df.lib_rt[i[idx]]<lib_rt_range[1]]]
-    #         new_filter = get_df_filter(t_df,percentile)
-    #         rt_spl = lowess_fit(t1[:,1][new_filter],t1[:,0][new_filter])
-    #         filters.append(new_filter)
-    #         rt_spls.append(rt_spl)
-    #         t_vals.append(t1)
-    #         t_seqs.append(t1_s)
-    #         converted_rt = rt_spl(t1[:,1])
-    #         converted_rts.append(converted_rt)
-    #         gaussian_fits.append(fit_gaussian(t1[:,0]-converted_rt))
-            
-    #     plt.subplots()
-    #     for idx in range(timeplex):
-    #         # print(np.sum(filters[idx]))
-    #         plt.scatter(t_vals[idx][:,1][filters[idx]],t_vals[idx][:,0][filters[idx]],s=1,c=colours[idx],edgecolor="none",label=f"T{str(idx)}")
-    #         plt.plot(sorted(t_vals[idx][:,1][filters[idx]]),rt_spls[idx](sorted(t_vals[idx][:,1][filters[idx]])),color=colours[idx],label=f"T{str(idx)}")
-    #     plt.xlabel("Library RT")
-    #     plt.ylabel("Observed RT")
-    #     plt.title(f"Percentile: {percentile}")
-    #     plt.show()
-    
-    ########################################################################################################
-    #########################################################################################################
-    #########################################################################################################
-    
-    
-    ## only uses peptides within certain tolerance (Assume most of these are true nad exclude incorrect outliers)
-    # _bool = np.abs(rt_diffs)<(4*rt_stddev)
-    # ### Could also change to those with the expectd offset when observed
-    # rt_offsets = np.array([i[0] for i in t_vals[1]])-[i[0] for i in t_vals[0]]
-    # rt_offsets2 = np.array([i[0] for i in t_vals[2]])-[i[0] for i in t_vals[1]] ## for column 2 vs 3
-    all_rt_offsets = [np.array([i[0] for i in t_vals[idx+1]])-[i[0] for i in t_vals[idx]] 
-                      for idx in range(n_timeplex-1)]
-    offset_tolerance = 1 ## 1 minute
-    # expected_offset = stats.mode(np.round(all_rt_offsets[0][all_rt_offsets[0]>.5],1)).mode
-    exp_offsets = [stats.mode(np.round(rt_off[rt_off>.5],1)).mode for rt_off in all_rt_offsets] ## ensure it's around zero
-    diff_bool = np.abs(all_rt_offsets[0]-exp_offsets[0])<offset_tolerance
-    all_diff_bools = [np.abs(all_rt_offsets[idx]-exp_offsets[idx])<offset_tolerance for idx in range(n_timeplex-1)]
-    # plt.scatter(np.array([i[1] for i in t_vals[0]])[diff_bool],np.array([i[0] for i in t_vals[0]])[diff_bool],s=1)
-    # plt.scatter(np.array([i[1] for i in t_vals[1]])[diff_bool],np.array([i[0] for i in t_vals[1]])[diff_bool],s=1)
-    
-    # for idx in range(timeplex):
-    #     # plt.subplots()
-    #     plt.scatter(np.array([i[1] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools])],np.array([i[0] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools])],s=1,c=colours[idx],edgecolor="none",label=f"T{str(idx)}")
-    # plt.xlabel("Library RT")
-    # plt.ylabel("Observed RT")
-    # plt.ylim(0,60)
-    
-    ## fit to the "zeroth" column
-    f = fast_modal_lowess(np.array([i[1] for i in t_vals[1]])[diff_bool],np.array([i[0] for i in t_vals[0]])[diff_bool], local_frac=.01,
-                               anchors=1000,
-                               grid_size=1000,
-                               post_smooth_frac=0.01)
-    
-    # plt.scatter([i[1] for i in t_vals[0]],[i[0] for i in t_vals[0]],s=1)
-    # plt.scatter([i[1] for i in t_vals[0]],f([i[1] for i in t_vals[0]]),s=1)
-    
-    # rt_diffs = f([i[1] for i in t_vals[1]])-[i[0] for i in t_vals[0]]
-    # rt_amplitude, rt_mean, rt_stddev = fit_gaussian(rt_diffs)
-    
-    # vals,bins,_ = plt.hist(rt_diffs,np.linspace(-10,10,150),density=True)
-    # plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
-    # plt.hist(rt_diffs[np.abs(rt_diffs)<(4*rt_stddev)],50,density=True,alpha=.5)
-    
-    
-    t0_rts = np.array(t_vals[0][:,1])
-    ## exclude regions where there are no IDs
-    rt_filter_bool = filter_rts_by_dense(t0_rts,30)
-    
-    emp_rt_spls = []
-    for idx in range(n_timeplex):
-        # rt_spl = threestepfit([updatedLibrary[key]["iRT"] for key in keys],[i[0] for i in t_vals[0]],1)
-        rt_spl = fast_modal_lowess(np.array(t_vals[idx][:,1])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
-                            np.array(t_vals[idx][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])], local_frac=.01,
-                               anchors=1000,
-                               grid_size=1000,
-                               post_smooth_frac=0.01)
-        emp_rt_spls.append(rt_spl)
-    
-    all_emp_diffs = np.concatenate([emp_rt_spls[i](np.array(t_vals[idx][:,1]))[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array(t_vals[i][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])] for i in range(n_timeplex)])
-    
-    # for idx in range(n_timeplex):
-    #     # plt.subplots()
-    #     test_bool = np.logical_and(diff_bool,rt_filter_bool)
-    #     plt.scatter(t0_rts[test_bool],np.array([i[0] for i in t_vals[idx]])[test_bool],c=colours[idx],s=1,edgecolor="none") 
-    #     plt.scatter(t0_rts[test_bool],rt_spls[idx](t0_rts)[test_bool],c=colours[idx],s=1,alpha=.2) 
-    
-    
-    percentile = config.rt_percentile
-    limit = 3 ## exlcude RT diffs larger than this (outliers)
-    
-    
-    ###############################################################
-    ####### fine tuning
-    ###############################################################
-    # """
+    channel = filtered_output["channel"].to_numpy()
+    deoffset_rt = filtered_output["rt"].to_numpy() - offsets[channel]
+    filtered_output["updated_lib_rt"] = filtered_output["lib_rt"]   # default x-axis = library iRT
+
+    emp_data, emp_p, emp_cdf_auc = cdf_data(residuals)
+    chosen_diffs = residuals
+    pred_data = pred_p = None
+    mixture_feat = "_timeplex_empirical"
+
     if not config.args.use_emp_rt:
-            
-            
-        ## use observed rt for fine_tuning
-        grouped_df = pd.DataFrame({'Stripped.Sequence':[librarySpectra[(i[0],float(i[1]))]["seq"] for i in t_seqs[0]],"RT":[i[0] for i in t_vals[0]]})[diff_bool]
-        data_split, models, convertor = fine_tune_rt(grouped_df,qc_plots=True,results_path=results_folder)
+        logger.info("Trying RT Prediction (timeplex)")
+        seq_rt = {}
+        for s, rt in zip(filtered_output["stripped_seq"], deoffset_rt):
+            seq_rt.setdefault(s, []).append(rt)
+        filtered_seq_rt = {s: np.median(v) for s, v in seq_rt.items() if np.ptp(v) < 1}
+        grouped_df = pd.DataFrame({'Stripped.Sequence': list(filtered_seq_rt),
+                                   'RT': list(filtered_seq_rt.values())})
+        data_split, models, convertor = fine_tune_rt(grouped_df, qc_plots=True, results_path=results_folder)
 
-        
-        ### recalculate RT_spls...
-        keys = [(i,float(j)) for i,j in t_seqs[0]]
-        
-        lib_seqs = [one_hot_encode_sequence(librarySpectra[key]["seq"]) for key in keys]
-        new_lib_rts = convertor(np.mean([model.predict(np.array(lib_seqs)) for model in models],axis=0).flatten())
-        
-        t0_rts = new_lib_rts
-        ## exclude regions where there are no IDs
-        rt_filter_bool = filter_rts_by_dense(t0_rts,30)
-        rt_spls = []
-        for idx in range(n_timeplex):
-            # rt_spl = threestepfit([updatedLibrary[key]["iRT"] for key in keys],[i[0] for i in t_vals[0]],1)
-            rt_spl = fast_modal_lowess(t0_rts[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],
-                                np.array([i[0] for i in t_vals[idx]])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],local_frac=.02,
-                               anchors=1000,
-                               grid_size=1000,
-                               post_smooth_frac=0.01)
-            rt_spls.append(rt_spl)
-        
-        # for idx in range(n_timeplex):
-        #     # plt.subplots()
-        #     test_bool = np.logical_and(diff_bool,rt_filter_bool)
-        #     plt.scatter(t0_rts[test_bool],np.array([i[0] for i in t_vals[idx]])[test_bool],c=colours[idx],s=1,edgecolor="none") 
-        #     plt.scatter(t0_rts[test_bool],rt_spls[idx](t0_rts)[test_bool],c=colours[idx],s=1,alpha=.2) 
-        
-        all_pred_diffs = np.concatenate([rt_spls[i](t0_rts)[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array([i[0] for i in t_vals[i]])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])] for i in range(n_timeplex)])
-        
-        
-        
-        emp_data, emp_p, emp_cdf_auc = cdf_data(all_emp_diffs,limit=limit)
-        pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs,limit=limit)
-        
-    
-        updatedLibrary = copy.deepcopy(librarySpectra)
-        all_lib_keys = list(librarySpectra)
-        
-        
-        
-        ### compare original empirical RTs to fintuned RTs
-        
-        if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
-            logger.info("Fine Tuned Library Chosen")
-    
-            boundary = fit_errors(all_pred_diffs,limit,percentile)
-    
-            all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
-            all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
-            
-            for key,rt in zip(all_lib_keys,all_new_lib_rts):
-                updatedLibrary[key]["iRT"] = rt
-                
-        else: ### empirical are better
-            ## keep the library RTs the same
-    
-            logger.info("Empirical Library Chosen")
-            
-            boundary = fit_errors(all_emp_diffs,limit,percentile)
-    
-            ## update the splines
-            rt_spls = emp_rt_spls
-            
-    
-        
-    ###############################################################
-    ####### NO fine tuning
-    ###############################################################
-     
-    else:
-    # """
-        logger.info("Using Empirical w/o Fine Tuning")
-        updatedLibrary = copy.deepcopy(librarySpectra)
-        all_lib_keys = list(librarySpectra)
-        
-        keys = [(i,float(j)) for i,j in t_seqs[0]]
-        boundary = fit_errors(all_emp_diffs,limit,percentile)
-        rt_spls = emp_rt_spls
-    
-        
-        
-    # ## get keys from t_vals and recreate scatter plot
-    # keys = [(i,float(j)) for i,j in t_seqs[0]]
-    # plt.scatter(f1(convertor([updatedLibrary[key]["iRT"] for key in keys])),[i[0] for i in t_vals[0]],s=1)
-    # plt.plot([10,50],[10,50])
-    # plt.scatter(f1(convertor([updatedLibrary[key]["iRT"] for key in keys])),[i[0] for i in t_vals[1]],s=1)
-    # plt.plot([10,50],[13,53])
-    
-    
-    # ## just use T0
-    # export_df = pd.DataFrame({"obs_rt":np.concatenate([t_vals[0][:,0],t_vals[1][:,0]]),
-    #                           "lib_rt":np.concatenate([t_vals[0][:,1],t_vals[1][:,1]]),
-    #                           "seq":[i[0] for i in t_seqs[0]]+[i[0] for i in t_seqs[1]],
-    #                           "charge":[i[1] for i in t_seqs[0]]+[i[1] for i in t_seqs[1]]})
-    
-    # export_df = pd.DataFrame({"obs_rt_0":t_vals[0][:,0],
-    #                           "obs_rt_1":t_vals[1][:,0],
-    #                           "lib_rt":t_vals[0][:,1],
-    #                           "seq":[i[0] for i in t_seqs[0]],
-    #                           "charge":[i[1] for i in t_seqs[0]]})
-    # export_df.to_csv("/Volumes/Lab/KMD/For_JD/T6doublets.csv")
-    
-    
-    ## combined gausian fit
-    # rt_amplitude, rt_mean, rt_stddev = fit_gaussian(np.concatenate([t[:,0]-c_rt for t,c_rt in zip(t_vals,converted_rts)]))
-    # f = lowess_fit([i[1] for i in t_vals[0]],[i[0] for i in t_vals[0]])
-    # f1 = lowess_fit(convertor(predictions).flatten(),[i[0] for i in t_vals[0]],frac=.4)
-    rt_amplitude, rt_mean, rt_stddev = fit_gaussian(rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])[diff_bool]-np.array([i[0] for i in t_vals[0]])[diff_bool],bin_n=100)
-    
-    emp_rt_amplitude, emp_rt_mean, emp_rt_stddev = fit_gaussian(emp_rt_spls[0](np.array(t_vals[0][:,1]))[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array(t_vals[0][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],bin_n=100)
-    
-    
-    
-    # vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],np.linspace(-10,10,150),density=True,label="Old RT")
-    # vals,bins,_ = plt.hist((rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
-    # plt.plot(np.linspace(-5,5,100),gaussian(np.linspace(-5,5,100), rt_amplitude, rt_mean, rt_stddev),label="New RT fit")
-    # # plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals))
-    # # plt.legend()
-    # ### vals,bins,_ = plt.hist(np.abs(rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],bins,alpha=.5,density=True,label="New RT")
-    
-    # vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[np.logical_and(diff_bool,rt_filter_bool)],np.linspace(-10,10,150),density=True,label="Old RT")
-    # vals,bins,_ = plt.hist(emp_rt_spls[0](np.array(t_vals[0][:,1]))[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])]-np.array(t_vals[0][:,0])[np.logical_and.reduce([*all_diff_bools,rt_filter_bool])],bins,alpha=.5,density=True,label="New RT")
-    # plt.plot(np.linspace(-5,5,100),gaussian(np.linspace(-5,5,100),  emp_rt_amplitude, emp_rt_mean, emp_rt_stddev),label="New RT fit")
-    # plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals))
-    
-   
-    ## NB: Only for n_timeplex=2
-    ## computes differences between the fit lines of first 2 plexes
-    prediction_diffs = np.abs(rt_spls[1]([updatedLibrary[key]["iRT"] for key in keys])-rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys]))
-    all_prediction_diffs = []
-    for idx in range(n_timeplex-1):
-        all_prediction_diffs.append(np.abs(rt_spls[idx+1]([updatedLibrary[key]["iRT"] for key in keys])-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])))
+        kept_pred = convertor(np.mean([m.predict(np.array([one_hot_encode_sequence(s)
+                              for s in filtered_output["stripped_seq"]])) for m in models], axis=0).flatten())
+        all_pred_diffs = data_split[3] - convertor(np.mean([m.predict(np.array(data_split[1]))
+                              for m in models], axis=0).flatten())
+        pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs)
+
+        if pred_cdf_auc > emp_cdf_auc:
+            logger.info("Fine Tuned Library Chosen (timeplex)")
+            pred_shape = fast_modal_lowess(kept_pred, deoffset_rt, local_frac=.01,
+                                           anchors=1000, grid_size=1000, post_smooth_frac=0.01)
+            rt_spls = _relax_channels(kept_pred, filtered_output["rt"].to_numpy(dtype=float),
+                                      pred_shape, offsets, d)
+            filtered_output["updated_lib_rt"] = kept_pred   # x-axis = predicted iRT
+            chosen_diffs = all_pred_diffs
+            mixture_feat = "_timeplex_fine_tuned"
+            uniq = list({updatedLibrary[k]["seq"] for k in librarySpectra})
+            uniq_rt = convertor(np.mean([m.predict(np.array([one_hot_encode_sequence(s) for s in uniq],
+                                dtype=np.float32), batch_size=4096) for m in models], axis=0).flatten())
+            s2rt = dict(zip(uniq, uniq_rt))
+            for k in librarySpectra:
+                updatedLibrary[k]["iRT"] = s2rt[updatedLibrary[k]["seq"]]
+        else:
+            logger.info("Empirical Library Chosen (timeplex)")
+
+    weights, sigmas = fit_zero_mean_gmm_1d(chosen_diffs, n_components=2)
+    sigmas = np.sort(sigmas)
+    boundary = 4 * sigmas[0] + 8 * elution_sd
+
     #####  Assume that the mz error is independent of n_timeplex
-    resp_ms1scans = [closest_ms1spec(output_df.rt[i], ms1_rt) for i in range(len(output_df.rt))]
-    diffs = [closest_peak_diff(mz, ms1spectra[i].mz) for i,mz in zip(resp_ms1scans,output_df.mz)]
-    
-    mz_spl = twostepfit(output_df.mz,diffs,1)
+    # Use the precomputed per-PSM MS1 error (same as the non-timeplex MZRTfit path),
+    # so the mz fit is consistent with filtered_output.mz_diffs used in plotting.
+    diffs = output_df["relative_error_ms1"].to_numpy()
     
     
     
@@ -2105,14 +2303,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     
     # config.rt_tol_spl = rt_tol_fn
     
-    # ensure there is no overlap
-    # if new_rt_tol>np.median(time_diffs)/2:
-    min_prediction_diff = np.min(prediction_diffs)
-    min_prediction_diff = np.min([np.min(i) for i in prediction_diffs])
-    
-    if new_rt_tol>np.abs(min_prediction_diff/2):
+    # ensure there is no overlap (d = the common channel gap)
+    if new_rt_tol>np.abs(d/2):
         logger.warning("Warning; Library RTs overlapping")
-        new_rt_tol = np.abs(min_prediction_diff/2)*.99 # ensure no overlap
+        new_rt_tol = np.abs(d/2)*.99 # ensure no overlap
         logger.warning(f"Reseting tolerance to {new_rt_tol}")
     
 
@@ -2154,176 +2348,14 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
         #     with open(results_folder+"/ms2_func","wb") as dill_file:
         #         dill.dump(ms2_func,dill_file)
             
-        ##plot RT alignment
-        filter_bool = np.logical_and.reduce([*all_diff_bools,rt_filter_bool])
-        
-        plt.subplots()
-        for idx in range(n_timeplex):
-            plt.scatter(np.array(t_vals[idx][:,1])[filter_bool],
-                        np.array(t_vals[idx][:,0])[filter_bool],
-                        s=1,c=colours[idx], alpha=.2,label=f"T{str(idx)}")
-            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1]),s=1,label=f"T{str(idx)}",c=colours[idx])
-            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
-            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
-            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
-            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
-        plt.legend(markerscale=10)
-        plt.xlabel("Library RT")
-        plt.ylabel("Observed RT")
-        # plt.show()
-        plt.savefig(results_folder+"/first_search/OriginalRTfit.png",dpi=600,bbox_inches="tight")
-        plt.close()
-            
-        ### want this later
-        plt.subplots()
-        for idx in range(n_timeplex):
-            plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[filter_bool],np.array([i[0] for i in t_vals[idx]])[filter_bool],s=1,label=f"T{str(idx)}",alpha=.2)
-            # plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]),s=1,label=f"T{str(idx)}",c=colours[idx])
-            plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
-            plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])-config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
-            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
-            # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
-        plt.legend(markerscale=10)
-        plt.xlabel("Updated Library RT")
-        plt.ylabel("Observed RT")
-        plt.savefig(results_folder+"/first_search/RTfit.png",dpi=600,bbox_inches="tight")
-        plt.close()
-        
-        plt.subplots()
-        for idx in range(n_timeplex):
-            vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[filter_bool],100,alpha=.5,label=f"T{str(idx)}")
-            # rt_stddev = gaussian_fits[idx][-1]
-        x_scale = np.diff(plt.xlim())[0]
-        plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
-        plt.text(config.opt_rt_tol+x_scale/100,max(vals)*.8,np.round(config.opt_rt_tol,2))
-        plt.legend()  
-        plt.xlabel("RT difference")
-        plt.ylabel("Frequency") 
-        # plt.show()
-        plt.savefig(results_folder+"/first_search/RTdiff.png",dpi=600,bbox_inches="tight")
-        plt.close()
-        
-        
-        plt.subplots()
-        for idx in range(n_timeplex):
-            if idx!=0:
-                offset = all_prediction_diffs[idx-1]
-            else:
-                offset = 0
-            vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+offset)[filter_bool],100,alpha=.5,label=f"T{str(idx)}")
-            # rt_stddev = gaussian_fits[idx][-1]
-            plt.vlines([-config.opt_rt_tol+np.median(offset),config.opt_rt_tol+np.median(offset)],0,max(vals),color="r")
-        x_scale = np.diff(plt.xlim())[0]
-        # plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
-        plt.text(config.opt_rt_tol+x_scale/100,max(vals)*.8,np.round(config.opt_rt_tol,2))
-        plt.legend()  
-        plt.xlabel("RT difference")
-        plt.ylabel("Frequency") 
-        plt.savefig(results_folder+"/first_search/Rterrors.png",dpi=600,bbox_inches="tight")
-        plt.close()
-        
-        
-        plt.subplots()
-        vals,bins,_ = plt.hist((f([i[1] for i in t_vals[0]])-[i[0] for i in t_vals[0]])[filter_bool],np.linspace(-10,10,150),density=True,label="Original RT")
-        plt.hist((rt_spls[0]([updatedLibrary[key]["iRT"] for key in keys])-[i[0] for i in t_vals[0]])[filter_bool],bins,alpha=.5,density=True,label="Updated RT")
-        plt.plot(np.linspace(-5,5,100),gaussian(np.linspace(-5,5,100), rt_amplitude, rt_mean, rt_stddev),label="Updated RT fit")
-        plt.legend()
-        plt.xlabel("RT alignment errors")
-        plt.savefig(results_folder+"/first_search/RtAlignmentErrors.png",dpi=600,bbox_inches="tight")
-        plt.close()
-        # plt.show()
-        
-        fig, ax = plt.subplots(nrows = n_timeplex, figsize=(7.2, 3.6*n_timeplex))        
-        for idx,row in enumerate(ax):
-            row.scatter(np.array(t_vals[idx][:,1])[filter_bool],np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[filter_bool],label="Original_RT",s=.1)
-            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[0,0],color="r",linestyle="--",alpha=.5)
-            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
-            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
-            row.set_ylabel(f"RT Residuals (T{idx})")
-            row.set_ylim(-5,5)
-        # plt.scatter(output_df.lib_rt,rt_spl(output_df.lib_rt),label="Predicted_RT",s=1)
-        # plt.legend()
-        plt.xlabel("Updated Library RT")
-        # plt.ylabel("RT Residuals")
-        # plt.show()
-        plt.savefig(results_folder+"/first_search/RtResidual.png",dpi=600,bbox_inches="tight")
-        plt.close()
-        
-        
-        # Plot the CDFs with elbow points
-        plt.subplots()
-        plt.figure(figsize=(8, 5))
-        plt.plot(emp_data, emp_p, label="Original CDF", linestyle='-')
-        plt.plot(pred_data, pred_p, label="Finetuned CDF", linestyle='-')
-        # plt.scatter(elbow_emp_x, elbow_emp_y, color='blue', label=f'Original Elbow at {elbow_emp_x:.2f}', zorder=3)
-        # plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
-        
-        emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
-
-        plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0],label="Emp Expon CDF")
-        emp_exp_999 = stats.expon.ppf(percentile,scale=emp_abs_errors_med/np.log(2))
-        plt.scatter([emp_exp_999], [percentile],c=colours[0],label=f"Emp Expon {percentile}: {emp_exp_999:.2f}",marker="*")
-        plt.plot(emp_data,stats.halfnorm.cdf(emp_data,loc=0,scale=np.power(emp_abs_errors_med*1.4826,1)),linestyle=":",color=colours[0],label="Emp Norm CDF")
-        emp_gauss_999 = stats.halfnorm.ppf(percentile,scale=emp_abs_errors_med*1.4826)
-        plt.scatter([emp_gauss_999], [percentile],c=colours[0],label=f"Emp Norm {percentile}: {emp_gauss_999:.2f}")
-        
-        pred_abs_errors_med = np.median(np.abs(all_pred_diffs[all_pred_diffs<limit]-np.median(all_pred_diffs[all_pred_diffs<limit])))
-        plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),linestyle="--",color=colours[1],label="Pred Exp CDF")
-        pred_exp_999 = stats.expon.ppf(percentile,scale=pred_abs_errors_med/np.log(2))
-        plt.scatter([pred_exp_999], [percentile],c=colours[1],label=f"Pred Expon {percentile}: {pred_exp_999:.2f}",marker="*")
-        plt.plot(pred_data,stats.halfnorm.cdf(pred_data,loc=0,scale=np.power(pred_abs_errors_med*1.4826,1)),linestyle=":",color=colours[1],label="Pred Norm CDF")
-        pred_gauss_999 = stats.halfnorm.ppf(percentile,scale=pred_abs_errors_med*1.4826)
-        plt.scatter([pred_gauss_999], [percentile],c=colours[1],label=f"Pred Norm {percentile}: {pred_gauss_999:.2f}")
-
-        plt.vlines(boundary,0,1,colors="r",linestyle="--",label="Boundary")
-        
-        plt.xlabel("RT Differences")
-        plt.ylabel("Cumulative Probability")
-        plt.legend()
-        plt.title("Finding an optimal RT library")
-        plt.savefig(results_folder+"/first_search/RTelbows.png",dpi=600,bbox_inches="tight")
-        plt.close()
-        
-        
-        
-        ##plot mz alignment
-        plt.subplots()
-        plt.scatter(rts,diffs,label="Original_MZ",s=1,alpha=min(1,5/((len(output_df.rt)//1000)+1)))
-        plt.scatter(rts,f_rt_mz(rts),label="Predicted_MZ",s=1)
-        # plt.legend()
-        plt.xlabel("Updated RT")
-        plt.ylabel("m/z difference (relative)")
-        # plt.show()
-        plt.savefig(results_folder+"/first_search/MZrtfit.png",dpi=600,bbox_inches="tight")
-        plt.close()
-        
-        ##plot mz alignment
-        plt.subplots()
-        plt.scatter(output_df.mz,diffs-f_rt_mz(rts),label="Original_MZ",s=1,alpha=min(1,5/((len(output_df.rt)//1000)+1)))
-        plt.scatter(output_df.mz,mz_spl(output_df.mz),label="Predicted_MZ",s=1)
-        # plt.legend()
-        plt.xlabel("m/z")
-        plt.ylabel("m/z difference (relative)")
-        # plt.show()
-        plt.savefig(results_folder+"/first_search/MZfit.png",dpi=600,bbox_inches="tight")
-        plt.close()
-        
-        
-        ## plot mz alignment
-        plt.subplots()
-        plt.hist(np.array(diffs)[rt_mz_filter_bool],100)
-        # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_df.lib_rt))/id_mzs,100,alpha=.5)
-        # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_spl(id_mzs))/id_mzs,100,alpha=.5)
-        vals,bins,_ = plt.hist((diffs-mz_spl(output_df.mz)-f_rt_mz(rts))[rt_mz_filter_bool],100,alpha=.5)
-        plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,max(vals)*.8,color="r")
-        # plt.vlines([-4*mz_stddev,4*mz_stddev],0,50,color="g")
-        plt.text(config.opt_ms1_tol,max(vals)*.8,f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
-        plt.xlabel("m/z difference (relative)")
-        plt.ylabel("Frequency")
-        # plt.show()
-        plt.savefig(results_folder+"/first_search/MZdiff.png",dpi=600,bbox_inches="tight")
-        plt.close()
-
+        # Per-channel RT plots (channel-aware alignment_plots); mz panels shared.
+        rt_dist_params = fit_gaussian(chosen_diffs)
+        plot_rt_residuals_mixture(chosen_diffs, feat=mixture_feat, weights=weights, sigmas=sigmas,
+                                  results_folder=results_folder)
+        alignment_plots(filtered_output, emp_shape, emp_shape, f_rt_mz, mz_spl, rt_dist_params,
+                        results_folder=results_folder, channels=channel, rt_spls=rt_spls, offsets=offsets)
+        cdf_plots(emp_data, emp_p, config.rt_percentile, boundary, pred_data, pred_p,
+                  results_folder=results_folder)
         plt.close("all")
     
     
