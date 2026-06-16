@@ -2183,10 +2183,22 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
 
     if not config.args.use_emp_rt:
         logger.info("Trying RT Prediction (timeplex)")
+        # Train only on peptides seen in ALL n_timeplex channels with agreeing de-offset
+        # RTs. Requiring every channel anchors the absolute offsets: with one observation
+        # per channel the lowest must be channel 0 and the highest channel K-1, so a
+        # uniform channel mis-assignment would wrap past the top ridge and break the
+        # agreement. (A >=2-channel rule can't do this — two obs d apart de-offset to the
+        # same value whether they're channels (0,1) or (1,2), so a uniform shift hides.)
         seq_rt = {}
-        for s, rt in zip(filtered_output["stripped_seq"], deoffset_rt):
-            seq_rt.setdefault(s, []).append(rt)
-        filtered_seq_rt = {s: np.median(v) for s, v in seq_rt.items() if np.ptp(v) < 1}
+        for s, c, rt in zip(filtered_output["stripped_seq"], channel, deoffset_rt):
+            seq_rt.setdefault(s, []).append((int(c), rt))
+        filtered_seq_rt = {
+            s: np.median([rt for _, rt in v])
+            for s, v in seq_rt.items()
+            if len({c for c, _ in v}) == n_timeplex and np.ptp([rt for _, rt in v]) < 1
+        }
+        logger.info(f"Fine-tuning on {len(filtered_seq_rt)} peptides present in all "
+                    f"{n_timeplex} channels")
         grouped_df = pd.DataFrame({'Stripped.Sequence': list(filtered_seq_rt),
                                    'RT': list(filtered_seq_rt.values())})
         data_split, models, convertor = fine_tune_rt(grouped_df, qc_plots=True, results_path=results_folder)
