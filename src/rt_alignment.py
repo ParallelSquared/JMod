@@ -2405,7 +2405,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     # if ms2:
     #     return (rt_spls, mz_func, ms2_func), updatedLibrary
     # else:
-    return (rt_spls, mz_func), updatedLibrary, None
+    # Return the measured elution FWHM (third slot) so downstream fragment-ion
+    # correlation features can be computed; returning None here makes
+    # compute_fragment_correlations bail out to all-NaN for every row.
+    return (rt_spls, mz_func), updatedLibrary, _fwhm
 
 
 

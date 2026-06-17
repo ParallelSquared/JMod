@@ -1213,6 +1213,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         fdc=fdc,
         fwhm=elution_fwhm,
         mz_tol=(config.args.ppm * 1e-6),
+        timeplex=timeplex,
     )
     for col in corr_features.columns:
         fdc[col] = corr_features[col].values
