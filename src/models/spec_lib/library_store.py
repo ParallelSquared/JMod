@@ -969,6 +969,15 @@ class SpectrumLibraryStore:
         frag_keys_data = np.concatenate(all_frag_keys) if all_frag_keys else np.empty(0, dtype=np.int32)
         top_n_data = np.concatenate(top_n_all) if top_n_all else np.empty(0, dtype=np.int32)
 
+        # Reconstruct target/decoy bookkeeping from parent_idx (-1 for targets,
+        # parent target's index for decoys). The constructor otherwise defaults to
+        # all-target, which silently strips decoy status when a library is rebuilt
+        # through from_dict (e.g. the timeplex channel-replication path).
+        parent_idx_arr = np.array(parent_idx_list, dtype=np.int64)
+        is_decoy = parent_idx_arr >= 0
+        n_decoys = int(is_decoy.sum())
+        n_targets = n - n_decoys
+
         # TODO: Sort library entries by calibrated RT before building spectrum_data.
         #       This aligns physical memory layout with the RT-ordered access pattern
         #       from fragment index queries, improving L3 cache locality when multiple
@@ -998,7 +1007,10 @@ class SpectrumLibraryStore:
             top_n_data=top_n_data,
             top_n_offsets=np.array(top_n_offsets, dtype=np.int64),
             top_n_lengths=np.array(top_n_lengths, dtype=np.int32),
-            parent_idx=np.array(parent_idx_list, dtype=np.int64),
+            parent_idx=parent_idx_arr,
+            n_targets=n_targets,
+            n_decoys=n_decoys,
+            is_decoy=is_decoy,
         )
 
     # ------------------------------------------------------------------

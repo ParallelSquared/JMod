@@ -2096,6 +2096,7 @@ def fit_timeplex_ridges(output_df, n_timeplex, results_folder=None):
         "stripped_seq": kept["stripped_seq"].to_numpy(),
         "mz_diffs": kept["relative_error_ms1"].to_numpy(dtype=float),
         "mz": kept["mz"].to_numpy(dtype=float),
+        "scribe_score": kept["scribe_score"].to_numpy(dtype=float),
     })
 
     return rt_spls, shared_shape, offsets, d, filtered_output, residuals
@@ -2176,56 +2177,86 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     deoffset_rt = filtered_output["rt"].to_numpy() - offsets[channel]
     filtered_output["updated_lib_rt"] = filtered_output["lib_rt"]   # default x-axis = library iRT
 
+    # rt_spls from fit_timeplex_ridges are per-channel iRT->RT curves (empirical default).
+    emp_curves = rt_spls
+    plot_curves = emp_curves                      # what alignment_plots draws
     emp_data, emp_p, emp_cdf_auc = cdf_data(residuals)
     chosen_diffs = residuals
     pred_data = pred_p = None
     mixture_feat = "_timeplex_empirical"
 
     if not config.args.use_emp_rt:
-        logger.info("Trying RT Prediction (timeplex)")
-        # Train only on peptides seen in ALL n_timeplex channels with agreeing de-offset
-        # RTs. Requiring every channel anchors the absolute offsets: with one observation
-        # per channel the lowest must be channel 0 and the highest channel K-1, so a
-        # uniform channel mis-assignment would wrap past the top ridge and break the
-        # agreement. (A >=2-channel rule can't do this — two obs d apart de-offset to the
-        # same value whether they're channels (0,1) or (1,2), so a uniform shift hides.)
-        seq_rt = {}
-        for s, c, rt in zip(filtered_output["stripped_seq"], channel, deoffset_rt):
-            seq_rt.setdefault(s, []).append((int(c), rt))
-        filtered_seq_rt = {
-            s: np.median([rt for _, rt in v])
-            for s, v in seq_rt.items()
-            if len({c for c, _ in v}) == n_timeplex and np.ptp([rt for _, rt in v]) < 1
-        }
-        logger.info(f"Fine-tuning on {len(filtered_seq_rt)} peptides present in all "
+        logger.info("Per-channel RT prediction (timeplex)")
+        # Train per channel, only on peptides seen in ALL n_timeplex channels with agreeing
+        # de-offset RTs. Requiring every channel anchors the absolute offsets: a uniform
+        # channel mis-assignment would have to wrap past the top ridge and break the
+        # agreement, so it can't sneak a wrong (off-by-multiple-of-d) target through.
+        obs_rt = filtered_output["rt"].to_numpy(dtype=float)
+        seq_obs, seq_deoff = {}, {}
+        for s, c, rt, drt in zip(filtered_output["stripped_seq"], channel, obs_rt, deoffset_rt):
+            seq_obs.setdefault(s, {}).setdefault(int(c), []).append(rt)
+            seq_deoff.setdefault(s, []).append(drt)
+        verified = [s for s in seq_obs
+                    if len(seq_obs[s]) == n_timeplex and np.ptp(seq_deoff[s]) < 1]
+        logger.info(f"Per-channel fine-tuning on {len(verified)} peptides in all "
                     f"{n_timeplex} channels")
-        grouped_df = pd.DataFrame({'Stripped.Sequence': list(filtered_seq_rt),
-                                   'RT': list(filtered_seq_rt.values())})
-        data_split, models, convertor = fine_tune_rt(grouped_df, qc_plots=True, results_path=results_folder)
 
-        kept_pred = convertor(np.mean([m.predict(np.array([one_hot_encode_sequence(s)
-                              for s in filtered_output["stripped_seq"]])) for m in models], axis=0).flatten())
-        all_pred_diffs = data_split[3] - convertor(np.mean([m.predict(np.array(data_split[1]))
-                              for m in models], axis=0).flatten())
-        pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs)
+        uniq = sorted({updatedLibrary[k]["seq"] for k in librarySpectra})
+        uniq_enc = np.array([one_hot_encode_sequence(s) for s in uniq], dtype=np.float32)
+        kept_enc = np.array([one_hot_encode_sequence(s) for s in filtered_output["stripped_seq"]])
+        cnn_lookup, val_resid, kept_pred_by_ch = [], [], []
+        for k in range(n_timeplex):
+            gdf = pd.DataFrame({'Stripped.Sequence': verified,
+                                'RT': [np.median(seq_obs[s][k]) for s in verified]})
+            ds, models, conv = fine_tune_rt(gdf, qc_plots=False, results_path=results_folder)
+            vr = ds[3] - conv(np.mean([m.predict(np.array(ds[1])) for m in models], axis=0).flatten())
+            val_resid.append(vr)
+            logger.info(f"  timeplex channel {k}: validation |dRT| median = {np.median(np.abs(vr)):.3f} min")
+            cnn_lookup.append(dict(zip(uniq, conv(np.mean(
+                [m.predict(uniq_enc, batch_size=4096) for m in models], axis=0).flatten()))))
+            kept_pred_by_ch.append(conv(np.mean([m.predict(kept_enc) for m in models], axis=0).flatten()))
 
-        if pred_cdf_auc > emp_cdf_auc:
-            logger.info("Fine Tuned Library Chosen (timeplex)")
-            pred_shape = fast_modal_lowess(kept_pred, deoffset_rt, local_frac=.01,
-                                           anchors=1000, grid_size=1000, post_smooth_frac=0.01)
-            rt_spls = _relax_channels(kept_pred, filtered_output["rt"].to_numpy(dtype=float),
-                                      pred_shape, offsets, d)
-            filtered_output["updated_lib_rt"] = kept_pred   # x-axis = predicted iRT
-            chosen_diffs = all_pred_diffs
-            mixture_feat = "_timeplex_fine_tuned"
-            uniq = list({updatedLibrary[k]["seq"] for k in librarySpectra})
-            uniq_rt = convertor(np.mean([m.predict(np.array([one_hot_encode_sequence(s) for s in uniq],
-                                dtype=np.float32), batch_size=4096) for m in models], axis=0).flatten())
-            s2rt = dict(zip(uniq, uniq_rt))
-            for k in librarySpectra:
-                updatedLibrary[k]["iRT"] = s2rt[updatedLibrary[k]["seq"]]
-        else:
-            logger.info("Empirical Library Chosen (timeplex)")
+        mixture_feat = "_timeplex_fine_tuned"
+
+        # --- SECOND ALIGNMENT (parity with the non-timeplex path) ---
+        # Build one shared predicted-iRT axis over ALL channels at once: each kept PSM
+        # carries its own channel's CNN prediction, de-offset by that channel's gap so
+        # the K bands collapse onto a single shape. Hand the whole (all-channel) frame
+        # to the SAME timeplex aligner used for the first fit (fit_timeplex_ridges),
+        # which re-discovers the shared shape + K equally-spaced offsets from density.
+        cnn_pred = np.vstack(kept_pred_by_ch)[channel, np.arange(len(channel))]
+        de_pred = cnn_pred - offsets[channel]
+        second_df = pd.DataFrame({
+            "scribe_score": filtered_output["scribe_score"].to_numpy(dtype=float),
+            "lib_rt": de_pred,                                  # predicted iRT replaces library iRT
+            "rt": filtered_output["rt"].to_numpy(dtype=float),  # original observed RT
+            "mz": filtered_output["mz"].to_numpy(dtype=float),
+            "relative_error_ms1": filtered_output["mz_diffs"].to_numpy(dtype=float),
+            "stripped_seq": filtered_output["stripped_seq"].to_numpy(),
+        })
+        rt_spls2, shape2, offsets2, d2, filtered_output2, residuals2 = \
+            fit_timeplex_ridges(second_df, n_timeplex, results_folder)
+
+        # Final per-channel library RT: feed each channel's CNN prediction (de-offset to
+        # the shared axis) through that channel's second-fit curve. Keep K dicts so the
+        # main search / decoy inheritance path in run_jmod is unchanged.
+        rt_spls = [{s: float(rt_spls2[k](cnn_lookup[k][s] - offsets[k])) for s in uniq}
+                   for k in range(n_timeplex)]
+
+        # Tolerance / GMM / CDF now reflect the second-fit residuals (the chosen model).
+        chosen_diffs = residuals2
+        pred_data, pred_p, pred_cdf_auc = cdf_data(chosen_diffs)
+        d = d2                                                  # final channel gap for the overlap guard
+        logger.info(f"RT model: per-channel fine-tuned CNN + second ridge alignment (timeplex)  "
+                    f"[empirical CDF-AUC={emp_cdf_auc:.4f}, fine-tuned CDF-AUC={pred_cdf_auc:.4f}; "
+                    f"lower is better]")
+
+        # Plot on the FINE-TUNED axis: observed RT vs the de-offset CNN-predicted iRT,
+        # overlaying the second-fit per-channel curves.
+        filtered_output["updated_lib_rt"] = de_pred
+        plot_curves = rt_spls2
+    else:
+        logger.info("RT model: empirical ridge alignment (timeplex; --use_emp_rt)")
 
     weights, sigmas = fit_zero_mean_gmm_1d(chosen_diffs, n_components=2)
     sigmas = np.sort(sigmas)
@@ -2365,7 +2396,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
         plot_rt_residuals_mixture(chosen_diffs, feat=mixture_feat, weights=weights, sigmas=sigmas,
                                   results_folder=results_folder)
         alignment_plots(filtered_output, emp_shape, emp_shape, f_rt_mz, mz_spl, rt_dist_params,
-                        results_folder=results_folder, channels=channel, rt_spls=rt_spls, offsets=offsets)
+                        results_folder=results_folder, channels=channel, rt_spls=plot_curves, offsets=offsets)
         cdf_plots(emp_data, emp_p, config.rt_percentile, boundary, pred_data, pred_p,
                   results_folder=results_folder)
         plt.close("all")

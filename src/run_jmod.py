@@ -295,12 +295,30 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
         rt_spls,mz_func = funcs[:2]
 
+        # Per-(entry, channel) search RT. Empirical: iRT->RT curves. Per-channel CNN:
+        # rt_spls is K dicts {target_seq: RT_k}; targets look up by sequence and decoys
+        # inherit their parent target's per-channel RT (same rule as the iRT inheritance
+        # above), so decoys stay co-located with their targets for FDR.
+        n_lib, K = len(spectrumLibrary), len(rt_spls)
+        per_ch = np.empty((n_lib, K))
+        if callable(rt_spls[0]):
+            for i in range(n_lib):
+                per_ch[i] = [rt_spls[k](spectrumLibrary.iRT[i]) for k in range(K)]
+        else:
+            for i in range(spectrumLibrary.n_targets):
+                per_ch[i] = [rt_spls[k][spectrumLibrary.seq[i]] for k in range(K)]
+            for i in range(spectrumLibrary.n_targets, n_lib):
+                parent = spectrumLibrary.parent_idx[i]
+                if parent >= 0:
+                    per_ch[i] = per_ch[parent]
+
         plex_lib = {}
         rt_mz = []
-        for idx in range(len(rt_spls)):
+        for idx in range(K):
             for key in spectrumLibrary:
                 plex_lib[key+(idx,)] = spectrumLibrary[key]
-            rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
+            rt_mz.append([[per_ch[i, idx], mz_func(e["prec_mz"], e["iRT"])]
+                          for i, e in enumerate(spectrumLibrary.values())])
         rt_mz = np.concatenate(rt_mz)
         
         from src.models.spec_lib.library_store import SpectrumLibraryStore

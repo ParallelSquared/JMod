@@ -2191,12 +2191,14 @@ def fit_to_lib2(dia_spec,
                 _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
         all_window_idxs = np.where(_bool)[0]
 
-    # Split into target and decoy candidates
+    # Split into target and decoy candidates using the per-entry is_decoy flag.
+    # This is layout-independent: it works for the contiguous [targets|decoys]
+    # ordering (non-timeplex) and the channel-interleaved ordering (timeplex),
+    # unlike an `idx < n_targets` threshold which assumes targets are contiguous.
     # TODO: unify target/decoy processing paths to eliminate this split
-    n_targets = library.n_targets
-    target_mask = all_window_idxs < n_targets
-    window_idxs = all_window_idxs[target_mask]
-    decoy_window_idxs = all_window_idxs[~target_mask] if decoy else np.empty(0, dtype=all_window_idxs.dtype)
+    decoy_mask = library.is_decoy[all_window_idxs]
+    window_idxs = all_window_idxs[~decoy_mask]
+    decoy_window_idxs = all_window_idxs[decoy_mask] if decoy else np.empty(0, dtype=all_window_idxs.dtype)
 
     mass_window_candidates = [all_keys[i] for i in window_idxs]
     _ref_idxs = library.resolve_indices(mass_window_candidates)
