@@ -2216,7 +2216,6 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
                 [m.predict(uniq_enc, batch_size=4096) for m in models], axis=0).flatten()))))
             kept_pred_by_ch.append(conv(np.mean([m.predict(kept_enc) for m in models], axis=0).flatten()))
 
-        mixture_feat = "_timeplex_fine_tuned"
 
         # --- SECOND ALIGNMENT (parity with the non-timeplex path) ---
         # Build one shared predicted-iRT axis over ALL channels at once: each kept PSM
@@ -2237,24 +2236,22 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
         rt_spls2, shape2, offsets2, d2, filtered_output2, residuals2 = \
             fit_timeplex_ridges(second_df, n_timeplex, results_folder)
 
-        # Final per-channel library RT: feed each channel's CNN prediction (de-offset to
-        # the shared axis) through that channel's second-fit curve. Keep K dicts so the
-        # main search / decoy inheritance path in run_jmod is unchanged.
-        rt_spls = [{s: float(rt_spls2[k](cnn_lookup[k][s] - offsets[k])) for s in uniq}
-                   for k in range(n_timeplex)]
+        pred_data, pred_p, pred_cdf_auc = cdf_data(residuals2)
 
-        # Tolerance / GMM / CDF now reflect the second-fit residuals (the chosen model).
-        chosen_diffs = residuals2
-        pred_data, pred_p, pred_cdf_auc = cdf_data(chosen_diffs)
-        d = d2                                                  # final channel gap for the overlap guard
-        logger.info(f"RT model: per-channel fine-tuned CNN + second ridge alignment (timeplex)  "
-                    f"[empirical CDF-AUC={emp_cdf_auc:.4f}, fine-tuned CDF-AUC={pred_cdf_auc:.4f}; "
-                    f"lower is better]")
-
-        # Plot on the FINE-TUNED axis: observed RT vs the de-offset CNN-predicted iRT,
-        # overlaying the second-fit per-channel curves.
-        filtered_output["updated_lib_rt"] = de_pred
-        plot_curves = rt_spls2
+        # Higher CDF-AUC = tighter residuals = better (same as non-timeplex MZRTfit).
+        if pred_cdf_auc > emp_cdf_auc:
+            logger.info(f"Fine-tuned RT model chosen (timeplex) "
+                        f"[empirical CDF-AUC={emp_cdf_auc:.4f} vs fine-tuned CDF-AUC={pred_cdf_auc:.4f}]")
+            mixture_feat = "_timeplex_fine_tuned"
+            rt_spls = [{s: float(rt_spls2[k](cnn_lookup[k][s] - offsets[k])) for s in uniq}
+                       for k in range(n_timeplex)]
+            chosen_diffs = residuals2
+            d = d2
+            filtered_output["updated_lib_rt"] = de_pred
+            plot_curves = rt_spls2
+        else:
+            logger.info(f"Empirical RT model chosen (timeplex) "
+                        f"[empirical CDF-AUC={emp_cdf_auc:.4f} vs fine-tuned CDF-AUC={pred_cdf_auc:.4f}]")
     else:
         logger.info("RT model: empirical ridge alignment (timeplex; --use_emp_rt)")
 
