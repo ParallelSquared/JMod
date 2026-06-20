@@ -253,7 +253,7 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float, pl.DataFram
     return fwhm, sigma, df
 
 
-def collapse_to_cluster_apices(df: pl.DataFrame) -> pl.DataFrame:
+def collapse_to_cluster_apices(df: pl.DataFrame, group_cols=('file_id', 'seq', 'z')) -> pl.DataFrame:
     """
     Collapse each peptide's per-spectrum PSMs into one apex row per elution.
 
@@ -270,12 +270,16 @@ def collapse_to_cluster_apices(df: pl.DataFrame) -> pl.DataFrame:
     Args:
         df: Polars DataFrame with columns: file_id, spec_name, rt, z, seq,
             closest_peak_intensity_ms1 (the peppy_sage first-search output).
+        group_cols: columns defining one peptide. Pass ('file_id', 'stripped_seq')
+            to collapse co-eluting charge states / modforms of the same bare
+            peptide into a single apex per elution, so each (peptide, channel)
+            yields one row.
 
     Returns:
         Polars DataFrame containing a subset of ``df``'s rows (one apex per
         elution cluster), with all original columns preserved.
     """
-    required_cols = {'file_id', 'spec_name', 'rt', 'z', 'seq', 'closest_peak_intensity_ms1'}
+    required_cols = {'spec_name', 'rt', 'seq', 'closest_peak_intensity_ms1', *group_cols}
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
@@ -292,7 +296,7 @@ def collapse_to_cluster_apices(df: pl.DataFrame) -> pl.DataFrame:
 
     max_scan_gap = _compute_scan_gap_mode(df) + 1  # extra scan just in case
 
-    grouped = df.group_by(['file_id', 'seq', 'z']).agg([
+    grouped = df.group_by(list(group_cols)).agg([
         pl.col('scan'),
         pl.col('rt'),
         pl.col('closest_peak_intensity_ms1'),
@@ -325,6 +329,88 @@ def collapse_to_cluster_apices(df: pl.DataFrame) -> pl.DataFrame:
             apex_rows.append(best_row_for_scan[apex_scan])
 
     return df.filter(pl.col('__row').is_in(apex_rows)).drop(['scan', '__row'])
+
+
+def rt_cluster_ids(df: pl.DataFrame, group_cols, rt_gap: float) -> pl.DataFrame:
+    """Vectorized RT-gap clustering. Adds ``__cid`` (1-based cluster index within
+    each group): a new cluster starts whenever the RT gap to the previous row in
+    the group exceeds ``rt_gap``. Elutions are seconds-wide and timeplex windows
+    are minutes apart, so this cleanly separates the windows without the slow
+    scan-adjacency Python loop (and without its duty-cycle harmonic fragmentation).
+    """
+    gcols = list(group_cols)
+    df = df.sort([*gcols, 'rt'])
+    df = df.with_columns(pl.col('rt').diff().over(gcols).alias('__gap'))
+    df = df.with_columns(
+        ((pl.col('__gap').is_null()) | (pl.col('__gap') > rt_gap)).cast(pl.Int64).alias('__brk'))
+    df = df.with_columns(pl.col('__brk').cum_sum().over(gcols).alias('__cid'))
+    return df.drop(['__gap', '__brk'])
+
+
+def _count_exactly_k(df: pl.DataFrame, K: int, rt_gap: float, group_cols) -> int:
+    """Number of peptides whose RT clusters total exactly K (summed across files)."""
+    gcols = list(group_cols)
+    u = rt_cluster_ids(df.select([*gcols, 'rt']).unique(), gcols, rt_gap)
+    per = (u.group_by(gcols).agg(pl.col('__cid').max().alias('n'))
+           .group_by('stripped_seq').agg(pl.col('n').sum().alias('n')))
+    return int((per['n'] == K).sum())
+
+
+def select_timeplex_alignment_set(df: pl.DataFrame, K: int, rt_gap: float,
+                                  scribe_percentiles=None):
+    """Build the timeplex RT-alignment input set, fully vectorized.
+
+    Sweeps scribe-score cutoffs and picks the one that **maximizes the number of
+    peptides seen in exactly K RT clusters** (K = n_timeplex). At that cutoff it
+    RT-clusters the surviving rows, takes the **apex** (max MS1 intensity) of each
+    cluster, keeps peptides with exactly K clusters, and assigns ``channel`` 0..K-1
+    by RT rank within each peptide.
+
+    Replaces the slow scan-adjacency collapse + scribe filter + completeness
+    assignment on the timeplex path only.
+
+    Required columns: ``file_id, stripped_seq, rt, scribe_score,
+    closest_peak_intensity_ms1`` (all original columns are preserved on output).
+
+    Returns
+    -------
+    apex : pl.DataFrame
+        One apex row per (peptide, channel), with an added ``channel`` column.
+    cutoff : float
+        The chosen scribe-score cutoff.
+    n_pep : int
+        Number of peptides with exactly K clusters at that cutoff.
+    """
+    if scribe_percentiles is None:
+        scribe_percentiles = [50, 40, 30, 25, 20, 15, 12.5, 10, 8, 6.25, 5]
+    group_cols = ('file_id', 'stripped_seq')
+    scribe = df['scribe_score'].to_numpy()
+
+    best_cut, best_n, best_p = None, -1, None
+    for p in scribe_percentiles:
+        cut = float(np.quantile(scribe, 1 - p / 100))
+        n_k = _count_exactly_k(df.filter(pl.col('scribe_score') >= cut), K, rt_gap, group_cols)
+        if n_k > best_n:
+            best_cut, best_n, best_p = cut, n_k, p
+
+    # build the apex set at the chosen cutoff
+    sel = df.filter(pl.col('scribe_score') >= best_cut)
+    sel = sel.with_columns(pl.col('closest_peak_intensity_ms1').fill_null(0.0).alias('__ms1i'))
+    sel = rt_cluster_ids(sel, group_cols, rt_gap)
+    apex = (sel.sort('__ms1i', descending=True)
+            .group_by([*group_cols, '__cid'], maintain_order=True).first())
+
+    # keep peptides with exactly K clusters (summed across files), via semi-join
+    cnt = (apex.group_by(list(group_cols)).agg(pl.len().alias('__nc'))
+           .group_by('stripped_seq').agg(pl.col('__nc').sum().alias('__nc'))
+           .filter(pl.col('__nc') == K).select('stripped_seq'))
+    apex = apex.join(cnt, on='stripped_seq', how='inner')
+
+    # channel by RT rank within each peptide
+    apex = apex.with_columns(
+        (pl.col('rt').rank('ordinal').over('stripped_seq').cast(pl.Int32) - 1).alias('channel'))
+    apex = apex.drop(['__cid', '__ms1i'])
+    return apex, best_cut, cnt.height
 
 
 if __name__ == '__main__':

@@ -1748,23 +1748,21 @@ def _extrap_spline(xg, curve, data_x, edge_frac=0.05):
     return f
 
 
-def _relax_channels(x, y, shape, offsets, d, wiggle=RIDGE_WIGGLE):
+def _relax_channels(x, y, shape, offsets, d, assign, wiggle=RIDGE_WIGGLE):
     """
     Let each channel wiggle into its own local mode. The joint fit
-    (shape + offsets[k]) is the anchor: assign every point to its nearest joint
-    line (gated at half-spacing so it can't grab a neighbour), fit a per-channel
-    modal LOESS to those points, then soft-clamp the result so it can only
-    deviate ±wiggle*d from the joint line (tanh — linear for small deviations,
-    saturating smoothly toward the cap). Returns a list of per-channel callables
-    mapping the x-axis (library or predicted iRT) to observed RT.
+    (shape + offsets[k]) is the anchor: using the supplied per-point channel
+    assignment (gated at half-spacing so an outlier can't reshape a channel), fit
+    a per-channel modal LOESS to those points, then soft-clamp the result so it
+    can only deviate ±wiggle*d from the joint line (tanh — linear for small
+    deviations, saturating smoothly toward the cap). Returns a list of per-channel
+    callables mapping the x-axis (library or predicted iRT) to observed RT.
     """
     K = len(offsets)
     xg = np.linspace(float(np.min(x)), float(np.max(x)), 500)
     base = np.asarray(shape(xg))
     shape_x = np.asarray(shape(x))
-    joint_y = shape_x[None, :] + offsets[:, None]                 # (K, n)
-    assign = np.argmin(np.abs(y[None, :] - joint_y), axis=0)
-    within = np.abs(y - (shape_x + offsets[assign])) <= 0.5 * d   # never cross a neighbour
+    within = np.abs(y - (shape_x + offsets[assign])) <= 0.5 * d   # gate outliers
     cap = wiggle * d
     rt_spls = []
     for k in range(K):
@@ -1921,15 +1919,19 @@ def fit_timeplex_ridges(output_df, n_timeplex, results_folder=None):
     if K < 1:
         raise RuntimeError("fit_timeplex_ridges requires n_timeplex >= 1")
 
-    # --- scribe-score quality gate: stepwise sweep (mirrors empirical_fit),
-    # scribe-only so the channel structure is preserved for ridge tracking ---
-    cor_filter = _timeplex_scribe_filter(output_df, results_folder)
-    kept = output_df.loc[cor_filter].reset_index(drop=True)
+    # PSMs arrive already scribe-filtered and channel-assigned upstream
+    # (select_timeplex_alignment_set), one apex per (peptide, channel). Use the
+    # supplied channel labels instead of nearest-snap assignment.
+    kept = output_df.reset_index(drop=True)
     x = kept["lib_rt"].to_numpy(dtype=float)
     y = kept["rt"].to_numpy(dtype=float)
-    logger.info(f"Ridge tracker: {len(kept)} IDs after scribe filtering")
+    if "channel" in kept.columns:
+        channel = kept["channel"].to_numpy(dtype=int)
+    else:
+        channel = np.zeros(len(kept), dtype=int)
+    logger.info(f"Ridge tracker: {len(kept)} IDs")
     if len(x) < 10:
-        raise RuntimeError(f"Ridge tracker: too few IDs ({len(x)}) after scribe filtering")
+        raise RuntimeError(f"Ridge tracker: too few IDs ({len(x)})")
 
     def make_spline(off):
         def _f(r):
@@ -2080,19 +2082,16 @@ def fit_timeplex_ridges(output_df, n_timeplex, results_folder=None):
     if K == 1:
         rt_spls = [make_spline(0.0)]
     else:
-        rt_spls = _relax_channels(x, y, shared_shape, offsets, d)
+        rt_spls = _relax_channels(x, y, shared_shape, offsets, d, channel)
 
-    # --- per-PSM channel assignment (nearest ridge) + signed residual ---
+    # --- signed residual of each PSM to its pre-assigned channel ridge ---
     shape_x = np.asarray(shared_shape(x))
-    ridge_vals = shape_x[None, :] + offsets[:, None]   # (K, N)
-    resid_all = y[None, :] - ridge_vals                # (K, N)
-    nearest = np.argmin(np.abs(resid_all), axis=0)     # (N,)
-    residuals = resid_all[nearest, np.arange(len(y))]  # signed residual to assigned ridge
+    residuals = y - (shape_x + offsets[channel])
 
     filtered_output = pd.DataFrame({
         "lib_rt": x,
         "rt": y,                                       # original observed RT
-        "channel": nearest,
+        "channel": channel,
         "stripped_seq": kept["stripped_seq"].to_numpy(),
         "mz_diffs": kept["relative_error_ms1"].to_numpy(dtype=float),
         "mz": kept["mz"].to_numpy(dtype=float),
@@ -2142,25 +2141,29 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
 
     # Run the peppy_sage MS2 library search (same as the non-timeplex MZRTfit path)
     import src.preliminary_search as preliminary_search
-    from src.elution_analysis import calculate_elution_width, collapse_to_cluster_apices
+    from src.elution_analysis import calculate_elution_width, select_timeplex_alignment_set
     output_df = preliminary_search.fit_with_features(
         dia_spectra, librarySpectra, mass_tag, SILAC,
         ms1_ppm_error=20, ms2_ppm_error=10,
     )
 
     # Elution width — provides elution_sd for the RT-tolerance GMM (same formula as
-    # the non-timeplex path). Also annotates cluster_size (ignored by the collapse).
+    # the non-timeplex path).
     _fwhm, elution_sd, output_df = calculate_elution_width(output_df)
     logger.info(f"Mean elution width: FWHM {_fwhm:.4f}, SD {elution_sd:.4f}")
 
-    # peppy_sage emits one PSM per matched spectrum, so a single elution is a
-    # cluster of consecutive-scan rows. Collapse each (seq, z) peptide's clusters
-    # to one apex row apiece — one row per elution = one timeplex position.
-    output_df = collapse_to_cluster_apices(output_df)
+    # Build the RT-alignment input set (vectorized): sweep scribe cutoffs and pick
+    # the one that maximizes peptides seen in exactly K=n_timeplex RT clusters, take
+    # each cluster's apex, and assign channel 0..K-1 by RT rank. Elutions are
+    # seconds-wide and timeplex windows minutes apart, so an 8*elution_sd RT gap
+    # separates the windows.
+    n_timeplex = config.args.num_timeplex
+    rt_gap = 8 * elution_sd
+    apex_pl, scribe_cut, n_pep = select_timeplex_alignment_set(output_df, n_timeplex, rt_gap)
+    logger.info(f"Timeplex alignment set: scribe >= {scribe_cut:.4f}, {n_pep} peptides "
+                f"x {n_timeplex} channels = {apex_pl.height} IDs (RT gap {rt_gap:.4f})")
 
-    # Sort by RT (not required by the ridge tracker, which is density-based) — keeps
-    # the debug firstSearch.tsv readable.
-    output_df = output_df.sort("rt").to_pandas().reset_index(drop=True)
+    output_df = apex_pl.sort("rt").to_pandas().reset_index(drop=True)
 
     id_keys = list(zip(output_df["seq"], output_df["z"]))
 
@@ -2169,7 +2172,6 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     if results_folder is not None:
         output_df.to_csv(results_folder+"/first_search/firstSearch.tsv", index=False, sep='\t')
 
-    n_timeplex = config.args.num_timeplex
     updatedLibrary = copy.deepcopy(librarySpectra)
     rt_spls, emp_shape, offsets, d, filtered_output, residuals = fit_timeplex_ridges(output_df, n_timeplex, results_folder)
 
@@ -2232,6 +2234,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
             "mz": filtered_output["mz"].to_numpy(dtype=float),
             "relative_error_ms1": filtered_output["mz_diffs"].to_numpy(dtype=float),
             "stripped_seq": filtered_output["stripped_seq"].to_numpy(),
+            "channel": channel,
         })
         rt_spls2, shape2, offsets2, d2, filtered_output2, residuals2 = \
             fit_timeplex_ridges(second_df, n_timeplex, results_folder)
