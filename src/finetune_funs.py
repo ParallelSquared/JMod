@@ -592,9 +592,44 @@ def _freeze_backbone(model):
     return model
 
 
+def _fit_monotone_conv(native_pred, observed, kind="linear"):
+    """Monotone calibration between the CNN's native output and observed RT, fit from
+    (native_pred, observed) pairs. Returns (model_to_obs, obs_to_model, info).
+
+    Monotone by construction so the round-trip is exact: model_to_obs(obs_to_model(r))==r.
+    'linear' = robust-ish least-squares affine (fixes the scale; 2 params); 'isotonic'
+    = monotone nonparametric (captures gradient curvature) with interpolated inverse.
+    """
+    x = np.asarray(native_pred, float)
+    r = np.asarray(observed, float)
+    if kind == "isotonic":
+        from sklearn.isotonic import IsotonicRegression
+        ir = IsotonicRegression(increasing=True, out_of_bounds="clip").fit(x, r)
+        xs = np.sort(np.unique(x))
+        ys = ir.predict(xs)
+        keep = np.concatenate(([True], np.diff(ys) > 0))     # strictly increasing for inverse
+        xs_i, ys_i = xs[keep], ys[keep]
+
+        def model_to_obs(v):
+            return ir.predict(np.clip(v, xs[0], xs[-1]))
+
+        def obs_to_model(rr):
+            return np.interp(rr, ys_i, xs_i)
+        info = {"kind": "isotonic", "x": x, "r": r, "grid_x": xs, "grid_y": ir.predict(xs)}
+    else:
+        a, b = np.polyfit(x, r, 1)
+        if a <= 0:                                            # guard monotonicity
+            a = max(a, 1e-6)
+        model_to_obs = lambda v: a * np.asarray(v, float) + b
+        obs_to_model = lambda rr: (np.asarray(rr, float) - b) / a
+        info = {"kind": "linear", "a": float(a), "b": float(b), "x": x, "r": r}
+    return model_to_obs, obs_to_model, info
+
+
 def bagged_finetune_channel(seqs, obs_rt, lib_seqs, model_path,
                             n_members=5, subsample=0.6, epochs=22, head_lr=1e-3,
-                            patience=7, trim_start=3, ema_beta=0.8, seed=0):
+                            patience=7, trim_start=3, ema_beta=0.8, seed=0,
+                            calibration="linear", results_path=None, channel=None):
     """Bagged, OOB, soft-weighted fine-tune for one timeplex channel.
 
     Trains an `n_members`-member ensemble; each member sees a random `subsample`
@@ -603,32 +638,22 @@ def bagged_finetune_channel(seqs, obs_rt, lib_seqs, model_path,
     |OOB residual| EMA is fit with a narrow+wide half-Gaussian mixture and each point's
     training weight is set to (1 - PEP). Early stopping uses OOB median-AE.
 
-    The CNN is fine-tuned to predict the channel's OBSERVED RT directly (no LOESS
-    calibration / no de-offset), so library predictions are already on the observed-RT
-    scale that the downstream search consumes as rt_spls[k][seq].
+    [exp1] The CNN is fine-tuned in its NATIVE output space: a monotone calibration
+    `conv` (built from base-model predictions vs observed RT -- library-independent) maps
+    native<->observed. The CNN trains toward obs_to_model(observed) (so it never relearns
+    the [-57,169]->minutes scale) and predictions are mapped back with model_to_obs. All
+    metrics (OOB residual, MedAE, PEP soft weight) are computed in OBSERVED space.
 
     Parameters
     ----------
-    seqs : array-like of str
-        Stripped sequences of the (gated) training apexes for this channel.
-    obs_rt : array-like of float
-        Observed RT for each training apex.
-    lib_seqs : list of str
-        Unique library sequences to predict (the returned dict keys).
-    model_path : str
-        Base path to the pretrained ensemble (indices appended).
-    n_members, subsample, epochs, head_lr, patience, trim_start, ema_beta, seed
-        Bagged-training hyperparameters (function defaults; no config knobs).
+    seqs, obs_rt, lib_seqs, model_path : as before.
+    calibration : 'linear' (default; monotone affine) or 'isotonic' (monotone, curved).
+    results_path, channel : if both given, save the per-channel calibration plot.
 
     Returns
     -------
-    (oob_resid, lib_pred)
-        oob_resid : np.ndarray of held-out OOB residuals (observed - predicted) for the
-                    training apexes (for the empirical-vs-fine-tuned comparison and the
-                    RT-tolerance GMM).
-        lib_pred  : dict {lib_seq: predicted_observed_rt} from the best-epoch ensemble.
-        history   : dict with 'oob_medae' (per-epoch held-out OOB MedAE) and
-                    'best_epoch' (for the fine-tune training-curve plot).
+    (oob_resid, lib_pred, history)  -- oob_resid/lib_pred in OBSERVED space; history has
+    'oob_medae' and 'best_epoch'.
     """
     import tensorflow as tf
 
@@ -639,6 +664,18 @@ def bagged_finetune_channel(seqs, obs_rt, lib_seqs, model_path,
 
     models = [_freeze_backbone(m) for m in load_existing_models(model_path, n_models=n_members)]
     n_members = len(models)
+
+    def _predict(model, arr):
+        return np.asarray(model(arr, training=False)).flatten()
+
+    # [exp1] monotone calibration from the BASE (pre-fine-tune) native predictions ->
+    # observed RT, then train in native space. conv is library-independent (uses base
+    # predictions, not lib_rt).
+    base_native = np.mean([_predict(m, X) for m in models], axis=0)
+    model_to_obs, obs_to_model, conv_info = _fit_monotone_conv(
+        base_native, y, kind=calibration)
+    y_model = obs_to_model(y)                          # native-space training target
+
     for m in models:
         m.compile(optimizer=keras.optimizers.legacy.Adam(head_lr), loss="mae")
 
@@ -651,26 +688,24 @@ def bagged_finetune_channel(seqs, obs_rt, lib_seqs, model_path,
     cnt = oob_mask.sum(0)
     has = cnt > 0
 
-    def _predict(model, arr):
-        return np.asarray(model(arr, training=False)).flatten()
-
-    def oob_predictions():
-        preds = np.array([_predict(m, X) for m in models])   # (n_members, n)
+    def oob_obs_predictions():
+        """OOB predictions mapped back to OBSERVED space."""
+        preds = np.array([_predict(m, X) for m in models])   # native (n_members, n)
         s1 = (preds * oob_mask).sum(0)
-        oob = np.where(has, s1 / np.where(has, cnt, 1), preds.mean(0))
-        return oob
+        oob_native = np.where(has, s1 / np.where(has, cnt, 1), preds.mean(0))
+        return model_to_obs(oob_native)
 
     sample_w = np.ones(n)
     ema = None
-    oob_medae_hist = []                              # per-epoch held-out OOB MedAE
-    best = {"medae": np.inf, "epoch": -1, "resid": y - oob_predictions(),
+    oob_medae_hist = []                              # per-epoch held-out OOB MedAE (observed)
+    best = {"medae": np.inf, "epoch": -1, "resid": y - oob_obs_predictions(),
             "weights": [m.get_weights() for m in models]}
     for ep in range(epochs):
         for k in range(n_members):
             ib = inbag[k]
-            models[k].fit(X[ib], y[ib], sample_weight=sample_w[ib],
+            models[k].fit(X[ib], y_model[ib], sample_weight=sample_w[ib],
                           epochs=1, batch_size=24, verbose=0)
-        resid = y - oob_predictions()
+        resid = y - oob_obs_predictions()             # observed-space residual
         medae = float(np.median(np.abs(resid)))
         oob_medae_hist.append(medae)
         a_resid = np.abs(resid)
@@ -684,14 +719,38 @@ def bagged_finetune_channel(seqs, obs_rt, lib_seqs, model_path,
         elif ep - best["epoch"] >= patience:
             break
     logger.info(f"  bagged fine-tune: OOB MedAE={best['medae']:.4f} "
-                f"(epoch {best['epoch']}, {n} apexes, {n_members} members)")
+                f"(epoch {best['epoch']}, {n} apexes, {n_members} members, "
+                f"conv={conv_info['kind']})")
 
-    # restore best-epoch weights and predict the library on the observed-RT scale
+    # restore best-epoch weights; predict library in native space, map back to observed
     for m, wts in zip(models, best["weights"]):
         m.set_weights(wts)
     lib_enc = np.array([one_hot_encode_sequence(s) for s in lib_seqs], dtype=np.float32)
-    lib_rt = np.mean([m.predict(lib_enc, batch_size=4096, verbose=0).flatten()
-                      for m in models], axis=0)
-    lib_pred = dict(zip(lib_seqs, lib_rt))
+    lib_native = np.mean([m.predict(lib_enc, batch_size=4096, verbose=0).flatten()
+                          for m in models], axis=0)
+    lib_pred = dict(zip(lib_seqs, model_to_obs(lib_native)))
+
+    # [exp1] save the calibration so it's inspectable (native pred -> observed + conv)
+    if results_path is not None and channel is not None:
+        try:
+            os.makedirs(results_path + "/first_search/fine_tuning", exist_ok=True)
+            figc, axc = plt.subplots(figsize=(6, 5))
+            axc.scatter(conv_info["x"], conv_info["r"], s=4, alpha=0.3,
+                        edgecolors="none", label="base native vs observed")
+            xs = np.linspace(np.percentile(conv_info["x"], 1),
+                             np.percentile(conv_info["x"], 99), 300)
+            axc.plot(xs, model_to_obs(xs), "r-", lw=2,
+                     label=f"conv ({conv_info['kind']})")
+            axc.set_xlabel("base CNN native prediction")
+            axc.set_ylabel("observed RT (min)")
+            axc.set_title(f"Fine-tune calibration (channel {channel})")
+            axc.legend(fontsize=8)
+            figc.savefig(results_path + f"/first_search/fine_tuning/"
+                         f"RT_finetune_calibration_ch{channel}.png",
+                         dpi=300, bbox_inches="tight")
+            plt.close(figc)
+        except Exception as e:
+            logger.warning(f"Could not save calibration plot: {e}")
+
     return best["resid"], lib_pred, {"oob_medae": oob_medae_hist,
                                      "best_epoch": best["epoch"]}

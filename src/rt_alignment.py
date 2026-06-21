@@ -2307,7 +2307,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
         for k in range(n_timeplex):
             sel = channel == k
             oob_resid, lib_pred, hist = bagged_finetune_channel(
-                seqs_all[sel], obs_rt[sel], uniq, model_path)
+                seqs_all[sel], obs_rt[sel], uniq, model_path,
+                results_path=results_folder, channel=k)
             lib_pred_by_ch.append(lib_pred)
             oob_by_ch.append((k, oob_resid))
             ft_hist.append(hist)
