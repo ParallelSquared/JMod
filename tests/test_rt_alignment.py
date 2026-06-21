@@ -18,7 +18,8 @@ import os
 
 # Import the functions we want to test
 from src.rt_alignment import (
-    twostepfit, lowess_fit, closest_spec, gaussian, fit_errors, cdf_plots, alignment_plots, cdf_data, get_multiples, empirical_fit, filter_rts_by_dense, MZRTfit
+    twostepfit, lowess_fit, closest_spec, gaussian, fit_errors, cdf_plots, alignment_plots, cdf_data, get_multiples, empirical_fit, filter_rts_by_dense, MZRTfit,
+    timeplex_pair_nn_gate, _hwhm_mode_sigma
 )
 
 from tests.fixtures.test_data import SAMPLE_LIBRARY_ENTRY, SAMPLE_MS2_SPECTRUM, SAMPLE_FEATURE
@@ -317,6 +318,78 @@ class TestEmpiricalFit:
         assert cor_filter.dtype == bool
         assert callable(emp_rt_spl)
         assert os.path.isdir(self.test_results_dir)
+
+class TestTimeplexPairNnGate:
+    @staticmethod
+    def _clean_frame(n=400, gaps=(3.0, 2.4), noise=0.2, seed=0):
+        rng = np.random.default_rng(seed)
+        base = rng.uniform(5, 25, n)
+        c1 = gaps[0]
+        c2 = gaps[0] + gaps[1]
+        rows = []
+        for i in range(n):
+            rows.append((f"PEP{i}", base[i] + rng.normal(0, noise), 0))
+            rows.append((f"PEP{i}", base[i] + c1 + rng.normal(0, noise), 1))
+            rows.append((f"PEP{i}", base[i] + c2 + rng.normal(0, noise), 2))
+        return pd.DataFrame(rows, columns=["stripped_seq", "rt", "channel"])
+
+    def test_keeps_clean_peptides(self):
+        df = self._clean_frame()
+        mask = timeplex_pair_nn_gate(df, 3)
+        assert mask.dtype == bool
+        assert len(mask) == len(df)
+        # the vast majority of clean members are kept
+        assert mask.mean() > 0.9
+
+    def test_drops_channel_off_with_both_others(self):
+        # channel 2 sits far from channels 0 and 1 -> dropped; 0 and 1 agree -> kept
+        df = self._clean_frame()
+        df = pd.concat([df, pd.DataFrame(
+            [("badA", 10.0, 0), ("badA", 13.0, 1), ("badA", 25.0, 2)],
+            columns=df.columns)], ignore_index=True)
+        mask = timeplex_pair_nn_gate(df, 3)
+        keep = dict(zip(zip(df["stripped_seq"], df["channel"]), mask))
+        assert keep[("badA", 0)] is np.True_ or keep[("badA", 0)]
+        assert keep[("badA", 1)]
+        assert not keep[("badA", 2)]
+
+    def test_exonerates_member_passing_with_another_channel(self):
+        # channel 1 collapses onto channel 0 (0-1 dist ~0, out of window) but 0 and 2
+        # still agree (0-2 in window) -> drop only channel 1, keep 0 and 2
+        df = self._clean_frame()
+        df = pd.concat([df, pd.DataFrame(
+            [("badB", 13.0, 0), ("badB", 13.0, 1), ("badB", 18.4, 2)],
+            columns=df.columns)], ignore_index=True)
+        mask = timeplex_pair_nn_gate(df, 3)
+        keep = dict(zip(zip(df["stripped_seq"], df["channel"]), mask))
+        assert keep[("badB", 0)]
+        assert not keep[("badB", 1)]
+        assert keep[("badB", 2)]
+
+    def test_k1_keeps_all(self):
+        df = pd.DataFrame({"stripped_seq": ["A", "B"], "rt": [1.0, 2.0],
+                           "channel": [0, 0]})
+        mask = timeplex_pair_nn_gate(df, 1)
+        assert mask.all()
+
+
+class TestHwhmModeSigma:
+    def test_recovers_gaussian_center_and_width(self):
+        rng = np.random.default_rng(0)
+        v = rng.normal(5.0, 0.5, 20000)
+        mode, sigma = _hwhm_mode_sigma(v)
+        assert abs(mode - 5.0) < 0.2
+        assert abs(sigma - 0.5) < 0.15
+
+    def test_width_robust_to_tail(self):
+        rng = np.random.default_rng(1)
+        core = rng.normal(3.0, 0.3, 10000)
+        tail = rng.uniform(0, 30, 3000)        # heavy contamination
+        mode, sigma = _hwhm_mode_sigma(np.concatenate([core, tail]))
+        assert abs(mode - 3.0) < 0.3
+        # tail does not blow up the width (a plain std of this mixture would be ~8)
+        assert sigma < 1.0
+
 
 class TestFilterRtsByDense:
     def test_filter_rts_by_dense_basic(self):

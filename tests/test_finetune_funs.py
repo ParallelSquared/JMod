@@ -2,7 +2,36 @@ import pytest
 import numpy as np
 import pandas as pd
 import sys, os
-from src.finetune_funs import one_hot_encode_sequence, create_model_data, scale_rt, fine_tune_rt
+import inspect
+from src.finetune_funs import (
+    one_hot_encode_sequence, create_model_data, scale_rt, fine_tune_rt,
+    _two_half_gauss_pep, load_existing_models,
+)
+
+
+class TestTwoHalfGaussPep:
+    def test_separates_narrow_core_from_wide_tail(self):
+        rng = np.random.default_rng(0)
+        core = rng.normal(0, 0.7, 4000)        # true positives
+        tail = rng.uniform(-12, 12, 800)       # false positives
+        r = np.concatenate([core, tail])
+        pep, params = _two_half_gauss_pep(np.abs(r))
+        # narrow component much tighter than wide
+        assert params["s_narrow"] < params["s_wide"]
+        # core points get low PEP, tail points get high PEP on average
+        assert pep[:4000].mean() < 0.25
+        assert pep[4000:].mean() > 0.5
+
+    def test_pep_in_unit_interval(self):
+        rng = np.random.default_rng(1)
+        pep, _ = _two_half_gauss_pep(np.abs(rng.normal(0, 1, 1000)))
+        assert pep.min() >= 0.0 and pep.max() <= 1.0
+
+
+class TestLoadExistingModelsSignature:
+    def test_n_models_default_is_three(self):
+        sig = inspect.signature(load_existing_models)
+        assert sig.parameters["n_models"].default == 3
 
 
 max_sequence_length = 5

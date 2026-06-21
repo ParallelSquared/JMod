@@ -72,17 +72,19 @@ def create_model_data(grouped_df,seq_name = 'PeptideSequence', rt_name="RT"):
     return X_train, X_test, Y_train, Y_test
 
 
-def convert_models_to_keras3_format(model_path, output_dir=None):
+def convert_models_to_keras3_format(model_path, output_dir=None, n_models=3):
     """
     Convert legacy TensorFlow SavedModel format to Keras 3-compatible format (.h5).
-    
+
     Parameters
     ----------
     model_path : str
-        Base path to the saved models. Function will append indices (0, 1, 2).
+        Base path to the saved models. Function will append indices (0..n_models-1).
     output_dir : str, optional
         Directory to save converted models. If None, uses original directory.
-    
+    n_models : int, optional
+        Number of ensemble members to convert. Default 3.
+
     Returns
     -------
     list
@@ -90,13 +92,13 @@ def convert_models_to_keras3_format(model_path, output_dir=None):
     """
     import tensorflow as tf
     import os
-    
+
     if output_dir is None:
         output_dir = os.path.dirname(model_path)
-    
+
     converted_paths = []
-    
-    for i in range(3):  # Assuming 3 models
+
+    for i in range(n_models):
         try:
             # First try the direct import approach
             logger.info(f"Converting model {i}...")
@@ -137,19 +139,21 @@ def convert_models_to_keras3_format(model_path, output_dir=None):
     return converted_paths
 
 
-def load_existing_models(model_path):
+def load_existing_models(model_path, n_models=3):
     """
     Load pre-trained CNN models in a way compatible with Keras 3.
-    
-    This function first attempts to load models directly. If that fails due to 
+
+    This function first attempts to load models directly. If that fails due to
     format compatibility issues, it tries to convert them to a Keras 3-compatible
     format and then load them.
-    
+
     Parameters
     ----------
     model_path : str
         Base path to the saved models.
-    
+    n_models : int, optional
+        Number of ensemble members to load (indices 0..n_models-1). Default 3.
+
     Returns
     -------
     list
@@ -158,13 +162,13 @@ def load_existing_models(model_path):
     import tensorflow as tf
     from tensorflow import keras
     import os
-    
+
     models = []
     try_conversion = False
-    
+
     # First try direct loading
     try:
-        for i in range(3):  # Assuming 3 models
+        for i in range(n_models):
             try:
                 # Try to load directly
                 model = keras.models.load_model(model_path + str(i), compile=False)
@@ -185,7 +189,7 @@ def load_existing_models(model_path):
     if try_conversion or not models:
         logger.debug("Attempting to convert models to Keras 3-compatible format...")
         try:
-            converted_paths = convert_models_to_keras3_format(model_path)
+            converted_paths = convert_models_to_keras3_format(model_path, n_models=n_models)
             
             # Try to load the converted models
             models = []
@@ -241,6 +245,28 @@ def scale_rt(rt,min_max):
     
 # model_path = "/Users/nathanwamsley/Data/JMOD_TESTS/iRT_CNN_model_tag6_05052025_"
          
+
+def rt_model_path(tag=None):
+    """Resolve the pretrained iRT-CNN base path for the active tag (same mapping
+    fine_tune_rt uses internally). Used by the timeplex bagged trainer."""
+    current_dir = os.path.dirname(__file__)
+    if tag is None:
+        tag = config.tag
+    if tag is None:
+        name = "iRT_CNN_model_LF_09182024_"
+    elif "mTRAQ" in tag.name:
+        name = "iRT_CNN_model_mTRAQ_09182024_"
+    elif "diethyl" in tag.name:
+        name = "iRT_CNN_model_DiEthyl_11052024_"
+    elif "PSMtag" in tag.name:
+        name = "iRT_TransferLearning_Tag6_updated_05072025_"
+    else:
+        from src.utils.gui_utils import send_raise_to_TK
+        logger.info(f"Tag Name: {tag.name}")
+        send_raise_to_TK("ValueError - Unknown Label")
+        raise ValueError("Unknown label")
+    return os.path.join(current_dir, "../rt_models", name)
+
 
 def fine_tune_rt(grouped_df,
                  qc_plots = False,
@@ -519,3 +545,153 @@ def predict_decoy_rts(decoy_seqs, models, convertor):
 
     logger.info(f"Updated iRT values for {len(decoy_seqs)} decoys")
     return predicted_rts
+
+
+# ---------------------------------------------------------------------------
+# Timeplex-only bagged, soft-weighted fine-tuning.
+#
+# Used exclusively by the timeplex RT-alignment path. The non-timeplex path
+# (fine_tune_rt / train_models) is unchanged. Validated recipe: MAE + a 5-member
+# bagged out-of-bag (OOB) ensemble + iterative two-half-Gaussian (1-PEP) soft
+# weighting. All hyperparameters are function defaults (no config/module constants).
+# ---------------------------------------------------------------------------
+def _two_half_gauss_pep(abs_resid, iters=200):
+    """Fit a narrow+wide half-Gaussian mixture to |residual| (the |r| analog of the
+    2-component zero-mean GMM) and return per-point PEP = P(wide / false-positive | |r|).
+
+    The per-point PEP is used for soft sample weighting; the component weight is NOT
+    a reliable contamination estimate (the wide half-Gaussian absorbs the heavy real
+    tail), so only the per-point posterior is used.
+    """
+    a = np.asarray(abs_resid, dtype=float)
+    c = np.sqrt(2.0 / np.pi)
+    s1 = max(np.percentile(a, 40), 1e-3)
+    s2 = max(np.percentile(a, 95), s1 * 2)
+    w = np.array([0.8, 0.2])
+    for _ in range(iters):
+        f1 = w[0] * c / s1 * np.exp(-a ** 2 / (2 * s1 ** 2))
+        f2 = w[1] * c / s2 * np.exp(-a ** 2 / (2 * s2 ** 2))
+        g2 = f2 / np.clip(f1 + f2, 1e-300, None)
+        g1 = 1.0 - g2
+        w = np.array([g1.mean(), g2.mean()])
+        s1 = np.sqrt(max((g1 * a ** 2).sum() / max(g1.sum(), 1e-9), 1e-6))
+        s2 = np.sqrt(max((g2 * a ** 2).sum() / max(g2.sum(), 1e-9), 1e-6))
+        if s1 > s2:
+            s1, s2 = s2, s1
+            w = w[::-1]
+    f1 = w[0] * c / s1 * np.exp(-a ** 2 / (2 * s1 ** 2))
+    f2 = w[1] * c / s2 * np.exp(-a ** 2 / (2 * s2 ** 2))
+    pep = f2 / np.clip(f1 + f2, 1e-300, None)
+    return pep, {"s_narrow": float(s1), "s_wide": float(s2), "w_wide": float(w[1])}
+
+
+def _freeze_backbone(model):
+    """Freeze conv backbone; train only the Dense head."""
+    for layer in model.layers:
+        layer.trainable = isinstance(layer, keras.layers.Dense)
+    return model
+
+
+def bagged_finetune_channel(seqs, obs_rt, lib_seqs, model_path,
+                            n_members=5, subsample=0.6, epochs=22, head_lr=1e-3,
+                            patience=7, trim_start=3, ema_beta=0.8, seed=0):
+    """Bagged, OOB, soft-weighted fine-tune for one timeplex channel.
+
+    Trains an `n_members`-member ensemble; each member sees a random `subsample`
+    fraction (no replacement), so every training point has an out-of-bag (OOB)
+    prediction from the members that did not train on it. Each epoch the per-point
+    |OOB residual| EMA is fit with a narrow+wide half-Gaussian mixture and each point's
+    training weight is set to (1 - PEP). Early stopping uses OOB median-AE.
+
+    The CNN is fine-tuned to predict the channel's OBSERVED RT directly (no LOESS
+    calibration / no de-offset), so library predictions are already on the observed-RT
+    scale that the downstream search consumes as rt_spls[k][seq].
+
+    Parameters
+    ----------
+    seqs : array-like of str
+        Stripped sequences of the (gated) training apexes for this channel.
+    obs_rt : array-like of float
+        Observed RT for each training apex.
+    lib_seqs : list of str
+        Unique library sequences to predict (the returned dict keys).
+    model_path : str
+        Base path to the pretrained ensemble (indices appended).
+    n_members, subsample, epochs, head_lr, patience, trim_start, ema_beta, seed
+        Bagged-training hyperparameters (function defaults; no config knobs).
+
+    Returns
+    -------
+    (oob_resid, lib_pred)
+        oob_resid : np.ndarray of held-out OOB residuals (observed - predicted) for the
+                    training apexes (for the empirical-vs-fine-tuned comparison and the
+                    RT-tolerance GMM).
+        lib_pred  : dict {lib_seq: predicted_observed_rt} from the best-epoch ensemble.
+        history   : dict with 'oob_medae' (per-epoch held-out OOB MedAE) and
+                    'best_epoch' (for the fine-tune training-curve plot).
+    """
+    import tensorflow as tf
+
+    rng = np.random.default_rng(seed)
+    y = np.asarray(obs_rt, dtype=float)
+    n = len(y)
+    X = np.array([one_hot_encode_sequence(s) for s in seqs], dtype=np.float32)
+
+    models = [_freeze_backbone(m) for m in load_existing_models(model_path, n_models=n_members)]
+    n_members = len(models)
+    for m in models:
+        m.compile(optimizer=keras.optimizers.legacy.Adam(head_lr), loss="mae")
+
+    # bagging membership: each member trains on a `subsample` fraction (no replacement)
+    n_sub = max(1, int(round(subsample * n)))
+    inbag = np.zeros((n_members, n), bool)
+    for k in range(n_members):
+        inbag[k, rng.choice(n, n_sub, replace=False)] = True
+    oob_mask = (~inbag).astype(np.float64)
+    cnt = oob_mask.sum(0)
+    has = cnt > 0
+
+    def _predict(model, arr):
+        return np.asarray(model(arr, training=False)).flatten()
+
+    def oob_predictions():
+        preds = np.array([_predict(m, X) for m in models])   # (n_members, n)
+        s1 = (preds * oob_mask).sum(0)
+        oob = np.where(has, s1 / np.where(has, cnt, 1), preds.mean(0))
+        return oob
+
+    sample_w = np.ones(n)
+    ema = None
+    oob_medae_hist = []                              # per-epoch held-out OOB MedAE
+    best = {"medae": np.inf, "epoch": -1, "resid": y - oob_predictions(),
+            "weights": [m.get_weights() for m in models]}
+    for ep in range(epochs):
+        for k in range(n_members):
+            ib = inbag[k]
+            models[k].fit(X[ib], y[ib], sample_weight=sample_w[ib],
+                          epochs=1, batch_size=24, verbose=0)
+        resid = y - oob_predictions()
+        medae = float(np.median(np.abs(resid)))
+        oob_medae_hist.append(medae)
+        a_resid = np.abs(resid)
+        ema = a_resid.copy() if ema is None else ema_beta * ema + (1 - ema_beta) * a_resid
+        if ep >= trim_start:
+            pep, _ = _two_half_gauss_pep(ema)
+            sample_w = ema_beta * sample_w + (1 - ema_beta) * (1.0 - pep)
+        if medae < best["medae"] - 1e-4:
+            best = {"medae": medae, "epoch": ep, "resid": resid.copy(),
+                    "weights": [m.get_weights() for m in models]}
+        elif ep - best["epoch"] >= patience:
+            break
+    logger.info(f"  bagged fine-tune: OOB MedAE={best['medae']:.4f} "
+                f"(epoch {best['epoch']}, {n} apexes, {n_members} members)")
+
+    # restore best-epoch weights and predict the library on the observed-RT scale
+    for m, wts in zip(models, best["weights"]):
+        m.set_weights(wts)
+    lib_enc = np.array([one_hot_encode_sequence(s) for s in lib_seqs], dtype=np.float32)
+    lib_rt = np.mean([m.predict(lib_enc, batch_size=4096, verbose=0).flatten()
+                      for m in models], axis=0)
+    lib_pred = dict(zip(lib_seqs, lib_rt))
+    return best["resid"], lib_pred, {"oob_medae": oob_medae_hist,
+                                     "best_epoch": best["epoch"]}

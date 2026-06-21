@@ -4,6 +4,8 @@ Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 import sys
+import os
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
@@ -41,7 +43,8 @@ from src.utils.misc_functions import within_tol,moving_average, \
     closest_ms1spec, closest_peak_diff, unstring_floats, fragment_cor
 
 
-from src.finetune_funs import fine_tune_rt, one_hot_encode_sequence
+from src.finetune_funs import fine_tune_rt, one_hot_encode_sequence, \
+    bagged_finetune_channel, rt_model_path
 from src.utils.io.read_output import names, dtypes
 
 from src.logger import logger
@@ -1880,6 +1883,96 @@ def _timeplex_scribe_filter(output_df, results_folder=None):
     return cor_filter
 
 
+def _hwhm_mode_sigma(v):
+    """Fit-free mode + HWHM-derived sigma (sigma = HWHM / 1.1774) of a 1-D sample.
+
+    Reads the width off the smoothed-histogram half-max crossings, so it ignores the
+    tails / contamination (no curve fit, no truncation bias)."""
+    v = np.asarray(v, dtype=float)
+    v = v[np.isfinite(v)]
+    hi = np.percentile(v, 99)
+    h, e = np.histogram(v[v <= hi], bins=120)
+    c = 0.5 * (e[:-1] + e[1:])
+    hs = gaussian_filter(h.astype(float), 1.5)
+    pk = int(np.argmax(hs))
+    mode = float(c[pk])
+    half = hs[pk] / 2.0
+    li = pk
+    while li > 0 and hs[li] > half:
+        li -= 1
+    ri = pk
+    while ri < len(hs) - 1 and hs[ri] > half:
+        ri += 1
+    sigma = max(min(mode - c[li], c[ri] - mode) / 1.1774, 1e-3)
+    return mode, sigma
+
+
+def timeplex_pair_nn_gate(apex_df, n_timeplex, n_sigma=2.0):
+    """Fit-independent per-channel-pair nearest-neighbor gate over the apex set.
+
+    Uses only raw observed RT, channel, and sequence -- nothing from any RT fit. For
+    each unordered channel pair (a, b) it measures the per-peptide cross-channel
+    distance |rt_a - rt_b|, builds a window mode +/- n_sigma*sigma from the fit-free
+    HWHM of that distance distribution, and applies the EXONERATION rule: flag both
+    members of an out-of-window pair, then un-flag any member that still agrees with
+    another channel. A member is therefore kept iff it is in-window with at least one
+    other channel; only members that disagree with EVERY other channel are dropped.
+
+    This replaces the old training-data filter, which de-offset each apex by the
+    ridge-fit offsets (fit-dependent) and assumed equal channel spacing.
+
+    Parameters
+    ----------
+    apex_df : pandas.DataFrame
+        Apex rows with columns 'stripped_seq', 'rt', 'channel' (one row per
+        peptide x channel; from select_timeplex_alignment_set).
+    n_timeplex : int
+        Number of channels K.
+    n_sigma : float
+        Half-width of the per-pair keep window in sigma. Default 2.0.
+
+    Returns
+    -------
+    np.ndarray[bool]
+        Keep mask aligned to apex_df rows.
+    """
+    K = int(n_timeplex)
+    df = apex_df.reset_index(drop=True)
+    if K < 2:
+        return np.ones(len(df), dtype=bool)
+
+    # one row per peptide, a column of rt per channel
+    wide = df.pivot_table(index="stripped_seq", columns="channel", values="rt",
+                          aggfunc="first")
+    full = wide.dropna(how="any")              # peptides present in all K channels
+    seqs = full.index.to_numpy()
+    rt = {k: full[k].to_numpy(dtype=float) for k in full.columns}
+
+    # per-channel keep (exoneration): keep_c = OR over the pairs containing c
+    keep_ch = {k: np.zeros(len(seqs), dtype=bool) for k in rt}
+    for a, b in combinations(sorted(rt), 2):
+        d = np.abs(rt[b] - rt[a])
+        mode, sigma = _hwhm_mode_sigma(d)
+        lo, hi = mode - n_sigma * sigma, mode + n_sigma * sigma
+        in_win = (d >= lo) & (d <= hi)
+        keep_ch[a] |= in_win
+        keep_ch[b] |= in_win
+        logger.info(f"NN gate pair {a}-{b}: window [{lo:.2f}, {hi:.2f}] "
+                    f"(mode {mode:.2f}, sigma {sigma:.2f}), "
+                    f"in-window {in_win.mean():.3f}")
+
+    # map per-(peptide, channel) keep back to apex rows
+    keep_lookup = {}
+    for j, s in enumerate(seqs):
+        for k in rt:
+            keep_lookup[(s, int(k))] = bool(keep_ch[k][j])
+    mask = np.array([keep_lookup.get((s, int(c)), False)
+                     for s, c in zip(df["stripped_seq"], df["channel"])], dtype=bool)
+    logger.info(f"NN gate: kept {int(mask.sum())}/{len(mask)} apexes "
+                f"({mask.mean():.3f})")
+    return mask
+
+
 def fit_timeplex_ridges(output_df, n_timeplex, results_folder=None):
     """
     Align timeplex channels as ONE shared iRT->RT shape + K equally-spaced vertical
@@ -2173,94 +2266,145 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
         output_df.to_csv(results_folder+"/first_search/firstSearch.tsv", index=False, sep='\t')
 
     updatedLibrary = copy.deepcopy(librarySpectra)
-    rt_spls, emp_shape, offsets, d, filtered_output, residuals = fit_timeplex_ridges(output_df, n_timeplex, results_folder)
+
+    # --- Phase 2: fit-independent per-channel-pair NN gate ---------------------
+    # Clean the apex set with the per-pair nearest-neighbor gate (raw |dRT| windows,
+    # exoneration rule). This uses NO RT fit, so the empirical and fine-tuned models
+    # are fit and compared on the same gated data.
+    gate_mask = timeplex_pair_nn_gate(output_df, n_timeplex)
+    gated_df = output_df[gate_mask].reset_index(drop=True)
+
+    # Empirical ridge fit on the GATED set (also the source of channel offsets, the
+    # channel separation d, and the OriginalRTfit shape).
+    rt_spls, emp_shape, offsets, d, filtered_output, residuals = \
+        fit_timeplex_ridges(gated_df, n_timeplex, results_folder)
 
     channel = filtered_output["channel"].to_numpy()
-    deoffset_rt = filtered_output["rt"].to_numpy() - offsets[channel]
-    filtered_output["updated_lib_rt"] = filtered_output["lib_rt"]   # default x-axis = library iRT
+    filtered_output["updated_lib_rt"] = filtered_output["lib_rt"]   # x-axis = library iRT
 
     # rt_spls from fit_timeplex_ridges are per-channel iRT->RT curves (empirical default).
     emp_curves = rt_spls
     plot_curves = emp_curves                      # what alignment_plots draws
     emp_data, emp_p, emp_cdf_auc = cdf_data(residuals)
     chosen_diffs = residuals
+    chosen_channel = channel                      # channel labels aligned to chosen_diffs
     pred_data = pred_p = None
     mixture_feat = "_timeplex_empirical"
 
     if not config.args.use_emp_rt:
         logger.info("Per-channel RT prediction (timeplex)")
-        # Train per channel, only on peptides seen in ALL n_timeplex channels with agreeing
-        # de-offset RTs. Requiring every channel anchors the absolute offsets: a uniform
-        # channel mis-assignment would have to wrap past the top ridge and break the
-        # agreement, so it can't sneak a wrong (off-by-multiple-of-d) target through.
+        # --- Phase 3: bagged, OOB, (1-PEP) soft-weighted fine-tune per channel ----
+        # Each channel is fine-tuned independently on its gated apexes with a 5-member
+        # bagged ensemble; held-out OOB residuals make the empirical-vs-fine-tuned
+        # comparison fair. The CNN predicts the channel's observed RT directly, so the
+        # per-channel {seq: rt} dict is already on the observed scale run_jmod consumes.
+        seqs_all = filtered_output["stripped_seq"].to_numpy()
         obs_rt = filtered_output["rt"].to_numpy(dtype=float)
-        seq_obs, seq_deoff = {}, {}
-        for s, c, rt, drt in zip(filtered_output["stripped_seq"], channel, obs_rt, deoffset_rt):
-            seq_obs.setdefault(s, {}).setdefault(int(c), []).append(rt)
-            seq_deoff.setdefault(s, []).append(drt)
-        verified = [s for s in seq_obs
-                    if len(seq_obs[s]) == n_timeplex and np.ptp(seq_deoff[s]) < 1]
-        logger.info(f"Per-channel fine-tuning on {len(verified)} peptides in all "
-                    f"{n_timeplex} channels")
-
         uniq = sorted({updatedLibrary[k]["seq"] for k in librarySpectra})
-        uniq_enc = np.array([one_hot_encode_sequence(s) for s in uniq], dtype=np.float32)
-        kept_enc = np.array([one_hot_encode_sequence(s) for s in filtered_output["stripped_seq"]])
-        cnn_lookup, val_resid, kept_pred_by_ch = [], [], []
+        model_path = rt_model_path()
+
+        lib_pred_by_ch, oob_by_ch, ft_hist = [], [], []
         for k in range(n_timeplex):
-            gdf = pd.DataFrame({'Stripped.Sequence': verified,
-                                'RT': [np.median(seq_obs[s][k]) for s in verified]})
-            ds, models, conv = fine_tune_rt(gdf, qc_plots=False, results_path=results_folder)
-            vr = ds[3] - conv(np.mean([m.predict(np.array(ds[1])) for m in models], axis=0).flatten())
-            val_resid.append(vr)
-            logger.info(f"  timeplex channel {k}: validation |dRT| median = {np.median(np.abs(vr)):.3f} min")
-            cnn_lookup.append(dict(zip(uniq, conv(np.mean(
-                [m.predict(uniq_enc, batch_size=4096) for m in models], axis=0).flatten()))))
-            kept_pred_by_ch.append(conv(np.mean([m.predict(kept_enc) for m in models], axis=0).flatten()))
+            sel = channel == k
+            oob_resid, lib_pred, hist = bagged_finetune_channel(
+                seqs_all[sel], obs_rt[sel], uniq, model_path)
+            lib_pred_by_ch.append(lib_pred)
+            oob_by_ch.append((k, oob_resid))
+            ft_hist.append(hist)
+            logger.info(f"  timeplex channel {k}: OOB |dRT| median = "
+                        f"{np.median(np.abs(oob_resid)):.3f} min")
 
+        # per-channel fine-tune training curve (held-out OOB MedAE vs epoch)
+        if results_folder is not None:
+            try:
+                os.makedirs(results_folder + "/first_search/fine_tuning", exist_ok=True)
+                figc, axc = plt.subplots(figsize=(7, 5))
+                for k, h in enumerate(ft_hist):
+                    axc.plot(range(len(h["oob_medae"])), h["oob_medae"],
+                             marker=".", label=f"T{k}")
+                    axc.axvline(h["best_epoch"], color=f"C{k}", ls=":", lw=1)
+                axc.set_xlabel("epoch"); axc.set_ylabel("held-out OOB MedAE (min)")
+                axc.set_title("Timeplex fine-tune training curves")
+                axc.legend()
+                figc.savefig(results_folder + "/first_search/fine_tuning/"
+                             "RT_finetune_oob_medae.png", dpi=300, bbox_inches="tight")
+                plt.close(figc)
+            except Exception as e:
+                logger.warning(f"Could not save fine-tune training curve: {e}")
 
-        # --- SECOND ALIGNMENT (parity with the non-timeplex path) ---
-        # Build one shared predicted-iRT axis over ALL channels at once: each kept PSM
-        # carries its own channel's CNN prediction, de-offset by that channel's gap so
-        # the K bands collapse onto a single shape. Hand the whole (all-channel) frame
-        # to the SAME timeplex aligner used for the first fit (fit_timeplex_ridges),
-        # which re-discovers the shared shape + K equally-spaced offsets from density.
-        cnn_pred = np.vstack(kept_pred_by_ch)[channel, np.arange(len(channel))]
-        de_pred = cnn_pred - offsets[channel]
-        second_df = pd.DataFrame({
-            "scribe_score": filtered_output["scribe_score"].to_numpy(dtype=float),
-            "lib_rt": de_pred,                                  # predicted iRT replaces library iRT
-            "rt": filtered_output["rt"].to_numpy(dtype=float),  # original observed RT
-            "mz": filtered_output["mz"].to_numpy(dtype=float),
-            "relative_error_ms1": filtered_output["mz_diffs"].to_numpy(dtype=float),
-            "stripped_seq": filtered_output["stripped_seq"].to_numpy(),
-            "channel": channel,
-        })
-        rt_spls2, shape2, offsets2, d2, filtered_output2, residuals2 = \
-            fit_timeplex_ridges(second_df, n_timeplex, results_folder)
+        pooled_oob = np.concatenate([r for _, r in oob_by_ch])
+        pooled_channel = np.concatenate([np.full(len(r), k, dtype=int)
+                                         for k, r in oob_by_ch])
+        pred_data, pred_p, pred_cdf_auc = cdf_data(pooled_oob)
 
-        pred_data, pred_p, pred_cdf_auc = cdf_data(residuals2)
-
-        # Higher CDF-AUC = tighter residuals = better (same as non-timeplex MZRTfit).
+        # Higher CDF-AUC = tighter residuals = better (now a FAIR, held-out comparison).
         if pred_cdf_auc > emp_cdf_auc:
             logger.info(f"Fine-tuned RT model chosen (timeplex) "
                         f"[empirical CDF-AUC={emp_cdf_auc:.4f} vs fine-tuned CDF-AUC={pred_cdf_auc:.4f}]")
             mixture_feat = "_timeplex_fine_tuned"
-            rt_spls = [{s: float(rt_spls2[k](cnn_lookup[k][s] - offsets[k])) for s in uniq}
-                       for k in range(n_timeplex)]
-            chosen_diffs = residuals2
-            d = d2
-            filtered_output["updated_lib_rt"] = de_pred
-            plot_curves = rt_spls2
+            rt_spls = [lib_pred_by_ch[k] for k in range(n_timeplex)]  # per-channel {seq: rt}
+            # NOTE: the model SELECTION above uses OOB residuals (a fair, held-out
+            # comparison so the memorizing CNN doesn't always win). But the reported
+            # sigma, the RTfit plot, and the RT tolerance use the IN-SAMPLE full-ensemble
+            # residuals (the in-distribution precision) -- consistent with the empirical
+            # branch, whose ridge residuals are also in-sample.
+            # TODO(rt-tolerance): in-sample full-ensemble residuals are overfit-optimistic
+            # (the 5 members have memorized the training peptides), so this UNDER-estimates
+            # the RT spread for unseen library peptides. We use it because in-sample
+            # ensemble worked best empirically here, and on this data the tolerance clamps
+            # to d/2 regardless. The honest deployed-model estimate is the held-out full
+            # ensemble (~0.75 vs in-sample ~0.6 vs OOB ~0.9); revisit if a run's channels
+            # are far enough apart that sigma -- not the d/2 overlap clamp -- drives the
+            # tolerance, where too-tight a window would cost real IDs.
+            ft_pred = np.array([lib_pred_by_ch[c][s]
+                                for s, c in zip(seqs_all, channel)], dtype=float)
+            chosen_diffs = obs_rt - ft_pred             # in-sample full-ensemble residual
+            chosen_channel = channel
+            # RTfit: de-offset the full-ensemble prediction to a shared axis (each channel
+            # minus its own median level) so matched peptides share an x and the channels
+            # show as parallel diagonals offset by their RT gap. Plot-only; returned
+            # rt_spls dicts (full ensemble) are what the search uses.
+            ch_level = np.array([np.median(obs_rt[channel == k])
+                                 for k in range(n_timeplex)])
+            ch_rel = ch_level - ch_level.mean()        # centered channel offsets
+            deoff_pred = ft_pred - ch_rel[channel]      # shared axis across channels
+            filtered_output["updated_lib_rt"] = deoff_pred
+            plot_curves = []
+            for k in range(n_timeplex):
+                mk = channel == k
+                if mk.sum() >= 20:
+                    plot_curves.append(fast_modal_lowess(
+                        deoff_pred[mk], obs_rt[mk], local_frac=.05, anchors=1000,
+                        grid_size=1000, post_smooth_frac=0.02))
+                else:
+                    plot_curves.append(lambda v: np.asarray(v, dtype=float))
         else:
             logger.info(f"Empirical RT model chosen (timeplex) "
                         f"[empirical CDF-AUC={emp_cdf_auc:.4f} vs fine-tuned CDF-AUC={pred_cdf_auc:.4f}]")
     else:
         logger.info("RT model: empirical ridge alignment (timeplex; --use_emp_rt)")
 
+    # --- Phase 4: RT tolerance from the per-channel narrow GMM component -------
+    # Fit a 2-component zero-mean GMM per channel on the chosen residuals, take the
+    # narrow sigma, and average across channels.
+    narrow_sigmas = []
+    for k in range(n_timeplex):
+        rk = chosen_diffs[chosen_channel == k]
+        if len(rk) >= 10:
+            _, sg = fit_zero_mean_gmm_1d(rk, n_components=2)
+            narrow_sigmas.append(float(np.sort(sg)[0]))
+    if narrow_sigmas:
+        sigma_narrow = float(np.mean(narrow_sigmas))
+    else:
+        _, sg = fit_zero_mean_gmm_1d(chosen_diffs, n_components=2)
+        sigma_narrow = float(np.sort(sg)[0])
+    boundary = 4 * sigma_narrow + 8 * elution_sd
+    logger.info(f"Per-channel narrow sigma {[round(s, 3) for s in narrow_sigmas]} "
+                f"-> mean {sigma_narrow:.3f}; RT boundary {boundary:.3f}")
+
+    # representative pooled GMM for the residual-mixture plot
     weights, sigmas = fit_zero_mean_gmm_1d(chosen_diffs, n_components=2)
     sigmas = np.sort(sigmas)
-    boundary = 4 * sigmas[0] + 8 * elution_sd
 
     #####  Assume that the mz error is independent of n_timeplex
     # Use the precomputed per-PSM MS1 error (same as the non-timeplex MZRTfit path),
