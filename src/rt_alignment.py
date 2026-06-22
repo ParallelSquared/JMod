@@ -1907,17 +1907,25 @@ def _hwhm_mode_sigma(v):
     return mode, sigma
 
 
-def timeplex_two_stage_gate(apex_df, n_timeplex, n_sigma=2.0, n_rt_bins=4):
+def timeplex_two_stage_gate(apex_df, n_timeplex, n_sigma_global=2.0, n_sigma_local=4.0,
+                            n_rt_bins=10):
     """[exp1_2stage] Two-stage, RT-aware per-pair gate with triplet-toss.
 
     For each channel pair (a,b) the per-peptide gap |rt_b - rt_a| is gated twice
-    (fit-independent): (1) a GLOBAL window mode +/- n_sigma*sigma over the whole RT range,
-    then (2) an RT-LOCAL re-gate -- within each RT bin (n_rt_bins quantiles of the pair's
-    mean RT, over the globally-passing points) recompute mode +/- n_sigma*sigma and keep
-    again. A pair passes only if it clears both. Then TRIPLET-TOSS: a peptide's apexes are
-    kept only if ALL pairs pass; if any pair is bad the whole triplet is dropped (the
-    timeplex channel assignment is no longer trustworthy). Width = fit-free HWHM (min of
+    (fit-independent): (1) a GLOBAL window mode +/- n_sigma_global*sigma over the whole RT
+    range, then (2) an RT-LOCAL re-gate -- within each RT bin (n_rt_bins quantiles of the
+    pair's mean RT, over the globally-passing points) recompute mode +/- n_sigma_local*sigma
+    and keep again. A pair passes only if it clears both. Then TRIPLET-TOSS: a peptide's
+    apexes are kept only if ALL pairs pass; if any pair is bad the whole triplet is dropped
+    (the timeplex channel assignment is no longer trustworthy). Width = fit-free HWHM (min of
     the two half-widths / 1.1774), same as the single-stage gate.
+
+    The global stage is kept TIGHT (default 2 sigma) and the local stage LOOSE (default
+    4 sigma) on purpose: a loose global window admits a near-zero-gap contaminant cluster
+    that, in the late RT bins, becomes a sharp spurious peak the HWHM mode estimator locks
+    onto -- collapsing the local window and tossing the real triplets. The tight global
+    stage strips those contaminants before the local fit ever sees them, so the looser
+    local re-gate can then keep the genuine RT-shifted population.
     """
     K = int(n_timeplex)
     df = apex_df.reset_index(drop=True)
@@ -1933,8 +1941,8 @@ def timeplex_two_stage_gate(apex_df, n_timeplex, n_sigma=2.0, n_rt_bins=4):
     for a, b in combinations(chans, 2):
         gap = np.abs(rt[b] - rt[a])
         mid = 0.5 * (rt[a] + rt[b])
-        gm, gs = _hwhm_mode_sigma(gap)                 # stage 1: global
-        gpass = np.abs(gap - gm) <= n_sigma * gs
+        gm, gs = _hwhm_mode_sigma(gap)                 # stage 1: global (tight)
+        gpass = np.abs(gap - gm) <= n_sigma_global * gs
         lpass = np.zeros(len(gap), dtype=bool)          # stage 2: RT-local
         if gpass.sum() >= max(4 * n_rt_bins, 40):
             edges = np.percentile(mid[gpass], np.linspace(0, 100, n_rt_bins + 1))
@@ -1944,7 +1952,7 @@ def timeplex_two_stage_gate(apex_df, n_timeplex, n_sigma=2.0, n_rt_bins=4):
                 in_bin_pass = m & gpass
                 if in_bin_pass.sum() >= 30:
                     lm, ls = _hwhm_mode_sigma(gap[in_bin_pass])
-                    lpass |= m & (np.abs(gap - lm) <= n_sigma * ls)
+                    lpass |= m & (np.abs(gap - lm) <= n_sigma_local * ls)
                 else:
                     lpass |= m                          # too few to re-gate; accept global
         else:
