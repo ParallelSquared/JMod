@@ -1907,6 +1907,60 @@ def _hwhm_mode_sigma(v):
     return mode, sigma
 
 
+def timeplex_two_stage_gate(apex_df, n_timeplex, n_sigma=2.0, n_rt_bins=4):
+    """[exp1_2stage] Two-stage, RT-aware per-pair gate with triplet-toss.
+
+    For each channel pair (a,b) the per-peptide gap |rt_b - rt_a| is gated twice
+    (fit-independent): (1) a GLOBAL window mode +/- n_sigma*sigma over the whole RT range,
+    then (2) an RT-LOCAL re-gate -- within each RT bin (n_rt_bins quantiles of the pair's
+    mean RT, over the globally-passing points) recompute mode +/- n_sigma*sigma and keep
+    again. A pair passes only if it clears both. Then TRIPLET-TOSS: a peptide's apexes are
+    kept only if ALL pairs pass; if any pair is bad the whole triplet is dropped (the
+    timeplex channel assignment is no longer trustworthy). Width = fit-free HWHM (min of
+    the two half-widths / 1.1774), same as the single-stage gate.
+    """
+    K = int(n_timeplex)
+    df = apex_df.reset_index(drop=True)
+    if K < 2:
+        return np.ones(len(df), dtype=bool)
+    wide = df.pivot_table(index="stripped_seq", columns="channel", values="rt",
+                          aggfunc="first").dropna(how="any")
+    seqs = wide.index.to_numpy()
+    rt = {k: wide[k].to_numpy(dtype=float) for k in wide.columns}
+    chans = sorted(rt)
+
+    keep_pep = np.ones(len(seqs), dtype=bool)          # triplet-toss accumulator
+    for a, b in combinations(chans, 2):
+        gap = np.abs(rt[b] - rt[a])
+        mid = 0.5 * (rt[a] + rt[b])
+        gm, gs = _hwhm_mode_sigma(gap)                 # stage 1: global
+        gpass = np.abs(gap - gm) <= n_sigma * gs
+        lpass = np.zeros(len(gap), dtype=bool)          # stage 2: RT-local
+        if gpass.sum() >= max(4 * n_rt_bins, 40):
+            edges = np.percentile(mid[gpass], np.linspace(0, 100, n_rt_bins + 1))
+            for j in range(n_rt_bins):
+                lo, hi = edges[j], edges[j + 1]
+                m = ((mid >= lo) & (mid < hi)) if j < n_rt_bins - 1 else ((mid >= lo) & (mid <= hi))
+                in_bin_pass = m & gpass
+                if in_bin_pass.sum() >= 30:
+                    lm, ls = _hwhm_mode_sigma(gap[in_bin_pass])
+                    lpass |= m & (np.abs(gap - lm) <= n_sigma * ls)
+                else:
+                    lpass |= m                          # too few to re-gate; accept global
+        else:
+            lpass[:] = True
+        pair_pass = gpass & lpass
+        keep_pep &= pair_pass
+        logger.info(f"two-stage gate pair {a}-{b}: global pass {gpass.mean():.3f}, "
+                    f"+RT-local {pair_pass.mean():.3f}")
+
+    keep_lookup = {s: bool(keep_pep[i]) for i, s in enumerate(seqs)}
+    mask = np.array([keep_lookup.get(s, False) for s in df["stripped_seq"]], dtype=bool)
+    logger.info(f"two-stage triplet-toss gate: kept {int(mask.sum())}/{len(mask)} apexes "
+                f"({mask.mean():.3f})")
+    return mask
+
+
 def timeplex_pair_nn_gate(apex_df, n_timeplex, n_sigma=2.0):
     """Fit-independent per-channel-pair nearest-neighbor gate over the apex set.
 
@@ -2271,7 +2325,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     # Clean the apex set with the per-pair nearest-neighbor gate (raw |dRT| windows,
     # exoneration rule). This uses NO RT fit, so the empirical and fine-tuned models
     # are fit and compared on the same gated data.
-    gate_mask = timeplex_pair_nn_gate(output_df, n_timeplex)
+    gate_mask = timeplex_two_stage_gate(output_df, n_timeplex)   # [exp1_2stage]
     gated_df = output_df[gate_mask].reset_index(drop=True)
 
     # Empirical ridge fit on the GATED set (also the source of channel offsets, the
