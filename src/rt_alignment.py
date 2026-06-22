@@ -1883,23 +1883,26 @@ def _timeplex_scribe_filter(output_df, results_folder=None):
     return cor_filter
 
 
-def _hwhm_mode_sigma(v):
+def _hwhm_mode_sigma(v, mode_smooth=3.0):
     """Fit-free mode + HWHM-derived sigma (sigma = HWHM / 1.1774) of a 1-D sample.
 
     Reads the width off the smoothed-histogram half-max crossings, so it ignores the
     tails / contamination (no curve fit, no truncation bias).
 
-    The mode (peak location) is taken from a HEAVILY smoothed histogram (sigma=3) so a
-    narrow contaminant spike cannot out-top the broad genuine hump (argmax rewards peak
-    height, not mass); the WIDTH is then measured on a LIGHTLY smoothed histogram
-    (sigma=1.5) around that location, so the heavy smoothing does not inflate sigma and
-    widen the gate. The two are deliberately decoupled."""
+    The mode (peak location) is taken from a histogram smoothed at `mode_smooth` (default
+    3.0, heavy) so a narrow contaminant spike cannot out-top the broad genuine hump
+    (argmax rewards peak height, not mass); the WIDTH is then measured on a LIGHTLY
+    smoothed histogram (sigma=1.5) around that location, so the mode smoothing does not
+    inflate sigma and widen the gate. The two are deliberately decoupled. Pass a smaller
+    `mode_smooth` (e.g. 1.5) when the sample is large and well-populated -- with many
+    points the broad hump already dominates and no spurious spike can win, so heavy
+    smoothing only blurs a genuine peak."""
     v = np.asarray(v, dtype=float)
     v = v[np.isfinite(v)]
     hi = np.percentile(v, 99)
     h, e = np.histogram(v[v <= hi], bins=120)
     c = 0.5 * (e[:-1] + e[1:])
-    hs_mode = gaussian_filter(h.astype(float), 3.0)    # locate peak (robust to spikes)
+    hs_mode = gaussian_filter(h.astype(float), mode_smooth)  # locate peak (robust to spikes)
     hs_width = gaussian_filter(h.astype(float), 1.5)   # measure HWHM (tight, faithful)
     pk = int(np.argmax(hs_mode))
     mode = float(c[pk])
@@ -1948,7 +1951,7 @@ def timeplex_two_stage_gate(apex_df, n_timeplex, n_sigma_global=2.0, n_sigma_loc
     for a, b in combinations(chans, 2):
         gap = np.abs(rt[b] - rt[a])
         mid = 0.5 * (rt[a] + rt[b])
-        gm, gs = _hwhm_mode_sigma(gap)                 # stage 1: global (tight)
+        gm, gs = _hwhm_mode_sigma(gap, mode_smooth=1.5)  # stage 1: global (many points; light smoothing)
         gpass = np.abs(gap - gm) <= n_sigma_global * gs
         lpass = np.zeros(len(gap), dtype=bool)          # stage 2: RT-local
         if gpass.sum() >= max(4 * n_rt_bins, 40):
