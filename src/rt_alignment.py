@@ -1887,21 +1887,28 @@ def _hwhm_mode_sigma(v):
     """Fit-free mode + HWHM-derived sigma (sigma = HWHM / 1.1774) of a 1-D sample.
 
     Reads the width off the smoothed-histogram half-max crossings, so it ignores the
-    tails / contamination (no curve fit, no truncation bias)."""
+    tails / contamination (no curve fit, no truncation bias).
+
+    The mode (peak location) is taken from a HEAVILY smoothed histogram (sigma=3) so a
+    narrow contaminant spike cannot out-top the broad genuine hump (argmax rewards peak
+    height, not mass); the WIDTH is then measured on a LIGHTLY smoothed histogram
+    (sigma=1.5) around that location, so the heavy smoothing does not inflate sigma and
+    widen the gate. The two are deliberately decoupled."""
     v = np.asarray(v, dtype=float)
     v = v[np.isfinite(v)]
     hi = np.percentile(v, 99)
     h, e = np.histogram(v[v <= hi], bins=120)
     c = 0.5 * (e[:-1] + e[1:])
-    hs = gaussian_filter(h.astype(float), 1.5)
-    pk = int(np.argmax(hs))
+    hs_mode = gaussian_filter(h.astype(float), 3.0)    # locate peak (robust to spikes)
+    hs_width = gaussian_filter(h.astype(float), 1.5)   # measure HWHM (tight, faithful)
+    pk = int(np.argmax(hs_mode))
     mode = float(c[pk])
-    half = hs[pk] / 2.0
+    half = hs_width[pk] / 2.0
     li = pk
-    while li > 0 and hs[li] > half:
+    while li > 0 and hs_width[li] > half:
         li -= 1
     ri = pk
-    while ri < len(hs) - 1 and hs[ri] > half:
+    while ri < len(hs_width) - 1 and hs_width[ri] > half:
         ri += 1
     sigma = max(min(mode - c[li], c[ri] - mode) / 1.1774, 1e-3)
     return mode, sigma
