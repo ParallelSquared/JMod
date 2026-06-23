@@ -909,24 +909,49 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
         feat = 'mz_error'
         func = np.array#np.log10#
+
+        plot_vals = fdc.loc[fdc[feat] != -1, feat]
+        n_unmatched = (fdc[feat] == -1).sum()
+        n_matched = (fdc[feat] != -1).sum()
+        n_total = n_unmatched + n_matched
+
         plt.subplots()
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
+        # vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
+        # # plt.hist([],[])
+        # vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
+        # vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low scoring")
+        # vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
+
+        vals,bins,_ = plt.hist(func([i for i in plot_vals]),40,label="All")
         # plt.hist([],[])
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low scoring")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
+        vals,bins,_ = plt.hist(func([i for i in plot_vals[above_t]]),bins,alpha=.5,label="1%FDR")
+        vals,bins,_ = plt.hist(func([i for i in plot_vals[np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low scoring")
+        vals,bins,_ = plt.hist(func([i for i in plot_vals[fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
 
         # putting a xlim so that you can see entire distribution of the mz errors better
-        xmin, xmax = plt.xlim()
-        max_abs = max(abs(xmin), abs(xmax))
-        plt.xlim(-max_abs, max_abs)
+        # xmin, xmax = plt.xlim()
+        # max_abs = max(abs(xmin), abs(xmax))
+        # plt.xlim(-max_abs, max_abs)
 
-        plt.xlabel(feat)
+        def human_fmt(n):
+            if n >= 1e6:
+                return f'{n/1e6:.3f}M'
+            if n >= 1e3:
+                return f'{n/1e3:.1f}K'
+            return str(n)
+
+        plt.title(
+            f'{human_fmt(n_matched)} / {human_fmt(n_total)} Precursors have MS1 Error'
+        )
+
         plt.ylabel("Frequency")
+        plt.xlabel('Absolute MS1 Error')
+        # plt.xlabel(feat)
         # plt.title(model_name+ f" - Type {config.args.unmatched}")
-        plt.title(model_name)
+        # plt.title(model_name)
         plt.legend()
-        plt.savefig(folder+"/scoring/mz_error.png",dpi=600,bbox_inches="tight")
+        plt.margins(x=0)
+        plt.savefig(folder+"/scoring/ms1_error.png",dpi=600,bbox_inches="tight")
 
         plt.close()
         plt.close("all")
