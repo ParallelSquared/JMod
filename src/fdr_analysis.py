@@ -1218,6 +1218,21 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     for col in corr_features.columns:
         fdc[col] = corr_features[col].values
 
+    # Cross-channel RT-residual consistency feature: SD of the per-PSM RT residual
+    # (rt_error = observed - predicted) for each peptide, pooled across ALL timeplex
+    # channels AND charge states (group = tag-stripped sequence). A peptide seen
+    # consistently across channels/charges has a tight residual spread (small SD); a
+    # spurious ID scatters. Grouped by is_decoy as well so targets and decoys never mix.
+    # Guard: groups with < 2 finite residuals can't have a dispersion -> sentinel -1.
+    if "untag_seq" in fdc.columns and "rt_error" in fdc.columns:
+        _grp = fdc.groupby(["untag_seq", "is_decoy"])["rt_error"]
+        _sd = _grp.transform("std")              # ddof=1; NaN for n<2, skips NaN residuals
+        _n = _grp.transform("count")             # count of finite residuals in the group
+        fdc["rt_resid_xchannel_sd"] = np.where(_n.to_numpy() >= 2,
+                                               _sd.to_numpy(), -1.0)
+    else:
+        fdc["rt_resid_xchannel_sd"] = -1.0
+
     fdx = score_precursors(fdc.reset_index(drop=True), config.score_model, config.fdr_threshold, folder=results_folder)
 
     fdx['PredVal'] = fdx['PredVal'].fillna(0)
