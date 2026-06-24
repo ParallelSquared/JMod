@@ -943,7 +943,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
             return str(n)
 
         plt.title(
-            f'{human_fmt(n_matched)} / {human_fmt(n_total)} Precursors have MS1 Error'
+            f'{human_fmt(n_matched)} / {human_fmt(n_total)} Precursors have an MS1 Error'
         )
 
         plt.ylabel("Frequency")
