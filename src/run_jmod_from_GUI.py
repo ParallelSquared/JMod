@@ -1349,17 +1349,13 @@ class JModGUI(ThemedTk):
     def get_tmp_filenames(self):
         """
         1) Error checking: mzml_and_lib_error_check
-        2) Error checking: test_long_paths
-        3) Get list of JSON to be ran with prepare_to_run
+        2) Get list of JSON to be ran with prepare_to_run
 
         called by: Run Button, also add to queue
         """
         if not self.mzml_and_lib_error_check():
             return []
 
-        if not self.test_long_paths():
-            return []
-            
         tmp_filenames = self.prepare_to_run()
         return tmp_filenames
 
@@ -1438,32 +1434,6 @@ class JModGUI(ThemedTk):
             return False
         return True
     
-    def test_long_paths(self): ##test if long paths break system
-        try:
-            long_name = "a" * 250 + ".txt"
-            test_path = os.path.join(tempfile.gettempdir(), long_name)
-            with open(test_path, "w") as f:
-                f.write("test")
-            os.remove(test_path)
-            return True
-        except FileNotFoundError as e:
-            if "[WinError 3]" in str(e) or "[Errno 2]" in str(e) or "[WinError 206]" in str(e):
-                ask_exit = tk.messagebox.askyesno("Path Limit Warning.", r"Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
-                if ask_exit:
-                    logging.getLogger("GUI").info("JMod Exited")
-                    return False
-                else:
-                    # logger.warning("Long Paths Enabled. Downstream processes may break")
-                    logging.getLogger("GUI").warning("Long Paths Enabled. Downstream processes may break")
-                    return True
-            else:
-                logging.getLogger("GUI").warning(f"Long path test failed with unknown FileNotFoundError:\n{e}")
-                tk.messagebox.showwarning("Path Test Warning", f"Long path test failed with unknown FileNotFoundError:\n{e}")
-                return False
-        except Exception as e:
-            logging.getLogger("GUI").warning(f"Long path test failed with unknown error:\n{e}")
-            tk.messagebox.showwarning("Path Test Warning", f"Long path test failed with unknown error:\n{e}")
-            return False
 
         
     def make_config_dict(self, mzml_path=None, run=True):
