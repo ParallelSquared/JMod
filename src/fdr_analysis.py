@@ -910,7 +910,9 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         feat = 'mz_error'
         func = np.array#np.log10#
 
+        valid = fdc[feat] != -1
         plot_vals = fdc.loc[fdc[feat] != -1, feat]
+
         n_unmatched = (fdc[feat] == -1).sum()
         n_matched = (fdc[feat] != -1).sum()
         n_total = n_unmatched + n_matched
@@ -924,9 +926,9 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
         vals,bins,_ = plt.hist(func([i for i in plot_vals]),40,label="All")
         # plt.hist([],[])
-        vals,bins,_ = plt.hist(func([i for i in plot_vals[above_t]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in plot_vals[np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low scoring")
-        vals,bins,_ = plt.hist(func([i for i in plot_vals[fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
+        vals,bins,_ = plt.hist(func([i for i in plot_vals[above_t[valid]]]),bins,alpha=.5,label="1%FDR")
+        vals,bins,_ = plt.hist(func([i for i in plot_vals[np.logical_and(~above_t[valid],~fdc.is_decoy[valid])]]),bins,alpha=.5,label="Low scoring")
+        vals,bins,_ = plt.hist(func([i for i in plot_vals[fdc.is_decoy[valid]]]),bins,alpha=.5,label="Decoy")
 
         # putting a xlim so that you can see entire distribution of the mz errors better
         # xmin, xmax = plt.xlim()
