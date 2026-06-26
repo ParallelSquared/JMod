@@ -16,7 +16,7 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 
 ###
 ## Table of Contents
-- [Setting up JMod](#environment-setup)
+- [Setting up JMod](#setting-up-jmod)
   - [Windows Batch Script](#setting-up-jmod-with-windows-gui-batch-script)
   - [Command Line Setup](#setting-up-a-jmod-uv-environment-via-the-command-line)
 - [Running a Search](#running-a-search)
@@ -48,7 +48,11 @@ This `.bat` executable is only compatible with Windows computers. If your comput
 
 1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
 
-2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, please install UV with either ```pip install uv``` or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. 
+2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, run the following command:
+
+    ```pip install uv``` 
+ 
+    or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. 
 
 3. Open a new terminal and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: 
 
