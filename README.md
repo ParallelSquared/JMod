@@ -22,7 +22,7 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
   - [Library Structure](#library-structure)
-  - [Graphic User Interface (GUI)](#running-jmod-with-the-graphic-user-interface-gui)
+  - [Graphical User Interface (GUI)](#running-jmod-with-the-graphical-user-interface-gui)
   - [Command Line Interface (CLI)](#running-jmod-with-the-command-line-interface-cli)
 - [Output Files](#output-files)
 
@@ -50,10 +50,10 @@ This `.bat` executable is only compatible with Windows computers. If your comput
 
 2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, please install UV with either ```pip install uv``` or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. 
 
-3. Open a new terminal window and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: ```uv sync --python 3.11```
+3. Open a new terminal and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: 
 
-      - You may get an error saying ```libomp``` is not installed. This is a MacOS native file that ```xgboost``` requires to run. Please install this with the homebrew command ```brew install libomp```. If you do not have homebrew installed, you can install it with the following command: ```/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"```. After running, please restart the terminal window and run ```uv sync --python 3.11``` again.
-    
+    ```uv sync --python 3.11```
+
 
 4. Use the command ```source .venv/bin/activate``` to activate the UV environment. You should see the environment name (JMod-Main) appear at the beginning of the terminal prompt.
     - If you are on a Windows computer, run ```.venv/Scripts/activate``` to activate the UV environment.
@@ -72,14 +72,14 @@ JMod currently supports `.mzML` files. Direct support for `.d` and `.raw` files 
 ###
 ### Library Structure  
 
-JMod requires specific library columns in a .tsv for searches to run successfully. An example library with the required columns can be found [here](/data/filtered_library.tsv).
+ An example library with the required columns can be found [here](/data/filtered_library.tsv).
 
 <!-- TODO: Image of the library headings (?) or something similar -->
 
 ###
-### Running JMod with the Graphic User Interface (GUI)
+### Running JMod with the Graphical User Interface (GUI)
 
-JMod can be run through a GUI. To launch the GUI, use:
+To launch the GUI, use:
 
 ```
 python path/to/run_jmod_from_GUI.py 
@@ -94,7 +94,7 @@ More detailed instructions on how to run JMod from the GUI can be found
 
 JMod can be run through the command line with various search parameters. An example command is shown below:
 ```
-uv run python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
+python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
 ```
 
 Some commonly used search parameters are listed below. A more extensive list of commands can be found [here](/Help/commands.pdf).
@@ -141,11 +141,23 @@ Some commonly used search parameters are listed below. A more extensive list of 
 
 
 ####
-JMod can also be run with a preset configuration file. That configuration file will include the path to the raw file and the library alongside other preset search parameters. An example configuration can be found in ```data/default_config.json```, and a sample command can be found here:
+JMod can also be run using a configuration file. Each JMod search produces its own configuration file which can be used to initialize other searches. An example configuration can be found in ```data/default_config.json```, and a sample command can be found here:
 
 ```
 python path/to/run_jmod.py --config_json path/to/config.json
 ```
+
+
+<details>
+<summary><strong> Sample Demo Data </strong></summary>
+
+We have provided a small .mzML file and a small library to run a quick JMod search to check all dependencies and environment variables are working properly. The raw file and library can be found in data/test_mode_filtered.mzML and data/filtered_library.tsv respectively. This quick search can be run on the command line with the following command:
+
+```
+python path/to/run_jmod.py -i path/to/data/test_mode_filtered.mzML -l path/to/data/filtered_library.tsv
+```
+
+</details>
 
 
 ###
@@ -157,15 +169,20 @@ JMod produces multiple output files. Below is a brief description of the main ou
 
 - ```filtered_IDs.parquet```: IDs filtered at 1% FDR with select columns
 - ```filtered_IDs.csv```: IDs filtered at 1% FDR with extended columns
-- ```config.json```: Configuration file for this current search. If the search ever needs to be repeated, this configuration file can be used in lieu of inputting all search parameters again
-- ```Log.log```: Log of the search. If there are any errors or warnings during the search, they will be printed out here
-- ```Summary.log```: Log showing summary statistics of precursor & protein identification
+- ```config.json```: Configuration file for this current search
+- ```Log.log```: Log of the search
+- ```Summary.txt```: Summary of precursor & protein identifications
 
 ####
 
 ```text
 search_results_directory
 
+├── filtered_IDs.parquet
+├── filtered_IDs.csv
+├── config.json
+├── Log.log
+├── Summary.txt
 ├── first_search/
 │   └── firstSearch.tsv
 ├── outputs/
@@ -174,12 +191,8 @@ search_results_directory
 │   ├── decoylibsearch_coeffs.parquet
 │   └── params.txt
 ├── scoring/
-├── filtered_IDs.parquet
-├── filtered_IDs.csv
-├── config.json
-├── Log.log
-└── Summary.txt
+└────── [scoring_plots].png
+
 ```
 
 
-<!-- TODO: config moved out of outputs + called filtered_IDs.parquet -->
