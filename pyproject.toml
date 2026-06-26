@@ -84,6 +84,7 @@ deps = [
 
   # Testing
   "pytest",
+  "pytest-cov"
 ]
 dev = [
     "pyside6<6.8",
