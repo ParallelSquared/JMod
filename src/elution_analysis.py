@@ -4,7 +4,6 @@ Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
 at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 """
 
-import re
 from collections import defaultdict
 
 import numpy as np
@@ -15,23 +14,6 @@ from scipy.optimize import curve_fit
 def _gaussian(x: np.ndarray, amplitude: float, mu: float, sigma: float) -> np.ndarray:
     """Gaussian function for curve fitting."""
     return amplitude * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
-
-
-def _create_modified_peptide_id(stripped_seq: str, modifications: str) -> str:
-    """
-    Create a unique identifier for modified peptides.
-
-    Args:
-        stripped_seq: Bare peptide sequence without modifications
-        modifications: String representation of modification masses
-
-    Returns:
-        Unique identifier combining sequence and rounded modification masses
-    """
-    mod_str = str(modifications).replace('\n', ' ').replace('  ', ' ')
-    masses = re.findall(r'[-+]?\d*\.?\d+', mod_str)
-    rounded_masses = tuple(round(float(m), 2) for m in masses if float(m) != 0)
-    return f"{stripped_seq}_{rounded_masses}"
 
 
 def _find_adjacent_clusters(
@@ -80,23 +62,41 @@ def _compute_scan_gap_mode(df: pl.DataFrame) -> int:
     """
     Compute the mode of scan gaps between consecutive PSMs for the same peptide.
 
-    This automatically detects the MS duty cycle.
+    This automatically detects the MS duty cycle. When IM-binned data produces
+    many scans at the same RT, duplicates are collapsed per unique RT first so
+    that the gap reflects the true RT-cycle spacing.
 
     Args:
-        df: DataFrame with columns: file_id, scan, mod_peptide
+        df: DataFrame with columns: file_id, scan, rt, seq
 
     Returns:
         Mode of scan gap distribution (the MS duty cycle)
     """
     all_gaps: list[int] = []
 
-    # Group by file_id and mod_peptide
-    grouped = df.group_by(['file_id', 'mod_peptide']).agg([
-        pl.col('scan').sort()
+    # Group by file_id and seq, collecting both scan and rt
+    grouped = df.group_by(['file_id', 'seq']).agg([
+        pl.col('scan').sort(),
+        pl.col('rt'),
     ])
 
     for row in grouped.iter_rows(named=True):
-        scans = row['scan']
+        scans = np.array(row['scan'])
+        rts = np.array(row['rt'])
+
+        if len(scans) < 2:
+            continue
+
+        # Sort by scan number
+        order = np.argsort(scans)
+        scans = scans[order]
+        rts = rts[order]
+
+        # Deduplicate by unique RT (collapse IM-bin duplicates at the same RT)
+        _, unique_idx = np.unique(rts, return_index=True)
+        unique_idx.sort()
+        scans = scans[unique_idx]
+
         if len(scans) < 2:
             continue
 
@@ -121,20 +121,17 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float, pl.DataFram
 
     This function:
     1. Extracts scan numbers from spec_name
-    2. Creates modified peptide identifiers
-    3. Auto-detects the MS duty cycle (scan gap mode)
-    4. Clusters adjacent scans for each peptide
-    5. Centers and overlays all RT profiles (intensity-weighted)
-    6. Fits a Gaussian to compute FWHM and sigma
-    7. Adds cluster_size column to the dataframe
+    2. Auto-detects the MS duty cycle (scan gap mode)
+    3. Clusters adjacent scans for each peptide
+    4. Centers and overlays all RT profiles (intensity-weighted)
+    5. Fits a Gaussian to compute FWHM and sigma
+    6. Adds cluster_size column to the dataframe
 
     Args:
         df: Polars DataFrame with columns:
             - file_id: MS run identifier
             - spec_name: Spectrum name containing 'scan=N'
             - rt: Retention time in minutes
-            - stripped_seq: Peptide sequence without modifications
-            - modifications: Modification masses string
             - z: Charge state
             - seq: Modified peptide sequence
             - closest_peak_intensity_ms1: MS1 intensity for weighting
@@ -145,36 +142,25 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float, pl.DataFram
     Raises:
         ValueError: If required columns are missing or no valid clusters found
     """
-    required_cols = {'file_id', 'spec_name', 'rt', 'stripped_seq', 'modifications', 'z', 'seq', 'closest_peak_intensity_ms1'}
+    required_cols = {'file_id', 'spec_name', 'rt', 'z', 'seq', 'closest_peak_intensity_ms1'}
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
 
-    # Step 1: Extract scan numbers from spec_name
+    # Extract scan numbers from spec_name
     df = df.with_columns(
         pl.col('spec_name').str.extract(r'scan=(\d+)', 1).cast(pl.Int64).alias('scan')
     )
 
     # Drop rows with missing values
-    df = df.drop_nulls(subset=['scan', 'rt', 'stripped_seq'])
+    df = df.drop_nulls(subset=['scan', 'rt', 'seq'])
 
     if df.height == 0:
         raise ValueError("No valid PSMs after filtering")
 
-    # Step 2: Create modified peptide identifiers
-    # Convert to Python for the UDF
-    mod_peptide_ids = [
-        _create_modified_peptide_id(seq, mods)
-        for seq, mods in zip(
-            df['stripped_seq'].to_list(),
-            df['modifications'].to_list()
-        )
-    ]
-    df = df.with_columns(pl.Series('mod_peptide', mod_peptide_ids))
-
-    # Step 3: Compute scan gap mode (auto-detect MS duty cycle)
+    # Compute scan gap mode (auto-detect MS duty cycle)
     scan_gap_mode = _compute_scan_gap_mode(df)
-    max_scan_gap = scan_gap_mode + 1  # Double the duty cycle to tolerate missing a scan
+    max_scan_gap = scan_gap_mode + 1 # extra scan just in case
 
     # Step 4 & 5: Cluster adjacent scans and collect centered RTs
     centered_rts: list[float] = []
@@ -191,10 +177,26 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float, pl.DataFram
     ])
 
     for row in grouped.iter_rows(named=True):
-        scans = row['scan']
-        rts = row['rt']
-        intensities = row['closest_peak_intensity_ms1']
+        scans = np.array(row['scan'])
+        rts = np.array(row['rt'])
+        intensities = np.array(row['closest_peak_intensity_ms1'])
         key = (row['seq'], row['z'])
+
+        # Collapse IM-bin duplicates: keep highest intensity per unique RT
+        unique_rts_vals, inv = np.unique(rts, return_inverse=True)
+        if len(unique_rts_vals) < len(rts):
+            # Multiple scans at same RT (IM bins) — pick best intensity per RT
+            best_scans = np.empty(len(unique_rts_vals), dtype=scans.dtype)
+            best_ints = np.full(len(unique_rts_vals), -np.inf)
+            best_rts = unique_rts_vals
+            for j in range(len(scans)):
+                uid = inv[j]
+                if intensities[j] > best_ints[uid]:
+                    best_ints[uid] = intensities[j]
+                    best_scans[uid] = scans[j]
+            scans = best_scans
+            rts = best_rts
+            intensities = best_ints
 
         if len(scans) < 2:
             cluster_sizes[key] = max(cluster_sizes.get(key, 0), 1)
@@ -249,6 +251,80 @@ def calculate_elution_width(df: pl.DataFrame) -> tuple[float, float, pl.DataFram
     )
 
     return fwhm, sigma, df
+
+
+def collapse_to_cluster_apices(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Collapse each peptide's per-spectrum PSMs into one apex row per elution.
+
+    Uses the same adjacent-scan clustering as :func:`calculate_elution_width`,
+    but instead of keeping only the largest cluster it emits one representative
+    row per cluster: the highest-MS1-intensity PSM in that cluster (the apex).
+
+    A peptide eluting N times (e.g. once per timeplex window) therefore yields N
+    rows — one per elution — which is the "multiple RT entries per (seq, z)"
+    structure the timeplex aligner expects. peppy_sage's first search produces a
+    cluster of consecutive-scan matches per elution rather than a single row, so
+    this step reconstructs that structure before ``get_multiples``.
+
+    Args:
+        df: Polars DataFrame with columns: file_id, spec_name, rt, z, seq,
+            closest_peak_intensity_ms1 (the peppy_sage first-search output).
+
+    Returns:
+        Polars DataFrame containing a subset of ``df``'s rows (one apex per
+        elution cluster), with all original columns preserved.
+    """
+    required_cols = {'file_id', 'spec_name', 'rt', 'z', 'seq', 'closest_peak_intensity_ms1'}
+    missing_cols = required_cols - set(df.columns)
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+
+    # Extract scan numbers and tag each row so clusters can be mapped back.
+    df = df.with_columns(
+        pl.col('spec_name').str.extract(r'scan=(\d+)', 1).cast(pl.Int64).alias('scan')
+    )
+    df = df.drop_nulls(subset=['scan', 'rt', 'seq'])
+    df = df.with_row_index('__row')
+
+    if df.height == 0:
+        return df.drop(['scan', '__row'])
+
+    max_scan_gap = _compute_scan_gap_mode(df) + 1  # extra scan just in case
+
+    grouped = df.group_by(['file_id', 'seq', 'z']).agg([
+        pl.col('scan'),
+        pl.col('rt'),
+        pl.col('closest_peak_intensity_ms1'),
+        pl.col('__row'),
+    ])
+
+    apex_rows: list[int] = []
+    for row in grouped.iter_rows(named=True):
+        scans = np.array(row['scan'])
+        rts = np.array(row['rt'])
+        intensities = np.array(row['closest_peak_intensity_ms1'])
+        rows = np.array(row['__row'])
+
+        if len(scans) == 1:
+            apex_rows.append(int(rows[0]))
+            continue
+
+        # Highest-intensity source row per scan (collapses IM-bin duplicates),
+        # used to map each cluster back to a single apex row.
+        best_row_for_scan: dict[int, int] = {}
+        best_int_for_scan: dict[int, float] = {}
+        for s, i, r in zip(scans, intensities, rows):
+            if s not in best_int_for_scan or i > best_int_for_scan[s]:
+                best_int_for_scan[s] = i
+                best_row_for_scan[s] = int(r)
+
+        clusters = _find_adjacent_clusters(list(zip(scans, rts)), max_scan_gap)
+        for cluster in clusters:
+            apex_scan = max((s for s, _ in cluster), key=lambda s: best_int_for_scan[s])
+            apex_rows.append(best_row_for_scan[apex_scan])
+
+    return df.filter(pl.col('__row').is_in(apex_rows)).drop(['scan', '__row'])
 
 
 if __name__ == '__main__':

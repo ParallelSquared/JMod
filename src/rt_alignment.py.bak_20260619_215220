@@ -1795,150 +1795,6 @@ def _relax_channels(x, y, shape, offsets, d, wiggle=RIDGE_WIGGLE):
     return rt_spls
 
 
-# --- timeplex independent per-channel fit knobs ---
-# These govern the *preliminary* RT fit only (the anchors used to fit the per-channel
-# curves and to fine-tune the CNN), never the final main-search IDs, so they are
-# deliberately strict: cleaner anchors -> better-centred per-channel curves -> a
-# correctly placed main-search RT window.
-RIDGE_SCRIBE_PCT = 50      # per-channel anchor scribe gate: keep the top (100-this)%
-RIDGE_RESID_NMAD = 3.0     # robust residual trim around each channel's own curve (xMAD)
-RIDGE_REFINE_ITERS = 2     # iterative trim+refit passes
-RIDGE_MIN_PTS = 25         # below this, fall back to the shared shape rather than fit
-RIDGE_CORROB_MIN_CH = 0    # preliminary FP filter: min time channels a precursor must corroborate in.
-                           # 0 = require ALL channels ("n hits for n-timeplex", cleanest); set >0 (e.g. 2) to relax to >=N-of-K.
-
-
-def _indep_curve(xk, yk, fallback_curve, xg):
-    """Fit an independent modal-LOESS over one channel's points; fall back to the
-    supplied curve (shared shape + that channel's offset) wherever there is too
-    little data to fit."""
-    xk = np.asarray(xk, float); yk = np.asarray(yk, float)
-    if xk.size >= RIDGE_MIN_PTS:
-        res = min(150, int(xk.size))
-        return fast_modal_lowess(xk, yk, local_frac=0.02, anchors=res,
-                                 grid_size=res, post_smooth_frac=max(0.01, 5 / res))
-    return interp1d(xg, fallback_curve, bounds_error=False,
-                    fill_value=(fallback_curve[0], fallback_curve[-1]))
-
-
-def _blended_curve(itp, shared_shape, offset, lo, hi):
-    """Per-channel iRT->RT curve: the density-blended independent fit *inside* the
-    fitted grid [lo, hi], falling back to the pooled shared_shape+offset *outside*
-    it. shared_shape is monotone and clamps to its endpoints, so the tails plateau
-    instead of a lone per-channel LOESS extrapolating several minutes off-band."""
-    def f(r):
-        r = np.asarray(r, float)
-        inb = (r >= lo) & (r <= hi)
-        return np.where(inb, itp(r), np.asarray(shared_shape(r)) + offset)
-    return f
-
-
-def _fit_channels_independent(x, y, seq, scribe, shared_shape, offsets, d):
-    """
-    Fit each timeplex channel its OWN iRT->RT curve -- independent shape AND offset --
-    rather than one shared shape shifted by equal offsets (the old _relax_channels,
-    which soft-clamped every channel to +-0.30*d of a common curve and so could not
-    follow an unequal channel gap; that is what left T0 riding the top edge of its
-    band when the true T0->T1 gap is wider than T1->T2).
-
-    Channel identity for the fit anchors comes from n-hit corroboration: a precursor
-    whose stripped sequence is seen in all K channels with agreeing de-offset RTs
-    contributes one labelled point per channel (the split_timePlex idea), so we *know*
-    which elution belongs to which channel instead of trusting density alone. The
-    anchors are then strictly filtered (scribe gate + robust residual trim) -- they
-    only seed the fit, not the final IDs, so we can afford to be aggressive. A second
-    pass folds the remaining in-band points of each channel back in to restore density.
-    """
-    K = len(offsets)
-    x = np.asarray(x, float); y = np.asarray(y, float)
-    seq = np.asarray(seq); scribe = np.asarray(scribe, float)
-    xg = np.linspace(float(x.min()), float(x.max()), 500)
-    base = np.asarray(shared_shape(xg))
-
-    # nearest-anchor assignment (anchor = shared shape + per-channel data offset),
-    # gated at half the *smallest* channel gap so a point can never cross into a
-    # neighbouring channel.
-    shape_x = np.asarray(shared_shape(x))
-    anchor = shape_x[None, :] + offsets[:, None]              # (K, N)
-    assign = np.argmin(np.abs(y[None, :] - anchor), axis=0)
-    within = np.abs(y - (shape_x + offsets[assign])) <= 0.5 * d
-
-    # --- n-hit corroborated backbone: stripped_seq present in ALL K channels (>=1
-    # elution each), with one best-scribe representative per channel whose de-offset
-    # RTs agree -- a genuine precursor split across the timeplex offsets. Extra
-    # elutions in a channel are allowed (we just take the cleanest), matching the CNN
-    # fine-tuning's completeness rule so the empirical and fine-tuned anchors agree. ---
-    by_seq = {}
-    for i in np.where(within)[0]:
-        by_seq.setdefault(seq[i], []).append(i)
-    labelled = [[] for _ in range(K)]
-    n_corrob = 0
-    de_tol = min(1.0, 0.5 * d)
-    for s, idxs in by_seq.items():
-        idxs = np.asarray(idxs)
-        chans = assign[idxs]
-        if len(set(chans.tolist())) != K:                    # must hit every channel
-            continue
-        reps = [idxs[chans == k][np.argmax(scribe[idxs[chans == k]])] for k in range(K)]
-        de = np.array([y[reps[k]] - offsets[k] for k in range(K)])
-        if np.ptp(de) < de_tol:                              # de-offset RTs agree -> real
-            n_corrob += 1
-            for k in range(K):
-                labelled[k].append(int(reps[k]))
-    logger.info(f"Ridge fit: {n_corrob} n-hit corroborated precursors "
-                f"(seen in all {K} channels, |dRT|<{de_tol:.2f} min)")
-
-    rt_spls = []
-    for k in range(K):
-        fb_y = base + offsets[k]                             # pooled shape + this channel's offset
-        prim = np.array(labelled[k], dtype=int)
-        pool = np.where((assign == k) & within)[0]
-        idx0 = prim if prim.size >= RIDGE_MIN_PTS else pool  # n-hit backbone, else all assigned
-        xk, yk, sk = x[idx0], y[idx0], scribe[idx0]
-        # strict scribe gate on the anchor set
-        if sk.size and np.ptp(sk) > 0:
-            g = sk >= np.percentile(sk, RIDGE_SCRIBE_PCT)
-            if g.sum() >= RIDGE_MIN_PTS:
-                xk, yk = xk[g], yk[g]
-        # independent fit + iterative robust residual trim (own curve)
-        curve = _indep_curve(xk, yk, fb_y, xg)
-        for _ in range(RIDGE_REFINE_ITERS):
-            r = yk - np.asarray(curve(xk))
-            med = np.median(r); mad = np.median(np.abs(r - med)) * 1.4826
-            keep = np.abs(r - med) <= RIDGE_RESID_NMAD * max(mad, 1e-3)
-            if keep.sum() < RIDGE_MIN_PTS:
-                break
-            xk, yk = xk[keep], yk[keep]
-            curve = _indep_curve(xk, yk, fb_y, xg)
-        # second pass: fold this channel's remaining in-band points back in for density
-        r_all = y - np.asarray(curve(x))
-        med = np.median(r_all[idx0])
-        mad = np.median(np.abs(r_all[idx0] - med)) * 1.4826
-        band = RIDGE_RESID_NMAD * max(mad, 1e-3)
-        add = (assign == k) & within & (np.abs(r_all - med) <= band)
-        if add.sum() >= RIDGE_MIN_PTS:
-            fit_x, fit_y = x[add], y[add]
-        else:
-            fit_x, fit_y = xk, yk
-        indep_y = np.asarray(_indep_curve(fit_x, fit_y, fb_y, xg)(xg))
-        # --- density taper: trust the per-channel curve only where THIS channel
-        # actually has points; blend back to the pooled shared shape (monotone,
-        # plateauing) in the sparse high/low-RT tails, where a lone per-channel LOESS
-        # + linear extrapolation otherwise overshoots the band by several minutes. ---
-        cnt, edges = np.histogram(fit_x, bins=120, range=(float(xg[0]), float(xg[-1])))
-        centers = 0.5 * (edges[:-1] + edges[1:])
-        cnt = gaussian_filter(cnt.astype(float), sigma=2.0)
-        ref = np.percentile(cnt[cnt > 0], 60) if np.any(cnt > 0) else 1.0
-        w = np.interp(xg, centers, np.clip(cnt / max(ref, 1e-9), 0.0, 1.0))
-        blend = w * indep_y + (1.0 - w) * fb_y
-        itp = interp1d(xg, blend, bounds_error=False, fill_value=(blend[0], blend[-1]))
-        rt_spls.append(_blended_curve(itp, shared_shape, float(offsets[k]),
-                                      float(xg[0]), float(xg[-1])))
-        logger.info(f"Ridge channel {k} (independent): {int(prim.size)} n-hit anchors, "
-                    f"{int(add.sum())} fit pts, tail->shared, offset~{offsets[k]:.3f}")
-    return rt_spls
-
-
 def _timeplex_scribe_filter(output_df, results_folder=None):
     """
     Scribe-score percentile sweep for the timeplex first search — a standalone
@@ -2069,7 +1925,6 @@ def fit_timeplex_ridges(output_df, n_timeplex, results_folder=None):
     # scribe-only so the channel structure is preserved for ridge tracking ---
     cor_filter = _timeplex_scribe_filter(output_df, results_folder)
     kept = output_df.loc[cor_filter].reset_index(drop=True)
-    src_pos = np.where(np.asarray(cor_filter))[0]   # kept rows' positions back in output_df
     x = kept["lib_rt"].to_numpy(dtype=float)
     y = kept["rt"].to_numpy(dtype=float)
     logger.info(f"Ridge tracker: {len(kept)} IDs after scribe filtering")
@@ -2207,69 +2062,32 @@ def fit_timeplex_ridges(output_df, n_timeplex, results_folder=None):
         shared_shape = interp1d(shape_sm[:, 0], shape_sm[:, 1], bounds_error=False,
                                 fill_value=(shape_sm[0, 1], shape_sm[-1, 1]))
 
-        # --- per-channel offsets straight from the data (NO equal-spacing): each
-        # channel's own median residual to the shared shape. Recovers unequal channel
-        # gaps (e.g. a wider T0->T1 than T1->T2) that the old base+k*d forced to be
-        # identical, which mis-centred the outer channels. d is now kept only as the
-        # *smallest* gap -- used for the half-gap assignment guard and the no-overlap
-        # tolerance cap downstream, not to place the channels. ---
-        per_off = np.array([
+        # --- equal-spacing offsets: offset[k] = base + k*d, d fixed to global ---
+        order_k = np.argsort([
             np.median([v - float(shared_shape(xi)) for (xi, v) in tracks[k]])
             if tracks[k] else rel[k] for k in range(K)])
-        offsets = np.sort(per_off)                          # ascending, data-driven
-        d = float(np.min(np.diff(offsets)))                 # smallest actual channel gap
-        logger.info(f"Ridge tracker: data-driven offsets={np.round(offsets,4)}, "
-                    f"gaps={np.round(np.diff(offsets),4)} (min gap d={d:.4f})")
+        kk, rr = [], []
+        for ki, k in enumerate(order_k):
+            for (xi, val) in tracks[k]:
+                kk.append(ki); rr.append(val - float(shared_shape(xi)))
+        kk = np.asarray(kk, float); rr = np.asarray(rr, float)
+        base_off = float(np.mean(rr - d * kk))
+        offsets = base_off + d * np.arange(K)
+        logger.info(f"Ridge tracker: offsets={np.round(offsets,4)}, "
+                    f"gaps={np.round(np.diff(offsets),4)}")
 
-    # --- per-channel curves: each channel fit INDEPENDENTLY (own shape + own offset),
-    # anchored on n-hit corroborated precursors and strictly filtered ---
+    # --- per-channel curves: joint shape+offset, relaxed into local modes (wiggle) ---
     if K == 1:
         rt_spls = [make_spline(0.0)]
-        nearest = np.zeros(len(y), dtype=int)
-        residuals = y - np.asarray(shared_shape(x))
     else:
-        rt_spls = _fit_channels_independent(
-            x, y, kept["stripped_seq"].to_numpy(),
-            kept["scribe_score"].to_numpy(dtype=float),
-            shared_shape, offsets, d)
-        # per-PSM channel = nearest INDEPENDENT curve; residual to that own curve
-        # (feeds the GMM RT tolerance, so it now reflects true per-channel scatter).
-        pred_k = np.vstack([np.asarray(rt_spls[k](x)) for k in range(K)])   # (K, N)
-        resid_all = y[None, :] - pred_k
-        nearest = np.argmin(np.abs(resid_all), axis=0)
-        residuals = resid_all[nearest, np.arange(len(y))]
+        rt_spls = _relax_channels(x, y, shared_shape, offsets, d)
 
-    # --- false-positive filter: CHANNEL CORROBORATION (library-RT-independent) ---
-    # A genuine timeplex precursor elutes in multiple time channels at the fixed
-    # per-channel offsets, so after de-offsetting (obs_rt - offset[channel]) its
-    # elutions collapse onto one consensus RT. A first-search false positive (wrong
-    # peptide) does not replicate across channels at the right spacing. We keep the
-    # elutions of each stripped sequence that agree with that sequence's OWN consensus
-    # de-offset RT, provided they span >= RIDGE_CORROB_MIN_CH channels. This compares a
-    # precursor's elutions to EACH OTHER (via the offsets), never to the library-RT
-    # curve -- so a precursor whose library RT is mis-annotated is still kept as long
-    # as its own elutions corroborate. Preliminary set only (cleans the CNN anchors /
-    # 2nd alignment / plots); the main search re-finds everything under opt_rt_tol.
-    if K > 1:
-        seqs = kept["stripped_seq"].to_numpy()
-        deoff = y - offsets[nearest]                 # collapse each PSM onto the shared axis
-        de_tol = min(1.0, 0.5 * d)
-        min_ch = K if RIDGE_CORROB_MIN_CH <= 0 else min(RIDGE_CORROB_MIN_CH, K)
-        by_seq = {}
-        for i in range(len(seqs)):
-            by_seq.setdefault(seqs[i], []).append(i)
-        keep = np.zeros(len(y), dtype=bool)
-        for idxs in by_seq.values():
-            idxs = np.asarray(idxs)
-            agree = np.abs(deoff[idxs] - np.median(deoff[idxs])) < de_tol
-            if np.unique(nearest[idxs[agree]]).size >= min_ch:
-                keep[idxs[agree]] = True
-        logger.info(f"Channel-corroboration filter: kept {int(keep.sum())}/{len(keep)} "
-                    f"({100 * keep.mean():.1f}%) preliminary PSMs corroborated across "
-                    f">= {min_ch} of {K} time channels")
-        x, y, nearest, residuals = x[keep], y[keep], nearest[keep], residuals[keep]
-        src_pos = src_pos[keep]
-        kept = kept.loc[keep].reset_index(drop=True)
+    # --- per-PSM channel assignment (nearest ridge) + signed residual ---
+    shape_x = np.asarray(shared_shape(x))
+    ridge_vals = shape_x[None, :] + offsets[:, None]   # (K, N)
+    resid_all = y[None, :] - ridge_vals                # (K, N)
+    nearest = np.argmin(np.abs(resid_all), axis=0)     # (N,)
+    residuals = resid_all[nearest, np.arange(len(y))]  # signed residual to assigned ridge
 
     filtered_output = pd.DataFrame({
         "lib_rt": x,
@@ -2279,7 +2097,6 @@ def fit_timeplex_ridges(output_df, n_timeplex, results_folder=None):
         "mz_diffs": kept["relative_error_ms1"].to_numpy(dtype=float),
         "mz": kept["mz"].to_numpy(dtype=float),
         "scribe_score": kept["scribe_score"].to_numpy(dtype=float),
-        "src_idx": src_pos,                            # row position back in output_df
     })
 
     return rt_spls, shared_shape, offsets, d, filtered_output, residuals
@@ -2458,16 +2275,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     rts = np.array([updatedLibrary[(i[0],float(i[1]))]["iRT"] for i in id_keys])#np.array([i[0] for i in t_vals[0]])
     # rt_filter_bool = filter_rts_by_dense(rts,30)
     # rt_filter_bool = np.logical_and(rts>15,rts<30)
-    # Anchor the m/z calibration (f_rt_mz, mz_spl, mz_func) and the MS1 tolerance on the
-    # SAME all-n-channel corroborated PSMs that drove the RT fit -- not the weaker
-    # matched_lib_pct>90 proxy. filtered_output.src_idx carries those rows' positions in
-    # output_df. Falls back to the old proxy only if src_idx is missing.
-    if "src_idx" in filtered_output:
-        rt_mz_filter_bool = np.zeros(len(output_df), dtype=bool)
-        rt_mz_filter_bool[filtered_output["src_idx"].to_numpy()] = True
-        logger.info(f"m/z calibration on {int(rt_mz_filter_bool.sum())} channel-corroborated PSMs")
-    else:
-        rt_mz_filter_bool = np.array(output_df.matched_lib_pct)>90 # use as proxy for correct IDs
+    rt_mz_filter_bool = np.array(output_df.matched_lib_pct)>90 # use as proxy for correct IDs
     f_rt_mz = fast_modal_lowess(rts[rt_mz_filter_bool],np.array(diffs)[rt_mz_filter_bool],local_frac=.02,
                                anchors=1000,
                                grid_size=1000,

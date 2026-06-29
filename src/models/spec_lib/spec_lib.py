@@ -182,6 +182,9 @@ def load_tsv_speclib(spec_lib_file):
             if "IonMobility" in row:
                 if row["IonMobility"]!="":
                     python_lib[unique_id]["IonMob"] = float(row["IonMobility"]) 
+            elif "IM" in row:
+                if row["IM"]!="":
+                    python_lib[unique_id]["IonMob"] = float(row["IM"]) 
             
             ### Protein info
             if "ProteinGroup" in row:
@@ -268,53 +271,87 @@ def load_blib(spec_lib_file):
 
 
 def loadSpecLib(lib_file):
-    
+    from src.models.spec_lib.library_store import SpectrumLibraryStore
+
     lib_ext = lib_file.rsplit(".")[-1]
-    
+
     logger.info("Loading Library...")
-    python_lib_file = lib_file+"_pythonlib"
-    if not os.path.exists(python_lib_file):
-        logger.info("Loading Library... from file")
-        if lib_ext=="blib":
-            spec_lib = load_blib(lib_file)
-        else:
-            # spec_lib = load_tsv_lib(lib_file)
-            spec_lib = load_tsv_speclib(lib_file)
-        with open(python_lib_file,"wb") as write_file:
-            pickle.dump(spec_lib, write_file)
-    else:
+    store_file = lib_file + "_store.npz"
+    python_lib_file = lib_file + "_pythonlib"
+
+    if os.path.exists(store_file):
+        logger.info("Loading Library... from binary cache")
+        spec_lib = SpectrumLibraryStore.load(store_file)
+    elif os.path.exists(python_lib_file):
         logger.info("Loading Library... from pickle")
-        with open(python_lib_file,"rb") as read_file:
-            spec_lib = pickle.load(read_file)
-    
+        with open(python_lib_file, "rb") as read_file:
+            old_lib = pickle.load(read_file)
+        spec_lib = SpectrumLibraryStore.from_dict(old_lib)
+        spec_lib.save(store_file)
+    else:
+        logger.info("Loading Library... from file")
+        if lib_ext == "blib":
+            spec_lib = SpectrumLibraryStore.from_blib(lib_file)
+        else:
+            spec_lib = SpectrumLibraryStore.from_tsv(lib_file)
+        spec_lib.save(store_file)
+
     logger.info(f"Loaded {len(spec_lib)} library precursors")
     return spec_lib
 
 
 # TODO add a test for this, make sure decoys are being generated correctly
-def create_decoy_lib(library,rules,tag,n_iso):
-    ## keep keys the same but change seq, mz and frags
-    for key in library:
-        library[key]["parent_key"] = key
+import multiprocessing
 
-    decoy_lib =copy.deepcopy(library) # create copy so we do not change the original
-    
-    for key in tqdm.tqdm(decoy_lib):
-        entry = decoy_lib[key]
-        entry["seq"] = change_seq(key[0],rules)
-        #!!! To change;
-        # if config.args.decoy=="rev": ## this will have the same mz as many correct matches and therefore a really good ms1 isotope corr
-        #     entry["prec_mz"] -= config.decoy_mz_offset
-            
-        entry["frags"] = convert_frags(key[0], entry["frags"],rules)
-        
-        if config.args.iso:
-            entry["spectrum"], entry["ordered_frags"] = gen_isotopes_dict(entry["seq"], entry["frags"], tag, n_iso)
-        else:
-            entry["spectrum"], entry["ordered_frags"] = frag_to_peak(entry["frags"],return_frags=True)
-            
-            
-    return decoy_lib
+def _decoy_worker(args):
+    """Worker function for parallel decoy generation."""
+    seq, frags, rules, tag, n_iso, use_iso = args
+    new_seq = change_seq(seq, rules, tag=tag)
+    new_frags = convert_frags(seq, frags, rules, tag=tag)
+    if use_iso:
+        spectrum, ordered_frags = gen_isotopes_dict(new_seq, new_frags, tag, n_iso)
+    else:
+        spectrum, ordered_frags = frag_to_peak(new_frags, return_frags=True)
+    return new_seq, new_frags, spectrum, ordered_frags
+
+
+def _decoy_arg_gen(library, all_keys, rules, tag, n_iso):
+    """Lazily yield decoy worker args to avoid materializing all frag dicts."""
+    for key in all_keys:
+        yield (key[0], library[key]["frags"], rules, tag, n_iso, False)
+
+
+def create_decoy_lib(library, rules, tag=None, n_iso=0):
+    """Generate decoys and return a combined target+decoy SpectrumLibraryStore.
+
+    Decoys are generated without tagging or isotope expansion — those
+    operations should be applied to the combined store afterward.
+
+    Returns a combined store with targets at [0, N) and decoys at [N, N+M).
+    """
+    from src.models.spec_lib.library_store import SpectrumLibraryStore
+    import gc
+
+    all_keys = list(library.keys())
+    n_total = len(all_keys)
+
+    p = multiprocessing.Pool(min(multiprocessing.cpu_count(), 61))
+    results = []
+    chunksize = 1000
+    arg_gen = _decoy_arg_gen(library, all_keys, rules, tag, n_iso)
+    for result in tqdm.tqdm(p.imap(_decoy_worker, arg_gen, chunksize=chunksize), total=n_total):
+        results.append(result)
+    p.close()
+    p.join()
+
+    gc.collect()
+
+    store = SpectrumLibraryStore.from_target_and_decoy_results(library, all_keys, results)
+
+    del results
+    gc.collect()
+
+    return store
             
             
 # spec_lib = loadSpecLib("/Volumes/Lab/KMD/SpectralLibraries/8ng_LF_24nce.tsv")
@@ -357,129 +394,6 @@ def write_speclib_tsv(library,filename):
                 writer.writerow([precursor[i] if i in precursor else "" for i in diann_names])
                 
 
-import re
-import polars as pl
-
-# matches: y5, b12, y7-H2O, etc.
-FRAG_KEY_RE = re.compile(r"^([A-Za-z]+)(\d+)(?:-(.+))?$")
-
-def _parse_frag_key(frag_key: str):
-    """
-    Parse your internal frag_type key:
-        y5, y5-H2O_2, b10_1, b10-NH3_2, etc.
-
-    Returns:
-        FragmentType (str),
-        FragmentNumber (int),
-        FragmentLossType (str or ""),
-        FragmentCharge (int)
-    """
-    try:
-        ion_part, charge_part = frag_key.split("_", 1)
-    except ValueError:
-        raise ValueError(f"Fragment key '{frag_key}' does not contain '_' for charge")
-
-    m = FRAG_KEY_RE.match(ion_part)
-    if not m:
-        raise ValueError(f"Fragment key '{frag_key}' does not match expected pattern")
-
-    frag_type = m.group(1)
-    frag_num = int(m.group(2))
-    loss_type = m.group(3) or ""   # empty string = no loss
-
-    frag_charge = int(charge_part)
-    return frag_type, frag_num, loss_type, frag_charge
-
-
-def python_lib_to_diann_df(python_lib: dict) -> pl.DataFrame:
-    """
-    Convert internal python_lib representation back to a DIA-NN-style
-    spectral library (one row per fragment) as a Polars DataFrame.
-
-    Column names follow the inverse of diann_to_jmod:
-        prec_mz       -> PrecursorMz
-        mod_seq       -> ModifiedPeptide
-        prec_z        -> PrecursorCharge
-        iRT           -> RT
-        seq           -> StrippedPeptide
-        IonMob        -> IonMobility
-        protein_group -> ProteinGroup
-        protein_name  -> ProteinName
-        genes         -> Genes
-    """
-    rows = []
-
-    for (modpep, prec_charge), entry in python_lib.items():
-        # precursor-level fields (with safe .get so it doesn't explode)
-        prec_mz        = entry.get("prec_mz")
-        mod_seq        = entry.get("mod_seq", modpep)
-        prec_z         = entry.get("prec_z", prec_charge)
-        iRT            = entry.get("iRT")
-        seq            = entry.get("seq")
-        ionmob         = entry.get("IonMob")
-        protein_group  = entry.get("protein_group")
-        protein_name   = entry.get("protein_name")
-        genes          = entry.get("genes")
-        protid         = entry.get("UniprotID")
-
-        frags = entry.get("frags", {})
-
-        for frag_key, (frag_mz, frag_intensity) in frags.items():
-            frag_type, frag_num, frag_loss, frag_charge = _parse_frag_key(frag_key)
-
-            # For no-loss case, DIA-NN often uses "noloss" or empty string;
-            # we can't distinguish original, so choose one convention:
-            frag_loss_col = frag_loss if frag_loss != "" else "noloss"
-
-            row = {
-                # precursor-level (using *DIA-NN* names)
-                "PrecursorMz":      float(prec_mz) if prec_mz is not None else None,
-                "ModifiedPeptide":  mod_seq,
-                "PrecursorCharge":  int(prec_z) if prec_z is not None else None,
-                "RT":  float(iRT) if iRT is not None else None,
-                "StrippedPeptide":  seq,
-                "IonMobility":      float(ionmob) if ionmob is not None else None,
-                "ProteinID":        protid,
-                "ProteinGroup":     protein_group,
-                "ProteinName":      protein_name,
-                "Genes":            genes,
-
-                # fragment-level
-                "FragmentType":     frag_type,
-                "FragmentSeriesNumber":   frag_num,
-                "FragmentLossType": frag_loss_col,
-                "FragmentCharge":   frag_charge,
-                "FragmentMz":       float(frag_mz),
-                "RelativeIntensity": float(frag_intensity),
-            }
-
-            rows.append(row)
-
-    df = pl.DataFrame(rows)
-
-    # Optional: enforce a stable column order
-    desired_order = [
-        "ModifiedPeptide",
-        "StrippedPeptide",
-        "PrecursorCharge",
-        "RT",
-        "IonMobility",
-        "PrecursorMz",
-        "FragmentMz",
-        "RelativeIntensity",
-        "FragmentType",
-        "FragmentCharge",
-        "FragmentSeriesNumber",
-        "FragmentLossType",
-        "ProteinID",
-        "ProteinGroup",
-        "ProteinName",
-        "Genes"
-    ]
-    existing_cols = [c for c in desired_order if c in df.columns]
-    df = df.select(existing_cols)
-
-    return df
 
 
 class LibrarySpectrum():

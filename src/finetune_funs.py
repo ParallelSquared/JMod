@@ -220,7 +220,7 @@ def train_models(models,train_data,results_folder=None):
         all_history.append(history)
         if results_folder:        
             try:
-                model.save(results_folder+f'/iRT_updated_model{i}')
+                model.save(results_folder+f'/first_search/fine_tuning/iRT_updated_model{i}')
             except:
                 from src.utils.gui_utils import send_raise_to_TK
                 send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
@@ -258,16 +258,16 @@ def fine_tune_rt(grouped_df,
        tag=config.tag
    
     if tag is None:
-        model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_LF_09182024_")
+        model_path = os.path.join(current_dir,"../rt_models","iRT_CNN_model_LF_09182024_")
         
     elif "mTRAQ" in tag.name:
-        model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_mTRAQ_09182024_")
+        model_path = os.path.join(current_dir,"../rt_models","iRT_CNN_model_mTRAQ_09182024_")
         
     elif "diethyl" in tag.name:
-        model_path = os.path.join(current_dir,"../RT_models","iRT_CNN_model_DiEthyl_11052024_")
+        model_path = os.path.join(current_dir,"../rt_models","iRT_CNN_model_DiEthyl_11052024_")
         
     elif "PSMtag" in tag.name:
-        model_path = os.path.join(current_dir,"../RT_models","iRT_TransferLearning_Tag6_updated_05072025_")
+        model_path = os.path.join(current_dir,"../rt_models","iRT_TransferLearning_Tag6_updated_05072025_")
         
     else:
         from src.utils.gui_utils import send_raise_to_TK
@@ -389,7 +389,7 @@ def fine_tune_rt(grouped_df,
         plt.xlabel("Observed Values")
         plt.ylabel("Base model predictions")
         if results_path:
-            plt.savefig(results_path+"/RT_finetune_ObsvsOld.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_ObsvsOld.png",dpi=600,bbox_inches="tight")
         plt.close()
             
         
@@ -398,7 +398,7 @@ def fine_tune_rt(grouped_df,
         plt.xlabel("Observed Values")
         plt.ylabel("Aligned observed Values")
         if results_path:
-            plt.savefig(results_path+"/RT_finetune_ObsvsOldAlign.png",dpi=600,bbox_inches="tight")
+            plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_ObsvsOldAlign.png",dpi=600,bbox_inches="tight")
         plt.close()
         
         if len(grouped_df)>config.FT_minimum and ('history' in locals() or 'history' in globals()):
@@ -411,7 +411,7 @@ def fine_tune_rt(grouped_df,
             plt.xlabel("Aligned observed Values")
             plt.ylabel("Old model predictions")
             if results_path:
-                plt.savefig(results_path+"/RT_finetune_AlignObsvsOld.png",dpi=600,bbox_inches="tight")
+                plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_AlignObsvsOld.png",dpi=600,bbox_inches="tight")
             plt.close()
             
         
@@ -420,7 +420,7 @@ def fine_tune_rt(grouped_df,
                 plt.plot(h.history["loss"],color="tab:blue",alpha=.5)
                 plt.plot(h.history["val_loss"],color="tab:orange",alpha=.5) 
             if results_path:
-                plt.savefig(results_path+"/RT_finetune_training.png",dpi=600,bbox_inches="tight")
+                plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_training.png",dpi=600,bbox_inches="tight")
             plt.close()
                  
             
@@ -455,9 +455,67 @@ def fine_tune_rt(grouped_df,
                 plt.xlabel("Aligned observed Values")
                 plt.ylabel("New model predictions")
                 if results_path:
-                    plt.savefig(results_path+"/RT_finetune_AlignObsvsNew.png",dpi=600,bbox_inches="tight")
+                    plt.savefig(results_path+"/first_search/fine_tuning/RT_finetune_AlignObsvsNew.png",dpi=600,bbox_inches="tight")
                 plt.close()
             except Exception as e:
                 logger.warning(f"Error creating fine-tuned model plot: {e}")
-        
+
     return data_split, models, model_to_obs
+
+
+def predict_decoy_rts(decoy_seqs, models, convertor):
+    """
+    Predict iRT values for decoy sequences using fine-tuned CNN models.
+
+    Parameters
+    ----------
+    decoy_seqs : list of str
+        Decoy peptide sequences (shuffled/reversed).
+    models : list
+        CNN models returned from fine_tune_rt().
+    convertor : callable
+        LOWESS calibration function (model_to_obs) from fine_tune_rt().
+
+    Returns
+    -------
+    np.ndarray
+        Predicted iRT values for each decoy sequence.
+    """
+    logger.info(f"Predicting RTs for {len(decoy_seqs)} decoy sequences")
+
+    # Deduplicate sequences to avoid redundant predictions
+    unique_seqs = list(set(decoy_seqs))
+    unique_encoded = np.array([one_hot_encode_sequence(s) for s in unique_seqs], dtype=np.float32)
+
+    # Ensemble predictions from all models
+    model_outputs = []
+    for model in models:
+        try:
+            if hasattr(model, 'predict'):
+                pred = model.predict(unique_encoded, batch_size=4096)
+            else:
+                pred = model(unique_encoded)
+                if isinstance(pred, dict):
+                    for key in pred:
+                        if hasattr(pred[key], 'numpy'):
+                            pred = pred[key].numpy()
+                            break
+            if hasattr(pred, 'numpy'):
+                pred = pred.numpy()
+            model_outputs.append(pred)
+        except Exception as e:
+            logger.warning(f"Error predicting decoy RTs with model: {e}")
+
+    if not model_outputs:
+        logger.warning("No valid predictions for decoys, returning None")
+        return None
+
+    # Average predictions and calibrate to observed scale
+    unique_rts = convertor(np.mean(model_outputs, axis=0).flatten())
+    seq_to_rt = dict(zip(unique_seqs, unique_rts))
+
+    # Map back to original order
+    predicted_rts = np.array([seq_to_rt[s] for s in decoy_seqs])
+
+    logger.info(f"Updated iRT values for {len(decoy_seqs)} decoys")
+    return predicted_rts

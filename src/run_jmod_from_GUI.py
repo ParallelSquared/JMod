@@ -191,7 +191,10 @@ class JModGUI(ThemedTk):
         self.file_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         self.mzml_button = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=self.select_mzml)
         self.mzml_button.grid(row=0, column=2, padx=10, pady=10)
-
+        # Add a "Clear All" button
+        # self.clear_button = ttk.Button(self.input_frame, text="Clear All", command=lambda: self.file_dropdown.clear_all())
+        # self.clear_button.grid(row=0, column=3, padx=10, pady=10)
+    
         # Speclib file input
         self.tsv_label = ttk.Label(self.input_frame, text="Spectral Library:")
         self.tsv_label.grid(row=1, column=0, padx=10, pady=10, sticky="e")
@@ -272,14 +275,6 @@ class JModGUI(ThemedTk):
         default_dict["lib_frac"]["tk_handle"] = self.min_lib_int_entry
         self.min_lib_int_entry.insert(0, "0.5")
 
-        # self.min_lib_int_score_lab = ttk.Label(self.ms_frame, text="Lib Match Score:")
-        # self.min_lib_int_score_lab.grid(row=2, column=2, padx=20, pady=5, sticky="e")
-        # Hovertip(self.min_lib_int_score_lab, "Minimum fraction library intensity matched to score")
-        # self.min_lib_int_score_entry = ttk.Entry(self.ms_frame, width=6)
-        # self.min_lib_int_score_entry.grid(row=2, column=3, padx=5, pady=5, sticky="w")
-        # default_dict["score_lib_frac"]["tk_handle"] = self.min_lib_int_score_entry
-        # self.min_lib_int_score_entry.insert(0, "0.5")
-
 
         # RT Tolerance (label + checkbox + entry)
         self.rt_tolerance_lab = ttk.Label(self.ms_frame, text="RT Tolerance:")
@@ -307,6 +302,16 @@ class JModGUI(ThemedTk):
         self.isotopes_dropdown = ttk.Combobox(self.ms_frame, textvariable=self.isotopes_count_var, values=list(range(2, 11)), width=3, state="readonly")
         self.isotopes_dropdown.grid(row=1, column=7, padx=5, pady=5, sticky="w")
         self.isotopes_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
+
+        # Apex Jitter (label + combobox)
+        self.apex_jitter_lab = ttk.Label(self.ms_frame, text="Apex Jitter:")
+        self.apex_jitter_lab.grid(row=2, column=0, padx=20, pady=5, sticky="e")
+        Hovertip(self.apex_jitter_lab, "Maximum MS1 cycles a channel's apex can drift from the group-voted apex via monotonic ascent during MS1 quant (0 = no drift, channels pinned to voted apex)")
+        self.apex_jitter_var = tk.IntVar(value=0)
+        default_dict["apex_jitter"]["tk_handle"] = self.apex_jitter_var
+        self.apex_jitter_dropdown = ttk.Combobox(self.ms_frame, textvariable=self.apex_jitter_var, values=list(range(0, 11)), width=3, state="readonly")
+        self.apex_jitter_dropdown.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+        self.apex_jitter_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
 
         ####         Multiplex Frame      #######
         self.multiplex_frame = ttk.LabelFrame(self, text="Multiplexing")
@@ -567,6 +572,7 @@ class JModGUI(ThemedTk):
                 if file not in self.file_dropdown.files:
                     self.file_dropdown.add_files([file])
                     self.last_opened_dir = os.path.dirname(file)
+    
 
     def select_tsv(self):
         """
@@ -1428,7 +1434,7 @@ class JModGUI(ThemedTk):
             return True
         except FileNotFoundError as e:
             if "[WinError 3]" in str(e) or "[Errno 2]" in str(e) or "[WinError 206]" in str(e):
-                ask_exit = tk.messagebox.askyesno("Path Limit Warning.", r"Long paths being disabled may cause errors.\nTo enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.\nExit? (recommended)", default='yes')
+                ask_exit = tk.messagebox.askyesno("Path Limit Warning.", r"Long paths being disabled may cause errors. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer. Exit? (recommended)", default='yes')
                 if ask_exit:
                     logging.getLogger("GUI").info("JMod Exited")
                     return False
@@ -1866,6 +1872,12 @@ class FileListDropdown(tk.Frame):
 
     def remove_file(self, idx):
         del self.files[idx]
+        self.update_button_label()
+        if self.expanded:
+            self.refresh_list()
+            
+    def clear_all(self):
+        self.files = []
         self.update_button_label()
         if self.expanded:
             self.refresh_list()

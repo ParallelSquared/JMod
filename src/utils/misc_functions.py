@@ -10,8 +10,9 @@ import csv
 import re
 from pyteomics import mass
 import src.config as config
-import pandas as pd 
+import pandas as pd
 from src.utils.parse_peptides import split_frag_name
+
 from src.logger import logger
 import math
 
