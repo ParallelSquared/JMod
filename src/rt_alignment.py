@@ -24,7 +24,6 @@ from statistics import quantiles
 from src.utils.misc_functions import within_tol
 from scipy import signal
 from scipy.optimize import curve_fit
-from scipy.optimize import linear_sum_assignment
 from scipy.ndimage import gaussian_filter
 from scipy import stats
 from sklearn.metrics import auc
@@ -385,7 +384,7 @@ def fit_errors(errors,limit=10,percentile=.999):
 
 
 
-def empirical_fit(output_df, results_folder=None):
+def empirical_fit(output_df, results_folder=None, channel=None, min_ids=800):
     """
     Filter data by confidence then fit LOWESS to empirical RT
 
@@ -393,6 +392,18 @@ def empirical_fit(output_df, results_folder=None):
     ----------
     output_df : pd.DataFrame
         Dataframe of IDs from the preliminary search.
+    results_folder : str, optional
+        Where to write the per-percentile diagnostic plots.
+    min_ids : int, optional
+        Good-ID floor for the scribe-stepping stop criterion: the sweep stops once
+        the number of within-tolerance IDs would drop below this, to avoid
+        over-filtering. Default 800 (the non-timeplex whole-set value); the
+        timeplex per-channel caller scales it down since each channel holds ~1/K of
+        the IDs.
+    channel : int, optional
+        Timeplex channel index. When set, it is appended to the diagnostic plot
+        filenames so the per-channel calls (one per timeplex channel) do not
+        overwrite each other. ``None`` keeps the original non-timeplex filenames.
 
     Returns
     -------
@@ -405,6 +416,8 @@ def empirical_fit(output_df, results_folder=None):
 
     logger.info("")
     logger.info("Filtering IDs from initial search")
+
+    sfx = "" if channel is None else f"_ch{channel}"
 
     for feature_percentile in range(20, 100, 5):
 
@@ -467,7 +480,7 @@ def empirical_fit(output_df, results_folder=None):
         # if results_folder is not None:
         plot_rt_residuals_mixture(
             residuals=res,
-            feat=feature_percentile,
+            feat=f"{feature_percentile}{sfx}",
             weights=weights,
             sigmas=sigmas,
             results_folder=results_folder
@@ -482,7 +495,7 @@ def empirical_fit(output_df, results_folder=None):
         # new + existing stopping criteria
         if (partial_posterior >= 0.99 or
                 outside_ratio < 0.05 or
-                (cor_filter.sum() - bad_IDs.sum()) < 800):
+                (cor_filter.sum() - bad_IDs.sum()) < min_ids):
             break
 
     logger.debug(f"{feature_percentile} {np.round(outside_ratio, 4)} {cor_filter.sum()}")
@@ -1709,179 +1722,6 @@ def timeplex_algnment_plots(n_timeplex, t_vals, results_folder = None):
         plt.savefig(results_folder+"/MZdiff.png",dpi=600,bbox_inches="tight")
 """
 
-# --- timeplex ridge-tracker constants ---
-RIDGE_X_BINS = 140
-RIDGE_Y_BINS = 240
-RIDGE_SIGMA = (1.0, 2.5)     # (x, y) gaussian smoothing of the density image
-RIDGE_PEAK_PROM_FRAC = 0.05  # min peak prominence as a fraction of the column max
-RIDGE_WIGGLE = 0.30          # max per-channel deviation from the joint line, as a fraction of d
-RIDGE_CORE_PCT = 2           # trim this %% of points off each tail before fitting (dense core)
-
-
-def _extrap_spline(xg, curve, data_x, edge_frac=0.05):
-    """
-    Interpolate the modal-LOESS curve within the channel's data range; beyond it,
-    extrapolate linearly with a slope least-squares-fit over the outer ``edge_frac``
-    of the DATA POINTS (by count, so the window tracks point density rather than the
-    x-axis), clamped non-negative so RT stays monotone. Keeps the body intact —
-    unlike isotonic, the sparse tails don't reshape it.
-    """
-    xg = np.asarray(xg, float)
-    curve = np.asarray(curve, float)
-    dx = np.asarray(data_x, float)
-    inner = interp1d(xg, curve, bounds_error=False, fill_value=(curve[0], curve[-1]))
-    if dx.size < 2:
-        return inner
-    lo_x, hi_x = float(dx.min()), float(dx.max())
-    lo_edge = np.percentile(dx, 100 * edge_frac)        # first edge_frac of points
-    hi_edge = np.percentile(dx, 100 * (1 - edge_frac))  # last  edge_frac of points
-
-    def slope(a, b):
-        mask = (xg >= a) & (xg <= b)
-        return max(0.0, np.polyfit(xg[mask], curve[mask], 1)[0]) if mask.sum() >= 2 else 0.0
-
-    lo_slope, hi_slope = slope(lo_x, lo_edge), slope(hi_edge, hi_x)
-    y_lo, y_hi = float(inner(lo_x)), float(inner(hi_x))
-
-    def f(r):
-        r = np.asarray(r, float)
-        y = inner(r)
-        y = np.where(r < lo_x, y_lo + lo_slope * (r - lo_x), y)
-        return np.where(r > hi_x, y_hi + hi_slope * (r - hi_x), y)
-    return f
-
-
-def _relax_channels(x, y, shape, offsets, d, assign, wiggle=RIDGE_WIGGLE):
-    """
-    Let each channel wiggle into its own local mode. The joint fit
-    (shape + offsets[k]) is the anchor: using the supplied per-point channel
-    assignment (gated at half-spacing so an outlier can't reshape a channel), fit
-    a per-channel modal LOESS to those points, then soft-clamp the result so it
-    can only deviate ±wiggle*d from the joint line (tanh — linear for small
-    deviations, saturating smoothly toward the cap). Returns a list of per-channel
-    callables mapping the x-axis (library or predicted iRT) to observed RT.
-    """
-    K = len(offsets)
-    xg = np.linspace(float(np.min(x)), float(np.max(x)), 500)
-    base = np.asarray(shape(xg))
-    shape_x = np.asarray(shape(x))
-    within = np.abs(y - (shape_x + offsets[assign])) <= 0.5 * d   # gate outliers
-    cap = wiggle * d
-    rt_spls = []
-    for k in range(K):
-        anchor = base + offsets[k]
-        m = (assign == k) & within
-        # Fit only the dense core of the channel's points: the sparse off-diagonal
-        # tails (e.g. CNN iRT-prediction errors after fine-tuning) otherwise hijack
-        # the modal LOESS and fold the curve back. Tails are handled by extrapolation.
-        xm, ym = x[m], y[m]
-        if xm.size >= 20:
-            lo = np.percentile(xm, RIDGE_CORE_PCT)
-            hi = np.percentile(xm, 100 - RIDGE_CORE_PCT)
-            c = (xm >= lo) & (xm <= hi)
-            xm, ym = xm[c], ym[c]
-        if xm.size >= 20:
-            res = min(100, int(xm.size))
-            itp = fast_modal_lowess(xm, ym, local_frac=0.01, anchors=res,
-                                    grid_size=res, post_smooth_frac=max(0.01, 5 / res))
-            curve = np.asarray(itp(xg))
-        else:
-            curve = anchor.copy()
-        curve = anchor + cap * np.tanh((curve - anchor) / cap)    # soft-limit the wiggle
-        # Body kept as-is; tails get a robust linear extrapolation (see _extrap_spline)
-        # so out-of-core / out-of-range iRTs don't flat-clamp or chase noise.
-        rt_spls.append(_extrap_spline(xg, curve, xm))
-        logger.info(f"Ridge channel {k}: {int(m.sum())} pts, "
-                    f"max wiggle {np.max(np.abs(curve - anchor)):.3f} (cap {cap:.3f})")
-    return rt_spls
-
-
-def _timeplex_scribe_filter(output_df, results_folder=None):
-    """
-    Scribe-score percentile sweep for the timeplex first search — a standalone
-    copy of empirical_fit's stepping so the non-timeplex path is left untouched.
-    Steps the scribe cutoff up (20→95) until the alignment residuals are clean
-    and returns the scribe-only cor_filter (no single-curve RT tolerance, which
-    would collapse the channel structure the ridge tracker needs).
-    """
-    for feature_percentile in range(20, 100, 5):
-
-        cor_filter = np.logical_and.reduce(
-            [output_df[feat] > np.percentile(output_df[feat], feature_percentile)
-             for feat in [
-                "scribe_score",
-             ]
-             ]
-        )
-
-        ## Only fit when fewer than this many peaks
-        if sum(cor_filter)>config.max_num_prelim_search:
-            continue
-
-        f = fast_modal_lowess(output_df.lib_rt[cor_filter],
-                        output_df.rt[cor_filter],
-                        .01,
-                        anchors=1000,
-                        grid_size=1000,
-                        post_smooth_frac=0.01)
-
-        plt.subplots()
-        plt.scatter(output_df.lib_rt[cor_filter],
-                    output_df.rt[cor_filter], s=1,alpha=.2)
-        plt.scatter(output_df.lib_rt[cor_filter],
-                    f(output_df.lib_rt[cor_filter]),edgecolor="none", s=1)
-        plt.scatter(f.anchor_x, f.anchor_y, color="red", s=8, edgecolor="none")
-        plt.title(str(feature_percentile))
-        if results_folder is not None:
-            plt.savefig(results_folder + f"/first_search/Percentile_{feature_percentile}.png",
-                        dpi=600, bbox_inches="tight")
-        plt.close()
-
-        first_rt_diffs = f(output_df.lib_rt) - output_df.rt
-
-        rt_amplitude, rt_mean, rt_stddev = fit_gaussian(first_rt_diffs[cor_filter])
-        first_rt_tolerance = 4 * np.abs(rt_stddev)
-
-        bad_IDs = (
-                np.abs(first_rt_diffs) >
-                np.min([first_rt_tolerance, np.ptp(output_df.rt) / 5])
-        )[cor_filter]
-        outside_ratio = bad_IDs.sum() / len(bad_IDs)
-
-        # GMM on residuals from current filter
-        res = first_rt_diffs[cor_filter]
-        weights, sigmas = fit_zero_mean_gmm_1d(res, n_components=2)
-
-        order = np.argsort(sigmas)
-        sigmas = sigmas[order]
-        weights = weights[order]
-
-        k = 3.29 * sigmas[0] # middle 99.9%
-        p_in = 2.0 * norm.cdf(k / sigmas) - 1.0
-        num = weights * p_in
-        partial_posterior = num[0] / num.sum()
-
-        plot_rt_residuals_mixture(
-            residuals=res,
-            feat=feature_percentile,
-            weights=weights,
-            sigmas=sigmas,
-            results_folder=results_folder
-        )
-
-        logger.info(
-            f"Testing Percentile: {feature_percentile}, "
-            f"Ratio: {outside_ratio:.4f}, #IDs: {cor_filter.sum()}, Partial Posterior: {partial_posterior:.4f}"
-        )
-
-        # new + existing stopping criteria
-        if (partial_posterior >= 0.99 or
-                outside_ratio < 0.05 or
-                (cor_filter.sum() - bad_IDs.sum()) < 800):
-            break
-
-    return cor_filter
-
 
 def _hwhm_mode_sigma(v, mode_smooth=3.0):
     """Fit-free mode + HWHM-derived sigma (sigma = HWHM / 1.1774) of a 1-D sample.
@@ -2045,223 +1885,99 @@ def timeplex_pair_nn_gate(apex_df, n_timeplex, n_sigma=2.0):
     return mask
 
 
-def fit_timeplex_ridges(output_df, n_timeplex, results_folder=None):
+def fit_timeplex_channels(output_df, n_timeplex, results_folder=None):
     """
-    Align timeplex channels as ONE shared iRT->RT shape + K equally-spaced vertical
-    offsets (constant per-channel RT shift), recovered by 2D-density ridge tracking.
+    Align timeplex channels by fitting each channel's iRT->RT curve INDEPENDENTLY,
+    one channel at a time, mirroring the per-channel structure of the fine-tune path.
 
-    Unlike the old get_multiples/split_timePlex approach, this needs no per-peptide
-    completeness and no positional assignment: it finds the K parallel RT bands in
-    the (lib_rt, obs_rt) density and enforces a single shared shape with a common
-    channel gap d.
+    The apexes arrive already channel-assigned (by RT rank, upstream in
+    select_timeplex_alignment_set) and cross-channel gated (timeplex_two_stage_gate).
+    For each channel we then run the SAME iterative scribe-score stepping the
+    non-timeplex path uses (empirical_fit): step the scribe cutoff up until the
+    per-channel RT residuals are clean, dropping the low-quality tail, and fit a
+    modal LOWESS to the survivors. This drops the old ridge-tracker's two strong
+    assumptions (one shared shape + equal channel spacing); each channel gets its
+    own empirical shape and its own quality cut.
 
     Parameters
     ----------
     output_df : pandas.DataFrame
-        First-search PSMs with columns: scribe_score, lib_rt, rt, mz,
-        relative_error_ms1.
+        Gated, channel-assigned first-search apexes with columns: scribe_score,
+        lib_rt, rt, mz, relative_error_ms1, stripped_seq, channel.
     n_timeplex : int
-        Number of channels K (>= 1).
+        Number of channels K (>= 2).
 
     Returns
     -------
     rt_spls : list[callable]
-        K callables mapping library iRT -> observed RT (shared_shape + offsets[k]).
+        K callables mapping library iRT -> observed RT (one independent fit each).
     shared_shape : callable
-        The single de-offset iRT->RT curve.
+        A representative de-offset iRT->RT curve (mean of the K curves after
+        removing each channel's level). Used only for the alignment plot x-shape.
     offsets : np.ndarray
-        Length-K, equally spaced (base + d*arange(K)).
+        Length-K per-channel RT level (median of each channel's curve).
     d : float
-        Common channel gap (np.inf when K == 1).
+        Common channel gap (median adjacent difference of the sorted offsets);
+        used downstream only for the d/2 RT-tolerance overlap clamp.
     filtered_output : pandas.DataFrame
-        Kept PSMs with lib_rt, rt (de-offset to the shared shape), mz_diffs, mz —
-        the shape alignment_plots expects.
+        The per-channel survivors (post scribe-stepping) with lib_rt, rt, channel,
+        stripped_seq, mz_diffs, mz, scribe_score.
     residuals : np.ndarray
-        Signed residual of each kept PSM to its assigned ridge (for the GMM
-        tolerance, the residual mixture plot, and the CDF plot).
+        Signed residual rt - f_k(lib_rt) of each surviving PSM, aligned to
+        filtered_output rows.
     """
     K = int(n_timeplex)
-    if K < 1:
-        raise RuntimeError("fit_timeplex_ridges requires n_timeplex >= 1")
+    if K < 2:
+        raise RuntimeError("fit_timeplex_channels requires n_timeplex >= 2")
 
-    # PSMs arrive already scribe-filtered and channel-assigned upstream
-    # (select_timeplex_alignment_set), one apex per (peptide, channel). Use the
-    # supplied channel labels instead of nearest-snap assignment.
     kept = output_df.reset_index(drop=True)
+    channel = kept["channel"].to_numpy(dtype=int)
+    logger.info(f"Per-channel timeplex fit: {len(kept)} gated IDs across {K} channels")
+
+    # --- fit each channel independently, one at a time, with its own scribe stepping ---
+    rt_spls = [None] * K
+    keep_frames = []                 # surviving rows per channel (for filtered_output)
+    resid_parts = []                 # per-channel residuals, aligned to keep_frames
+    for k in range(K):
+        in_channel = channel == k    # boolean mask: apex rows assigned to channel k
+        ch_df = kept.loc[in_channel, ["lib_rt", "rt", "scribe_score",
+                                      "stripped_seq", "mz",
+                                      "relative_error_ms1"]].reset_index(drop=True)
+        if len(ch_df) < 10:
+            raise RuntimeError(f"Per-channel timeplex fit: channel {k} has too few "
+                               f"IDs ({len(ch_df)})")
+        # iterative scribe-percentile stepping + final residual cut (per channel).
+        # Scale the good-ID stop floor down: each channel holds ~1/K of the IDs, so
+        # inheriting the whole-set 800 floor would break the sweep at the most
+        # lenient cutoff (or immediately) for normal channel sizes.
+        cor_filter, f_k = empirical_fit(ch_df, results_folder=results_folder,
+                                        channel=k, min_ids=max(100, 800 // K))
+        rt_spls[k] = f_k
+
+        surv = ch_df.loc[cor_filter].copy()
+        surv["channel"] = k
+        resid = surv["rt"].to_numpy(dtype=float) - np.asarray(f_k(surv["lib_rt"].to_numpy(dtype=float)))
+        keep_frames.append(surv)
+        resid_parts.append(resid)
+        logger.info(f"  channel {k}: kept {int(cor_filter.sum())}/{len(ch_df)} apexes, "
+                    f"median |dRT| = {np.median(np.abs(resid)):.3f}")
+
+    # --- assemble survivors into the shape downstream expects ---
+    filtered_output = pd.concat(keep_frames, ignore_index=True).rename(
+        columns={"relative_error_ms1": "mz_diffs"})
+    residuals = np.concatenate(resid_parts)
+
+    # --- summary values derived from the fitted curves (plot + d/2 clamp only) ---
     x = kept["lib_rt"].to_numpy(dtype=float)
-    y = kept["rt"].to_numpy(dtype=float)
-    if "channel" in kept.columns:
-        channel = kept["channel"].to_numpy(dtype=int)
-    else:
-        channel = np.zeros(len(kept), dtype=int)
-    logger.info(f"Ridge tracker: {len(kept)} IDs")
-    if len(x) < 10:
-        raise RuntimeError(f"Ridge tracker: too few IDs ({len(x)})")
-
-    def make_spline(off):
-        def _f(r):
-            return np.asarray(shared_shape(np.asarray(r, dtype=float))) + off
-        return _f
-
-    if K == 1:
-        # Single channel: just the global modal trend, no offsets.
-        shared_shape = fast_modal_lowess(x, y, local_frac=.01, anchors=1000,
-                                         grid_size=1000, post_smooth_frac=0.01)
-        offsets = np.array([0.0])
-        d = float("inf")
-    else:
-        # --- build smoothed density image ---
-        H, xedges, yedges = np.histogram2d(x, y, bins=[RIDGE_X_BINS, RIDGE_Y_BINS])
-        H = gaussian_filter(H, sigma=RIDGE_SIGMA)
-        x_centers = 0.5 * (xedges[:-1] + xedges[1:])
-        y_centers = 0.5 * (yedges[:-1] + yedges[1:])
-
-        def column_peaks(col, min_dist_bins):
-            """Up to K strongest, well-separated peak positions (sorted by y)."""
-            if col.max() <= 0:
-                return np.array([])
-            peaks, _ = signal.find_peaks(col, prominence=RIDGE_PEAK_PROM_FRAC * col.max(),
-                                         distance=max(1, min_dist_bins))
-            if len(peaks) == 0:
-                return np.array([])
-            top = peaks[np.argsort(col[peaks])[::-1][:K]]
-            return np.sort(y_centers[top])
-
-        min_dist_bins = int(0.02 * RIDGE_Y_BINS)
-        cols = [(x_centers[i], column_peaks(H[i], min_dist_bins))
-                for i in range(H.shape[0])]
-
-        npks = np.array([len(c[1]) for c in cols])
-        mid = np.median(x_centers)
-        lo = x_centers < mid
-        logger.info("Ridge peaks/col (low RT): "
-                    + str({k: int(((npks == k) & lo).sum()) for k in range(K + 1)}))
-        logger.info("Ridge peaks/col (high RT): "
-                    + str({k: int(((npks == k) & ~lo).sum()) for k in range(K + 1)}))
-
-        # --- global channel spacing d: mode of within-column adjacent peak gaps ---
-        gap_list = [np.diff(c[1]) for c in cols if len(c[1]) >= 2]
-        all_gaps = np.concatenate(gap_list) if gap_list else np.array([])
-        if all_gaps.size == 0:
-            raise RuntimeError("Ridge tracker: no column yielded >=2 peaks; "
-                               "lower RIDGE_PEAK_PROM_FRAC or check --num_timeplex")
-        gh, ge = np.histogram(all_gaps, bins=60)
-        gmode_lo, gmode_hi = ge[np.argmax(gh)], ge[np.argmax(gh) + 1]
-        d = float(np.median(all_gaps[(all_gaps >= gmode_lo) & (all_gaps <= gmode_hi)]))
-        logger.info(f"Ridge tracker: global spacing d={d:.4f} "
-                    f"(from {all_gaps.size} within-column gaps)")
-
-        # --- seed: densest K-peak column most consistent with equal spacing d ---
-        gap_tol = 0.35 * d
-        cand = []
-        for i in range(H.shape[0]):
-            m = cols[i][1]
-            if len(m) != K:
-                continue
-            if np.max(np.abs(np.diff(m) - d)) <= gap_tol:
-                cand.append((H[i].sum(), i))
-        if not cand:
-            raise RuntimeError(f"Ridge tracker: no column had K={K} equally-spaced "
-                               f"peaks (d={d:.4f}); check --num_timeplex / prominence")
-        seed_i = max(cand)[1]
-        seed_modes = cols[seed_i][1]
-        spacing = float(np.min(np.diff(seed_modes)))
-        link_thresh = 0.45 * spacing
-        logger.info(f"Ridge tracker: seed @ libRT={x_centers[seed_i]:.2f}, "
-                    f"modes={np.round(seed_modes,3)}, spacing={spacing:.3f} "
-                    f"({len(cand)} equal-spaced candidate columns)")
-
-        tracks = [[(x_centers[seed_i], seed_modes[k])] for k in range(K)]
-        rel = seed_modes - seed_modes.mean()   # fixed relative offset prior
-
-        def predict(h, xq):
-            """Predict a ridge's y at xq from its recent history h=[(x,y),...]."""
-            h = h[-5:]
-            if len(h) >= 2:
-                xs = np.array([p[0] for p in h]); ys = np.array([p[1] for p in h])
-                if xs.max() - xs.min() > 1e-9:
-                    sl, ic = np.polyfit(xs, ys, 1)
-                    return sl * xq + ic
-            return h[-1][1]
-
-        def walk(order):
-            hist = [[(x_centers[seed_i], seed_modes[k])] for k in range(K)]
-            for i in order:
-                m = cols[i][1]
-                if len(m) == 0:
-                    continue
-                xi = x_centers[i]
-                # match available peaks to ridges via each ridge's slope prediction
-                pred = np.array([predict(hist[k], xi) for k in range(K)])
-                cost = np.abs(pred[:, None] - m[None, :])
-                ri, ci = linear_sum_assignment(cost)
-                matched, used = {}, set()
-                for r, c in zip(ri, ci):
-                    if cost[r, c] <= link_thresh:
-                        matched[r] = m[c]; used.add(c)
-                # recover unmatched ridges from siblings via the fixed-offset prior
-                if matched:
-                    s = np.median([matched[r] - rel[r] for r in matched])
-                    for k in range(K):
-                        if k in matched:
-                            continue
-                        target = s + rel[k]
-                        avail = [c for c in range(len(m)) if c not in used]
-                        if avail:
-                            c = min(avail, key=lambda c: abs(m[c] - target))
-                            if abs(m[c] - target) <= link_thresh:
-                                matched[k] = m[c]; used.add(c)
-                for r, val in matched.items():
-                    tracks[r].append((xi, val))
-                    hist[r].append((xi, val))
-
-        walk(range(seed_i - 1, -1, -1))       # leftward
-        walk(range(seed_i + 1, H.shape[0]))   # rightward
-
-        # --- one shared shape: pool de-offset points, single lowess ---
-        pool_x, pool_s = [], []
-        for k in range(K):
-            for (xi, val) in tracks[k]:
-                pool_x.append(xi); pool_s.append(val - rel[k])
-        pool_x = np.asarray(pool_x); pool_s = np.asarray(pool_s)
-        o = np.argsort(pool_x)
-        shape_sm = lowess(pool_s[o], pool_x[o], frac=0.15, it=0)
-        shared_shape = interp1d(shape_sm[:, 0], shape_sm[:, 1], bounds_error=False,
-                                fill_value=(shape_sm[0, 1], shape_sm[-1, 1]))
-
-        # --- equal-spacing offsets: offset[k] = base + k*d, d fixed to global ---
-        order_k = np.argsort([
-            np.median([v - float(shared_shape(xi)) for (xi, v) in tracks[k]])
-            if tracks[k] else rel[k] for k in range(K)])
-        kk, rr = [], []
-        for ki, k in enumerate(order_k):
-            for (xi, val) in tracks[k]:
-                kk.append(ki); rr.append(val - float(shared_shape(xi)))
-        kk = np.asarray(kk, float); rr = np.asarray(rr, float)
-        base_off = float(np.mean(rr - d * kk))
-        offsets = base_off + d * np.arange(K)
-        logger.info(f"Ridge tracker: offsets={np.round(offsets,4)}, "
-                    f"gaps={np.round(np.diff(offsets),4)}")
-
-    # --- per-channel curves: joint shape+offset, relaxed into local modes (wiggle) ---
-    if K == 1:
-        rt_spls = [make_spline(0.0)]
-    else:
-        rt_spls = _relax_channels(x, y, shared_shape, offsets, d, channel)
-
-    # --- signed residual of each PSM to its pre-assigned channel ridge ---
-    shape_x = np.asarray(shared_shape(x))
-    residuals = y - (shape_x + offsets[channel])
-
-    filtered_output = pd.DataFrame({
-        "lib_rt": x,
-        "rt": y,                                       # original observed RT
-        "channel": channel,
-        "stripped_seq": kept["stripped_seq"].to_numpy(),
-        "mz_diffs": kept["relative_error_ms1"].to_numpy(dtype=float),
-        "mz": kept["mz"].to_numpy(dtype=float),
-        "scribe_score": kept["scribe_score"].to_numpy(dtype=float),
-    })
+    grid = np.linspace(np.percentile(x, 2), np.percentile(x, 98), 400)
+    curves = np.vstack([np.asarray(rt_spls[k](grid)) for k in range(K)])  # (K, grid)
+    offsets = np.median(curves, axis=1)                  # per-channel RT level
+    d = float(np.median(np.diff(np.sort(offsets))))      # common channel gap
+    shape = (curves - offsets[:, None]).mean(axis=0)     # de-offset mean shape (plot only)
+    shared_shape = interp1d(grid, shape, bounds_error=False,
+                            fill_value=(shape[0], shape[-1]))
+    logger.info(f"Per-channel timeplex fit: offsets={np.round(offsets, 4)}, "
+                f"channel gap d={d:.4f}")
 
     return rt_spls, shared_shape, offsets, d, filtered_output, residuals
 
@@ -2339,22 +2055,23 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
 
     updatedLibrary = copy.deepcopy(librarySpectra)
 
-    # --- Phase 2: fit-independent per-channel-pair NN gate ---------------------
-    # Clean the apex set with the per-pair nearest-neighbor gate (raw |dRT| windows,
-    # exoneration rule). This uses NO RT fit, so the empirical and fine-tuned models
-    # are fit and compared on the same gated data.
+    # --- Phase 2: fit-independent cross-channel gate ---------------------------
+    # Clean the apex set with the two-stage per-pair gate (raw |dRT| HWHM windows,
+    # global + RT-local, triplet-toss). This uses NO RT fit, so the empirical and
+    # fine-tuned models are fit and compared on the same gated data.
     gate_mask = timeplex_two_stage_gate(output_df, n_timeplex)   # [exp1_2stage]
     gated_df = output_df[gate_mask].reset_index(drop=True)
 
-    # Empirical ridge fit on the GATED set (also the source of channel offsets, the
-    # channel separation d, and the OriginalRTfit shape).
+    # Per-channel empirical fit on the GATED set: each channel is fit independently
+    # with its own iterative scribe-score stepping (empirical_fit). Also the source
+    # of the per-channel offsets, the channel gap d, and the alignment-plot shape.
     rt_spls, emp_shape, offsets, d, filtered_output, residuals = \
-        fit_timeplex_ridges(gated_df, n_timeplex, results_folder)
+        fit_timeplex_channels(gated_df, n_timeplex, results_folder)
 
     channel = filtered_output["channel"].to_numpy()
     filtered_output["updated_lib_rt"] = filtered_output["lib_rt"]   # x-axis = library iRT
 
-    # rt_spls from fit_timeplex_ridges are per-channel iRT->RT curves (empirical default).
+    # rt_spls from fit_timeplex_channels are per-channel iRT->RT curves (empirical default).
     emp_curves = rt_spls
     plot_curves = emp_curves                      # what alignment_plots draws
     emp_data, emp_p, emp_cdf_auc = cdf_data(residuals)
