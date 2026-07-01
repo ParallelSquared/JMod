@@ -159,74 +159,36 @@ class SpectrumFile:
             return self.ms2scans[level_idx]
 
     def build_ms2_to_ms1_map(self):
-        """Precompute nearest MS1 scan index for each MS2 scan.
+        """Precompute the nearest-RT MS1 scan index for each MS2 scan.
 
-        When IM data is present (im_lo is not None on MS1 scans), matching
-        is done per IM bin: each MS2 scan is paired with the nearest-RT MS1
-        scan that shares the same (im_lo, im_hi) bin.
+        MS1 is one spectrum per frame (peaks carry per-peak mobility), so the
+        pairing is purely nearest-RT; any IM-window restriction is applied later
+        at query time using the MS2 band's (im_lo, im_hi). Vectorized over all
+        MS2 scans at once (the old per-scan key-miss fallback was O(n_ms2*n_ms1)).
         """
-        has_im = len(self.ms1scans) > 0 and self.ms1scans[0].im_lo is not None
+        self._im_bin_to_ms1 = None
+        n_ms1 = len(self.ms1scans)
+        n_ms2 = len(self.ms2scans)
+        ms1_nums = np.array([s.scan_num for s in self.ms1scans])
 
-        if has_im:
-            # Build per-IM-bin lookup: (im_lo, im_hi) -> (sorted_rt_array, ms1_index_array)
-            from collections import defaultdict
-            bin_to_ms1 = defaultdict(lambda: ([], []))
-            for i, s in enumerate(self.ms1scans):
-                key = (s.im_lo, s.im_hi)
-                bin_to_ms1[key][0].append(s.RT)
-                bin_to_ms1[key][1].append(i)
-            # Convert to sorted numpy arrays
-            self._im_bin_to_ms1 = {}
-            for key, (rts, idxs) in bin_to_ms1.items():
-                rt_arr = np.array(rts)
-                idx_arr = np.array(idxs, dtype=int)
-                order = np.argsort(rt_arr)
-                self._im_bin_to_ms1[key] = (rt_arr[order], idx_arr[order])
+        if n_ms1 == 0 or n_ms2 == 0:
+            self.ms2_to_ms1_map = np.zeros(n_ms2, dtype=int)
+            self.ms2_to_ms1_scan_num = (
+                ms1_nums[self.ms2_to_ms1_map] if n_ms1 > 0
+                else np.zeros(n_ms2, dtype=int))
+            return
 
-            ms1_nums = np.array([s.scan_num for s in self.ms1scans])
-            ms2_to_ms1 = np.zeros(len(self.ms2scans), dtype=int)
-            for i, s2 in enumerate(self.ms2scans):
-                im_key = (s2.im_lo, s2.im_hi)
-                if im_key in self._im_bin_to_ms1:
-                    rt_arr, idx_arr = self._im_bin_to_ms1[im_key]
-                    pos = np.searchsorted(rt_arr, s2.RT)
-                    if pos == 0:
-                        ms2_to_ms1[i] = idx_arr[0]
-                    elif pos == len(rt_arr):
-                        ms2_to_ms1[i] = idx_arr[-1]
-                    else:
-                        before, after = rt_arr[pos - 1], rt_arr[pos]
-                        ms2_to_ms1[i] = idx_arr[pos - 1] if abs(s2.RT - before) < abs(s2.RT - after) else idx_arr[pos]
-                else:
-                    # Fallback: nearest RT across all MS1
-                    all_ms1_rts = np.array([s.RT for s in self.ms1scans])
-                    pos = np.searchsorted(all_ms1_rts, s2.RT)
-                    if pos == 0:
-                        ms2_to_ms1[i] = 0
-                    elif pos == len(all_ms1_rts):
-                        ms2_to_ms1[i] = len(all_ms1_rts) - 1
-                    else:
-                        before, after = all_ms1_rts[pos - 1], all_ms1_rts[pos]
-                        ms2_to_ms1[i] = pos - 1 if abs(s2.RT - before) < abs(s2.RT - after) else pos
+        ms1_rts = np.array([s.RT for s in self.ms1scans])  # sorted ascending
+        ms2_rts = np.array([s.RT for s in self.ms2scans])
+        if n_ms1 == 1:
+            nearest = np.zeros(n_ms2, dtype=int)
         else:
-            self._im_bin_to_ms1 = None
-            ms1_rts = np.array([s.RT for s in self.ms1scans])
-            ms1_nums = np.array([s.scan_num for s in self.ms1scans])
-            ms2_to_ms1 = np.zeros(len(self.ms2scans), dtype=int)
-            for i, rt in enumerate([s.RT for s in self.ms2scans]):
-                pos = np.searchsorted(ms1_rts, rt)
-                if pos == 0:
-                    closest_idx = 0
-                elif pos == len(ms1_rts):
-                    closest_idx = len(ms1_rts) - 1
-                else:
-                    before, after = ms1_rts[pos - 1], ms1_rts[pos]
-                    closest_idx = pos - 1 if abs(rt - before) < abs(rt - after) else pos
-                ms2_to_ms1[i] = closest_idx
-            ms1_nums = np.array([s.scan_num for s in self.ms1scans])
+            pos = np.clip(np.searchsorted(ms1_rts, ms2_rts), 1, n_ms1 - 1)
+            left_closer = np.abs(ms2_rts - ms1_rts[pos - 1]) <= np.abs(ms2_rts - ms1_rts[pos])
+            nearest = np.where(left_closer, pos - 1, pos).astype(int)
 
-        self.ms2_to_ms1_map = ms2_to_ms1
-        self.ms2_to_ms1_scan_num = ms1_nums[ms2_to_ms1]  # parallel array for convenience
+        self.ms2_to_ms1_map = nearest
+        self.ms2_to_ms1_scan_num = ms1_nums[nearest]  # parallel array for convenience
 
     def get_nearest_ms1_for_scan(self, scan_id_or_num):
         """Return the closest MS1 Spectrum to the given MS2 scan (by ID or number)."""

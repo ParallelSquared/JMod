@@ -155,6 +155,13 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # Since the data was iterated in order, we can just horizontally stack (hstack)
     df = df.hstack(ms1_df)
 
+    # Per-fragment ion mobility: join each matched fragment's experimental m/z
+    # back to its MS2 band spectrum to read the observed peak's 1/K0.
+    logger.info("Looking up per-fragment ion mobilities")
+    df = df.with_columns(
+        pl.Series("frag_ion_mobility", lookup_fragment_mobilities(df, dia_spectra))
+    )
+
     # 4. Vectorized Error Calculations (Polars Expressions)
     df = df.with_columns([
         # Calculate difference
@@ -601,6 +608,45 @@ def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
             })
 
     return ms1_data
+
+
+def lookup_fragment_mobilities(df: pl.DataFrame, dia_spectra):
+    """Attach the observed ion mobility (1/K0) of each matched fragment.
+
+    For every hit, each matched fragment's experimental m/z is joined back to
+    its searched MS2 band spectrum (same spec_id) to read the parallel per-peak
+    mobility. Fragments with no observed peak (experimental m/z <= 0) get None.
+    A matched fragment whose experimental m/z has no corresponding peak in the
+    spectrum is a genuine error and raises.
+    """
+    spec_ids = df['spec_id'].to_list()
+    frag_exp_mzs = df['frag_mz_experimental'].to_list()
+
+    out = []
+    for spec_id, exp_mzs in zip(spec_ids, frag_exp_mzs):
+        scan_num = spec_id if isinstance(spec_id, int) else Spectrum.extract_scannum(spec_id)
+        spec = dia_spectra.get_by_idx(scan_num)
+        mz = spec.mz
+        mob = spec.mobility
+        if mob is None:
+            # Non-IM data (e.g. mzML): no per-fragment mobility exists.
+            out.append([None] * len(exp_mzs))
+            continue
+        row = []
+        for fmz in exp_mzs:
+            if fmz is None or fmz <= 0.0:
+                row.append(None)  # library fragment with no observed peak
+                continue
+            idx = int(np.searchsorted(mz, fmz))
+            j = min((i for i in (idx - 1, idx) if 0 <= i < len(mz)),
+                    key=lambda i: abs(mz[i] - fmz))
+            if abs(mz[j] - fmz) > 1e-4:
+                raise ValueError(
+                    f"Spectrum {spec_id}: matched fragment m/z {fmz} has no peak "
+                    f"(closest {mz[j]}, |diff|={abs(mz[j] - fmz):.6f})")
+            row.append(float(mob[j]))
+        out.append(row)
+    return out
 
 
 def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFrame:
