@@ -747,6 +747,181 @@ def fit_zero_mean_gmm_1d(x, n_components=2, max_iter=200, tol=1e-6):
     return weights, sigmas
 
 
+def fit_zero_mean_laplace_uniform_1d(x, max_iter=200, tol=1e-6):
+    """
+    Fit a zero-centered Laplace + uniform mixture to 1D data by EM.
+
+    The Laplace component captures the sharp, zero-centered core of the error
+    distribution; the uniform component absorbs the residual flat background left
+    after outlier removal, so the recovered Laplace scale ``b`` reflects only the
+    core. Mirrors ``fit_zero_mean_gmm_1d`` in structure.
+
+    Parameters
+    ----------
+    x : array
+        Errors (assumed roughly zero-centered).
+
+    Returns
+    -------
+    (weight_laplace, b) : tuple of float
+        Mixture weight of the Laplace component and its scale parameter ``b``.
+        Returns ``(nan, nan)`` when the data has no spread.
+    """
+    x = np.asarray(x, dtype=float)
+    x = x[~np.isnan(x)]
+    n = x.shape[0]
+
+    span = np.max(x) - np.min(x) if n > 0 else 0.0
+    if n == 0 or span <= 0:
+        return np.nan, np.nan
+    uniform_pdf = 1.0 / span
+
+    abs_x = np.abs(x)
+
+    # init: split on the median of |x| into core (Laplace) vs background (uniform)
+    split = np.median(abs_x)
+    resp_l = (abs_x <= split).astype(float)
+    w = resp_l.mean()
+    b = np.sum(resp_l * abs_x) / (np.sum(resp_l) + 1e-300)
+
+    def laplace_pdf(scale):
+        return np.exp(-abs_x / scale) / (2.0 * scale)
+
+    def log_likelihood():
+        mix = w * laplace_pdf(b) + (1.0 - w) * uniform_pdf
+        return np.sum(np.log(mix + 1e-300))
+
+    prev_ll = log_likelihood()
+
+    for _ in range(max_iter):
+        # E-step
+        l_term = w * laplace_pdf(b)
+        u_term = (1.0 - w) * uniform_pdf
+        denom = l_term + u_term + 1e-300
+        resp_l = l_term / denom
+
+        # M-step
+        w = resp_l.mean()
+        b = np.sum(resp_l * abs_x) / (np.sum(resp_l) + 1e-300)
+
+        ll = log_likelihood()
+        if abs(ll - prev_ll) < tol:
+            break
+        prev_ll = ll
+
+    return w, b
+
+
+def _im_error_model(im_error):
+    """
+    Shared fit behind the IM tolerance and its diagnostic plot.
+
+    Removes outliers with a Gaussian 4-sigma cut (mirroring the ``4x`` multiple the
+    RT/MS1 fits use), then models the cleaned core with a zero-centered Laplace +
+    uniform mixture. Returns ``None`` when there is insufficient data.
+    """
+    errors = np.asarray(im_error, dtype=float)
+    errors = errors[~np.isnan(errors)]
+    if errors.shape[0] < 2:
+        return None
+
+    # Gaussian outlier removal: fit a Gaussian, drop |error| >= 4*sigma
+    try:
+        _, _, sigma = fit_gaussian(errors)
+    except Exception:
+        logger.info("IM tolerance: Gaussian outlier-removal fit failed; skipping")
+        return None
+    sigma = np.abs(sigma)
+    cut = 4.0 * sigma
+    clean = errors[np.abs(errors) < cut]
+    if clean.shape[0] < 2:
+        return None
+
+    # Laplace + uniform mixture on the cleaned core
+    weight, b = fit_zero_mean_laplace_uniform_1d(clean)
+    if not np.isfinite(b) or b <= 0:
+        return None
+
+    # 99% central quantile of the zero-mean Laplace (tighter than RT/MS1 4*SD)
+    tolerance = float(stats.laplace.ppf(0.995, loc=0, scale=b))
+    return {"errors": errors, "sigma": sigma, "cut": cut, "clean": clean,
+            "weight": weight, "b": b, "tolerance": tolerance}
+
+
+def fit_im_tolerance(im_error):
+    """
+    Derive an ion-mobility (1/K0) tolerance from per-PSM IM errors.
+
+    Follows the RT/MS1 tolerance pattern: Gaussian 4-sigma outlier removal, then a
+    zero-centered Laplace + uniform mixture on the cleaned core, returning the
+    Laplace 99% central quantile as the tolerance.
+
+    Parameters
+    ----------
+    im_error : array
+        Per-PSM IM error (median matched-fragment 1/K0 minus precursor 1/K0).
+
+    Returns
+    -------
+    float or None
+        The optimized IM tolerance, or ``None`` when there is insufficient IM data.
+    """
+    model = _im_error_model(im_error)
+    if model is None:
+        return None
+    return model["tolerance"]
+
+
+def plot_im_error_mixture(im_error, results_folder=None, grid_delta=0.00127):
+    """
+    Histogram of IM errors with the fitted Laplace core and derived tolerance.
+
+    Mirrors ``plot_rt_residuals_mixture``. ``grid_delta`` jitter smears the discrete
+    TIMS-scan-grid comb so the underlying continuous shape is visible.
+    """
+    model = _im_error_model(im_error)
+    if model is None or results_folder is None:
+        return
+
+    errors = model["clean"]
+    b = model["b"]
+    weight = model["weight"]
+    tol = model["tolerance"]
+
+    # jitter to smear the discrete TIMS grid (doc section 7)
+    if grid_delta and grid_delta > 0:
+        jitter = np.linspace(-grid_delta / 2.0, grid_delta / 2.0, errors.shape[0])
+        plot_vals = errors + jitter
+    else:
+        plot_vals = errors
+
+    max_abs = np.percentile(np.abs(errors), 99) if errors.size else model["cut"]
+    bins = np.linspace(-max_abs, max_abs, 80)
+
+    plt.figure(figsize=(6, 4))
+    plt.hist(plot_vals, bins=bins, density=True, alpha=0.5,
+             edgecolor="black", linewidth=0.5)
+
+    x = np.linspace(-max_abs, max_abs, 500)
+    laplace_pdf = weight * np.exp(-np.abs(x) / b) / (2.0 * b)
+    plt.plot(x, laplace_pdf, linewidth=2, label=f"Laplace core (b={b:.4f})")
+
+    ax = plt.gca()
+    ax.axvline(0, color="black", linewidth=1)
+    ax.axvline(tol, color="red", linestyle="--", linewidth=1,
+               label=f"tol = {tol:.4f}")
+    ax.axvline(-tol, color="red", linestyle="--", linewidth=1)
+
+    plt.legend()
+    plt.xlabel("median(frag 1/K0) - precursor 1/K0")
+    plt.ylabel("density")
+    plt.title("IM Errors After Alignment")
+    plt.tight_layout()
+    plt.savefig(results_folder + "/first_search/im_errors.png",
+                dpi=600, bbox_inches="tight")
+    plt.close()
+
+
 def plot_rt_residuals_mixture(residuals,
                               feat,
                               weights=None,
@@ -1392,6 +1567,46 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         new_ms1_tol=np.abs(config.min_ms1_tol)
 
     config.opt_ms1_tol  = new_ms1_tol
+
+
+    ################################################
+    ########### Optimize IM tolerance       ########
+    ################################################
+
+    def _median_skipnull(vals):
+        if vals is None:
+            return np.nan
+        arr = np.array([v for v in vals if v is not None and np.isfinite(v)],
+                       dtype=float)
+        return np.median(arr) if arr.size else np.nan
+
+    if {"frag_ion_mobility", "precursor_mobility"}.issubset(output_df.columns):
+        frag_median = np.array([_median_skipnull(v)
+                                for v in output_df["frag_ion_mobility"]])
+        precursor = pd.to_numeric(output_df["precursor_mobility"],
+                                  errors="coerce").to_numpy(dtype=float)
+        has_frag = np.isfinite(frag_median).any()
+        has_prec = np.isfinite(precursor).any()
+
+        if not has_frag and not has_prec:
+            logger.info("No ion mobility data; keeping default IM tolerance: "
+                        f"{config.opt_im_tol}")
+        elif has_frag != has_prec:
+            raise ValueError(
+                "Inconsistent ion mobility data: one of frag_ion_mobility / "
+                "precursor_mobility is populated while the other is missing.")
+        else:
+            im_error = (frag_median - precursor)[cor_filter]
+            new_im_tol = fit_im_tolerance(im_error)
+            if new_im_tol is not None:
+                config.opt_im_tol = np.abs(new_im_tol)
+            logger.info(f"Optimized IM tolerance: {config.opt_im_tol}")
+            if results_folder is not None:
+                plot_im_error_mixture(im_error, results_folder=results_folder)
+    else:
+        logger.info("No ion mobility columns; keeping default IM tolerance: "
+                    f"{config.opt_im_tol}")
+
 
     ################################################################
     ########### Save the functions and Plot the alignment   ########
