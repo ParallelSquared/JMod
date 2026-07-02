@@ -22,6 +22,7 @@ from src.fragment_correlation import (
     _covering_scans_numba,
     _flatten_ms2_peaks,
     _match_and_fill_numba,
+    _match_and_fill_im_numba,
     _pairwise_corr_and_features_numba,
     compute_fragment_correlations,
 )
@@ -38,6 +39,24 @@ def _make_scan(mz, intens, rt, win_target, win_lower, win_upper):
         mz=np.asarray(mz, dtype=np.float64),
         intens=np.asarray(intens, dtype=np.float64),
         RT=float(rt),
+        isolation_window={
+            "isolation window target m/z": float(win_target),
+            "isolation window lower offset": float(win_lower),
+            "isolation window upper offset": float(win_upper),
+        },
+    )
+
+
+def _make_im_scan(mz, intens, mob, rt, im_lo, im_hi,
+                  win_target=500, win_lower=5, win_upper=5):
+    """Like _make_scan but with per-peak mobility and IM-bin bounds."""
+    return SimpleNamespace(
+        mz=np.asarray(mz, dtype=np.float64),
+        intens=np.asarray(intens, dtype=np.float64),
+        mobility=np.asarray(mob, dtype=np.float64),
+        RT=float(rt),
+        im_lo=float(im_lo),
+        im_hi=float(im_hi),
         isolation_window={
             "isolation window target m/z": float(win_target),
             "isolation window lower offset": float(win_lower),
@@ -89,7 +108,7 @@ def _make_library(entries):
 
 class TestMatchAndFill:
     def _call(self, scans, scan_idx, frag_mz, ppm_tol):
-        pmz, pin, poff, _rt, _lo, _hi = _flatten_ms2_peaks(scans)
+        pmz, pin, _mob, poff, _rt, _lo, _hi = _flatten_ms2_peaks(scans)
         si = np.asarray(scan_idx, dtype=np.int64)
         fm = np.asarray(frag_mz, dtype=np.float64)
         out = np.empty((len(si), len(fm)), dtype=np.float64)
@@ -157,7 +176,7 @@ class TestCSRBuilders:
 
     def test_csr_round_trip(self):
         scans = self._build()
-        pmz, pin, poff, rt, lo, hi = _flatten_ms2_peaks(scans)
+        pmz, pin, _mob, poff, rt, lo, hi = _flatten_ms2_peaks(scans)
         for i, s in enumerate(scans):
             a = poff[i]
             b = poff[i + 1]
@@ -169,7 +188,7 @@ class TestCSRBuilders:
 
     def test_window_grouping_and_rt_sort(self):
         scans = self._build()
-        _pmz, _pin, _poff, rt, lo, hi = _flatten_ms2_peaks(scans)
+        _pmz, _pin, _mob, _poff, rt, lo, hi = _flatten_ms2_peaks(scans)
         wl, wh, offs, idx, rts = _build_window_csr(rt, lo, hi)
         # Two distinct windows: (495, 505) and (505, 515).
         assert wl.shape[0] == 2
@@ -184,6 +203,58 @@ class TestCSRBuilders:
                 assert scans[s_idx].RT == s_rt
 
 
+class TestMatchAndFillIM:
+    """IM-gated matching kernel: keep only peaks within im_tol of the reference IM."""
+
+    def _peaks(self):
+        # 3 scans, one peak each at m/z 500; scans 0,1 at IM ~0.90, scan 2 an
+        # interferer at IM 1.30.
+        peak_mz = np.array([500.0, 500.0, 500.0])
+        peak_int = np.array([10.0, 20.0, 99.0])
+        peak_mob = np.array([0.90, 0.91, 1.30])
+        peak_off = np.array([0, 1, 2, 3], dtype=np.int64)
+        scan_idx = np.array([0, 1, 2], dtype=np.int64)
+        frag_mz = np.array([500.0])
+        return peak_mz, peak_int, peak_mob, peak_off, scan_idx, frag_mz
+
+    def test_median_reference_gates_interferer(self):
+        pmz, pin, pmob, poff, si, fm = self._peaks()
+        out = np.empty((3, 1)); mob = np.empty((3, 1))
+        pim = _match_and_fill_im_numba(pmz, pin, pmob, poff, si, 3, fm,
+                                       20e-6, 0.05, np.nan, out, mob)
+        assert abs(pim - 0.91) < 1e-9          # median(0.90, 0.91, 1.30)
+        assert out[0, 0] == 10.0 and out[1, 0] == 20.0 and out[2, 0] == 0.0
+
+    def test_fixed_reference(self):
+        pmz, pin, pmob, poff, si, fm = self._peaks()
+        out = np.empty((3, 1)); mob = np.empty((3, 1))
+        _match_and_fill_im_numba(pmz, pin, pmob, poff, si, 3, fm,
+                                 20e-6, 0.05, 1.30, out, mob)
+        assert out[0, 0] == 0.0 and out[1, 0] == 0.0 and out[2, 0] == 99.0
+
+    def test_co_matching_peaks_are_summed(self):
+        # One scan with two peaks at m/z 500 within im_tol of the reference IM,
+        # plus an out-of-tol interferer. The two in-tol peaks must be summed.
+        peak_mz = np.array([500.0, 500.0, 500.0])
+        peak_int = np.array([10.0, 20.0, 99.0])
+        peak_mob = np.array([0.90, 0.91, 1.30])
+        peak_off = np.array([0, 3], dtype=np.int64)   # single scan, 3 peaks
+        si = np.array([0], dtype=np.int64)
+        fm = np.array([500.0])
+        out = np.empty((1, 1)); mob = np.empty((1, 1))
+        _match_and_fill_im_numba(peak_mz, peak_int, peak_mob, peak_off, si, 1, fm,
+                                 20e-6, 0.05, 0.905, out, mob)
+        assert out[0, 0] == 30.0   # 10 + 20; the 1.30 interferer excluded
+
+    def test_no_mobility_falls_back_to_no_gating(self):
+        pmz, pin, _pmob, poff, si, fm = self._peaks()
+        out = np.empty((3, 1)); mob = np.empty((3, 1))
+        r = _match_and_fill_im_numba(pmz, pin, np.full(3, np.nan), poff, si, 3, fm,
+                                     20e-6, 0.05, np.nan, out, mob)
+        assert np.isnan(r)
+        assert out[0, 0] == 10.0 and out[1, 0] == 20.0 and out[2, 0] == 99.0
+
+
 # ---------------------------------------------------------------------------
 # _covering_scans_numba
 # ---------------------------------------------------------------------------
@@ -191,7 +262,7 @@ class TestCSRBuilders:
 
 class TestCoveringScans:
     def _build(self, scans):
-        _pmz, _pin, _poff, rt, lo, hi = _flatten_ms2_peaks(scans)
+        _pmz, _pin, _mob, _poff, rt, lo, hi = _flatten_ms2_peaks(scans)
         return _build_window_csr(rt, lo, hi)
 
     def test_window_coverage_only(self):
@@ -576,3 +647,49 @@ class TestThreadSafety:
                 np.where(np.isnan(r), -1.0, r),
                 np.where(np.isnan(reference), -1.0, reference),
             )
+
+
+# ---------------------------------------------------------------------------
+# IM-aware single-bin covering-scan selection
+# ---------------------------------------------------------------------------
+
+
+class TestIMBinSelection:
+    """With IM data, each precursor's XIC must be built from ONE IM bin across RT,
+    not the union of all overlapping IM bins at each RT."""
+
+    def _scenario(self):
+        library = _make_library([
+            {"seq": "PEPTIDE", "z": 2, "prec_mz": 500.0,
+             "frag_names": ["b3_1", "y4_1"], "frag_mz": [200.0, 400.0]},
+        ])
+        rts = np.linspace(5.0, 15.0, 11)
+        g = np.exp(-0.5 * ((rts - 10.0) / 1.0) ** 2)
+        b = 1000.0 * g
+        y = 1500.0 * g + np.array([0, 0, 1, 0, -1, 2, 0, -1, 0, 1, 0], dtype=np.float64)
+        scans = []
+        for i, rt in enumerate(rts):
+            # bin A [0.90, 0.95]: the precursor's real, coherent fragments
+            scans.append(_make_im_scan([200.0, 400.0], [b[i], y[i]],
+                                       [0.925, 0.925], rt, 0.90, 0.95))
+            # bin B [0.95, 1.00]: interfering y4-only peak at a higher IM
+            scans.append(_make_im_scan([400.0], [700.0 * g[i]],
+                                       [0.975], rt, 0.95, 1.00))
+        return library, SimpleNamespace(ms2scans=scans)
+
+    def test_selects_single_im_bin(self):
+        library, spectra = self._scenario()
+        fdc = pd.DataFrame({"seq": ["PEPTIDE"], "z": [2], "rt": [10.0], "coeff": [5.0]})
+
+        # IM on: precursor IM ~0.925 -> only bin A scans, one per RT (11), clean corr.
+        on = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.02)
+        assert on["n_corr_scans"].iloc[0] == 11
+        assert on["mean_frag_corr"].iloc[0] > 0.99
+
+        # IM off: all bins mixed -> both bins' scans used (22).
+        off = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.0)
+        assert off["n_corr_scans"].iloc[0] == 22

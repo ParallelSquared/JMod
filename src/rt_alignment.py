@@ -842,8 +842,8 @@ def _im_error_model(im_error):
     if not np.isfinite(b) or b <= 0:
         return None
 
-    # 99% central quantile of the zero-mean Laplace (tighter than RT/MS1 4*SD)
-    tolerance = float(stats.laplace.ppf(0.995, loc=0, scale=b))
+    # 4*SD of the zero-mean Laplace (SD = b*sqrt(2)), matching the RT/MS1 idiom
+    tolerance = float(4.0 * b * np.sqrt(2.0))
     return {"errors": errors, "sigma": sigma, "cut": cut, "clean": clean,
             "weight": weight, "b": b, "tolerance": tolerance}
 
@@ -853,8 +853,8 @@ def fit_im_tolerance(im_error):
     Derive an ion-mobility (1/K0) tolerance from per-PSM IM errors.
 
     Follows the RT/MS1 tolerance pattern: Gaussian 4-sigma outlier removal, then a
-    zero-centered Laplace + uniform mixture on the cleaned core, returning the
-    Laplace 99% central quantile as the tolerance.
+    zero-centered Laplace + uniform mixture on the cleaned core, returning
+    4*SD of the Laplace core (SD = b*sqrt(2)) as the tolerance.
 
     Parameters
     ----------
@@ -920,6 +920,68 @@ def plot_im_error_mixture(im_error, results_folder=None, grid_delta=0.00127):
     plt.savefig(results_folder + "/first_search/im_errors.png",
                 dpi=600, bbox_inches="tight")
     plt.close()
+
+
+def plot_im_spread(frag_mobility_lists, precursor, results_folder=None):
+    """
+    Two-panel diagnostic of IM spread among matched fragments.
+
+    Panel A: each matched fragment's ``1/K0 - precursor 1/K0`` across ALL fragments
+    (the un-collapsed version of the median-based IM error) — shows the per-fragment
+    spread the single-median tolerance does not represent.
+    Panel B: within-PSM spread (max - min of each PSM's matched-fragment ``1/K0``) —
+    shows how wide a single precursor's fragments span in the IM dimension.
+    """
+    if results_folder is None:
+        return
+
+    per_frag_dev = []   # frag 1/K0 - precursor 1/K0, one per matched fragment
+    psm_spread = []      # max - min of a PSM's matched-fragment 1/K0 values
+    for vals, prec in zip(frag_mobility_lists, precursor):
+        if vals is None or not np.isfinite(prec):
+            continue
+        arr = np.array([v for v in vals if v is not None and np.isfinite(v)],
+                       dtype=float)
+        if arr.size == 0:
+            continue
+        per_frag_dev.extend(arr - prec)
+        if arr.size >= 2:
+            psm_spread.append(arr.max() - arr.min())
+
+    per_frag_dev = np.asarray(per_frag_dev, dtype=float)
+    psm_spread = np.asarray(psm_spread, dtype=float)
+    if per_frag_dev.size == 0:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+
+    # Panel A: per-fragment deviation from precursor
+    a_max = np.percentile(np.abs(per_frag_dev), 99) if per_frag_dev.size else 0.05
+    a_max = a_max if a_max > 0 else 0.05
+    axes[0].hist(per_frag_dev, bins=np.linspace(-a_max, a_max, 80),
+                 alpha=0.6, edgecolor="black", linewidth=0.5)
+    axes[0].axvline(0, color="black", linewidth=1)
+    axes[0].set_xlabel("fragment 1/K0 - precursor 1/K0")
+    axes[0].set_ylabel("matched fragments")
+    axes[0].set_title(f"Per-fragment IM deviation (n={per_frag_dev.size})")
+
+    # Panel B: within-PSM fragment IM spread (max - min)
+    if psm_spread.size:
+        b_max = np.percentile(psm_spread, 99)
+        b_max = b_max if b_max > 0 else psm_spread.max() or 0.05
+        axes[1].hist(psm_spread, bins=np.linspace(0, b_max, 80),
+                     alpha=0.6, edgecolor="black", linewidth=0.5, color="tab:orange")
+        axes[1].axvline(np.median(psm_spread), color="red", linestyle="--",
+                        linewidth=1, label=f"median = {np.median(psm_spread):.4f}")
+        axes[1].legend()
+    axes[1].set_xlabel("within-PSM fragment 1/K0 spread (max - min)")
+    axes[1].set_ylabel("PSMs")
+    axes[1].set_title(f"Within-PSM IM spread (n={psm_spread.size})")
+
+    fig.tight_layout()
+    fig.savefig(results_folder + "/first_search/im_spread.png",
+                dpi=600, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_rt_residuals_mixture(residuals,
@@ -1603,6 +1665,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             logger.info(f"Optimized IM tolerance: {config.opt_im_tol}")
             if results_folder is not None:
                 plot_im_error_mixture(im_error, results_folder=results_folder)
+                frag_lists = output_df["frag_ion_mobility"].to_numpy()[cor_filter]
+                plot_im_spread(frag_lists, precursor[cor_filter],
+                               results_folder=results_folder)
     else:
         logger.info("No ion mobility columns; keeping default IM tolerance: "
                     f"{config.opt_im_tol}")

@@ -13,6 +13,7 @@ import os
 
 names = ["coeff", "spec_id", "Ms1_spec_id",
          "seq", "z", "window_mz", "rt",
+         "prec_im",
          "num_lib",
          "frac_lib_int",
          "frac_dia_int",
@@ -58,6 +59,7 @@ dtypes  = {"coeff":np.float32,
            "z":np.float32,
            "window_mz":np.float32,
            "rt":np.float32,
+            "prec_im":np.float32,
             "num_lib":np.float32,
             "frac_lib_int":np.float32,
             "frac_dia_int":np.float32,
@@ -110,6 +112,7 @@ _SCHEMA_SPEC = [
     # -- timeplex inserts "time_channel" here at index 5 --
     ("window_mz",                   pl.Float32,             0.0),
     ("rt",                          pl.Float32,             0.0),
+    ("prec_im",                     pl.Float32,             0.0),
     # 27 feature columns
     ("num_lib",                     pl.Float32,             0.0),
     ("frac_lib_int",                pl.Float32,             0.0),

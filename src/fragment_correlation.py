@@ -63,6 +63,9 @@ def _flatten_ms2_peaks(ms2scans):
     -------
     peak_mz_flat, peak_int_flat : np.ndarray (float64)
         Concatenated peak arrays in scan order.
+    peak_mob_flat : np.ndarray (float64)
+        Concatenated per-peak ion mobility (1/K0), parallel to ``peak_mz_flat``.
+        All ``NaN`` when the data has no ion mobility (e.g. mzML).
     peak_offsets : np.ndarray (int64, shape n_scans+1)
         Scan ``i``'s peaks live in ``peak_mz_flat[offsets[i]:offsets[i+1]]``.
     scan_rt : np.ndarray (float64, shape n_scans)
@@ -92,14 +95,18 @@ def _flatten_ms2_peaks(ms2scans):
     total = int(peak_offsets[-1])
     peak_mz_flat = np.empty(total, dtype=np.float64)
     peak_int_flat = np.empty(total, dtype=np.float64)
+    peak_mob_flat = np.full(total, np.nan, dtype=np.float64)
     for i, s in enumerate(ms2scans):
         off = int(peak_offsets[i])
         ln = int(lengths[i])
         if ln:
             peak_mz_flat[off:off + ln] = s.mz
             peak_int_flat[off:off + ln] = s.intens
+            if getattr(s, "mobility", None) is not None:
+                peak_mob_flat[off:off + ln] = s.mobility
 
-    return peak_mz_flat, peak_int_flat, peak_offsets, scan_rt, scan_win_lo, scan_win_hi
+    return (peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
+            scan_rt, scan_win_lo, scan_win_hi)
 
 
 def _build_window_csr(scan_rt, scan_win_lo, scan_win_hi):
@@ -241,6 +248,120 @@ def _match_and_fill_numba(
                 out_matrix[i, j] = scan_in[cand]
             else:
                 out_matrix[i, j] = 0.0
+
+
+@nb.njit(cache=False, nogil=True)
+def _match_and_fill_im_numba(
+    peak_mz_flat,
+    peak_int_flat,
+    peak_mob_flat,
+    peak_offsets,
+    scan_idx,
+    n_scans_used,
+    frag_mz,
+    ppm_tol,
+    im_tol,
+    prec_im_in,
+    out_matrix,
+    out_mob,
+):
+    """Like ``_match_and_fill_numba`` but IM-gated, summing co-matching peaks.
+
+    ``out_matrix[i, j]`` is the SUMMED intensity of every peak in scan
+    ``scan_idx[i]`` that lies within ``ppm_tol`` (m/z) of ``frag_mz[j]`` AND
+    within ``im_tol`` (1/K0) of the reference precursor IM. Multiple peaks that
+    fall inside both tolerances (e.g. an unresolved IM doublet) are added
+    together rather than one being chosen — mirroring the 2D-bin summation the
+    spectral-fitting stage performs.
+
+    The reference IM is ``prec_im_in`` when finite; otherwise it is derived as
+    the median mobility of the nearest-m/z matched peak per (scan, fragment)
+    (``out_mob`` is scratch for that derivation). When it cannot be determined
+    (no finite mobilities), matching falls back to m/z only — no IM gate.
+
+    Returns the reference IM used (NaN when it could not be determined).
+    """
+    n_frags = frag_mz.shape[0]
+
+    # ── Reference IM: caller-provided if finite, else median of nearest-m/z
+    #    matched mobilities. NaN => fall back to m/z-only (no IM gate). ──
+    if prec_im_in == prec_im_in:
+        prec_im = prec_im_in
+    else:
+        for i in range(n_scans_used):
+            for j in range(n_frags):
+                out_mob[i, j] = np.nan
+        n_matched = 0
+        for i in range(n_scans_used):
+            s = scan_idx[i]
+            lo = peak_offsets[s]
+            hi = peak_offsets[s + 1]
+            n_peaks = hi - lo
+            if n_peaks == 0:
+                continue
+            scan_mz = peak_mz_flat[lo:hi]
+            for j in range(n_frags):
+                q = frag_mz[j]
+                pos = np.searchsorted(scan_mz, q)
+                if pos == 0:
+                    cand = 0
+                elif pos >= n_peaks:
+                    cand = n_peaks - 1
+                else:
+                    if q - scan_mz[pos - 1] <= scan_mz[pos] - q:
+                        cand = pos - 1
+                    else:
+                        cand = pos
+                diff = scan_mz[cand] - q
+                if diff < 0.0:
+                    diff = -diff
+                if diff <= q * ppm_tol:
+                    m = peak_mob_flat[lo + cand]
+                    if m == m:
+                        out_mob[i, j] = m
+                        n_matched += 1
+        if n_matched == 0:
+            prec_im = np.nan
+        else:
+            mob_buf = np.empty(n_matched, dtype=np.float64)
+            c = 0
+            for i in range(n_scans_used):
+                for j in range(n_frags):
+                    m = out_mob[i, j]
+                    if m == m:
+                        mob_buf[c] = m
+                        c += 1
+            prec_im = np.median(mob_buf[:c])
+
+    gate = prec_im == prec_im  # finite reference => apply IM gate
+
+    # ── Summation pass: sum all peaks within m/z tol (and, if gating, im_tol) ──
+    for i in range(n_scans_used):
+        s = scan_idx[i]
+        lo = peak_offsets[s]
+        hi = peak_offsets[s + 1]
+        n_peaks = hi - lo
+        if n_peaks == 0:
+            for j in range(n_frags):
+                out_matrix[i, j] = 0.0
+            continue
+        scan_mz = peak_mz_flat[lo:hi]
+        scan_in = peak_int_flat[lo:hi]
+        for j in range(n_frags):
+            q = frag_mz[j]
+            tol = q * ppm_tol
+            lo_pos = np.searchsorted(scan_mz, q - tol)
+            hi_pos = np.searchsorted(scan_mz, q + tol, side="right")
+            acc = 0.0
+            for p in range(lo_pos, hi_pos):
+                if gate:
+                    mob = peak_mob_flat[lo + p]
+                    if mob == mob and abs(mob - prec_im) <= im_tol:
+                        acc += scan_in[p]
+                else:
+                    acc += scan_in[p]
+            out_matrix[i, j] = acc
+    return prec_im
 
 
 @nb.njit(cache=False, nogil=True)
@@ -499,6 +620,8 @@ def compute_fragment_correlations(
     mz_tol,
     fwhm_multiplier=4.0,
     min_obs=3,
+    im_tol=0.0,
+    prec_im=None,
 ):
     """Compute pairwise fragment-ion correlation features for every row of ``fdc``.
 
@@ -518,6 +641,12 @@ def compute_fragment_correlations(
         Relative PPM tolerance for MS2 peak matching (e.g., 20e-6).
     fwhm_multiplier : float, default 4.0
         RT half-width of the correlation window is ``fwhm_multiplier * fwhm``.
+    prec_im : array-like or None, default None
+        Per-row precursor ion mobility (1/K0), positionally aligned with ``fdc``,
+        carried through from the spectral-fitting stage (median of matched
+        fragment mobilities). When finite it is used directly as the IM gate
+        center; NaN entries fall back to an in-kernel median of the matched
+        mobilities. Ignored for non-IM data.
     min_obs : int, default 3
         Fragment columns with fewer than this many non-zero entries are dropped
         before correlation.
@@ -545,10 +674,28 @@ def compute_fragment_correlations(
         return pd.DataFrame(out, index=fdc.index, columns=list(FEATURE_COLUMNS))
 
     logger.info("Computing fragment-ion correlation features")
-    (peak_mz_flat, peak_int_flat, peak_offsets,
+    (peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
      scan_rt, scan_win_lo, scan_win_hi) = _flatten_ms2_peaks(ms2scans)
     (win_lo, win_hi, win_scan_offsets,
      win_scan_idx, win_scan_rt) = _build_window_csr(scan_rt, scan_win_lo, scan_win_hi)
+
+    # IM-aware matching only when the data has ion mobility and a tolerance is set.
+    _use_im = im_tol > 0.0 and getattr(ms2scans[0], "mobility", None) is not None
+    if _use_im:
+        logger.info(f"IM-aware fragment correlations (im_tol={im_tol:.5f})")
+        # Per-scan IM-bin bounds (parallel to ms2scans / scan indices), used to
+        # restrict each precursor's XIC to a single IM bin across RT.
+        scan_im_lo = np.array(
+            [s.im_lo if getattr(s, "im_lo", None) is not None else np.nan
+             for s in ms2scans], dtype=np.float64)
+        scan_im_hi = np.array(
+            [s.im_hi if getattr(s, "im_hi", None) is not None else np.nan
+             for s in ms2scans], dtype=np.float64)
+
+        # Precursor IM carried through from spectral fitting (per fdc row). When
+        # absent, prec_im stays NaN and _match_and_fill_im_numba derives it
+        # in-kernel from the matched fragment mobilities.
+        prec_im_arr = None if prec_im is None else np.asarray(prec_im, dtype=np.float64)
 
     rt_halfwidth = float(fwhm_multiplier) * float(fwhm)
 
@@ -604,11 +751,47 @@ def compute_fragment_correlations(
             continue
 
         n_frags_kept = frag_mz_kept.shape[0]
-        matrix = np.empty((n_scans, n_frags_kept), dtype=np.float64)
-        _match_and_fill_numba(
-            peak_mz_flat, peak_int_flat, peak_offsets,
-            scan_buf, n_scans, frag_mz_kept, float(mz_tol), matrix,
-        )
+
+        if _use_im:
+            # Precursor IM comes from the fitting stage (carried on fdc); no need
+            # to re-derive it here. NaN => in-kernel median fallback at fill time.
+            prec_im = float(prec_im_arr[row]) if prec_im_arr is not None else np.nan
+            # Pass 2: restrict to ONE covering scan per RT whose IM bin contains
+            # prec_im (nearest bin center) — a clean single-bin XIC across RT.
+            cov = scan_buf[:n_scans]
+            if np.isfinite(prec_im):
+                contains = (scan_im_lo[cov] <= prec_im) & (prec_im <= scan_im_hi[cov])
+                cov = cov[contains]
+            if cov.shape[0] == 0:
+                use_scans = scan_buf[:0]
+            else:
+                centers = 0.5 * (scan_im_lo[cov] + scan_im_hi[cov])
+                dist = np.abs(centers - prec_im) if np.isfinite(prec_im) else np.zeros(cov.shape[0])
+                order = np.lexsort((dist, scan_rt[cov]))  # by RT, then nearest bin
+                _, first = np.unique(scan_rt[cov][order], return_index=True)
+                use_scans = np.ascontiguousarray(cov[order][first])
+            out[row, 0] = float(use_scans.shape[0])
+            if use_scans.shape[0] == 0:
+                continue
+            n_use = use_scans.shape[0]
+            matrix = np.empty((n_use, n_frags_kept), dtype=np.float64)
+            _mob_scratch = np.empty((n_use, n_frags_kept), dtype=np.float64)
+            # Gate matched peaks by the calibrated IM tolerance: keep a fragment's
+            # intensity only when its peak mobility is within `im_tol` of prec_im.
+            # Cheap here because use_scans holds one scan per RT (not all bands).
+            _match_and_fill_im_numba(
+                peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
+                use_scans, n_use, frag_mz_kept, float(mz_tol), float(im_tol),
+                prec_im, matrix, _mob_scratch,
+            )
+        else:
+            use_scans = scan_buf[:n_scans]
+            n_use = n_scans
+            matrix = np.empty((n_use, n_frags_kept), dtype=np.float64)
+            _match_and_fill_numba(
+                peak_mz_flat, peak_int_flat, peak_offsets,
+                use_scans, n_use, frag_mz_kept, float(mz_tol), matrix,
+            )
 
         nonzero_counts = np.count_nonzero(matrix, axis=0)
         keep_cols = nonzero_counts >= min_obs
@@ -622,13 +805,23 @@ def compute_fragment_correlations(
         out[row, 2:2 + _n_pairwise_feats] = feat_scratch
 
         # Precursor–fragment correlation: extract unfragmented precursor
-        # intensity from each covering scan and correlate with fragment traces.
+        # intensity from the SAME single-bin scan set and correlate with fragments.
         prec_mz_arr_q = np.array([prec_mz], dtype=np.float64)
-        prec_matrix = np.empty((n_scans, 1), dtype=np.float64)
-        _match_and_fill_numba(
-            peak_mz_flat, peak_int_flat, peak_offsets,
-            scan_buf, n_scans, prec_mz_arr_q, float(mz_tol), prec_matrix,
-        )
+        prec_matrix = np.empty((n_use, 1), dtype=np.float64)
+        if _use_im:
+            # Same IM gate as the fragment matrix, so the precursor trace is
+            # measured at the fragment-derived mobility.
+            _prec_mob_scratch = np.empty((n_use, 1), dtype=np.float64)
+            _match_and_fill_im_numba(
+                peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
+                use_scans, n_use, prec_mz_arr_q, float(mz_tol), float(im_tol),
+                prec_im, prec_matrix, _prec_mob_scratch,
+            )
+        else:
+            _match_and_fill_numba(
+                peak_mz_flat, peak_int_flat, peak_offsets,
+                use_scans, n_use, prec_mz_arr_q, float(mz_tol), prec_matrix,
+            )
         _precursor_frag_corr_numba(
             prec_matrix[:, 0], sub_matrix, prec_corr_mean, prec_corr_max,
         )

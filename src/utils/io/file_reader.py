@@ -18,8 +18,12 @@ from src.utils.io import im_watershed
 from src.logger import logger
 
 
-def compute_im_bins(im_lo, im_hi, width=0.025, stride=0.0125):
-    """Return (N, 2) array of [bin_lo, bin_hi] for overlapping IM bins."""
+def compute_im_bins(im_lo, im_hi, width=0.05, stride=0.025):
+    """Return (N, 2) array of [bin_lo, bin_hi] for overlapping IM bins.
+
+    ``width = 2 * stride`` (50% overlap) is required by ``_assign_peaks_to_im_bins``,
+    which only tests two candidate bins per peak.
+    """
     starts = np.arange(im_lo, im_hi - width + stride * 0.5, stride)
     return np.column_stack([starts, starts + width])
 
@@ -280,28 +284,31 @@ def _assign_peaks_to_im_bins(mob_arr, im_bins):
     """Assign each peak to its overlapping IM bins.
 
     Returns arrays (peak_indices, bin_indices) where each peak may appear
-    in up to 2 bins due to 50% overlap.  O(N_peaks) complexity.
+    in up to 2 bins due to 50% overlap.  Vectorized, O(N_peaks).
     """
+    mob_arr = np.asarray(mob_arr, dtype=np.float64)
     bin_lo0 = im_bins[0, 0]
     stride = im_bins[1, 0] - im_bins[0, 0]  # 0.0125
-    width = im_bins[0, 1] - im_bins[0, 0]   # 0.025
     n_bins = len(im_bins)
 
-    # Primary bin index for each peak
+    # Primary bin index for each peak; the two overlapping candidates are
+    # raw_idx and raw_idx-1 (50% overlap => a peak lands in at most 2 bins).
     raw_idx = ((mob_arr - bin_lo0) / stride).astype(np.int64)
+    all_peaks = np.arange(mob_arr.shape[0], dtype=np.int64)
 
-    peak_indices = []
-    bin_indices = []
-    for i in range(len(mob_arr)):
-        m = mob_arr[i]
-        # Check candidate bins: raw_idx and raw_idx-1
-        for candidate in (raw_idx[i], raw_idx[i] - 1):
-            if 0 <= candidate < n_bins:
-                if im_bins[candidate, 0] <= m < im_bins[candidate, 1]:
-                    peak_indices.append(i)
-                    bin_indices.append(candidate)
+    peak_chunks = []
+    bin_chunks = []
+    for cand in (raw_idx, raw_idx - 1):
+        valid = (cand >= 0) & (cand < n_bins)
+        cv = cand[valid]
+        pv = all_peaks[valid]
+        mv = mob_arr[valid]
+        inb = (im_bins[cv, 0] <= mv) & (mv < im_bins[cv, 1])
+        peak_chunks.append(pv[inb])
+        bin_chunks.append(cv[inb])
 
-    return np.array(peak_indices, dtype=np.int64), np.array(bin_indices, dtype=np.int64)
+    return (np.concatenate(peak_chunks) if peak_chunks else np.empty(0, np.int64),
+            np.concatenate(bin_chunks) if bin_chunks else np.empty(0, np.int64))
 
 
 def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: pl.DataFrame, im_bins: np.ndarray) -> SpectrumFile:
@@ -465,9 +472,12 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         sf.scan_pos[scan_counter] = [1, idx]
         scan_counter += 1
 
-    # MS2 spectra: segment each (frame, window) into data-driven IM bands
-    # (watershed), one Spectrum per kept band. Peaks outside kept bands dropped.
-    logger.info("Building MS2 spectra with IM watershed segmentation")
+    # MS2 spectra: segment each (frame, window) into IM bands, one Spectrum per
+    # band, retaining per-peak mobility. Overlapping fixed-bin mode (the pre-
+    # watershed "overlapping windows"): each peak lands in up to 2 overlapping
+    # fixed IM bins (denormalized). Swap the `bands = ...` line to re-enable the
+    # data-driven watershed.
+    logger.info("Building MS2 spectra with overlapping fixed IM bins")
     im_watershed.reset_timings()
     for key in sorted(ms2_groups.keys()):
         rt_val, prec_mz_val, iso_width, ce = key
@@ -478,7 +488,20 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         if len(mz_concat) == 0:
             continue
 
-        bands = im_watershed.segment_window(mob_concat, intens_concat)
+        # Overlapping fixed-bin mode: group peaks by their overlapping IM bins.
+        # bands = im_watershed.segment_window(mob_concat, intens_concat)  # watershed mode
+        _pidxs, _bidxs = _assign_peaks_to_im_bins(mob_concat, im_bins)
+        bands = []
+        if _bidxs.shape[0] > 0:
+            # sort by bin, then split into contiguous per-bin chunks (no repeated scans)
+            _order = np.argsort(_bidxs, kind="stable")
+            _sb = _bidxs[_order]
+            _sp = _pidxs[_order]
+            _cuts = np.flatnonzero(np.diff(_sb)) + 1
+            _starts = np.concatenate(([0], _cuts))
+            for _s, _chunk in zip(_starts, np.split(_sp, _cuts)):
+                b = int(_sb[_s])
+                bands.append((float(im_bins[b, 0]), float(im_bins[b, 1]), _chunk))
 
         half_width = iso_width / 2.0
         t0 = perf_counter()
@@ -523,6 +546,10 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         im_watershed.TIMINGS["spectrum_construct"] += perf_counter() - t0
 
     logger.info(im_watershed.format_timings())
+    logger.info(
+        f"MS2 scans after IM binning: {len(sf.ms2scans)} "
+        f"(original windows: {len(ms2_groups)})"
+    )
 
     sf.build_ms2_to_ms1_map()
     return sf

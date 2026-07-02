@@ -208,6 +208,88 @@ class SpectrumFile:
         ms1_idx = self.ms2_to_ms1_map[ms2_idx]
         return self.ms1scans[ms1_idx]
 
+    def reband_ms1_to_ms2_bands(self, im_tol):
+        """Re-band the full-range MS1 frames to mirror the MS2 watershed bands.
+
+        For each distinct MS2 band ``(im_lo, im_hi)`` (taken from ``ms2scans``),
+        draw peaks from that band's nearest-RT full-range MS1 frame that fall
+        within ``[im_lo - im_tol, im_hi + im_tol]`` and emit a paired MS1 band
+        spectrum carrying the *same* ``(im_lo, im_hi)`` key. Peaks are
+        denormalized: a peak within ``im_tol`` of two overlapping bands appears
+        in each band's MS1 spectrum. Downstream, ``im_bin_ms1`` keyed by
+        ``(im_lo, im_hi)`` then resolves each MS2 band to its matching MS1 band.
+
+        Must run after the preliminary search (so ``im_tol`` = ``config.opt_im_tol``
+        is known) and before the main search. No-op if MS1 lacks per-peak mobility.
+        """
+        if len(self.ms1scans) == 0 or len(self.ms2scans) == 0:
+            return
+        if self.ms1scans[0].mobility is None:
+            return  # non-IM data; nothing to band
+
+        # nearest full-range MS1 frame per MS2 scan (RT-based)
+        self.build_ms2_to_ms1_map()
+        source_ms1 = self.ms1scans
+
+        next_scan = max(max(self.ms1_by_id, default=0),
+                        max(self.ms2_by_id, default=0)) + 1
+
+        new_ms1 = []
+        new_ms1_by_id = {}
+        seen = {}  # (source_idx, im_lo, im_hi) -> None, dedup identical bands
+        for ms2_idx, m2 in enumerate(self.ms2scans):
+            im_lo = getattr(m2, "im_lo", None)
+            if im_lo is None:
+                continue
+            im_hi = m2.im_hi
+            src_idx = int(self.ms2_to_ms1_map[ms2_idx])
+            ckey = (src_idx, im_lo, im_hi)
+            if ckey in seen:
+                continue
+            seen[ckey] = None
+
+            base = source_ms1[src_idx]
+            if base.mobility is None or base.mz.size == 0:
+                continue
+            mask = (base.mobility >= im_lo - im_tol) & (base.mobility <= im_hi + im_tol)
+            if not mask.any():
+                continue  # no MS1 signal in this band; skip (rare)
+
+            b = Spectrum()
+            b.scan_num = next_scan
+            b.id = f"scan={next_scan}"
+            next_scan += 1
+            b.level = 1
+            b.RT = base.RT
+            b.mz = base.mz[mask]            # base.mz is m/z-sorted; mask preserves order
+            b.intens = base.intens[mask]
+            b.mobility = base.mobility[mask]
+            b.TIC = float(b.intens.sum())
+            b.injection_time = getattr(base, "injection_time", 1.0)
+            b.collision_energy = None
+            b.isolation_window = None
+            b.im_lo = im_lo
+            b.im_hi = im_hi
+            b.scanwindow = [float(b.mz[0]), float(b.mz[-1])]
+
+            new_ms1_by_id[b.scan_num] = len(new_ms1)
+            new_ms1.append(b)
+
+        if not new_ms1:
+            return
+
+        # replace MS1 frames with the banded spectra; refresh maps
+        self.scan_pos = {k: v for k, v in self.scan_pos.items() if v[0] != 1}
+        self.ms1scans = new_ms1
+        self.ms1_by_id = new_ms1_by_id
+        for scan_num, idx in new_ms1_by_id.items():
+            self.scan_pos[scan_num] = [1, idx]
+        self.build_ms2_to_ms1_map()
+        logger.info(
+            f"Re-banded MS1: {len(new_ms1)} band spectra "
+            f"(im_tol={im_tol:.5f}) paired to MS2 watershed bands"
+        )
+
 
 def loadSpectra(mzml_file):
     logger.info("Loading Spectra...")
