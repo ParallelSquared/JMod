@@ -200,7 +200,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
     ######################################################
     #### Load the data
-    spectrumLibrary, library_tag_bool, source_channel_mass = spec_lib.loadSpecLib(lib_file)
+    spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
     DIAspectra=file_reader.loadSpectra(mzml_file)
 
     if config.args.test_mode:
@@ -235,6 +235,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectra_to_fit = DIAspectra.ms2scans
 
     ### Finding tags moved to above decoy generation, library is still tagged afterwards
+    ## TODO Running SILAC + a Tag without an untagged library is probably not currently functional
     if config.args.SILAC:
         # Find the tag object based on the tag name
         if config.args.SILAC in available_tags:
@@ -266,7 +267,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 closest_channel_mass = config.tag.channel_masses[closest_idx]
                 mass_diff = closest_channel_mass - source_channel_mass
                 source_channel = config.tag.name + "-" + str(closest_channel_name)
-                logger.info(f"Using {source_channel} as library tag. (mass difference: {mass_diff:.6f} Da)")
+                logger.info(f"Tag found in library: {source_channel}. (mass difference: {mass_diff:.6f} Da)")
+                spectrumLibrary.relabel_tag(library_tag_name, source_channel)
             else:
                 source_channel = None
         else:

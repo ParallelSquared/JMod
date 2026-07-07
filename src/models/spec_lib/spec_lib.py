@@ -313,9 +313,9 @@ def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
         mz_delta = prec_mz - untagged_mz
         source_channel_mass = (mz_delta * prec_z) / len(tag_mods)
 
-        return source_channel_mass, True
+        return source_channel_mass, True, tag_mods[0]
 
-    return 0, False
+    return 0, False, None
 
 def loadSpecLib(lib_file):
     from src.models.spec_lib.library_store import SpectrumLibraryStore
@@ -345,12 +345,12 @@ def loadSpecLib(lib_file):
             spec_lib = SpectrumLibraryStore.from_parquet(lib_file)
         spec_lib.save(store_file)
 
-    source_channel_mass, library_tag_bool = has_mass_tag(spec_lib.mod_seq, spec_lib.prec_mz, spec_lib.prec_z)
+    source_channel_mass, library_tag_bool, library_tag_name = has_mass_tag(spec_lib.mod_seq, spec_lib.prec_mz, spec_lib.prec_z)
     if library_tag_bool:
         logger.info("Spectral Library Contains Tagged Peptides")
 
     logger.info(f"Loaded {len(spec_lib)} library precursors")
-    return spec_lib, library_tag_bool, source_channel_mass
+    return spec_lib, library_tag_bool, source_channel_mass, library_tag_name
 
 
 # TODO add a test for this, make sure decoys are being generated correctly

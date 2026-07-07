@@ -1247,7 +1247,6 @@ class SpectrumLibraryStore:
 
         if source_channel:
             source_channel_mass = tag.mass_dict[source_channel]
-            logger.info(f"Using source channel for tagging library: {source_channel}: {source_channel_mass} Da")
         else:
             source_channel_mass = 0
 
@@ -1636,7 +1635,6 @@ class SpectrumLibraryStore:
                 mod_pep = first_aa + existing_mods + leading_mods + rest
             # (tag)C(UniMod:4)SQAPVYGR → C(UniMod:4)(tag)SQAPVYGR
 
-            mod_pep = mod_pep.replace("(tag)", "(PSMtag_5plex-0)")
 
             charge = get_field(row, "PrecursorCharge", "Precursor.Charge")
             try:
@@ -1661,7 +1659,7 @@ class SpectrumLibraryStore:
                 iRT = np.nan if rt == "" else float(rt)
 
                 ion_mob = get_field(row, "IonMobility", "IM", default=np.nan)
-                if ion_mob == "" or ion_mob == "0.0":  #in DIANN IM = "0.0" if experiment does not have IM
+                if ion_mob == "" or ion_mob == "0.0" or ion_mob == 0:  #in DIANN IM = "0.0" (or 0.0 as a float in parquet) if experiment does not have IM
                     ion_mob = np.nan
                 else:
                     ion_mob = float(ion_mob)
@@ -1901,6 +1899,30 @@ class SpectrumLibraryStore:
             top_n_lengths=np.empty(n, dtype=np.int32),
             parent_idx=np.full(n, -1, dtype=np.int64),
         )
+    
+    def relabel_tag(self, library_tag_name, source_channel):
+        """Replace a placeholder tag annotation (e.g. "(tag)") with a concrete
+        source channel annotation (e.g. "(PSMtag_5plex-d0)") throughout this store.
+
+        Updates both ``mod_seq`` values and the ``key_to_idx`` keys so they stay
+        in sync. Mutates in place and returns self.
+        """
+        old_annotation = "(" + library_tag_name + ")"
+        new_annotation = "(" + source_channel + ")"
+
+        for i in range(len(self.mod_seq)):
+            old_seq = self.mod_seq[i]
+            if old_annotation in old_seq:
+                self.mod_seq[i] = old_seq.replace(old_annotation, new_annotation)
+
+        new_key_to_idx = {}
+        for (mod_seq_key, charge), idx in self.key_to_idx.items():
+            if old_annotation in mod_seq_key:
+                mod_seq_key = mod_seq_key.replace(old_annotation, new_annotation)
+            new_key_to_idx[(mod_seq_key, charge)] = idx
+        self.key_to_idx = new_key_to_idx
+
+        return self
 
 
 class _EntryView:
