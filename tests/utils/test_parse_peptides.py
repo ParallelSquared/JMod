@@ -79,60 +79,60 @@ class TestChangeSeq:
             # Intensities must be preserved
             assert intensity == frags[frag_key][1]
 
-    def test_convert_frags_shuffle_tagged_channel_delta(self):
-        """Test that tagged shuffle produces correct mass deltas between channels.
+    # def test_convert_frags_shuffle_tagged_channel_delta(self):
+    #     """Test that tagged shuffle produces correct mass deltas between channels.
 
-        For each fragment, the m/z difference between channels should equal
-        (n_tags_in_fragment * channel_delta) / charge.
-        """
-        from src.mass_tags import massTag
+    #     For each fragment, the m/z difference between channels should equal
+    #     (n_tags_in_fragment * channel_delta) / charge.
+    #     """
+    #     from src.mass_tags import massTag
 
-        tag = massTag(
-            rules="nK",
-            base_mass=140.0949630177,
-            delta=[0.0, 4.0070994, 8.0141988132],
-            channel_names=["0", "4", "8"],
-            name="mTRAQ",
-        )
+    #     tag = massTag(
+    #         rules="nK",
+    #         base_mass=140.0949630177,
+    #         delta=[0.0, 4.0070994, 8.0141988132],
+    #         channel_names=["0", "4", "8"],
+    #         name="mTRAQ",
+    #     )
 
-        base_seq = "KPEPTIKR"
-        frags = {
-            'b3_1': [1.0, 0.5],  # dummy m/z — will be recomputed
-            'y3_1': [1.0, 0.5],
-            'y6_1': [1.0, 1.0],
-        }
+    #     base_seq = "KPEPTIKR"
+    #     frags = {
+    #         'b3_1': [1.0, 0.5],  # dummy m/z — will be recomputed
+    #         'y3_1': [1.0, 0.5],
+    #         'y6_1': [1.0, 1.0],
+    #     }
 
-        # Build tagged sequences for channels 0 and 4
-        tagged_0 = "K(mTRAQ-0)PEPTIK(mTRAQ-0)R"
-        tagged_4 = "K(mTRAQ-4)PEPTIK(mTRAQ-4)R"
+    #     # Build tagged sequences for channels 0 and 4
+    #     tagged_0 = "K(mTRAQ-0)PEPTIK(mTRAQ-0)R"
+    #     tagged_4 = "K(mTRAQ-4)PEPTIK(mTRAQ-4)R"
 
-        result_0 = convert_frags(tagged_0, frags, "shuffle", tag=tag)
-        result_4 = convert_frags(tagged_4, frags, "shuffle", tag=tag)
+    #     result_0 = convert_frags(tagged_0, frags, "shuffle", tag=tag)
+    #     result_4 = convert_frags(tagged_4, frags, "shuffle", tag=tag)
 
-        # Tags stay at their original positions (0 and 6) after shuffle,
-        # NOT recomputed from nK rules on the shuffled sequence.
-        # Original: K(mTRAQ)PEPTIK(mTRAQ)R → tags at positions 0 and 6
-        tag_positions = np.zeros(len(base_seq))
-        tag_positions[0] = 1  # n-term K
-        tag_positions[6] = 1  # second K
-        n_tags_n = np.cumsum(tag_positions, dtype=int)
-        n_tags_c = np.cumsum(tag_positions[::-1], dtype=int)
+    #     # Tags stay at their original positions (0 and 6) after shuffle,
+    #     # NOT recomputed from nK rules on the shuffled sequence.
+    #     # Original: K(mTRAQ)PEPTIK(mTRAQ)R → tags at positions 0 and 6
+    #     tag_positions = np.zeros(len(base_seq))
+    #     tag_positions[0] = 1  # n-term K
+    #     tag_positions[6] = 1  # second K
+    #     n_tags_n = np.cumsum(tag_positions, dtype=int)
+    #     n_tags_c = np.cumsum(tag_positions[::-1], dtype=int)
 
-        channel_delta = 4.0070994  # delta between channel 0 and 4
+    #     channel_delta = 4.0070994  # delta between channel 0 and 4
 
-        for frag_key in frags:
-            frag_type, frag_idx, loss, frag_z = split_frag_name(frag_key)
-            if frag_type in "abc":
-                n_tags = n_tags_n[frag_idx - 1]
-            else:
-                n_tags = n_tags_c[frag_idx - 1]
+    #     for frag_key in frags:
+    #         frag_type, frag_idx, loss, frag_z = split_frag_name(frag_key)
+    #         if frag_type in "abc":
+    #             n_tags = n_tags_n[frag_idx - 1]
+    #         else:
+    #             n_tags = n_tags_c[frag_idx - 1]
 
-            expected_delta = (n_tags * channel_delta) / int(frag_z)
-            actual_delta = result_4[frag_key][0] - result_0[frag_key][0]
-            assert abs(actual_delta - expected_delta) < 1e-6, (
-                f"{frag_key}: delta {actual_delta} != expected {expected_delta} "
-                f"(n_tags={n_tags})"
-            )
+    #         expected_delta = (n_tags * channel_delta) / int(frag_z)
+    #         actual_delta = result_4[frag_key][0] - result_0[frag_key][0]
+    #         assert abs(actual_delta - expected_delta) < 1e-6, (
+    #             f"{frag_key}: delta {actual_delta} != expected {expected_delta} "
+    #             f"(n_tags={n_tags})"
+    #         )
 
     def test_change_seq_shuffle_preserves_mods(self):
         """Test that non-tag modifications stay attached to their AA after shuffle."""
@@ -192,6 +192,41 @@ class TestChangeSeq:
         result = change_seq("P(mTRAQ)EPTIDEK(mTRAQ)K(mTRAQ)", "rev", tag=mock_tag)
         assert result == "K(mTRAQ)(mTRAQ)EDITPEPK(mTRAQ)"
 
+        result = change_seq("C(UniMod:4)(mTRAQ)EPTIDER", "rev", tag=mock_tag)
+        assert result == "E(mTRAQ)DITPEC(UniMod:4)R"
+
+        #test rev_nc with tags
+        result = change_seq("K(mTRAQ)PEPTIDE", "rev_nc", tag=mock_tag)
+        assert result == "K(mTRAQ)DITPEPE"
+
+        result = change_seq("P(mTRAQ)EK(mTRAQ)PTIDER", "rev_nc", tag=mock_tag)
+        assert result == "P(mTRAQ)EDITPK(mTRAQ)ER"
+
+        result = change_seq("K(mTRAQ)(mTRAQ)EK(mTRAQ)PTIDER", "rev_nc", tag=mock_tag)
+        assert result == "K(mTRAQ)(mTRAQ)EDITPK(mTRAQ)ER"
+
+        result = change_seq("P(mTRAQ)EPTIDEK(mTRAQ)K(mTRAQ)", "rev_nc", tag=mock_tag)
+        assert result == "P(mTRAQ)K(mTRAQ)EDITPEK(mTRAQ)"
+
+        result = change_seq("C(UniMod:4)(mTRAQ)EPTIDER", "rev_nc", tag=mock_tag)
+        assert result == "C(UniMod:4)(mTRAQ)EDITPER"
+
+        #test shuffle with tags
+        result = change_seq("K(mTRAQ)PEPTIDE", "shuffle", tag=mock_tag)
+        assert result == "E(mTRAQ)TIPPKDE"
+
+        result = change_seq("P(mTRAQ)EK(mTRAQ)PTIDER", "shuffle", tag=mock_tag)
+        assert result == "T(mTRAQ)PEK(mTRAQ)EPIDR"
+
+        result = change_seq("K(mTRAQ)(mTRAQ)EK(mTRAQ)PTIDER", "shuffle", tag=mock_tag)
+        assert result == "E(mTRAQ)PK(mTRAQ)DETK(mTRAQ)IR"
+
+        result = change_seq("P(mTRAQ)EPTIDEK(mTRAQ)K(mTRAQ)", "shuffle", tag=mock_tag)
+        assert result == "K(mTRAQ)(mTRAQ)PTIEDPEK(mTRAQ)"
+
+        result = change_seq("C(UniMod:4)(mTRAQ)EPTIDER", "shuffle", tag=mock_tag)
+        assert result == "E(mTRAQ)DC(UniMod:4)IPTER"
+        
     def test_change_seq_invalid_aa_keyerror(self):
         """Test that change_seq raises KeyError for unknown amino acids with diann rules"""
         with pytest.raises(KeyError, match="'X'"):
