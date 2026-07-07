@@ -183,6 +183,15 @@ class TestChangeSeq:
         result = change_seq("K(mTRAQ)PEPTIDE", "rev", tag=mock_tag)
         assert result == "D(mTRAQ)ITPEPKE"
 
+        result = change_seq("P(mTRAQ)EK(mTRAQ)PTIDER", "rev", tag=mock_tag)
+        assert result == "E(mTRAQ)DITPK(mTRAQ)EPR"
+
+        result = change_seq("K(mTRAQ)(mTRAQ)EK(mTRAQ)PTIDER", "rev", tag=mock_tag)
+        assert result == "E(mTRAQ)DITPK(mTRAQ)EK(mTRAQ)R"
+
+        result = change_seq("P(mTRAQ)EPTIDEK(mTRAQ)K(mTRAQ)", "rev", tag=mock_tag)
+        assert result == "K(mTRAQ)(mTRAQ)EDITPEPK(mTRAQ)"
+
     def test_change_seq_invalid_aa_keyerror(self):
         """Test that change_seq raises KeyError for unknown amino acids with diann rules"""
         with pytest.raises(KeyError, match="'X'"):
@@ -208,6 +217,9 @@ class TestPrecMz:
         #Since no mods dict is specified the mod is ignored 
         result = convert_prec_mz("PEPTIDE(mTRAQ-0)", 2)
         assert abs(result - 400.68725848012497) < 1e-6
+
+        result = convert_prec_mz("PEC(UniMod:4)TIDE", 2, {"UniMod:4": 57.021464})
+        assert abs(result - 432.176201) < 1e-6
 
         #Now includes the mod mass 
         result = convert_prec_mz("PEPTIDE(mTRAQ-0)", 2, {"mTRAQ-0": 144.102063})

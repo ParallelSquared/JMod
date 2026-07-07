@@ -200,7 +200,7 @@ class JModGUI(ThemedTk):
         # Speclib file input
         self.tsv_label = ttk.Label(self.input_frame, text="Spectral Library:")
         self.tsv_label.grid(row=1, column=0, padx=10, pady=10, sticky="e")
-        Hovertip(self.tsv_label, "Add a spectral library in .tsv format to be used for all runs ")
+        Hovertip(self.tsv_label, "Add a spectral library in .tsv or .parquet format to be used for all runs ")
         self.tsv_entry = ttk.Entry(self.input_frame, width=50)
         self.tsv_entry.grid(row=1, column=1, padx=10, pady=10)
         default_dict["speclib"]["tk_handle"] = self.tsv_entry
@@ -590,11 +590,11 @@ class JModGUI(ThemedTk):
 
     def select_tsv(self):
         """
-        Open filedialog for tsv
+        Open filedialog for tsv and parquet
         Button: Browse button for specLib
         """
         file_path = filedialog.askopenfilename(
-            title="Select .tsv File", filetypes=[("TSV files", "*.tsv")], initialdir=self.last_opened_dir
+            title="Select .tsv or .parquet File", filetypes=[("Spectral Library", "*.tsv *.parquet"), ("TSV files", "*.tsv"), ("Parquet files", "*.parquet")], initialdir=self.last_opened_dir
         )
         if file_path:
             self.tsv_entry.delete(0, tk.END)
@@ -1423,7 +1423,7 @@ class JModGUI(ThemedTk):
         if os.path.exists(tsv_path) is False:
             tk.messagebox.showerror("Speclib Not Found", f"Speclib not found: {tsv_path}")
             return False
-        if os.path.splitext(tsv_path)[1].lower() != ".tsv":
+        if os.path.splitext(tsv_path)[1].lower() not in [".tsv", ".parquet"]:
             tk.messagebox.showerror("Speclib Type Error", f"Speclib filetype type ({os.path.splitext(tsv_path)[1].lower()}) not supported: {tsv_path}")
             return False
         if self.output_folder_var.get() == "":

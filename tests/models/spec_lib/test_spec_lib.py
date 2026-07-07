@@ -5,7 +5,7 @@ import os
 import tempfile
 import csv
 
-from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib
+from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib, has_mass_tag
 
 
 def test_create_python_lib_basic():
@@ -143,3 +143,61 @@ def test_load_tsv_speclib_minimal():
     assert "y5_1" in frags
     assert "b3_1" in frags
     assert frags["y5_1"] == [600.1, 0.8]
+
+
+class Test_has_mass_tag():
+
+    def test_no_tags(self):
+        peptides = ["PEPTIDEK", "AAAEQAISVR"]
+        prec_mzs = [500.0, 600.0]
+        prec_zs = [2, 2]
+        source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
+        assert found is False
+        assert source_channel_mass == 0
+        assert name == None
+
+    def test_one_tag_no_mod(self):
+        peptides = ["P(PSMtag-0)EPTIDEK"]
+        prec_mzs = [464.734740 + (150/2)]
+        prec_zs = [2]
+        source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
+        assert found is True
+        assert np.isclose(source_channel_mass, 150)
+        assert name == "(PSMtag-0)"
+
+    def test_two_tags_no_mod(self):
+        peptides = ["P(PSMtag-0)EPTIDEK(PSMtag-0)"]
+        prec_mzs = [464.734740 + (300/2)]
+        prec_zs = [2]
+        source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
+        assert found is True
+        assert np.isclose(source_channel_mass, 150)
+        assert name == "(PSMtag-0)"
+
+    def test_mod(self):
+        peptides = ["PEP(UniMod:21)TIDEK"]
+        prec_mzs = [464.734740 + (79.966331/2)]
+        prec_zs = [2]
+        source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
+        assert found is False
+        assert source_channel_mass == 0
+        assert name == None
+
+    def test_mod_and_tag(self):
+        peptides = ["P(PSMtag-0)EP(UniMod:21)TIDEK"]
+        prec_mzs = [464.734740 + (79.966331/2) + (150/2)]
+        prec_zs = [2]
+        source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
+        assert found is True
+        assert np.isclose(source_channel_mass, 150)
+        assert name == "(PSMtag-0)"
+
+    def test_mod_and_tag_same_residue(self):
+        peptides = ["PEP(UniMod:21)(PSMtag-0)TIDEK"]
+        prec_mzs = [464.734740 + (79.966331/2) + (150/2)]
+        prec_zs = [2]
+        source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
+        assert found is True
+        assert np.isclose(source_channel_mass, 150)
+        assert name == "(PSMtag-0)"
+

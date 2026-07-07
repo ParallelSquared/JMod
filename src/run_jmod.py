@@ -200,7 +200,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     
     ######################################################
     #### Load the data
-    spectrumLibrary = spec_lib.loadSpecLib(lib_file)
+    spectrumLibrary, library_tag_bool, source_channel_mass = spec_lib.loadSpecLib(lib_file)
     DIAspectra=file_reader.loadSpectra(mzml_file)
 
     if config.args.test_mode:
@@ -233,25 +233,13 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary = filtered_library
     else:
         spectra_to_fit = DIAspectra.ms2scans
-    ######################################################
-    #### Generate decoys (before tagging/isotopes so they apply to both)
-    logger.info("Creating Decoy Library")
-    spectrumLibrary = spec_lib.create_decoy_lib(spectrumLibrary, rules=config.args.decoy)
-    config.target_decoy_ratio = spectrumLibrary.target_decoy_ratio
-    logger.info(f"Combined library: {spectrumLibrary.n_targets} targets, "
-                f"{spectrumLibrary.n_decoys} decoys "
-                f"(ratio={config.target_decoy_ratio:.4f})")
-    # TODO: use target_decoy_ratio to correct FDR calculation
 
-    ######################################################
-    #### Tagging #####
-
+    ### Finding tags moved to above decoy generation, library is still tagged afterwards
     if config.args.SILAC:
         # Find the tag object based on the tag name
         if config.args.SILAC in available_tags:
             config.SILAC = available_tags[config.args.SILAC]
             logger.info(f"Using SILAC: {config.SILAC.name} - {config.SILAC.n_channels} channels")
-            spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
             SILAC = config.SILAC
         else:
             if config.args.SILAC != "None":
@@ -270,8 +258,17 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         if config.args.tag in available_tags:
             config.tag = available_tags[config.args.tag]
             logger.info(f"Using tag: {config.tag.name} - {config.tag.n_channels} channels")
-            spectrumLibrary = tag_library(spectrumLibrary, config.tag)
             mass_tag = config.tag
+            if library_tag_bool:
+                diffs = np.abs(config.tag.channel_masses - source_channel_mass)
+                closest_idx = int(np.argmin(diffs))
+                closest_channel_name = config.tag.channel_names[closest_idx]
+                closest_channel_mass = config.tag.channel_masses[closest_idx]
+                mass_diff = closest_channel_mass - source_channel_mass
+                source_channel = config.tag.name + "-" + str(closest_channel_name)
+                logger.info(f"Using {source_channel} as library tag. (mass difference: {mass_diff:.6f} Da)")
+            else:
+                source_channel = None
         else:
             if config.args.tag != "None":
                 from src.utils.gui_utils import send_raise_to_TK
@@ -283,6 +280,32 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     else:
         mass_tag = None
         config.tag = None
+
+    ######################################################
+    #### Generate decoys (before tagging/isotopes so they apply to both)
+    logger.info("Creating Decoy Library")
+    # if "diann_tagged" in lib_file_name:
+    if library_tag_bool:
+        lib_gen_tag = mass_tag
+    else:
+        lib_gen_tag = None
+    spectrumLibrary = spec_lib.create_decoy_lib(spectrumLibrary, rules=config.args.decoy, tag=lib_gen_tag)
+    config.target_decoy_ratio = spectrumLibrary.target_decoy_ratio
+    logger.info(f"Combined library: {spectrumLibrary.n_targets} targets, "
+                f"{spectrumLibrary.n_decoys} decoys "
+                f"(ratio={config.target_decoy_ratio:.4f})")
+    # TODO: use target_decoy_ratio to correct FDR calculation
+
+    ######################################################
+    #### Tagging #####
+
+    if config.SILAC:
+        spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
+    if config.tag:
+        spectrumLibrary = tag_library(spectrumLibrary, config.tag, source_channel=source_channel)
+    import pickle
+    with open("lib_tagged_new.pkl", "wb") as f:
+        pickle.dump(spectrumLibrary, f)
 
     ######################################################
     #### RT/MZ Alignment (initial search uses target entries only) #####

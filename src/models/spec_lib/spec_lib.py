@@ -18,6 +18,9 @@ import copy
 import src.config as config
 from src.iso_functions import gen_isotopes_dict
 from src.logger import logger
+import re
+from pyteomics import mass
+unimods = mass.Unimod()
 
 
 # load in spec library (tsv)
@@ -268,7 +271,51 @@ def load_blib(spec_lib_file):
 
     
 # lib = load_blib("/Volumes/One Touch/PTI/Specter/EcoliSpectralLibrary.blib")    
+_MOD_PATTERN = re.compile(r"\(([^)]+)\)")
+_UNIMOD_PATTERN = re.compile(r"^UniMod:\d+$", re.IGNORECASE)
 
+def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
+    """
+    Returns True if any ModifiedPeptide string contains a non-UniMod
+    parenthetical modification (a mass tag),
+    along with the back-calculated mass of that tag.
+
+    Parameters
+    ----------
+    modified_peptides : Iterable[str]
+        ModifiedPeptide strings, e.g. "P(PSMtag_5plex-0)EPTIDEK"
+    prec_mzs : Iterable[float]
+        PrecursorMz values, same order/length as modified_peptides
+    prec_zs : Iterable[float]
+        PrecursorCharge values, same order/length as modified_peptides
+
+    Returns
+    -------
+    (source_channel_mass, library_tag_bool, library_tag_name) : (float, bool, str)
+        Back-calculated mass of the tag channel from the first tagged
+        peptide found, and whether any tag was found at all. Returns
+        (0, False, None) if no tag is present.
+    """
+    for pep, prec_mz, prec_z in zip(modified_peptides, prec_mzs, prec_zs):
+        if not pep:
+            continue
+        all_mods = _MOD_PATTERN.findall(pep)
+        tag_mods = [m.strip() for m in all_mods if not _UNIMOD_PATTERN.match(m.strip())]
+        if not tag_mods:
+            continue
+
+        unimods_attached = [m.strip() for m in all_mods if _UNIMOD_PATTERN.match(m.strip())]
+        stripped_peptide = re.sub(r"\([^)]*\)", "", pep)
+        stripped_mass = mass.fast_mass(stripped_peptide)
+        unimods_mass = sum(unimods.by_id(int(u.split(":")[1]))['mono_mass'] for u in unimods_attached)
+
+        untagged_mz = (stripped_mass + unimods_mass + prec_z * 1.00727647) / prec_z
+        mz_delta = prec_mz - untagged_mz
+        source_channel_mass = (mz_delta * prec_z) / len(tag_mods)
+
+        return source_channel_mass, True
+
+    return 0, False
 
 def loadSpecLib(lib_file):
     from src.models.spec_lib.library_store import SpectrumLibraryStore
@@ -292,12 +339,18 @@ def loadSpecLib(lib_file):
         logger.info("Loading Library... from file")
         if lib_ext == "blib":
             spec_lib = SpectrumLibraryStore.from_blib(lib_file)
-        else:
+        elif lib_ext == "tsv":
             spec_lib = SpectrumLibraryStore.from_tsv(lib_file)
+        elif lib_ext == "parquet":
+            spec_lib = SpectrumLibraryStore.from_parquet(lib_file)
         spec_lib.save(store_file)
 
+    source_channel_mass, library_tag_bool = has_mass_tag(spec_lib.mod_seq, spec_lib.prec_mz, spec_lib.prec_z)
+    if library_tag_bool:
+        logger.info("Spectral Library Contains Tagged Peptides")
+
     logger.info(f"Loaded {len(spec_lib)} library precursors")
-    return spec_lib
+    return spec_lib, library_tag_bool, source_channel_mass
 
 
 # TODO add a test for this, make sure decoys are being generated correctly

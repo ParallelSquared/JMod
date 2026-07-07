@@ -320,10 +320,13 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
 
     if rules=="diann":
         new_split_seq = [diann_rules[aa] for aa in seq]
+        perm = list(range(len(seq)))
     elif rules=="rev":
         new_split_seq = seq[:-1][::-1]+seq[-1:]
+        perm = list(range(len(seq)-2, -1, -1)) + [len(seq)-1]
     elif rules=="rev_nc":
         new_split_seq = seq[:1] + seq[1:-1][::-1] + seq[-1:]
+        perm = [0] + list(range(len(seq)-2, 0, -1)) + [len(seq)-1]
     elif rules=="shuffle":
         # Shuffle body (all but C-term), keeping mods attached to their AA.
         # Seed on the tag-stripped sequence so all channels get the same shuffle.
@@ -332,17 +335,22 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
         if len(seq) > 2 and len(set(seq[:-1])) > 1:
             for attempt in range(3):
                 rng = random.Random(base_seed + attempt)
-                body = list(seq[:-1])
+                # body = list(seq[:-1])
+                body = list(range(len(seq) - 1))
                 rng.shuffle(body)
-                new_split_seq = body + [seq[-1]]
+                perm = body + [len(seq) - 1]
+                new_split_seq = [seq[i] for i in perm]
+                # new_split_seq = body + [seq[-1]]
                 if new_split_seq != list(seq):
                     break
             else:
                 # All 3 attempts matched original — fall back to reversal
                 new_split_seq = seq[:-1][::-1] + seq[-1:]
+                perm = list(range(len(seq)-2, -1, -1)) + [len(seq)-1]
         else:
             # Not enough unique residues to shuffle — reverse instead
             new_split_seq = seq[:-1][::-1] + seq[-1:]
+            perm = list(range(len(seq)-2, -1, -1)) + [len(seq)-1]
     else:
         from src.utils.gui_utils import send_raise_to_TK
         send_raise_to_TK("ValueError - Unavailable Rules Selected")
@@ -350,7 +358,15 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
     # elif rules==None:
     #     new_seq = "".join(seq)
     
-    new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq,tags)])
+    # new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq,tags)])
+    if tag:
+        n_term_tag = tags[0][:1] ##only save the first tag as N terminal sepcific (double tagged n-terminal K)
+        residue_tags_at_0 = tags[0][1:]  
+        new_tags = [tags[i] if i > 0 else residue_tags_at_0 for i in perm]  # non-N-term tags follow their residue
+        new_tags[0] += n_term_tag                              # N-term tag always stays at position 0
+    else:
+        new_tags = tags
+    new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq, new_tags)])
     
     return new_seq
 

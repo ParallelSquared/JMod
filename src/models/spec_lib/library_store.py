@@ -6,6 +6,7 @@ at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
 import numpy as np
 import os
 from src.utils.frag_encoding import encode_frag_name, encode_frag_names, decode_frag_names
+import re
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +135,12 @@ class _TargetView:
             parent_idx=s.parent_idx[:n].copy(),
         )
 
+def get_field(row, *names, default=None):
+            """Helper function for reading tabular data (spectral libraries) from various formats"""
+            for name in names:
+                if name in row:
+                    return row[name]
+            return default
 
 class SpectrumLibraryStore:
     """Columnar store for spectral library data.
@@ -1089,7 +1096,7 @@ class SpectrumLibraryStore:
         # seq: target seqs + decoy seqs
         decoy_seqs = np.empty(M, dtype=object)
         for j, (_, result, _) in enumerate(valid):
-            decoy_seqs[j] = result[0]
+            decoy_seqs[j] = re.sub(r'\(.*?\)', '', result[0])  #strip the sequence here in case decoys were built with tags
         seq = np.concatenate([target_store.seq, decoy_seqs])
 
         # parent_idx: -1 for targets, parent target's index for decoys
@@ -1215,7 +1222,7 @@ class SpectrumLibraryStore:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_tagged(cls, target_store, tag):
+    def from_tagged(cls, target_store, tag, source_channel=None):
         """Build a tagged SpectrumLibraryStore by pre-allocating arrays.
 
         For each entry in *target_store*, creates M copies (one per tag
@@ -1238,6 +1245,13 @@ class SpectrumLibraryStore:
 
         logger.info(f"Building tagged library (pre-allocated) with tag: {tag.name}")
 
+        if source_channel:
+            source_channel_mass = tag.mass_dict[source_channel]
+            logger.info(f"Using source channel for tagging library: {source_channel}: {source_channel_mass} Da")
+        else:
+            source_channel_mass = 0
+
+
         N = len(target_store.key_to_idx)
         M = tag.n_channels
 
@@ -1255,7 +1269,8 @@ class SpectrumLibraryStore:
         else:
             all_frag_charges = np.empty(0, dtype=np.float64)
 
-        logger.info("Computing tag positions")
+        if source_channel is None:
+            logger.info("Computing tag positions")
         for i in tqdm.tqdm(range(N)):
             mod_seq_str = target_store.mod_seq[i]
             peptide = (
@@ -1263,19 +1278,28 @@ class SpectrumLibraryStore:
                 if isinstance(mod_seq_str, str)
                 else "".join(mod_seq_str)
             )
-            split_peptide = parse_peptide(peptide)
 
-            all_tag_pos, additional_tag_masses = get_tag_pos(
-                split_peptide, tag.rules
-            )
-            n_tag_sites[i] = len(all_tag_pos)
-
-            num_tags_n = np.cumsum(additional_tag_masses, dtype=int)
-            num_tags_c = np.cumsum(additional_tag_masses[::-1], dtype=int)
-
-            for pos in all_tag_pos:
-                split_peptide[pos] += "(" + tag.name + ")"
-            tagged_templates[i] = "".join(split_peptide)
+            if source_channel is not None:
+                src_channel_name = source_channel.replace(tag.name + "-", "")
+                strip_annotation = "(" + tag.name + "-" + src_channel_name + ")"
+                # Relabel to generic tag.name, preserving exact positions
+                tagged_templates[i] = peptide.replace(strip_annotation, "(" + tag.name + ")")
+                
+                # Derive tag positions from what's actually in the sequence
+                split_peptide = parse_peptide(tagged_templates[i])
+                actual_tag_mask = np.array([res.count("(" + tag.name + ")") for res in split_peptide], dtype=int)
+                n_tag_sites[i] = actual_tag_mask.sum()
+                num_tags_n = np.cumsum(actual_tag_mask)
+                num_tags_c = np.cumsum(actual_tag_mask[::-1])
+            else:
+                split_peptide = parse_peptide(peptide)
+                all_tag_pos, additional_tag_masses = get_tag_pos(split_peptide, tag.rules)
+                n_tag_sites[i] = len(all_tag_pos)
+                num_tags_n = np.cumsum(additional_tag_masses, dtype=int)
+                num_tags_c = np.cumsum(additional_tag_masses[::-1], dtype=int)
+                for pos in all_tag_pos:
+                    split_peptide[pos] += "(" + tag.name + ")"
+                tagged_templates[i] = "".join(split_peptide)
 
             foff = int(target_store.frag_offsets[i])
             flen = int(target_store.frag_lengths[i])
@@ -1370,7 +1394,7 @@ class SpectrumLibraryStore:
             out_seq[out_idx] = target_store.seq[i]
             out_prec_mz[out_idx] = (
                 target_store.prec_mz[i]
-                + tag_mass * n_tag_sites[i] / target_store.prec_z[i]
+                + (tag_mass - source_channel_mass) * n_tag_sites[i] / target_store.prec_z[i]
             )
             out_prec_z[out_idx] = target_store.prec_z[i]
             out_iRT[out_idx] = target_store.iRT[i]
@@ -1408,7 +1432,7 @@ class SpectrumLibraryStore:
                 local_charges = all_frag_charges[foff:foff + flen]
 
                 tag_mass = tag.channel_masses[c]
-                new_mz = src_mz + (tag_mass * local_n_tags / local_charges)
+                new_mz = src_mz + ((tag_mass - source_channel_mass) * local_n_tags / local_charges)
 
                 # Frag data (original ordering)
                 out_frag_data[cursor:cursor + flen, 0] = new_mz
@@ -1551,111 +1575,143 @@ class SpectrumLibraryStore:
     # ------------------------------------------------------------------
     # Factory: direct TSV parser
     # ------------------------------------------------------------------
-
     @classmethod
     def from_tsv(cls, spec_lib_file):
-        """Parse a DIA-NN / FragPipe TSV directly into columnar form."""
-        import csv
+        from src.logger import logger
+        logger.info("using: SpectrumLibraryStore.from_tsv")
+        return cls._read_from_tsv_or_parquet(spec_lib_file, "tsv")
+
+    @classmethod
+    def from_parquet(cls, spec_lib_file):
+        from src.logger import logger
+        logger.info("using: SpectrumLibraryStore.from_parquet")
+        return cls._read_from_tsv_or_parquet(spec_lib_file, "parquet")
+
+    @classmethod
+    def _iter_rows(cls, spec_lib_file, file_type):
+        if file_type == "tsv":
+            import csv
+            with open(spec_lib_file, newline="") as f:
+                yield from csv.DictReader(f, delimiter="\t")
+        elif file_type == "parquet":
+            import pyarrow.parquet as pq
+            yield from pq.read_table(spec_lib_file).to_pylist()
+
+    ##TODO optimize parquet reading
+
+    @classmethod
+    def _read_from_tsv_or_parquet(cls, spec_lib_file, file_type):
+        """Parse a DIA-NN / FragPipe TSV or Parquet directly into columnar form."""
         from src.utils.misc_functions import frag_to_peak
         from src.logger import logger
-
-        logger.info("using: SpectrumLibraryStore.from_tsv")
 
         # First pass: accumulate into per-precursor lists
         precursor_order = []
         precursor_data = {}
+        num_decoys_skipped = 0
 
-        with open(spec_lib_file, newline="") as tsv_file:
-            csv_reader = csv.DictReader(tsv_file, delimiter="\t")
+        for row in cls._iter_rows(spec_lib_file, file_type):
 
-            for row in csv_reader:
-                # Resolve ModifiedPeptide
-                if "ModifiedPeptide" in row:
-                    mod_pep = row["ModifiedPeptide"].strip("_")
-                elif "ModifiedSequence" in row:
-                    mod_pep = row["ModifiedSequence"].strip("_")
-                else:
+            # decoy_bool = get_field(row, "Decoy", default=0)
+            # if str(decoy_bool).strip() in ("1", "1.0", "True"):
+            #     num_decoys_skipped += 1
+            #     continue #skip this peptide if it is a decoy
+
+            # Resolve ModifiedPeptide
+            mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence")
+            if mod_pep is None:
+                from src.utils.gui_utils import send_raise_to_TK
+                send_raise_to_TK("ValueError - Unknown ModifiedPeptide Column")
+                raise ValueError("Unknown ModifiedPeptide column")
+            mod_pep = mod_pep.strip("_")
+
+            ## Regex for moving DIANN N-terminal tags.modifications to after the first AA
+            # match = re.match(r'^((?:\([^)]*\))+)([A-Z])(.*)$', mod_pep)
+            # if match:
+            #     mods, first_aa, rest = match.groups()
+            #     mod_pep = first_aa + mods + rest
+            match = re.match(r'^((?:\([^)]*\))+)([A-Z])((?:\([^)]*\))*)(.*)$', mod_pep)
+            if match:
+                leading_mods, first_aa, existing_mods, rest = match.groups()
+                mod_pep = first_aa + existing_mods + leading_mods + rest
+            # (tag)C(UniMod:4)SQAPVYGR → C(UniMod:4)(tag)SQAPVYGR
+
+            mod_pep = mod_pep.replace("(tag)", "(PSMtag_5plex-0)")
+
+            charge = get_field(row, "PrecursorCharge", "Precursor.Charge")
+            try:
+                charge = float(charge)
+            except:
+                from src.utils.gui_utils import send_raise_to_TK
+                send_raise_to_TK("ValueError - SpecLib Charge Cannot be Converted to Float")
+                raise ValueError("SpecLib Charge Cannot be Converted to Float")
+            unique_id = (mod_pep, charge)
+
+            if unique_id not in precursor_data:
+                precursor_order.append(unique_id)
+
+                seq = get_field(row, "StrippedPeptide", "PeptideSequence", "Stripped.Sequence")
+                rt = get_field(row, "Tr_recalibrated", "RT", "iRT")
+
+                if rt is None:
                     from src.utils.gui_utils import send_raise_to_TK
-                    send_raise_to_TK("ValueError - Unknown ModifiedPeptide Column")
-                    raise ValueError("Unknown ModifiedPeptide column")
+                    send_raise_to_TK("ValueError - Unknown Retention Time Column")
+                    raise ValueError("Unknown retention time column")
 
-                charge = float(row["PrecursorCharge"])
-                unique_id = (mod_pep, charge)
+                iRT = np.nan if rt == "" else float(rt)
 
-                if unique_id not in precursor_data:
-                    precursor_order.append(unique_id)
-                    if "StrippedPeptide" in row:
-                        seq = row["StrippedPeptide"]
-                    else:
-                        seq = row["PeptideSequence"]
-
-                    if "Tr_recalibrated" in row:
-                        rt = row["Tr_recalibrated"]
-                    elif "RT" in row:
-                        rt = row["RT"]
-                    elif "iRT" in row:
-                        rt = row["iRT"]
-                    else:
-                        from src.utils.gui_utils import send_raise_to_TK
-                        send_raise_to_TK("ValueError - Unknown Retention Time Column")
-                        raise ValueError("Unknown retention time column")
-
-                    iRT = np.nan if rt == "" else float(rt)
-
+                ion_mob = get_field(row, "IonMobility", "IM", default=np.nan)
+                if ion_mob == "" or ion_mob == "0.0":  #in DIANN IM = "0.0" if experiment does not have IM
                     ion_mob = np.nan
-                    if "IonMobility" in row and row["IonMobility"] != "":
-                        ion_mob = float(row["IonMobility"])
+                else:
+                    ion_mob = float(ion_mob)
 
-                    protein_group = row.get("ProteinGroup", "")
-                    if "ProteinName" in row:
-                        protein_name = row["ProteinName"]
-                    elif "ProteinID" in row:
-                        protein_name = row["ProteinID"]
-                    elif "ProteinId" in row:
-                        protein_name = row["ProteinId"]
-                    else:
-                        protein_name = ""
-                    genes_val = row.get("Genes", "")
-                    if not genes_val and "GeneName" in row:
-                        genes_val = row["GeneName"]
-                    uniprot_id = row.get("UniprotID", "")
+                protein_group = get_field(row, "ProteinGroup", "Protein.Group", default="")
+                protein_name = get_field(row, "ProteinName", "ProteinID", "ProteinId", "Protein.Names", default="")
+                genes_val = get_field(row, "Genes", "GeneName", default="")
+                if genes_val == "": ## standardize JMod and DIANN speclibs
+                    genes_val = '""'
+                uniprot_id = get_field(row, "ProteinID", "UniprotID", "Protein.Ids", default="")
 
-                    precursor_data[unique_id] = {
-                        'mod_seq': mod_pep,
-                        'seq': seq,
-                        'prec_mz': float(row["PrecursorMz"]),
-                        'prec_z': charge,
-                        'iRT': iRT,
-                        'ion_mob': ion_mob,
-                        'protein_group': protein_group or "",
-                        'protein_name': protein_name or "",
-                        'genes': genes_val or "",
-                        'uniprot_id': uniprot_id or "",
-                        'frags': {},
-                    }
+                prec_mz = get_field(row, "PrecursorMz", "Precursor.Mz", default=np.nan)
+                prec_mz = float(prec_mz)
+                
+                precursor_data[unique_id] = {
+                    'mod_seq': mod_pep,
+                    'seq': seq,
+                    'prec_mz': prec_mz,
+                    'prec_z': charge,
+                    'iRT': iRT,
+                    'ion_mob': ion_mob,
+                    'protein_group': protein_group or "",
+                    'protein_name': protein_name or "",
+                    'genes': genes_val or "",
+                    'uniprot_id': uniprot_id or "",
+                    'frags': {},
+                }
 
-                # Build fragment key
+            # Build fragment key
+            loss = get_field(row, "FragmentLossType", "Fragment.Loss.Type", default="")
+            loss = str(loss)
+            if loss in ["unknown", "noloss", ""]:
                 loss = ""
-                if "FragmentLossType" in row:
-                    loss = str(row["FragmentLossType"])
-                    if loss in ["unknown", "noloss", ""]:
-                        loss = ""
-                    else:
-                        loss = "-" + loss
+            else:
+                loss = "-" + loss
 
-                if "FragmentNumber" in row:
-                    frag_type = str(row["FragmentType"]) + str(row["FragmentNumber"]) + loss + "_" + str(row["FragmentCharge"])
-                else:
-                    frag_type = str(row["FragmentType"]) + str(row["FragmentSeriesNumber"]) + loss + "_" + str(row["FragmentCharge"])
+            frag_type = get_field(row, "FragmentType", "Fragment.Type")
+            frag_num = get_field(row, "FragmentNumber", "FragmentSeriesNumber", "Fragment.Series.Number")
+            frag_charge = get_field(row, "FragmentCharge", "Fragment.Charge")
+            frag_type = str(frag_type) + str(frag_num) + loss + "_" + str(frag_charge)
 
-                if "FragmentMz" in row:
-                    frag_mz = float(row["FragmentMz"])
-                    frag_int = float(row["RelativeIntensity"])
-                else:
-                    frag_mz = float(row["ProductMz"])
-                    frag_int = float(row["LibraryIntensity"])
+            frag_mz = get_field(row, "FragmentMz", "ProductMz", "Product.Mz")
+            frag_mz = float(frag_mz)
+            frag_int = get_field(row, "RelativeIntensity", "LibraryIntensity", "Relative.Intensity")
+            frag_int = float(frag_int)
 
-                precursor_data[unique_id]['frags'][frag_type] = [frag_mz, frag_int]
+            precursor_data[unique_id]['frags'][frag_type] = [frag_mz, frag_int]
+
+        if num_decoys_skipped > 0:
+            logger.info(f"{num_decoys_skipped} decoys removed from input library")
 
         # Second pass: convert to columnar arrays
         n = len(precursor_order)
