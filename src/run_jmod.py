@@ -305,9 +305,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
     if config.tag:
         spectrumLibrary = tag_library(spectrumLibrary, config.tag, source_channel=source_channel)
-    import pickle
-    with open("lib_tagged_new.pkl", "wb") as f:
-        pickle.dump(spectrumLibrary, f)
 
     ######################################################
     #### RT/MZ Alignment (initial search uses target entries only) #####

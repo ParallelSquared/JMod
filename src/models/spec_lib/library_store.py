@@ -1607,14 +1607,16 @@ class SpectrumLibraryStore:
         # First pass: accumulate into per-precursor lists
         precursor_order = []
         precursor_data = {}
-        num_decoys_skipped = 0
+        decoy_precursors = set()
 
         for row in cls._iter_rows(spec_lib_file, file_type):
 
-            # decoy_bool = get_field(row, "Decoy", default=0)
-            # if str(decoy_bool).strip() in ("1", "1.0", "True"):
-            #     num_decoys_skipped += 1
-            #     continue #skip this peptide if it is a decoy
+            decoy_bool = get_field(row, "Decoy", default=0)
+            if str(decoy_bool).strip() in ("1", "1.0", "True"):
+                mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence").strip("_")
+                charge = float(get_field(row, "PrecursorCharge", "Precursor.Charge"))
+                decoy_precursors.add((mod_pep, charge))
+                continue #skip this peptide if it is a decoy
 
             # Resolve ModifiedPeptide
             mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence")
@@ -1708,8 +1710,8 @@ class SpectrumLibraryStore:
 
             precursor_data[unique_id]['frags'][frag_type] = [frag_mz, frag_int]
 
-        if num_decoys_skipped > 0:
-            logger.info(f"{num_decoys_skipped} decoys removed from input library")
+        if len(decoy_precursors) > 0:
+            logger.info(f"{len(decoy_precursors)} decoy precursors removed from input library")
 
         # Second pass: convert to columnar arrays
         n = len(precursor_order)
