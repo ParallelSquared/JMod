@@ -158,7 +158,9 @@ python path/to/run_jmod.py --config_json path/to/config.json
 We have provided a small .mzML file and a small library to run a quick JMod search to check all dependencies and environment variables are working properly. The raw file and library can be found in data/test_mode_filtered.mzML and data/filtered_library.tsv respectively. This quick search can be run on the command line with the following command:
 
 ```
-python path/to/run_jmod.py -i path/to/data/test_mode_filtered.mzML -l path/to/data/filtered_library.tsv
+cd path/to/JMod-Main
+
+python run_jmod.py -i data/test_mode_filtered.mzML -l data/filtered_library.tsv
 ```
 
 </details>
