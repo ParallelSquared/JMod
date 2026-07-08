@@ -17,8 +17,8 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 ###
 ## Table of Contents
 - [Setting up JMod](#setting-up-jmod)
-  - [Windows Batch Script](#setting-up-jmod-with-windows-gui-batch-script)
-  - [Command Line Setup](#setting-up-a-jmod-uv-environment-via-the-command-line)
+  - [Windows Batch Script](#windows-setup)
+  - [Command Line Setup](#linuxmacos-setup)
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
   - [Library Structure](#library-structure)
@@ -29,9 +29,9 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 ###
 ## Setting up JMod
 
-### Setting up JMod with Windows GUI Batch Script
+### Windows Setup
 
-This `.bat` executable is only compatible with Windows computers. If your computer is running MacOS/Linux, please scroll down to the command line UV environment installation to set up and run JMod.
+JMod has a `.bat` executable is only compatible with Windows computers. Follow the instructions below to launch the JMod GUI via the `.bat`.
 
 1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
 
@@ -44,7 +44,7 @@ This `.bat` executable is only compatible with Windows computers. If your comput
 ![alt text](/Help/JMod_GUI.jpeg "JMod GUI Image")
 
 
-### Setting up a JMod UV Environment via the Command Line
+### Linux/MacOS Setup
 
 1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
 
