@@ -316,11 +316,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             logger.info("Loading Dinosaur features")
             dino_features = pd.read_csv(feature_path, delimiter="\t")
             funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align)
+                                            ms2=config.args.ms2_align, use_emp_rt=config.args.use_emp_rt)
         else:
             logger.info("Not using features")
             funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, None, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align)
+                                            ms2=config.args.ms2_align, use_emp_rt=config.args.use_emp_rt)
         # Timeplex path doesn't compute elution SD yet — use the historical default.
         vote_sigma = 1.0
 
@@ -351,10 +351,10 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     else:
         funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma = MZRTfit(
-            DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6),
+            DIAspectra, target_view, dino_features, config.args.ppm,
             results_folder=results_folder_path,
             ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
-            return_rt_models=config.args.predict_decoys,
+            return_rt_models=config.args.predict_decoys, use_emp_rt=config.args.use_emp_rt
         )
 
         # Propagate updated iRT from aligned targets back to combined store
@@ -403,8 +403,10 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     if config.args.ms2_align:
         ms2_func = funcs[2]
 
+        # for key in all_keys:
+        #     spectrumLibrary[key]["spectrum"][:,0] = ms2_func(spectrumLibrary[key]["spectrum"][:,0])
         for key in all_keys:
-            spectrumLibrary[key]["spectrum"][:,0] = ms2_func(spectrumLibrary[key]["spectrum"][:,0])
+            spectrumLibrary[key]["spectrum"][:,0] = ms2_func(spectrumLibrary[key]["spectrum"][:,0],spectrumLibrary[key]["iRT"])
     else:
         ms2_func=None
 
@@ -515,7 +517,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                        rt_filter=True,
                                        rt_tol=config.opt_rt_tol,
                                        ms1_tol=config.opt_ms1_tol,
-                                       mz_tol=(config.args.ppm * 1e-6),
+                                       mz_tol=(config.opt_ms2_tol),
                                        ms1_spectra=DIAspectra.ms1scans,
                                        return_frags=False,
                                        decoy=True,

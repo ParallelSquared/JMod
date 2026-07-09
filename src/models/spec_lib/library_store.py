@@ -95,6 +95,8 @@ class _TargetView:
     def __getattr__(self, name):
         """Delegate attribute access to the underlying store for methods
         not explicitly overridden (e.g. resolve_indices)."""
+        if name == "_store":
+            raise AttributeError(name)
         return getattr(self._store, name)
 
     def __deepcopy__(self, memo):

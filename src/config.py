@@ -102,6 +102,9 @@ FT_minimum = 1e3
 ### minimum ms1 tolerance; set to 0 to ignore
 min_ms1_tol = 0#3e-6
 
+### minimum ms2 tolerance; set to 0 to ignore
+min_ms2_tol = 0
+
 min_iso_intensity = 1e-3 ## derived empirically
 
 ## how many isotope pearsonR corr to collect
