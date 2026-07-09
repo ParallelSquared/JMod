@@ -1410,11 +1410,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
         frag_theo_mzs, frag_errors, frag_lib_rts = [], [], []
         for row in conf_df.itertuples(index=False):
-            n = len(row.frag_theo_mz)
+            n = len(row.frag_mz_calculated)
             if n == 0:
                 continue
             lib_rt = updatedLibrary[(row.seq, float(row.z))]["iRT"]
-            frag_theo_mzs.extend(row.frag_theo_mz)
+            frag_theo_mzs.extend(row.frag_mz_calculated)
             frag_errors.extend(row.relative_error_ms2)
             frag_lib_rts.extend([lib_rt] * n)
 
@@ -1431,8 +1431,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
         # Stage 2: residual m/z-dependent trend (mirrors mz_spl)
         ms2_spl = fast_modal_lowess(frag_theo_mzs, (frag_errors - f_rt_ms2(frag_lib_rts)),
-                                    local_frac=.01, anchors=1000,
-                                    grid_size=1000, post_smooth_frac=0.01)
+                                    local_frac=.03, anchors=1000,
+                                    grid_size=1000, post_smooth_frac=0.03)
 
         def ms2_func(mz, rt):
             return mz + ((ms2_spl(mz) + f_rt_ms2(rt)) * mz)
@@ -1530,7 +1530,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                             results_folder=results_folder)
         if ms2:
             ms2_alignment_plots(frag_theo_mzs, frag_lib_rts, frag_errors, f_rt_ms2, ms2_spl, results_folder=results_folder, ms2_sigmas=ms2_sigmas, ms2_weights=ms2_weights)
-
         
         cdf_plots(emp_data,emp_p,percentile,boundary,pred_data,pred_p,results_folder=results_folder)
         

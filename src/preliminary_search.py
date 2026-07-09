@@ -181,12 +181,15 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
     # Calculate spectral angle
     logger.info("Creating fragment library map")
-    fragment_library_map, fragment_mz_map = create_fragment_library_map(library_spectra)
+    fragment_library_map = create_fragment_library_map(library_spectra)
 
-    logger.info("Looking up MS2 fragment data")
-    ms2_data_list = lookup_ms2_data_list(df, dia_spectra, fragment_mz_map)
-    ms2_df = pl.DataFrame(ms2_data_list, schema={"frag_theo_mz": pl.List(pl.Float64), "relative_error_ms2": pl.List(pl.Float64)})
-    df = df.hstack(ms2_df)
+
+    df = df.with_columns(
+        (
+            (pl.col("frag_mz_experimental") - pl.col("frag_mz_calculated")) 
+            / pl.col("frag_mz_calculated")
+        ).alias("relative_error_ms2")
+    )
 
     # Filter to only peptides present in the library (before computing expensive scores)
     valid_keys_df = pl.DataFrame({
@@ -258,16 +261,14 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
 def create_fragment_library_map(library_spectra):
     """
-    Converts the library spectra dictionary into two nested, fast-lookup maps
+    Converts the library spectra dictionary into a nested, fast-lookup maps
     for spectral comparison.
 
     Keys: (Modified Sequence, Precursor Charge) [TUPLE KEY REQUIRED FOR ACCURACY]
     fragment_library_map values: Dict mapping (ion_kind, ordinal, charge) -> RelativeIntensity
-    fragment_mz_map values: Dict mapping (ion_kind, ordinal, charge) -> TheoreticalMz
     """
 
     frag_map = {}
-    mz_map = {}
     for data in library_spectra.values():
         mod_seq = data.get('mod_seq')
         prec_z = data.get('prec_z')  # New: Get precursor charge
@@ -277,7 +278,6 @@ def create_fragment_library_map(library_spectra):
             continue
 
         peptide_map = {}
-        peptide_mz_map = {}
         # The key for the map is now (modified sequence, charge)
         map_key = (mod_seq, prec_z)
 
@@ -304,13 +304,11 @@ def create_fragment_library_map(library_spectra):
             # Key for alignment: (IonType, Ordinal, Charge)
             key = (frag_type, frag_ordinal, frag_z)
             peptide_map[key] = mz_int_list[1] #relative intensity
-            peptide_mz_map[key] = mz_int_list[0] #theoretical mz
 
         if peptide_map:
             frag_map[map_key] = peptide_map  # Store map with (mod_seq, prec_z) key
-            mz_map[map_key] = peptide_mz_map
 
-    return frag_map, mz_map
+    return frag_map
 
 # Define the Polars UDF closure to capture the fragment_library_map
 def spectral_angle_polars_udf(r: dict, fragment_library_map) -> float:
@@ -610,53 +608,6 @@ def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
 
     return ms1_data
 
-def lookup_ms2_data_list(df: pl.DataFrame, dia_spectra, fragment_mz_map: dict):
-    """
-    Per-PSM fragment lookup, mirroring lookup_ms1_data_list: for each matched
-    fragment, find its theoretical m/z (from the library) and its closest
-    observed peak in that PSM's own MS2 scan.
-
-    Returns a list of dicts with list-valued fields, one dict per row of df.
-    """
-    scan_by_id = {s.scan_num: s for s in dia_spectra.ms2scans}
-
-    spec_ids = df['spec_id'].to_list()
-    seqs = df['seq'].to_list()
-    zs = df['z'].to_list()
-    charges_list = df['frag_charges'].to_list()
-    kinds_list = df['frag_kinds'].to_list()
-    ordinals_list = df['frag_fragment_ordinals'].to_list()
-    intensities_list = df['frag_intensities'].to_list()
-
-    ms2_data = []
-    for spec_id, seq, z, charges, kinds, ordinals, intensities in tqdm(
-            zip(spec_ids, seqs, zs, charges_list, kinds_list, ordinals_list, intensities_list),
-            desc="MS2 Fragment Peak Finding",
-            total=len(spec_ids),
-            leave=False):
-
-        scan = scan_by_id.get(spec_id)
-        frag_vec = fragment_mz_map.get((seq, z))
-
-        theo_mzs, rel_errors = [], []
-        if scan is not None and frag_vec is not None:
-            for c, k, o, inten in zip(charges, kinds, ordinals, intensities):
-                if inten <= 0:
-                    continue
-                theo_mz = frag_vec.get((k.upper(), o, c))
-                if theo_mz is None:
-                    continue
-                theo_mz = theo_mz
-                _, obs_mz, _ = scan.closest_peak(theo_mz)
-                theo_mzs.append(theo_mz)
-                rel_errors.append((obs_mz - theo_mz) / theo_mz)
-
-        ms2_data.append({
-            "frag_theo_mz": theo_mzs,
-            "relative_error_ms2": rel_errors,
-        })
-
-    return ms2_data
 
 def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFrame:
     """
