@@ -435,7 +435,7 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
                                     frac_matched=.8, ## NB: this may be selcting for smaller peptides
                                     rt_tol = config.rt_tol,
                                     ms1_tol = config.ms1_tol,
-                                    mz_tol = (config.args.ppm * 1e-6)
+                                    mz_tol = (config.opt_ms2_tol * 1e-6)
                                     )
         fit_outputs.append(fit_output)
         
@@ -897,8 +897,8 @@ def ms2_alignment_plots(theo_mzs, rts, errors, f_rt_ms2, ms2_spl, results_folder
     plt.hist(errors, 100, label="Theoretical m/z")
     fully_corrected = residual - ms2_spl(theo_mzs)
     vals, bins, _ = plt.hist(fully_corrected, 100, alpha=.5, label="Updated m/z")
-    plt.vlines([-config.opt_ms2_tol, config.opt_ms2_tol], 0, max(vals)*.8, color="r")
-    plt.text(config.opt_ms2_tol, max(vals)*.8, f"{np.round(1e6*config.opt_ms2_tol,2)} ppm")
+    plt.vlines([-config.opt_ms2_tol/1e6, config.opt_ms2_tol/1e6], 0, max(vals)*.8, color="r")
+    plt.text(config.opt_ms2_tol/1e6, max(vals)*.8, f"{np.round(config.opt_ms2_tol,2)} ppm")
 
     if ms2_sigmas is not None and ms2_weights is not None:
         # GMM overlay (density curves scaled to match the histogram's count-based y-axis)
@@ -1467,7 +1467,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     if ms2:
         new_ms2_tol = np.abs(ms2_boundary)
         logger.info(f"Optimized MS2 tolerance: {new_ms2_tol}")
-        config.opt_ms2_tol = new_ms2_tol
 
     new_ms1_tol = np.abs(mz_boundary)
     logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
@@ -1491,9 +1490,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             logger.info(f"Exceeded minimum MS2 tolerance: {np.abs(config.min_ms2_tol)}")
             logger.info(f"Setting new MS2 tolerance: {np.abs(config.min_ms2_tol)}")
             new_ms2_tol=np.abs(config.min_ms2_tol)
-        config.opt_ms2_tol = new_ms2_tol
+        config.opt_ms2_tol = new_ms2_tol * 1e6
     else:
-        config.opt_ms2_tol = np.abs(mz_tol*1e-6)
+        config.opt_ms2_tol = np.abs(mz_tol)
+
+    logger.info(f"Opt MS2 Tol {config.opt_ms2_tol}")
+    logger.info(f"Args PPM {config.args.ppm}")
 
 
     ################################################################

@@ -1190,11 +1190,11 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     # Compute frac_shared_intensity: fraction of library intensity from fragments shared across channels
     if fdc_list_cols is not None:
         fdc["frac_shared_intensity"] = _compute_frac_shared_intensity_from_polars(
-            fdc, fdc_list_cols, mz_tol=(config.args.ppm * 1e-6)
+            fdc, fdc_list_cols, mz_tol=(config.opt_ms2_tol * 1e-6)
         )
     else:
         fdc["frac_shared_intensity"] = _compute_frac_shared_intensity(
-            fdc, mz_tol=(config.args.ppm * 1e-6)
+            fdc, mz_tol=(config.opt_ms2_tol * 1e-6)
         )
 
     if timeplex:
@@ -1239,7 +1239,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         library=library,
         fdc=fdc,
         fwhm=elution_fwhm,
-        mz_tol=(config.args.ppm * 1e-6),
+        mz_tol=(config.opt_ms2_tol * 1e-6),
     )
     for col in corr_features.columns:
         fdc[col] = corr_features[col].values
