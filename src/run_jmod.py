@@ -197,6 +197,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     # python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
     logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
 
+    if config.args.mzml.lower().endswith(".raw"):
+        file_reader.load_rawfilereader(config.args.rawfilereader_path)
+
     
     ######################################################
     #### Load the data

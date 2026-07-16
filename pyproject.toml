@@ -62,6 +62,7 @@ deps = [
 
   # OS-specific helper
   "pywin32; platform_system == 'Windows'",
+  "pythonnet",
 
   # TensorFlow per platform
   # Mac

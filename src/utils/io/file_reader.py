@@ -534,3 +534,46 @@ def loadSpectra(input_file: str) -> SpectrumFile:
     logger.info(f"Loaded {len(spectra.ms2scans)} MS2 spectra")
     logger.info("finished")
     return spectra
+
+def load_rawfilereader(sdk_path):
+    import sys
+    import clr
+    from pathlib import Path
+        
+    try:
+        sdk_path = Path(sdk_path)
+    except:
+        from src.utils.gui_utils import send_raise_to_TK
+        send_raise_to_TK(f"Thermo RawFileReader path does not exist: {sdk_path}")
+        raise FileNotFoundError(f"Thermo RawFileReader path does not exist: {sdk_path}")
+
+    if not sdk_path.exists():
+        from src.utils.gui_utils import send_raise_to_TK
+        send_raise_to_TK(f"Thermo RawFileReader path could not be found: {sdk_path}")
+        raise FileNotFoundError(f"Thermo RawFileReader path could not be found: {sdk_path}")
+
+    if str(sdk_path) not in sys.path:
+        sys.path.append(str(sdk_path))
+
+    logger.info("Attempting to load Thermo RawFileReader .dlls")
+
+    try:
+        clr.AddReference("ThermoFisher.CommonCore.Data")
+        clr.AddReference("ThermoFisher.CommonCore.RawFileReader")
+        from ThermoFisher.CommonCore.RawFileReader import RawFileReaderAdapter # type: ignore
+        logger.info("Thermo RawFileReader .dlls loaded successfully")
+    except Exception as e:
+        error_message = ("Failed to load the Thermo RawFileReader SDK.\n\n"
+                        "Please verify that:\n"
+                        "  1. The RawFileReader SDK path is correct.\n"
+                        "  2. The folder contains the ThermoFisher.CommonCore*.dll files.\n"
+                        "  3. The DLLs have been unblocked after downloading "
+                        "(Right-click the ZIP → Properties → Unblock before extracting, "
+                        "or unblock the DLLs with PowerShell).\n"
+                        "  4. The required .NET runtime is installed.\n\n"
+                        f"Configured SDK path: {sdk_path}\n\n"
+                        f"Original error:\n{e}")
+        from src.utils.gui_utils import send_raise_to_TK
+        send_raise_to_TK(error_message)
+        raise ValueError(error_message) from e
+
