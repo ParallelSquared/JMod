@@ -151,7 +151,7 @@ python path/to/run_jmod.py --config_json path/to/config.json
 ## Thermo RAW File Support
 JMod supports direct processing of Thermo `.raw` files using Thermo's RawFileReader libraries.
 
-To enable `.raw` file support, download the latest RawFileReader release from [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/)
+To enable `.raw` file support, the latest RawFileReader release can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
 
 Thermo RawFileReader is developed and distributed by Pacific Northwest National Laboratory (PNNL) and Thermo Fisher Scientific and is licensed and distributed separately from JMod.
 
