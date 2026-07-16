@@ -104,7 +104,7 @@ Some commonly used search parameters are listed below. A more extensive list of 
 
 ```
 -i, --mzml
-  Input file in mzML format
+  Input file in mzML format or .raw format (see --rawfilereader_path for processing .raw files)
 -l, --speclib
   Spectrum library in DIANN output format (must be .tsv)
 -m --atleast_m
@@ -135,6 +135,8 @@ Some commonly used search parameters are listed below. A more extensive list of 
   default = False
 --ms1_ppm
   User provided MS1 ppm error tolerance.
+  --rawfilereader_path
+  Required for raw file reading. Path to the folder containing ThermoFisher.CommonCore.Data.dll. The latest version can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
   ```
 
 </details>
