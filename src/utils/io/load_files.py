@@ -55,57 +55,66 @@ class Spectrum:
 
     def get_vals_raw(self, raw_scan):
         """Extract values from a Thermo RawFileReader scan (parallel to get_vals).
-
-        raw_scan is a dict bundling everything needed for one scan:
-            {"raw_file": IRawDataPlus, "scan_number": int,
-             "scan_stats": ScanStatistics, "scan_event": IScanEventBase,
-             "ms_order": MSOrderType}
+        Mirrors ProteoWizard's RawFile.cpp: reads MSOrder/MassAnalyzer/precursor info
+        from GetFilterForScanNumber(), not from GetScanEventForScanNumber().GetReaction().
         """
         from ThermoFisher.CommonCore.Data.Business import Scan  # type: ignore
-        from ThermoFisher.CommonCore.Data.FilterEnums import MSOrderType  # type: ignore
+        from ThermoFisher.CommonCore.Data.FilterEnums import MSOrderType, MassAnalyzerType  # type: ignore
 
         raw_file = raw_scan["raw_file"]
         scan_number = raw_scan["scan_number"]
         scan_stats = raw_scan["scan_stats"]
-        scan_event = raw_scan["scan_event"]
+        scan_filter = raw_scan["scan_filter"]
         ms_order = raw_scan["ms_order"]
 
         self.id = f"scan={scan_number}"
         self.scan_num = scan_number
         self.level = 1 if ms_order == MSOrderType.Ms else 2
         self.RT = raw_file.RetentionTimeFromScanNumber(scan_number)
-        
-        # Ion injection time lives in trailer extra data, not ScanStatistics
+
         trailer = raw_file.GetTrailerExtraInformation(scan_number)
-        self.injection_time = np.nan  # fallback default
+        self.injection_time = 1.0
         for label, value in zip(trailer.Labels, trailer.Values):
             if "Ion Injection Time" in label:
                 self.injection_time = float(value) / 1000  # assume milliseconds
                 break
 
-        scan = Scan.FromFile(raw_file, scan_number)
-        if scan.HasCentroidStream:
-            centroid = raw_file.GetCentroidStream(scan_number, False)
-            self.mz = np.array(list(centroid.Masses), dtype=np.float64)
-            self.intens = np.array(list(centroid.Intensities), dtype=np.float64)
+        # Centroiding: FTMS uses vendor centroid stream; everything else (including
+        # Astral) falls through to Scan.ToCentroid, exactly mirroring pwiz's getMassList.
+        is_ftms = scan_filter.MassAnalyzer == MassAnalyzerType.MassAnalyzerFTMS
+        centroid_stream = raw_file.GetCentroidStream(scan_number, True) if is_ftms else None
+
+        if centroid_stream is not None and centroid_stream.Length > 0:
+            self.mz = np.array(list(centroid_stream.Masses), dtype=np.float64)
+            self.intens = np.array(list(centroid_stream.Intensities), dtype=np.float64)
         else:
-            self.mz = np.array(list(scan.PreferredMasses), dtype=np.float64)
-            self.intens = np.array(list(scan.PreferredIntensities), dtype=np.float64)
+            scan = Scan.FromFile(raw_file, scan_number)
+            # pwiz guard: degenerate scans get an empty spectrum, not an exception
+            if scan.SegmentedScanAccess.Positions.Length == 0 or scan.ScanStatistics.BasePeakIntensity == 0:
+                self.mz = np.array([], dtype=np.float64)
+                self.intens = np.array([], dtype=np.float64)
+            else:
+                centroided = Scan.ToCentroid(scan)
+                self.mz = np.array(list(centroided.SegmentedScanAccess.Positions), dtype=np.float64)
+                self.intens = np.array(list(centroided.SegmentedScanAccess.Intensities), dtype=np.float64)
 
         self.scanwindow = [scan_stats.LowMass, scan_stats.HighMass]
 
         if self.level == 2:
-            reaction = scan_event.GetReaction(0)
-            self.collision_energy = reaction.CollisionEnergy
+            # index into the filter's precursor list the same way pwiz does: i = msOrder - 2
+            i = int(ms_order) - 2
+            precursor_mz = scan_filter.GetMass(i)
+            isolation_width = scan_filter.GetIsolationWidth(i)
+
+            self.collision_energy = scan_filter.GetEnergy(i)
             self.isolation_window = {
-                "isolation window target m/z": reaction.PrecursorMass,
-                "isolation window lower offset": reaction.IsolationWidth / 2.0,
-                "isolation window upper offset": reaction.IsolationWidth / 2.0,
+                "isolation window target m/z": precursor_mz,
+                "isolation window lower offset": isolation_width / 2.0,
+                "isolation window upper offset": isolation_width / 2.0,
             }
-            self.prec_mz = self.isolation_window["isolation window target m/z"]
-            self.ms1window = self.isolation_window["isolation window target m/z"] + np.array([-1, 1]) * [
-                self.isolation_window["isolation window lower offset"],
-                self.isolation_window["isolation window upper offset"],
+            self.prec_mz = precursor_mz
+            self.ms1window = precursor_mz + np.array([-1, 1]) * [
+                isolation_width / 2.0, isolation_width / 2.0,
             ]
 
         self.TIC = scan_stats.TIC
@@ -234,19 +243,16 @@ class SpectrumFile:
             last_scan = reader.RunHeaderEx.LastSpectrum
 
             for scan_number in range(first_scan, last_scan + 1):
-                scan_event = reader.GetScanEventForScanNumber(scan_number)
-                ms_order = scan_event.MSOrder
+                scan_filter = reader.GetFilterForScanNumber(scan_number)
+                ms_order = scan_filter.MSOrder
                 if ms_order not in (MSOrderType.Ms, MSOrderType.Ms2):
                     continue
-                
-                scan_stats = reader.GetScanStatsForScanNumber(scan_number)
-
 
                 raw_scan = {
                     "raw_file": reader,
                     "scan_number": scan_number,
-                    "scan_stats": scan_stats,
-                    "scan_event": scan_event,
+                    "scan_stats": reader.GetScanStatsForScanNumber(scan_number),
+                    "scan_filter": scan_filter,
                     "ms_order": ms_order,
                 }
 
