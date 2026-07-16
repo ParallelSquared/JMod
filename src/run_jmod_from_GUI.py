@@ -34,6 +34,7 @@ import queue
 from logging.handlers import QueueHandler
 import atexit
 import sys
+from src.utils.gui_settings import load_settings, save_settings
 
 
 
@@ -186,9 +187,9 @@ class JModGUI(ThemedTk):
 
         # mzML and .d file input
         # Not saving this in default dict because we are only running one at a time
-        self.mzml_label = ttk.Label(self.input_frame, text=".mzML:")
+        self.mzml_label = ttk.Label(self.input_frame, text="Mass Spec Files:")
         self.mzml_label.grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        Hovertip(self.mzml_label, "Add any number of .mzML files to be ran sequentially ")
+        Hovertip(self.mzml_label, "Add any number of .mzML or .raw files to be ran sequentially ")
         self.file_dropdown = FileListDropdown(self.input_frame)
         self.file_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         self.mzml_button = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=self.select_mzml)
@@ -457,7 +458,40 @@ class JModGUI(ThemedTk):
         self.has_shown_no_dummy_val = False
 
 
+        ## On Startup ##
+
+        # settings = load_settings()
+        # if not settings["seen_startup_message"]:
+        #     self.show_rawfile_popup()
+        #     settings["seen_startup_message"] = True
+        #     save_settings(settings)
+
+
     ####### Miscellaneous Funcs ##########
+
+    def show_rawfile_popup(self):
+        tk.messagebox.showinfo("Raw File Processing", "Thermo .raw file processing requires the use of RawFileReader.\n\nThe latest version can be found at:\n\nhttps://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/\n\nPlease download the latest version before continuing.\n\nAlternatively, files can be converted to mzML format.")
+
+    def locate_raw_path(self):
+        response = messagebox.askyesno("RawFileReader", "Thermo .raw files require Thermo RawFileReader.\n\nHave you already downloaded RawFileReader?")
+
+        if response is False:
+            self.show_rawfile_popup()
+            return None
+        else:
+            tk.messagebox.showinfo("Point to RawFileReader", "Navigate to the download and select the RawFileReader folder titled 'netstandard2.0'")
+            folder = filedialog.askdirectory(title="Select the RawFileReader folder titled 'netstandard2.0'")
+            if not folder:
+                return None
+            return folder
+        
+
+    def _rawfilereader_path_valid(self, path):
+        p = Path(path) if path else None
+        if not p or not p.exists():
+            return False
+        return (p / "ThermoFisher.CommonCore.Data.dll").exists()
+
 
     # Info button
     def show_info(self):
@@ -580,12 +614,32 @@ class JModGUI(ThemedTk):
         Open filedialog for mzML
         Button: Browse button for mzML
         """
-        files = filedialog.askopenfilenames(title="Select .mzML or .d Files", filetypes=[("Mass Spec Files", "*.mzML *.d")], initialdir=self.last_opened_dir)
+        files = filedialog.askopenfilenames(title="Select .mzML or .raw Files", filetypes=[("Mass Spec Files", "*.mzML *.raw"), ("mzML files", "*.mzML"), ("Thermo Raw files", "*.raw")], initialdir=self.last_opened_dir)
         if files:
             for file in files:
                 if file not in self.file_dropdown.files:
+
+                    #check if user has path for RawFileReader
+                    if os.path.splitext(file)[1].lower() in [".raw"]:
+                        settings = load_settings()
+                        if not settings["rawfilereader_path"] or not self._rawfilereader_path_valid(settings["rawfilereader_path"]):
+                            new_path = self.locate_raw_path()
+                            if new_path and self._rawfilereader_path_valid(new_path):
+                                settings["rawfilereader_path"] = new_path
+                            elif new_path is None:
+                                settings["rawfilereader_path"] = None
+                            else:
+                                tk.messagebox.showerror("RawFileReader Error", f"{new_path} does not contain 'ThermoFisher.CommonCore.Data.dll'")
+                                settings["rawfilereader_path"] = None
+                            save_settings(settings)
+
+                        if not settings["rawfilereader_path"]:
+                            tk.messagebox.showinfo("File not added", f"Raw file could not be added due to absence of RawFileReader:\n\n{file}")
+                            continue
+
                     self.file_dropdown.add_files([file])
                     self.last_opened_dir = os.path.dirname(file)
+
     
 
     def select_tsv(self):
@@ -646,7 +700,7 @@ class JModGUI(ThemedTk):
             # Update args with values from JSON
             for key, value in config_data.items():
                 if key in default_dict.keys():
-                    if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF"]: ##does not allow file input from JSON. plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects
+                    if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF", "rawfilereader_path"]: ##does not allow file input from JSON. plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects
                         continue
                     if key == "speclib" or key == "output_folder":
                         if value is None or value == "":
@@ -1408,23 +1462,25 @@ class JModGUI(ThemedTk):
         tsv_path = self.tsv_entry.get().strip()
 
         if not mzml_files:
-            messagebox.showerror("Missing mzML or .d Files", "Please select the mzML or .d files before running or adding to queue.")
+            messagebox.showerror("Missing mzML or .d Files", "Please select mzML or .raw files before running or adding to queue.")
             return False
         if not tsv_path:
-            messagebox.showerror("Missing Library File", "Please select the Library file before running or adding to queue.")
+            messagebox.showerror("Missing Library File", "Please select Spectral Library file before running or adding to queue.")
             return False
         for mzml_path in mzml_files:
             if os.path.exists(mzml_path) is False:
                 tk.messagebox.showerror("Data File Not Found", f"Data File not found: {mzml_path}")
                 return False
-            if os.path.splitext(mzml_path)[1].lower() not in [".mzml"]:
-                tk.messagebox.showerror("Data File Type Error", f"Data File type not supported: {mzml_path}")
+            mass_spec_filetypes = [".mzml", ".raw"]
+            if os.path.splitext(mzml_path)[1].lower() not in mass_spec_filetypes:
+                tk.messagebox.showerror("Data File Type Error", f"Data File type ({os.path.splitext(mzml_path)[1].lower()}) not in supported: {mass_spec_filetypes}")
                 return False
         if os.path.exists(tsv_path) is False:
             tk.messagebox.showerror("Speclib Not Found", f"Speclib not found: {tsv_path}")
             return False
-        if os.path.splitext(tsv_path)[1].lower() not in [".tsv", ".parquet"]:
-            tk.messagebox.showerror("Speclib Type Error", f"Speclib filetype type ({os.path.splitext(tsv_path)[1].lower()}) not supported: {tsv_path}")
+        speclib_filetypes = [".tsv", ".parquet"]
+        if os.path.splitext(tsv_path)[1].lower() not in speclib_filetypes:
+            tk.messagebox.showerror("Speclib Type Error", f"Speclib filetype type ({os.path.splitext(tsv_path)[1].lower()}) not in supported filetypes: {speclib_filetypes}")
             return False
         if self.output_folder_var.get() == "":
             tk.messagebox.showerror("Output Folder Error", "Output Folder Error: Please Specify an Output Folder")
@@ -1466,6 +1522,9 @@ class JModGUI(ThemedTk):
                     config_args_dict[key] = True if os.path.splitext(mzml_path)[1].lower() == ".d" else False
                 else:
                     config_args_dict[key] = False
+            elif key == 'rawfilereader_path':
+                settings = load_settings()
+                config_args_dict[key] = settings["rawfilereader_path"]
             elif callable(data['special_upload']):  ##if special upload function is defined
                 try:
                     config_args_dict[key] = data['special_upload'](data['tk_handle'], handles_map)

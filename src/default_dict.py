@@ -414,7 +414,7 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
-    'rawfilereader_path': {
+    'rawfilereader_path': {  ##hardcoded in GUI because it comes from appdata settings
         'flags': ('--rawfilereader_path',),
         'default': None,
         'takes_value': True,
