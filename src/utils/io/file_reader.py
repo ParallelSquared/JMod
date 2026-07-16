@@ -132,15 +132,18 @@ class FileReader:
 
 
 def _load_mzml(filepath: str) -> SpectrumFile:
-    return SpectrumFile(filepath)
+    logger.info("Loading Spectra... from .mzML file")
+    return SpectrumFile(mzml_file=filepath)
 
 
 def _load_raw(filepath: str) -> SpectrumFile:
-    raise NotImplementedError(f".raw file support is not yet implemented ({filepath})")
+    logger.info("Loading Spectra... from .raw file")
+    return SpectrumFile(raw_file=filepath)
 
 
 def _load_d(filepath: str) -> SpectrumFile:
     """Load timsTOF .d data from peaks.parquet + analysis.tdf."""
+    logger.info("Loading Spectra... from .d file")
     d_path = filepath.rstrip("/")
 
     peaks_path = os.path.join(d_path, "peaks.parquet")
@@ -520,7 +523,6 @@ def loadSpectra(input_file: str) -> SpectrumFile:
     logger.info("Loading Spectra...")
     # python_spec_file = input_file + "_pythonspec"
     # if not os.path.exists(python_spec_file):
-    logger.info("Loading Spectra... from file")
     reader = FileReader(input_file)
     spectra = reader.read()
     #     with open(python_spec_file, "wb") as f:
