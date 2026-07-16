@@ -34,7 +34,7 @@ import queue
 from logging.handlers import QueueHandler
 import atexit
 import sys
-from src.utils.gui_settings import load_settings, save_settings
+from src.utils.gui_utils import load_settings, save_settings
 
 
 
