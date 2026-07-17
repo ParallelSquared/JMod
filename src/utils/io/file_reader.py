@@ -546,8 +546,8 @@ def load_rawfilereader(sdk_path):
         sdk_path = Path(sdk_path)
     except:
         from src.utils.gui_utils import send_raise_to_TK
-        send_raise_to_TK(f"Thermo RawFileReader path does not exist: {sdk_path}")
-        raise FileNotFoundError(f"Thermo RawFileReader path does not exist: {sdk_path}")
+        send_raise_to_TK(f"Thermo RawFileReader path does not exist: {sdk_path}\n          If using command line please add with --rawfilereader_path 'path' or manually update in JMod/Data/Settings.json.")
+        raise FileNotFoundError(f"Thermo RawFileReader path does not exist: {sdk_path}\n          If using command line please add with --rawfilereader_path 'path' or manually update in JMod/Data/Settings.json.")
 
     if not sdk_path.exists():
         from src.utils.gui_utils import send_raise_to_TK
@@ -569,9 +569,8 @@ def load_rawfilereader(sdk_path):
                         "Please verify that:\n"
                         "  1. The RawFileReader SDK path is correct.\n"
                         "  2. The folder contains the ThermoFisher.CommonCore*.dll files.\n"
-                        "  3. The DLLs have been unblocked after downloading "
-                        "(Right-click the ZIP → Properties → Unblock before extracting, "
-                        "or unblock the DLLs with PowerShell).\n"
+                        "  3. 'ThermoFisher.CommonCore.Data.dll' and 'ThermoFisher.CommonCore.RawFileReader.dll' have been unblocked after downloading "
+                        "(Right-click the ZIP → Properties → Unblock.\n"
                         "  4. The required .NET runtime is installed.\n\n"
                         f"Configured SDK path: {sdk_path}\n\n"
                         f"Original error:\n{e}")

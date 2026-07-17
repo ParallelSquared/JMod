@@ -55,17 +55,14 @@ def rename_results_folder(config):
         except Exception as rename_error:
             logging.getLogger("appLogger").warning(f"Could not rename results folder: {rename_error}")
 
-SETTINGS_DIR = Path(os.getenv("LOCALAPPDATA")) / "JMod"
+SETTINGS_DIR = Path("data")
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 
 DEFAULT_SETTINGS = {
-    "seen_startup_message": False,
     "rawfilereader_path": None,
 }
 
 def load_settings():
-    SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-
     if not SETTINGS_FILE.exists():
         return DEFAULT_SETTINGS.copy()
 
@@ -75,7 +72,6 @@ def load_settings():
     return DEFAULT_SETTINGS | settings
 
 def save_settings(settings):
-    SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=2)
 

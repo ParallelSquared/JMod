@@ -34,6 +34,7 @@ import queue
 from logging.handlers import QueueHandler
 import atexit
 import sys
+import webbrowser
 from src.utils.gui_utils import load_settings, save_settings
 
 
@@ -470,7 +471,15 @@ class JModGUI(ThemedTk):
     ####### Miscellaneous Funcs ##########
 
     def show_rawfile_popup(self):
-        tk.messagebox.showinfo("Raw File Processing", "Thermo .raw file processing requires the use of RawFileReader.\n\nThe latest version can be found at:\n\nhttps://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/\n\nPlease download the latest version before continuing.\n\nAlternatively, files can be converted to mzML format.")
+        open_page = messagebox.askyesno(
+            "Raw File Processing",
+            "Thermo .raw file processing requires Thermo RawFileReader.\n\n"
+            "Alternatively, you can convert your files to mzML format.\n\n"
+            "Would you like to open the download page in your web browser?"
+        )
+
+        if open_page:
+            webbrowser.open("https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/")
 
     def locate_raw_path(self):
         response = messagebox.askyesno("RawFileReader", "Thermo .raw files require Thermo RawFileReader.\n\nHave you already downloaded RawFileReader?")
@@ -621,6 +630,9 @@ class JModGUI(ThemedTk):
 
                     #check if user has path for RawFileReader
                     if os.path.splitext(file)[1].lower() in [".raw"]:
+                        if sys.platform != "win32":
+                            tk.messagebox.showerror("OS Error", "Direct .raw file support is only available on Windows. Please convert to mzML")
+                            continue
                         settings = load_settings()
                         if not settings["rawfilereader_path"] or not self._rawfilereader_path_valid(settings["rawfilereader_path"]):
                             new_path = self.locate_raw_path()
