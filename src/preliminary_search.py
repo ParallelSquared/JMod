@@ -701,6 +701,8 @@ def peptide_to_mod_array(peptide_str, mod_dict):
                 try:
                     mod_mass = float(mod_token)
                 except ValueError:
+                    from src.utils.gui_utils import send_raise_to_TK
+                    send_raise_to_TK(f"ValueError - Unknown modification: {mod_token}")
                     raise ValueError(f"Unknown modification: {mod_token}")
 
             next_char = peptide_str[j + 1] if j + 1 < len(peptide_str) else ''

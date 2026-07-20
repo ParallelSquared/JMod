@@ -32,6 +32,8 @@ import copy
 from scipy.interpolate import interp1d
 import statsmodels.api as sm
 from statsmodels.nonparametric.smoothers_lowess import lowess
+from scipy.optimize import minimize
+
 
 #from src.mass_tags import tag_library, mTRAQ, mTRAQ_678, mTRAQ_02468, diethyl_6plex, tag6
 
@@ -746,6 +748,236 @@ def fit_zero_mean_gmm_1d(x, n_components=2, max_iter=200, tol=1e-6):
 
     return weights, sigmas
 
+def fit_laplace_uniform_mixture_binned(x, n_bins=200, fit_a=True):
+    """
+    Fit zero-median Laplace + Uniform(-a, a) mixture using a binned,
+    log-space least-squares objective. Log-space compresses the huge
+    dynamic range between the peak and the floor, so the floor's shape
+    (not just its point count) drives the fit
+
+    Returns
+    -------
+    weight_laplace, laplace_scale (b), weight_uniform, uniform_half_width (a)
+    """
+    x = np.asarray(x, dtype=float)
+    x = x[~np.isnan(x)]
+    n = len(x)
+
+    counts, edges = np.histogram(x, bins=n_bins)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    widths = np.diff(edges)
+    obs_log = np.log1p(counts)
+
+    a_max = np.max(np.abs(x))
+
+    def model_counts(weight_l, b, a):
+        weight_l = np.clip(weight_l, 1e-6, 1 - 1e-6)
+        weight_u = 1 - weight_l
+        laplace = (1 / (2 * b)) * np.exp(-np.abs(centers) / b)
+        uniform = np.where(np.abs(centers) <= a, 1 / (2 * a), 0.0)
+        return n * widths * (weight_l * laplace + weight_u * uniform)
+
+    def objective(params):
+        if fit_a:
+            weight_l, log_b, log_a = params
+            b, a = np.exp(log_b), min(np.exp(log_a), a_max)
+            # b, a = np.exp(log_b), np.exp(log_a)
+        else:
+            weight_l, log_b = params
+            b, a = np.exp(log_b), a_max
+        pred = model_counts(weight_l, b, a)
+        pred = np.clip(pred, 1e-10, None)
+        return np.sum((obs_log - np.log1p(pred)) ** 2)
+
+    b0 = np.mean(np.abs(x))
+    if fit_a:
+        x0 = [0.9, np.log(b0), np.log(a_max)]
+    else:
+        x0 = [0.9, np.log(b0)]
+
+    res = minimize(objective, x0=x0, method="Nelder-Mead",
+                    options={"xatol": 1e-8, "fatol": 1e-8, "maxiter": 5000})
+
+    if fit_a:
+        weight_l, log_b, log_a = res.x
+        a = min(np.exp(log_a), a_max)
+        # a = np.exp(log_a)
+    else:
+        weight_l, log_b = res.x
+        a = a_max
+    b = np.exp(log_b)
+    weight_l = np.clip(weight_l, 1e-6, 1 - 1e-6)
+    weight_u = 1 - weight_l
+
+    return weight_l, b, weight_u, a
+
+
+def ms2_boundary_at_PEP(weight_l, b, a, ms2_ppm_error_prelim, target_PEP=0.5, n_grid=10000):
+    """
+    Evaluate PEP(x) = uniform/(uniform+laplace) over the grid
+    [-ms2_ppm_error_prelim, +ms2_ppm_error_prelim] (in ppm), and return
+    the |x| (in ppm) where PEP first crosses target_PEP.
+
+    Assumes weight_l, b, a are all in the same relative units (e.g. 1e-6
+    per ppm) that the mixture was originally fit in -- ms2_ppm_error_prelim
+    is converted to match.
+    """
+    weight_u = 1 - weight_l
+
+    # convert the ppm search bound into the same relative units as b/a
+    x_max = ms2_ppm_error_prelim * 1e-6
+    x_grid = np.linspace(0, x_max, n_grid)  # fold to |x|, PEP is symmetric
+
+    uniform = np.where(x_grid <= a, weight_u / (2 * a), 0.0)
+    laplace = weight_l * (1 / (2 * b)) * np.exp(-x_grid / b)
+    pep = uniform / (uniform + laplace)
+
+    crosses = pep >= target_PEP
+
+    if pep[0] >= target_PEP:
+        # even the peak center exceeds target -- no clean boundary
+        boundary_rel = ms2_ppm_error_prelim * 1e-6
+        logger.warning(f"MS2 calibration too poor to reliably estimate a fragment tolerance; using default of {boundary_rel * 1e6} ppm instead")
+    elif not crosses.any():
+        # genuinely never crosses anywhere in the grid -- not just an edge artifact
+        boundary_rel = ms2_ppm_error_prelim * 1e-6
+        logger.info(f"MS2 calibration tolerance exceeds preliminary search ppm: {ms2_ppm_error_prelim}")
+    else:
+        idx = np.argmax(crosses)
+        boundary_rel = x_grid[idx]
+
+    return boundary_rel
+
+
+def plot_pep_curve(weight_l, b, a, ms2_ppm_error_prelim, target_PEP=0.5,
+                     n_grid=10000, results_folder=None):
+    """
+    Plot PEP(x) = uniform/(uniform+laplace) across
+    [-ms2_ppm_error_prelim, +ms2_ppm_error_prelim] (ppm), with the
+    target_PEP boundary marked.
+    """
+    weight_u = 1 - weight_l
+
+    ppm_grid = np.linspace(-ms2_ppm_error_prelim, ms2_ppm_error_prelim, n_grid)
+    x_grid = ppm_grid * 1e-6  # convert to relative units to match b/a
+
+    abs_x = np.abs(x_grid)
+    uniform = np.where(abs_x <= a, weight_u / (2 * a), 0.0)
+    laplace = weight_l * (1 / (2 * b)) * np.exp(-abs_x / b)
+    pep = uniform / (uniform + laplace)
+
+    boundary_rel = ms2_boundary_at_PEP(weight_l, b, a, ms2_ppm_error_prelim, target_PEP, n_grid)
+    boundary_ppm = boundary_rel * 1e6
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.plot(ppm_grid, pep, color="black", lw=2, label="PEP(x)")
+    ax.axhline(target_PEP, color="red", linestyle="--", lw=1,
+               label=f"target PEP = {target_PEP}")
+
+    if boundary_ppm > 0:
+        ax.axvline(boundary_ppm, color="red", linestyle="-", lw=1.5)
+        ax.axvline(-boundary_ppm, color="red", linestyle="-", lw=1.5)
+        ax.text(boundary_ppm, 1.02, f"{boundary_ppm:.2f} ppm",
+                color="red", ha="center", va="bottom",
+                transform=ax.get_xaxis_transform())
+
+    ax.set_xlabel("m/z difference (ppm)")
+    ax.set_ylabel("PEP (Posterior Error Probability)")
+    ax.set_ylim(0, 1)
+    ax.set_title(f"MS2 PEP curve\nweight_l={weight_l:.3g}, b={b:.3g}, a={a:.3g}")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+
+    if results_folder:
+        plt.savefig(results_folder+"/first_search/MS2_PEP.png", dpi=600, bbox_inches="tight")
+        plt.close()
+
+def ms2_boundary_at_FDR(weight_l, b, a, ms2_ppm_error_prelim, target_FDR=0.2, n_grid=10000):
+    """
+    Evaluate cumulative FDR(x) = expected fraction of false (uniform) matches
+    among all matches with |error| <= x, over the grid
+    [0, ms2_ppm_error_prelim] (in ppm), and return the |x| (in ppm) where
+    FDR first crosses target_FDR.
+
+    Unlike PEP (a pointwise density ratio), FDR is a cumulative quantity:
+    it integrates each component's mass from 0 to x rather than evaluating
+    the density at x.
+
+    Assumes weight_l, b, a are all in the same relative units (e.g. 1e-6
+    per ppm) that the mixture was originally fit in -- ms2_ppm_error_prelim
+    is converted to match.
+    """
+    weight_u = 1 - weight_l
+
+    x_max = ms2_ppm_error_prelim * 1e-6
+    x_grid = np.linspace(0, x_max, n_grid)
+
+    # cumulative mass in [0, x] for each component (folded, i.e. mass in [-x, x] / 2... 
+    # kept as one-sided masses since they cancel in the ratio)
+    uniform_mass = np.minimum(x_grid, a) / a           # saturates at 1 once x >= a
+    laplace_mass = 1 - np.exp(-x_grid / b)              # -> 1 as x grows
+
+    numerator = weight_u * uniform_mass
+    denominator = numerator + weight_l * laplace_mass
+    fdr = np.where(denominator > 0, numerator / denominator, 0.0)
+
+    crosses = fdr >= target_FDR
+
+    if fdr[0] >= target_FDR:
+        boundary_rel = ms2_ppm_error_prelim * 1e-6
+        logger.warning(f"MS2 calibration too poor to reliably estimate a fragment tolerance; using default of {boundary_rel * 1e6}")
+    elif not crosses.any():
+        boundary_rel = ms2_ppm_error_prelim * 1e-6
+        logger.info(f"MS2 calibration FDR tolerance exceeds preliminary search ppm: {ms2_ppm_error_prelim}")
+    else:
+        idx = np.argmax(crosses)
+        boundary_rel = x_grid[idx]
+
+    return boundary_rel
+
+
+def plot_fdr_curve(weight_l, b, a, ms2_ppm_error_prelim, target_FDR=0.2,
+                    n_grid=10000, results_folder=None):
+    """
+    Plot cumulative FDR(x) across [0, ms2_ppm_error_prelim] (ppm), with the
+    target_FDR boundary marked.
+    """
+    weight_u = 1 - weight_l
+
+    ppm_grid = np.linspace(0, ms2_ppm_error_prelim, n_grid)
+    x_grid = ppm_grid * 1e-6
+
+    uniform_mass = np.minimum(x_grid, a) / a
+    laplace_mass = 1 - np.exp(-x_grid / b)
+    numerator = weight_u * uniform_mass
+    denominator = numerator + weight_l * laplace_mass
+    fdr = np.where(denominator > 0, numerator / denominator, 0.0)
+
+    boundary_rel = ms2_boundary_at_FDR(weight_l, b, a, ms2_ppm_error_prelim, target_FDR, n_grid)
+    boundary_ppm = boundary_rel * 1e6
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.plot(ppm_grid, fdr, color="black", lw=2, label="FDR(x)")
+    ax.axhline(target_FDR, color="red", linestyle="--", lw=1,
+               label=f"target FDR = {target_FDR}")
+
+    if boundary_ppm > 0:
+        ax.axvline(boundary_ppm, color="red", linestyle="-", lw=1.5)
+        ax.text(boundary_ppm, 1.02, f"{boundary_ppm:.2f} ppm",
+                color="red", ha="center", va="bottom",
+                transform=ax.get_xaxis_transform())
+
+    ax.set_xlabel("m/z difference (ppm)")
+    ax.set_ylabel("Cumulative FDR")
+    ax.set_ylim(0, 1)
+    ax.set_title(f"MS2 cumulative FDR curve\nweight_l={weight_l:.3g}, b={b:.3g}, a={a:.3g}")
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+
+    if results_folder:
+        plt.savefig(results_folder+"/first_search/MS2_FDR.png", dpi=600, bbox_inches="tight")
+        plt.close()
+
 
 def plot_rt_residuals_mixture(residuals,
                               feat,
@@ -864,7 +1096,7 @@ def cdf_data(rt_diffs,limit=3):
     
     return data, p, cdf_auc
 
-def ms2_alignment_plots(theo_mzs, rts, errors, f_rt_ms2, ms2_spl, results_folder=None, ms2_sigmas=None, ms2_weights=None):
+def ms2_alignment_plots(theo_mzs, rts, errors, f_rt_ms2, ms2_spl, results_folder=None, ms2_weight_l=None, ms2_b=None, ms2_weight_u=None, ms2_a=None):
     theo_mzs = np.asarray(theo_mzs)
     rts = np.asarray(rts)
     errors = np.asarray(errors)
@@ -900,20 +1132,18 @@ def ms2_alignment_plots(theo_mzs, rts, errors, f_rt_ms2, ms2_spl, results_folder
     plt.vlines([-config.opt_ms2_tol/1e6, config.opt_ms2_tol/1e6], 0, max(vals)*.8, color="r")
     plt.text(config.opt_ms2_tol/1e6, max(vals)*.8, f"{np.round(config.opt_ms2_tol,2)} ppm")
 
-    if ms2_sigmas is not None and ms2_weights is not None:
-        # GMM overlay (density curves scaled to match the histogram's count-based y-axis)
-        order = np.argsort(ms2_sigmas)
-        sigmas = ms2_sigmas[order]
-        weights = ms2_weights[order]
+    if ms2_weight_l is not None and ms2_b is not None:
         bin_width = bins[1] - bins[0]
         n_total = len(fully_corrected)
-        scale = n_total * bin_width  # converts density -> counts, matching plt.hist's default y-axis
+        scale = n_total * bin_width
         x = np.linspace(bins[0], bins[-1], 500)
-        comp_pdfs = [weights[k] * norm.pdf(x, loc=0.0, scale=sigmas[k]) * scale for k in range(2)]
-        mixture_pdf = comp_pdfs[0] + comp_pdfs[1]
-        plt.plot(x, mixture_pdf, label="mixture", linewidth=2, color="k")
-        plt.plot(x, comp_pdfs[0], linestyle="--", label=f"comp 1 (σ={sigmas[0]:.2e})")
-        plt.plot(x, comp_pdfs[1], linestyle="--", label=f"comp 2 (σ={sigmas[1]:.2e})")
+        laplace_curve = ms2_weight_l * (1.0 / (2 * ms2_b)) * np.exp(-np.abs(x) / ms2_b) * scale
+        uniform_curve = ms2_weight_u * (1.0 / (2 * ms2_a)) * (np.abs(x) <= ms2_a) * scale
+        mixture_curve = laplace_curve + uniform_curve
+        plt.plot(x, mixture_curve, label="mixture", linewidth=2, color="k")
+        plt.plot(x, laplace_curve, linestyle="--", label=f"Laplace (b={ms2_b:.2e})")
+        plt.plot(x, uniform_curve, linestyle="--", label=f"Uniform (±{ms2_a:.2e})")
+
 
     plt.xlabel("m/z difference (relative)")
     plt.ylabel("Frequency")
@@ -1126,6 +1356,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
     
     config.n_most_intense_features = int(1e5) 
+
+    ms2_ppm_error_prelim = 20
+    ms1_ppm_error_prelim = 20
     
     # Calculate scans_per_cycle safely
     if len(dia_spectra.ms1scans) > 0:
@@ -1148,7 +1381,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
     # Run a preliminary search returning results at the PSM level
     import src.preliminary_search as preliminary_search
-    output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=20)
+    output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, SILAC, ms1_ppm_error=ms1_ppm_error_prelim, ms2_ppm_error=ms2_ppm_error_prelim)
 
     # Calculate the elution width and add cluster_size column
     import src.elution_analysis as elution_analysis
@@ -1438,9 +1671,16 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             return mz + ((ms2_spl(mz) + f_rt_ms2(rt)) * mz)
 
         ms2_corrected = (frag_errors - (f_rt_ms2(frag_lib_rts) + ms2_spl(frag_theo_mzs)))
-        ms2_weights, ms2_sigmas = fit_zero_mean_gmm_1d(ms2_corrected, n_components=2)
-        ms2_sigmas = ms2_sigmas[np.argsort(ms2_sigmas)]
-        ms2_boundary = 4 * ms2_sigmas[0]
+        mask = np.abs(ms2_corrected) <= (ms2_ppm_error_prelim * 1e-6)
+        ms2_corrected = ms2_corrected[mask]
+
+        ms2_weight_l, ms2_b, ms2_weight_u, ms2_a = fit_laplace_uniform_mixture_binned(ms2_corrected)
+
+        ms2_boundary = ms2_boundary_at_PEP(ms2_weight_l, ms2_b, ms2_a, ms2_ppm_error_prelim, target_PEP=0.5)
+        plot_pep_curve(ms2_weight_l, ms2_b, ms2_a, ms2_ppm_error_prelim, target_PEP=0.5, results_folder=results_folder)
+
+        ms2_boundary = ms2_boundary_at_FDR(ms2_weight_l, ms2_b, ms2_a, ms2_ppm_error_prelim, target_FDR=0.2)
+        plot_fdr_curve(ms2_weight_l, ms2_b, ms2_a, ms2_ppm_error_prelim, target_FDR=0.2, results_folder=results_folder)
 
     
     
@@ -1494,8 +1734,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     else:
         config.opt_ms2_tol = np.abs(mz_tol)
 
-    logger.info(f"Opt MS2 Tol {config.opt_ms2_tol}")
-    logger.info(f"Args PPM {config.args.ppm}")
 
 
     ################################################################
@@ -1531,8 +1769,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                             rt_dist_params=(rt_amplitude,rt_mean,rt_stddev),
                             results_folder=results_folder)
         if ms2:
-            ms2_alignment_plots(frag_theo_mzs, frag_lib_rts, frag_errors, f_rt_ms2, ms2_spl, results_folder=results_folder, ms2_sigmas=ms2_sigmas, ms2_weights=ms2_weights)
-        
+            ms2_alignment_plots(frag_theo_mzs, frag_lib_rts, frag_errors, f_rt_ms2, ms2_spl, results_folder=results_folder, ms2_weight_l=ms2_weight_l, ms2_b=ms2_b, ms2_weight_u=ms2_weight_u, ms2_a=ms2_a)
+
         cdf_plots(emp_data,emp_p,percentile,boundary,pred_data,pred_p,results_folder=results_folder)
         
        
