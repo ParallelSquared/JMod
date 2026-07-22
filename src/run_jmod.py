@@ -301,10 +301,10 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ######################################################
     #### Tagging #####
 
-    if config.SILAC:
-        spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
     if config.tag:
         spectrumLibrary = tag_library(spectrumLibrary, config.tag, source_channel=source_channel)
+    if config.SILAC:
+        spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
 
     ######################################################
     #### RT/MZ Alignment (initial search uses target entries only) #####
