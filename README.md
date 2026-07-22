@@ -1,8 +1,13 @@
-<!-- TODO: Add a logo/image here? -->
-
 # JMod
 
 **JMod is an open and flexible software for increasing the throughput of sensitive proteomics by supporting multiplexing in the mass and time domains.**
+
+<!-- TODO: Review / get from KMD -->
+
+- Jointly models overlapping MS1 and MS2 spectra for more accurate DIA analysis.
+- Enables high-throughput multiplexed proteomics, including 9-plexDIA with 2 Da channel spacing.
+- Supports label-free DIA, plexDIA, timePlex, and custom mass-tag workflows.
+- Open-source, extensible, and designed for next-generation multiplexed proteomics.
 
 ###
 ## Reference
@@ -12,13 +17,11 @@
 Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Specht, Nikolai Slavov
 *bioRxiv* 2025.05.22.655512; doi: [10.1101/2025.05.22.655512](https://doi.org/10.1101/2025.05.22.655512)
 
-<!-- TODO: Boil abstract down to bullet points and insert here -->
-
 ###
 ## Table of Contents
 - [Setting up JMod](#setting-up-jmod)
-  - [Windows Batch Script](#windows-setup)
-  - [Command Line Setup](#linuxmacos-setup)
+  - [Windows Setup](#windows-setup)
+  - [Linux/MacOS Setup](#linuxmacos-setup)
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
   - [Library Structure](#library-structure)
@@ -31,20 +34,29 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 
 ### Windows Setup
 
+<details>
+<summary><strong> Windows Setup Steps </strong>
+</summary>
+
 JMod has a `.bat` executable is only compatible with Windows computers. Follow the instructions below to launch the JMod GUI via the `.bat`.
 
 1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
 
-<!-- TODO: Add the J icon to the .bat file -->
-
 2. Navigate to the JMod directory. Inside that directory is a `launch.bat` file. Double-click on the file to open the JMod GUI.
     - If this is the first time the computer is setting up a UV environment, it might take a few minutes to download all dependencies and packages.
-3. The JMod GUI should open in a new window, looking something like this:
+3. The JMod GUI should open in a new window.
 
-![alt text](/Help/JMod_GUI.jpeg "JMod GUI Image")
+If you would like to set up the UV environment manually on Windows to run JMod with the command line, please follow the instructions below in [Linux/MacOS Setup](#linuxmacos-setup).
 
+</details>
+
+<!-- TODO: Test both above and below -->
 
 ### Linux/MacOS Setup
+
+<details>
+<summary><strong> Linux Setup Steps </strong>
+</summary>
 
 1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
 
@@ -58,36 +70,43 @@ JMod has a `.bat` executable is only compatible with Windows computers. Follow t
 
     ```uv sync --python 3.11```
 
+4. You can now launch the JMod GUI with ```uv run python run_jmod_from_GUI.py``` or run a search using the command line with ```uv run python run_jmod.py <args>```.
 
-4. Use the command ```source .venv/bin/activate``` to activate the UV environment. You should see the environment name (JMod-Main) appear at the beginning of the terminal prompt.
-    - If you are on a Windows computer, run ```.venv/Scripts/activate``` to activate the UV environment.
+</details>
 
-5. You can now launch the JMod GUI with ```python run_jmod_from_GUI.py``` or run a search using the command line with ```python run_jmod.py <args>```.
 
 ###
 ## Running a Search
 
-To run a JMod search, both a .mzML spectrum file and a .tsv spectral library are required.
+<!-- TODO: check that the .mzML references throughout the READMe are working -->
+
+To run a JMod search, both a spectrum file (either `.raw` or `.mzML`) and a .tsv spectral library are required. If you would like to convert `.raw` files to `.mzML` to run with JMod, please follow the instructions below.
 
 ### File Conversion 
 
-JMod currently supports `.mzML` files. Direct support for `.d` and `.raw` files will be added in future releases. In the meantime, please convert `.raw` files to `.mzML` files. When converting files to `.mzML`, the data should be centroided. This can be done with MSConvert with the command `--filter peakPicking true 1-`
+JMod currently supports `.mzML` and `.raw` files. Direct support for `.d` files will be added in future releases. To convert `.raw` files to `.mzML` files, please make sure the data is centroided. This can be done with MSConvert with the command `--filter peakPicking true 1-`
 
 ###
 ### Library Structure  
 
  An example library with the required columns can be found [here](/data/filtered_library.tsv).
 
-<!-- TODO: Image of the library headings (?) or something similar -->
+<!-- TODO: Image of the library headings or something similar -->
 
 ###
 ### Running JMod with the Graphical User Interface (GUI)
 
-To launch the GUI, use:
+![alt text](/Help/JMod_GUI.jpeg "JMod GUI Image")
+
+The GUI can be launched with the `launch_JMod.bat` file on Windows computers. 
+
+If not on a Windows computer, the GUI can be launched with the following command:
 
 ```
-python path/to/run_jmod_from_GUI.py 
+uv run python path/to/run_jmod_from_GUI.py 
 ```
+
+<!-- TODO: rename the .bat file to launch_JMod.bat -->
 
 More detailed instructions on how to run JMod from the GUI can be found
 [here.](/Help/JMod_Tutorial.pdf)
@@ -98,13 +117,13 @@ More detailed instructions on how to run JMod from the GUI can be found
 
 JMod can be run through the command line with various search parameters. An example command is shown below:
 ```
-python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
+uv run python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
 ```
 
 Some commonly used search parameters are listed below. A more extensive list of commands can be found [here](/Help/commands.pdf).
 
 <details>
-<summary><strong> Select Parameters </strong></summary>
+<summary><strong> Common Search Parameters </strong></summary>
 
 ```
 -i, --mzml
@@ -148,19 +167,19 @@ Some commonly used search parameters are listed below. A more extensive list of 
 JMod can also be run using a configuration file. Each JMod search produces its own configuration file which can be used to initialize other searches. An example configuration can be found in ```data/default_config.json```, and a sample command can be found here:
 
 ```
-python path/to/run_jmod.py --config_json path/to/config.json
+uv run python path/to/run_jmod.py --config_json path/to/config.json
 ```
 
 
 <details>
-<summary><strong> Sample Demo Data </strong></summary>
+<summary><strong> Running JMod with Sample Demo Data </strong></summary>
 
 We have provided a small .mzML file and a small library to run a quick JMod search to check all dependencies and environment variables are working properly. The raw file and library can be found in data/test_mode_filtered.mzML and data/filtered_library.tsv respectively. This quick search can be run on the command line with the following command:
 
 ```
 cd path/to/JMod-Main
 
-python run_jmod.py -i data/test_mode_filtered.mzML -l data/filtered_library.tsv
+uv run python run_jmod.py -i data/test_mode_filtered.mzML -l data/filtered_library.tsv
 ```
 
 </details>
@@ -169,7 +188,6 @@ python run_jmod.py -i data/test_mode_filtered.mzML -l data/filtered_library.tsv
 ###
 ## Output Files
 
-<!-- TODO: Fix wording -->
 
 JMod produces multiple output files. Below is a brief description of the main outputs alongside an example directory structure. A more comprehensive description of each output file can be found [here.](/Help/outputs.pdf)
 
