@@ -63,16 +63,16 @@ This `.bat` executable is only compatible with Windows computers. If your comput
 ###
 ## Running a Search
 
-To run a JMod search, both a .mzML spectrum file and a .tsv spectral library are required.
+To run a JMod search, both a .mzML/.raw spectrum file and a .tsv/.parquet spectral library are required.
 
 ### File Conversion 
 
-JMod currently supports `.mzML` files. Direct support for `.d` and `.raw` files will be added in future releases. In the meantime, please convert `.raw` files to `.mzML` files. When converting files to `.mzML`, the data should be centroided. This can be done with MSConvert with the command `--filter peakPicking true 1-`
+JMod currently supports `.raw` (Windows only) and `.mzML` files. Direct support for `.d` files will be added in future releases. When converting `.raw` files to `.mzML`, the data should be centroided. This can be done with MSConvert with the command `--filter peakPicking true 1-`
 
 ###
 ### Library Structure  
 
-JMod requires specific library columns in a .tsv for searches to run successfully. An example library with the required columns can be found [here](/data/filtered_library.tsv).
+JMod can be run with a DIANN-style output library in .tsv or .parquet format, or a specific library format whose example can be found [here](/data/filtered_library.tsv).
 
 <!-- TODO: Image of the library headings (?) or something similar -->
 
@@ -104,7 +104,7 @@ Some commonly used search parameters are listed below. A more extensive list of 
 
 ```
 -i, --mzml
-  Input file in mzML format
+  Input file in mzML format or .raw format (see --rawfilereader_path for processing .raw files)
 -l, --speclib
   Spectrum library in DIANN output format (must be .tsv)
 -m --atleast_m
@@ -135,6 +135,8 @@ Some commonly used search parameters are listed below. A more extensive list of 
   default = False
 --ms1_ppm
   User provided MS1 ppm error tolerance.
+--rawfilereader_path
+  Path to the folder containing 'ThermoFisher.CommonCore.Data.dll'. see Thermo RAW File Support.
   ```
 
 </details>
@@ -146,7 +148,14 @@ JMod can also be run with a preset configuration file. That configuration file w
 ```
 python path/to/run_jmod.py --config_json path/to/config.json
 ```
+## Thermo RAW File Support
+JMod supports direct processing of Thermo `.raw` files using Thermo's RawFileReader libraries on Windows.
 
+To enable `.raw` file support, the latest RawFileReader release can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
+
+When using the GUI, you will be prompted to point to the 'netstandard2.0' directory. If using the command line interface, use --rawfilereader_path 'path/netstandard2.0'. Both of these options will save this path to data/settings.json which will be used in future runs unless --rawfilereader_path is specified.
+
+Thermo RawFileReader is developed and distributed by Pacific Northwest National Laboratory (PNNL) and Thermo Fisher Scientific and is licensed and distributed separately from JMod.
 
 ###
 ## Output Files

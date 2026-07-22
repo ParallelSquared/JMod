@@ -31,6 +31,7 @@
     "user_percentile": false,
     "no_ms1_req": true,
     "ms1_ppm": 0.0,
+    "rawfilereader_path": null,
     "config_json": null,
     "test_mode": false,
     "test_rt_min": 0,

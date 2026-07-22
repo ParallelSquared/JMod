@@ -30,6 +30,7 @@ from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
 from src.finetune_funs import predict_decoy_rts
+from utils.gui_utils import load_settings, save_settings
 
 from src.logger import logger, set_log_filepath, log_exceptions
 import logging
@@ -196,6 +197,22 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     overall_start_time = time.time()
     # python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
     logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
+
+    if config.args.mzml.lower().endswith(".raw"):
+        if sys.platform != "win32":
+            from src.utils.gui_utils import send_raise_to_TK
+            send_raise_to_TK("Direct .raw file support is only available on Windows. Please convert to mzML")
+            raise RuntimeError("Direct .raw file support is only available on Windows. Please convert to mzML")
+        settings = load_settings()
+        
+        if config.args.rawfilereader_path is not None:
+            reader_path = config.args.rawfilereader_path
+            settings["rawfilereader_path"] = reader_path
+            save_settings(settings)
+        else:
+            reader_path = settings["rawfilereader_path"]            
+
+        file_reader.load_rawfilereader(reader_path)
 
     
     ######################################################

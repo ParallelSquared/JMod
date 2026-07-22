@@ -414,6 +414,17 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    'rawfilereader_path': {  ##hardcoded in GUI because it comes from appdata settings
+        'flags': ('--rawfilereader_path',),
+        'default': None,
+        'takes_value': True,
+        'in_GUI': False,    
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'config_json': {
         'flags': ('--config_json',),
         'default': None,

@@ -30,8 +30,6 @@ import pandas as pd
 
 # from src.ms1_cor_channels import ms1_cor_channels
 import src.ms1_cor_channels as ms1_mod
-from src.utils.io.load_files import loadSpectra
-from src.models.spec_lib.spec_lib import loadSpecLib
 
 #from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 from src.utils.misc_functions import unstring_floats

@@ -1,3 +1,9 @@
+"""
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
+
 import tkinter as tk
 from tkinter import messagebox
 import logging
@@ -5,6 +11,9 @@ import sys
 import importlib
 import os
 import shutil
+from pathlib import Path
+import json
+import os
 
 def send_raise_to_TK(error_text):
     if "src.config" in sys.modules:   #this weird import somehow solved an error
@@ -45,6 +54,26 @@ def rename_results_folder(config):
             shutil.move(config.results_folder_path, failed_folder_path)
         except Exception as rename_error:
             logging.getLogger("appLogger").warning(f"Could not rename results folder: {rename_error}")
+
+SETTINGS_DIR = Path("data")
+SETTINGS_FILE = SETTINGS_DIR / "settings.json"
+
+DEFAULT_SETTINGS = {
+    "rawfilereader_path": None,
+}
+
+def load_settings():
+    if not SETTINGS_FILE.exists():
+        return DEFAULT_SETTINGS.copy()
+
+    with open(SETTINGS_FILE) as f:
+        settings = json.load(f)
+
+    return DEFAULT_SETTINGS | settings
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(settings, f, indent=2)
 
 
 

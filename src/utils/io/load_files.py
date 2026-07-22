@@ -18,7 +18,7 @@ import peppy_sage as ps
 # NB this may not work for all mzml files!!!
 class Spectrum:
 
-    def __init__(self,scan=None):
+    def __init__(self,scan=None,raw_scan=None):
         self.id = None
         self.level=None
         self.RT=None
@@ -33,6 +33,8 @@ class Spectrum:
 
         if scan:
             self.get_vals(scan)
+        if raw_scan:
+            self.get_vals_raw(raw_scan)
 
     def get_vals(self,scan):
         # extract values from mzml spectrum
@@ -50,6 +52,72 @@ class Spectrum:
             self.prec_mz = self.isolation_window["isolation window target m/z"]
             self.ms1window = self.isolation_window["isolation window target m/z"]+np.array([-1,1])*[self.isolation_window['isolation window lower offset'],self.isolation_window['isolation window upper offset']]
         self.TIC = scan["total ion current"]
+
+    def get_vals_raw(self, raw_scan):
+        """Extract values from a Thermo RawFileReader scan (parallel to get_vals).
+        Mirrors ProteoWizard's RawFile.cpp: reads MSOrder/MassAnalyzer/precursor info
+        from GetFilterForScanNumber(), not from GetScanEventForScanNumber().GetReaction().
+        """
+        from ThermoFisher.CommonCore.Data.Business import Scan  # type: ignore
+        from ThermoFisher.CommonCore.Data.FilterEnums import MSOrderType, MassAnalyzerType  # type: ignore
+
+        raw_file = raw_scan["raw_file"]
+        scan_number = raw_scan["scan_number"]
+        scan_stats = raw_scan["scan_stats"]
+        scan_filter = raw_scan["scan_filter"]
+        ms_order = raw_scan["ms_order"]
+
+        self.id = f"scan={scan_number}"
+        self.scan_num = scan_number
+        self.level = 1 if ms_order == MSOrderType.Ms else 2
+        self.RT = raw_file.RetentionTimeFromScanNumber(scan_number)
+
+        trailer = raw_file.GetTrailerExtraInformation(scan_number)
+        self.injection_time = 1.0
+        for label, value in zip(trailer.Labels, trailer.Values):
+            if "Ion Injection Time" in label:
+                self.injection_time = float(value) / 1000  # assume milliseconds
+                break
+
+        # Centroiding: FTMS uses vendor centroid stream; everything else (including
+        # Astral) falls through to Scan.ToCentroid, exactly mirroring pwiz's getMassList.
+        is_ftms = scan_filter.MassAnalyzer == MassAnalyzerType.MassAnalyzerFTMS
+        centroid_stream = raw_file.GetCentroidStream(scan_number, True) if is_ftms else None
+
+        if centroid_stream is not None and centroid_stream.Length > 0:
+            self.mz = np.array(list(centroid_stream.Masses), dtype=np.float64)
+            self.intens = np.array(list(centroid_stream.Intensities), dtype=np.float64)
+        else:
+            scan = Scan.FromFile(raw_file, scan_number)
+            # pwiz guard: degenerate scans get an empty spectrum, not an exception
+            if scan.SegmentedScanAccess.Positions.Length == 0 or scan.ScanStatistics.BasePeakIntensity == 0:
+                self.mz = np.array([], dtype=np.float64)
+                self.intens = np.array([], dtype=np.float64)
+            else:
+                centroided = Scan.ToCentroid(scan)
+                self.mz = np.array(list(centroided.SegmentedScanAccess.Positions), dtype=np.float64)
+                self.intens = np.array(list(centroided.SegmentedScanAccess.Intensities), dtype=np.float64)
+
+        self.scanwindow = [scan_stats.LowMass, scan_stats.HighMass]
+
+        if self.level == 2:
+            # index into the filter's precursor list the same way pwiz does: i = msOrder - 2
+            i = int(ms_order) - 2
+            precursor_mz = scan_filter.GetMass(i)
+            isolation_width = scan_filter.GetIsolationWidth(i)
+
+            self.collision_energy = scan_filter.GetEnergy(i)
+            self.isolation_window = {
+                "isolation window target m/z": precursor_mz,
+                "isolation window lower offset": isolation_width / 2.0,
+                "isolation window upper offset": isolation_width / 2.0,
+            }
+            self.prec_mz = precursor_mz
+            self.ms1window = precursor_mz + np.array([-1, 1]) * [
+                isolation_width / 2.0, isolation_width / 2.0,
+            ]
+
+        self.TIC = scan_stats.TIC
 
     def closest_peak(self, target_mz):
         """
@@ -115,13 +183,14 @@ class Spectrum:
     
 class SpectrumFile:
 
-    def __init__(self,mzml_file=None):
-
+    def __init__(self, mzml_file=None, raw_file=None):
         self.filename = None
         self.ms2_to_ms1_map = None
 
         if mzml_file:
             self.load_spectra(mzml_file)
+        elif raw_file:
+            self.load_spectra_raw(raw_file)
 
     def load_spectra(self,mzml_file):
         self.filename = mzml_file
@@ -147,6 +216,60 @@ class SpectrumFile:
                     self.ms2scans.append(spec)
                     self.ms2_by_id[spec.scan_num] = idx
                     self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms2scans)-1]
+
+        self.build_ms2_to_ms1_map()
+
+    def load_spectra_raw(self, raw_file):
+        """Load Thermo .raw data via the RawFileReader .NET SDK (parallel to load_spectra)."""
+        from ThermoFisher.CommonCore.RawFileReader import RawFileReaderAdapter  # type: ignore
+        from ThermoFisher.CommonCore.Data.Business import Device  # type: ignore
+        from ThermoFisher.CommonCore.Data.FilterEnums import MSOrderType  # type: ignore
+
+        self.filename = raw_file
+
+        self.scan_pos = {}
+        self.ms1scans = []
+        self.ms2scans = []
+        self.ms1_by_id = {}
+        self.ms2_by_id = {}
+
+        reader = RawFileReaderAdapter.FileFactory(raw_file)
+        reader.SelectInstrument(Device.MS, 1)
+        if reader.IsError or not reader.IsOpen:
+            raise IOError(f"Could not open Thermo .raw file: {raw_file}")
+
+        try:
+            first_scan = reader.RunHeaderEx.FirstSpectrum
+            last_scan = reader.RunHeaderEx.LastSpectrum
+
+            for scan_number in range(first_scan, last_scan + 1):
+                scan_filter = reader.GetFilterForScanNumber(scan_number)
+                ms_order = scan_filter.MSOrder
+                if ms_order not in (MSOrderType.Ms, MSOrderType.Ms2):
+                    continue
+
+                raw_scan = {
+                    "raw_file": reader,
+                    "scan_number": scan_number,
+                    "scan_stats": reader.GetScanStatsForScanNumber(scan_number),
+                    "scan_filter": scan_filter,
+                    "ms_order": ms_order,
+                }
+
+                if ms_order == MSOrderType.Ms:
+                    spec = Spectrum(raw_scan=raw_scan)
+                    idx = len(self.ms1scans)
+                    self.ms1scans.append(spec)
+                    self.ms1_by_id[spec.scan_num] = idx
+                    self.scan_pos[spec.scan_num] = [1, idx]
+                elif ms_order == MSOrderType.Ms2:
+                    spec = Spectrum(raw_scan=raw_scan)
+                    idx = len(self.ms2scans)
+                    self.ms2scans.append(spec)
+                    self.ms2_by_id[spec.scan_num] = idx
+                    self.scan_pos[spec.scan_num] = [2, idx]
+        finally:
+            reader.Dispose()
 
         self.build_ms2_to_ms1_map()
 
@@ -247,22 +370,4 @@ class SpectrumFile:
         return self.ms1scans[ms1_idx]
 
 
-def loadSpectra(mzml_file):
-    logger.info("Loading Spectra...")
-    python_spec_file = mzml_file+"_pythonspec"
-    if not os.path.exists(python_spec_file):
-        logger.info("Loading Spectra... from file")
-        spectra = SpectrumFile(mzml_file)
-        with open(python_spec_file,"wb") as write_file:
-            pickle.dump(spectra, write_file)
-    else:
-        with open(python_spec_file,"rb") as read_file:
-            logger.info("Loading Spectra... from pickle")
-            spectra = pickle.load(read_file)
-            
-    logger.info(f"Loaded {len(spectra.ms1scans)} MS1 spectra")
-    logger.info(f"Loaded {len(spectra.ms2scans)} MS2 spectra")
-    logger.info("finished")
-    
-    return spectra
 
