@@ -90,6 +90,11 @@ class Test_get_seq_comp():
     def test_NH3_loss(self):
         seq_comp = get_seq_comp(["A(Unimod:35)", "S(Unimod:21)", "K"], "M", "NH3")
         assert seq_comp == mass.Composition({'H': 22, 'C': 12, 'O': 9, 'N': 3, 'P': 1})
+    
+    def test_diann_mod_outside_of_unimod(self): ##A mod that is not in unimod will not return the correct isotopic sequence
+        seq_comp = get_seq_comp(["A", "C(Carbamidomethyl)", "K"], "M")
+        assert seq_comp == mass.Composition({'H': 24, 'C': 12, 'O': 4, 'N': 4, 'S': 1})
+        #correct isotopic sequence for carbamidomethyl: H27 C13 O5 N5 S1
 
 
 
