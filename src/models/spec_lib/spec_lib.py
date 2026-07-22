@@ -20,7 +20,6 @@ from src.iso_functions import gen_isotopes_dict
 from src.logger import logger
 import re
 from pyteomics import mass
-unimods = mass.Unimod()
 
 
 # load in spec library (tsv)
@@ -272,7 +271,6 @@ def load_blib(spec_lib_file):
     
 # lib = load_blib("/Volumes/One Touch/PTI/Specter/EcoliSpectralLibrary.blib")    
 _MOD_PATTERN = re.compile(r"\(([^)]+)\)")
-_UNIMOD_PATTERN = re.compile(r"^UniMod:\d+$", re.IGNORECASE)
 
 def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
     """
@@ -296,24 +294,25 @@ def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
         peptide found, and whether any tag was found at all. Returns
         (0, False, None) if no tag is present.
     """
+    diann_mods = config.diann_mods
     for pep, prec_mz, prec_z in zip(modified_peptides, prec_mzs, prec_zs):
         if not pep:
             continue
-        all_mods = _MOD_PATTERN.findall(pep)
-        tag_mods = [m.strip() for m in all_mods if not _UNIMOD_PATTERN.match(m.strip())]
+        all_mods = [m.strip() for m in _MOD_PATTERN.findall(pep)]
+        tag_mods = [m for m in all_mods if m not in diann_mods]
         if not tag_mods:
             continue
 
-        unimods_attached = [m.strip() for m in all_mods if _UNIMOD_PATTERN.match(m.strip())]
+        known_mods_attached = [m for m in all_mods if m in diann_mods]
         stripped_peptide = re.sub(r"\([^)]*\)", "", pep)
         stripped_mass = mass.fast_mass(stripped_peptide)
-        unimods_mass = sum(unimods.by_id(int(u.split(":")[1]))['mono_mass'] for u in unimods_attached)
+        known_mods_mass = sum(diann_mods[m] for m in known_mods_attached)
 
-        untagged_mz = (stripped_mass + unimods_mass + prec_z * 1.00727647) / prec_z
+        untagged_mz = (stripped_mass + known_mods_mass + prec_z * 1.00727647) / prec_z
         mz_delta = prec_mz - untagged_mz
         source_channel_mass = (mz_delta * prec_z) / len(tag_mods)
 
-        return source_channel_mass, True, tag_mods[0]
+        return source_channel_mass, True, "(" + tag_mods[0] + ")"
 
     return 0, False, None
 
