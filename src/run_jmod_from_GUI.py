@@ -630,9 +630,6 @@ class JModGUI(ThemedTk):
 
                     #check if user has path for RawFileReader
                     if os.path.splitext(file)[1].lower() in [".raw"]:
-                        if sys.platform != "win32":
-                            tk.messagebox.showerror("OS Error", "Direct .raw file support is only available on Windows. Please convert to mzML")
-                            continue
                         settings = load_settings()
                         if not settings["rawfilereader_path"] or not self._rawfilereader_path_valid(settings["rawfilereader_path"]):
                             new_path = self.locate_raw_path()

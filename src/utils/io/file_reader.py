@@ -539,8 +539,17 @@ def loadSpectra(input_file: str) -> SpectrumFile:
 
 def load_rawfilereader(sdk_path):
     import sys
-    import clr
     from pathlib import Path
+
+    try:
+        import clr
+    except Exception as e:
+        from src.utils.gui_utils import send_raise_to_TK
+        if sys.platform == "darwin":
+            send_raise_to_TK("Failure on import clr. Please use 'brew install mono' to use Thermo RawFileReader .dlls or convert to mzML")
+            raise RuntimeError("Failure on import clr. Please use 'brew install mono' to use Thermo RawFileReader .dlls or convert to mzML")
+        else:
+            raise e
         
     try:
         sdk_path = Path(sdk_path)

@@ -199,10 +199,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
 
     if config.args.mzml.lower().endswith(".raw"):
-        if sys.platform != "win32":
-            from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK("Direct .raw file support is only available on Windows. Please convert to mzML")
-            raise RuntimeError("Direct .raw file support is only available on Windows. Please convert to mzML")
         settings = load_settings()
         
         if config.args.rawfilereader_path is not None:
