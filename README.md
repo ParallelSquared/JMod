@@ -32,7 +32,7 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 <summary><strong> Setup Steps </strong>
 </summary>
 
-JMod has a `.bat` executable is only compatible with Windows computers. Follow the instructions below to launch the JMod GUI via the `.bat`.
+JMod has a `.bat` executable that is only compatible with Windows computers. Follow the instructions below to launch the JMod GUI via the `.bat`.
 
 1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
 
@@ -78,7 +78,7 @@ If you would like to set up the UV environment with the command line, please fol
 
 JMod supports direct processing of Thermo `.raw` files using Thermo's RawFileReader libraries on Windows.
 
-To enable `.raw` file support, please download the latest RawFileReader release can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
+To enable `.raw` file support, please download the latest RawFileReader release, which can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
 
 When using the JMod GUI, you will be prompted to point to the `netstandard2.0` directory. If running JMod with the command line, use `--rawfilereader_path path/netstandard2.0`. Both of these options will save this path to `data/settings.json` which will be used in future runs unless `--rawfilereader_path` is specified.
 
@@ -192,7 +192,7 @@ uv run python path/to/run_jmod.py --config_json path/to/config.json
 <details>
 <summary><strong> Running JMod with Sample Demo Data </strong></summary>
 
-We have provided a small .mzML file and a small library to run a quick JMod search to check all dependencies and environment variables are working properly. The raw file and library can be found in data/test_mode_filtered.mzML and data/filtered_library.tsv respectively. This quick search can be run on the command line with the following command:
+We have provided a small .mzML file and a small library to run a quick JMod search to check that all dependencies and environment variables are working properly. The raw file and library can be found in data/test_mode_filtered.mzML and data/filtered_library.tsv respectively. This quick search can be run on the command line with the following command:
 
 ```
 cd path/to/JMod-Main
