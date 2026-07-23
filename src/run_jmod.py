@@ -55,7 +55,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         if not config.load_config_from_json(config.args.config_json):
             pass
 
-    # A tag implies plexDIA, mirroring the inference the GUI already performs
     if config.args.tag != "None":
         config.args.plexDIA = True
 
