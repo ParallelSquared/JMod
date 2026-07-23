@@ -2,13 +2,6 @@
 
 **JMod is an open and flexible software for increasing the throughput of sensitive proteomics by supporting multiplexing in the mass and time domains.**
 
-<!-- TODO: Review / get from KMD -->
-
-- Jointly models overlapping MS1 and MS2 spectra for more accurate DIA analysis.
-- Enables high-throughput multiplexed proteomics, including 9-plexDIA with 2 Da channel spacing.
-- Supports label-free DIA, plexDIA, timePlex, and custom mass-tag workflows.
-- Open-source, extensible, and designed for next-generation multiplexed proteomics.
-
 ###
 ## Reference
 
@@ -22,6 +15,7 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 - [Setting up JMod](#setting-up-jmod)
   - [Windows Setup](#windows-setup)
   - [Linux/MacOS Setup](#linuxmacos-setup)
+  - [Thermo Raw File Support](#thermo-raw-file-support)
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
   - [Library Structure](#library-structure)
@@ -35,7 +29,7 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 ### Windows Setup
 
 <details>
-<summary><strong> Windows Setup Steps </strong>
+<summary><strong> Setup Steps </strong>
 </summary>
 
 JMod has a `.bat` executable is only compatible with Windows computers. Follow the instructions below to launch the JMod GUI via the `.bat`.
@@ -46,19 +40,19 @@ JMod has a `.bat` executable is only compatible with Windows computers. Follow t
     - If this is the first time the computer is setting up a UV environment, it might take a few minutes to download all dependencies and packages.
 3. The JMod GUI should open in a new window.
 
-If you would like to set up the UV environment manually on Windows to run JMod with the command line, please follow the instructions below in [Linux/MacOS Setup](#linuxmacos-setup).
+If you would like to set up the UV environment with the command line, please follow the instructions below in [Linux/MacOS Setup](#linuxmacos-setup).
 
 </details>
 
-<!-- TODO: Test both above and below -->
 
 ### Linux/MacOS Setup
 
 <details>
-<summary><strong> Linux Setup Steps </strong>
+<summary><strong> Setup Steps </strong>
 </summary>
 
 1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
+
 
 2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, run the following command:
 
@@ -74,11 +68,35 @@ If you would like to set up the UV environment manually on Windows to run JMod w
 
 </details>
 
+<!-- TODO: review this -->
+
+### Thermo Raw File Support
+
+<details>
+<summary><strong> Setup Steps </strong>
+</summary>
+
+JMod supports direct processing of Thermo `.raw` files using Thermo's RawFileReader libraries on Windows.
+
+To enable `.raw` file support, please download the latest RawFileReader release can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
+
+When using the JMod GUI, you will be prompted to point to the `netstandard2.0` directory. If running JMod with the command line, use `--rawfilereader_path path/netstandard2.0`. Both of these options will save this path to `data/settings.json` which will be used in future runs unless `--rawfilereader_path` is specified.
+
+If running JMod on Linux/MacOS, `mono` will need to be downloaded. This can be done with the following command:
+
+`brew install mono`
+
+If homebrew is not installed, it can be installed with the following command:
+
+`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+
+
+Thermo RawFileReader is developed and distributed by Pacific Northwest National Laboratory (PNNL) and Thermo Fisher Scientific and is licensed and distributed separately from JMod.
+
+</details>
 
 ###
 ## Running a Search
-
-<!-- TODO: check that the .mzML references throughout the READMe are working -->
 
 To run a JMod search, both a spectrum file (either `.raw` or `.mzML`) and a .tsv spectral library are required. If you would like to convert `.raw` files to `.mzML` to run with JMod, please follow the instructions below.
 
@@ -90,8 +108,6 @@ JMod currently supports `.mzML` and `.raw` files. Direct support for `.d` files 
 ### Library Structure  
 
  An example library with the required columns can be found [here](/data/filtered_library.tsv).
-
-<!-- TODO: Image of the library headings or something similar -->
 
 ###
 ### Running JMod with the Graphical User Interface (GUI)
@@ -106,7 +122,7 @@ If not on a Windows computer, the GUI can be launched with the following command
 uv run python path/to/run_jmod_from_GUI.py 
 ```
 
-<!-- TODO: rename the .bat file to launch_JMod.bat -->
+<!-- TODO: rename the .bat file to launch_JMod.bat // wrap this in a .exe with the icon-->
 
 More detailed instructions on how to run JMod from the GUI can be found
 [here.](/Help/JMod_Tutorial.pdf)
@@ -116,6 +132,8 @@ More detailed instructions on how to run JMod from the GUI can be found
 ### Running JMod with the Command Line Interface (CLI) 
 
 JMod can be run through the command line with various search parameters. An example command is shown below:
+
+
 ```
 uv run python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
 ```
