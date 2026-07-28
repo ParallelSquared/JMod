@@ -312,7 +312,7 @@ def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
         mz_delta = prec_mz - untagged_mz
         source_channel_mass = (mz_delta * prec_z) / len(tag_mods)
 
-        return source_channel_mass, True, "(" + tag_mods[0] + ")"
+        return source_channel_mass, True, tag_mods[0]
 
     return 0, False, None
 
