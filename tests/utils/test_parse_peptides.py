@@ -226,6 +226,15 @@ class TestChangeSeq:
 
         result = change_seq("C(UniMod:4)(mTRAQ)EPTIDER", "shuffle", tag=mock_tag)
         assert result == "E(mTRAQ)DC(UniMod:4)IPTER"
+
+        result = change_seq("C(H_DM_mod)(mTRAQ)EPTIDER", "rev", tag=mock_tag)
+        assert result == "E(mTRAQ)(H_DM_mod)DITPECR"
+
+        result = change_seq("C(mTRAQ)(H_DM_mod)EPTIDER", "rev", tag=mock_tag)
+        assert result == "E(mTRAQ)(H_DM_mod)DITPECR"
+
+        result = change_seq("C(H_DM_mod)EPTIK(mTRAQ)ER", "rev", tag=mock_tag)
+        assert result == "E(H_DM_mod)K(mTRAQ)ITPECR"
         
     def test_change_seq_invalid_aa_keyerror(self):
         """Test that change_seq raises KeyError for unknown amino acids with diann rules"""

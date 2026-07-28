@@ -307,6 +307,18 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
         seq = parse_peptide(seq)
     # else:
     #     seq = [re.sub("\(.*\)","",aa) for aa in seq]\
+
+
+    # --- Keep a fixed N-terminal "H_DM_mod" pinned to position 0 ---
+    # This mod is baked into the residue string itself (e.g. "M(H_DM_mod)"),
+    # so it must be pulled out before shuffling/reversal/diann-mapping and
+    # reattached to whichever residue lands in position 0 afterward.
+    n_term_mod_pattern = r"(\(H_DM_mod\))"
+    n_term_fixed_mod = re.findall(n_term_mod_pattern, seq[0])
+    if n_term_fixed_mod:
+        seq = list(seq)  # avoid mutating caller's list in place
+        seq[0] = re.sub(n_term_mod_pattern, "", seq[0])
+
         
     if tag:
        tags = [re.findall(f"(\({tag.name}.*?\))",i) for i in seq]
@@ -367,6 +379,14 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
     else:
         new_tags = tags
     new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq, new_tags)])
+
+    # Re-apply the pinned N-terminal fixed mod to whatever residue is now first
+    if n_term_fixed_mod:
+        parts = list(new_split_seq)
+        # simplest: just prepend the mod string right after position-0's residue
+        # by rebuilding new_seq with the mod inserted at the correct spot
+        first_chunk = new_split_seq[0] + "".join(new_tags[0]) if tag else new_split_seq[0]
+        new_seq = first_chunk + n_term_fixed_mod[0] + new_seq[len(first_chunk):]
     
     return new_seq
 
