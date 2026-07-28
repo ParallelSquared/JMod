@@ -30,7 +30,7 @@ from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
 from src.finetune_funs import predict_decoy_rts
-from utils.gui_utils import load_settings, save_settings
+from src.utils.gui_utils import load_settings, save_settings
 
 from src.logger import logger, set_log_filepath, log_exceptions
 import logging

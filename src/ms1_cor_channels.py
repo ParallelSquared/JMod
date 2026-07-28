@@ -1300,6 +1300,14 @@ def fit_channel_isotopes_numba(spec, all_iso, mz_ppm):
     dia_spec_int = dia_spec_int[keep]
     kept_mz = all_mz[keep]
 
+    if dense_matrix.shape[0] == 0:
+        return (
+            np.zeros(len(all_iso), dtype=float),
+            dia_spec_int,
+            dense_matrix,
+            kept_mz,
+        )
+
     lib_coefficients, _ = optimize.nnls(dense_matrix, dia_spec_int)
     lib_coefficients[lib_coefficients < 1] = 0.0
 

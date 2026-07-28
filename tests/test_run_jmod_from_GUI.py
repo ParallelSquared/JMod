@@ -2,6 +2,9 @@ import pytest
 import builtins
 import multiprocessing
 from unittest.mock import patch, MagicMock
+import sys
+import types
+
 
 # Check if tkinter is functional
 _tkinter_available = False
@@ -54,11 +57,15 @@ class Test_run_main_process():
 
         result_queue, log_queue = mock_queues
 
+        fake_run_jmod = types.ModuleType("src.run_jmod")
+        fake_run_jmod.main = MagicMock(return_value=None)
+
         with patch("src.run_jmod_from_GUI.os.remove") as mock_remove, \
             patch("src.run_jmod_from_GUI.sys.exit") as mock_exit, \
             patch("src.run_jmod_from_GUI.logging.getLogger") as mock_get_logger, \
             patch("src.run_jmod_from_GUI.QueueHandler") as mock_QH, \
             patch("src.run_jmod.main") as mock_main:
+
 
             # simulate run_jmod.main returning success
             mock_main.return_value = None
