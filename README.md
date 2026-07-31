@@ -147,7 +147,7 @@ Some commonly used search parameters are listed below. A more extensive list of 
 -i, --mzml
   Input file in mzML format
 -l, --speclib
-  Spectrum library in DIANN output format (must be .tsv)
+  Spectrum library in DIANN output format (must be .tsv or .parquet)
 -m --atleast_m
   Required number of fragments matched from top N fragments (N=10)
   default = 3

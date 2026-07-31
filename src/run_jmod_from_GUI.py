@@ -527,7 +527,7 @@ class JModGUI(ThemedTk):
         github_button.grid(row=3, column=0, padx=42)
 
     def open_tutorial(self):  ##TODO Update tutorial with final tutorial
-        self.open_folder_file("Help", "JMod Tutorial.pdf")
+        self.open_folder_file("Help", "JMod_Tutorial.pdf")
 
     def open_tutorial_video(self):  ##TODO Update link to go to tutorial video
         link = "https://www.youtube.com/@ParallelSquared"
