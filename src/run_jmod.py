@@ -56,6 +56,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         if not config.load_config_from_json(config.args.config_json):
             pass
 
+    if config.args.tag != "None":
+        config.args.plexDIA = True
+
     # Check if running in test mode
     if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
         # Run tests instead of normal operation
