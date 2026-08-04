@@ -1,5 +1,3 @@
-<!-- TODO: Add a logo/image here? -->
-
 # JMod
 
 **JMod is an open and flexible software for increasing the throughput of sensitive proteomics by supporting multiplexing in the mass and time domains.**
@@ -12,78 +10,119 @@
 Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Specht, Nikolai Slavov
 *bioRxiv* 2025.05.22.655512; doi: [10.1101/2025.05.22.655512](https://doi.org/10.1101/2025.05.22.655512)
 
-<!-- TODO: Boil abstract down to bullet points and insert here -->
-
 ###
 ## Table of Contents
-- [Setting up JMod](#environment-setup)
-  - [Windows Batch Script](#setting-up-jmod-with-windows-gui-batch-script)
-  - [Command Line Setup](#setting-up-a-jmod-uv-environment-via-the-command-line)
+- [Setting up JMod](#setting-up-jmod)
+  - [Windows Setup](#windows-setup)
+  - [Linux/MacOS Setup](#linuxmacos-setup)
+  - [Thermo Raw File Support](#thermo-raw-file-support)
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
   - [Library Structure](#library-structure)
-  - [Graphic User Interface (GUI)](#running-jmod-with-the-graphic-user-interface-gui)
+  - [Graphical User Interface (GUI)](#running-jmod-with-the-graphical-user-interface-gui)
   - [Command Line Interface (CLI)](#running-jmod-with-the-command-line-interface-cli)
 - [Output Files](#output-files)
 
 ###
 ## Setting up JMod
 
-### Setting up JMod with Windows GUI Batch Script
+### Windows Setup
 
-This `.bat` executable is only compatible with Windows computers. If your computer is running MacOS/Linux, please scroll down to the command line UV environment installation to set up and run JMod.
+<details>
+<summary><strong> Setup Steps </strong>
+</summary>
+
+JMod has a `.bat` executable that is only compatible with Windows computers. Follow the instructions below to launch the JMod GUI via the `.bat`.
 
 1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
-
-<!-- TODO: Add the J icon to the .bat file -->
 
 2. Navigate to the JMod directory. Inside that directory is a `launch.bat` file. Double-click on the file to open the JMod GUI.
     - If this is the first time the computer is setting up a UV environment, it might take a few minutes to download all dependencies and packages.
-3. The JMod GUI should open in a new window, looking something like this:
+3. The JMod GUI should open in a new window.
 
-![alt text](/Help/JMod_GUI.jpeg "JMod GUI Image")
+If you would like to set up the UV environment with the command line, please follow the instructions below in [Linux/MacOS Setup](#linuxmacos-setup).
+
+</details>
 
 
-### Setting up a JMod UV Environment via the Command Line
+### Linux/MacOS Setup
+
+<details>
+<summary><strong> Setup Steps </strong>
+</summary>
 
 1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
 
-2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, please install UV with either ```pip install uv``` or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. 
 
-3. Open a new terminal window and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: ```uv sync --python 3.11```
+2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, run the following command:
 
-      - You may get an error saying ```libomp``` is not installed. This is a MacOS native file that ```xgboost``` requires to run. Please install this with the homebrew command ```brew install libomp```. If you do not have homebrew installed, you can install it with the following command: ```/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"```. After running, please restart the terminal window and run ```uv sync --python 3.11``` again.
-    
+    ```pip install uv``` 
+ 
+    or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. 
 
-4. Use the command ```source .venv/bin/activate``` to activate the UV environment. You should see the environment name (JMod-Main) appear at the beginning of the terminal prompt.
-    - If you are on a Windows computer, run ```.venv/Scripts/activate``` to activate the UV environment.
+3. Open a new terminal and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: 
 
-5. You can now launch the JMod GUI with ```python run_jmod_from_GUI.py``` or run a search using the command line with ```python run_jmod.py <args>```.
+    ```uv sync --python 3.11```
+
+4. You can now launch the JMod GUI with ```uv run python run_jmod_from_GUI.py``` or run a search using the command line with ```uv run python run_jmod.py <args>```.
+
+</details>
+
+<!-- TODO: review this -->
+
+### Thermo Raw File Support
+
+<details>
+<summary><strong> Setup Steps </strong>
+</summary>
+
+JMod supports direct processing of Thermo `.raw` files using Thermo's RawFileReader libraries on Windows.
+
+To enable `.raw` file support, please download the latest RawFileReader release, which can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
+
+When using the JMod GUI, you will be prompted to point to the `netstandard2.0` directory. If running JMod with the command line, use `--rawfilereader_path path/netstandard2.0`. Both of these options will save this path to `data/settings.json` which will be used in future runs unless `--rawfilereader_path` is specified.
+
+If running JMod on Linux/MacOS, `mono` will need to be downloaded. This can be done with the following command:
+
+`brew install mono`
+
+If homebrew is not installed, it can be installed with the following command:
+
+`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+
+
+Thermo RawFileReader is developed and distributed by Pacific Northwest National Laboratory (PNNL) and Thermo Fisher Scientific and is licensed and distributed separately from JMod.
+
+</details>
 
 ###
 ## Running a Search
 
-To run a JMod search, both a .mzML/.raw spectrum file and a .tsv/.parquet spectral library are required.
+To run a JMod search, both a spectrum file (either `.raw` or `.mzML`) and a .tsv spectral library are required. If you would like to convert `.raw` files to `.mzML` to run with JMod, please follow the instructions below.
 
 ### File Conversion 
 
-JMod currently supports `.raw` (Windows only) and `.mzML` files. Direct support for `.d` files will be added in future releases. When converting `.raw` files to `.mzML`, the data should be centroided. This can be done with MSConvert with the command `--filter peakPicking true 1-`
+JMod currently supports `.mzML` and `.raw` files. Direct support for `.d` files will be added in future releases. To convert `.raw` files to `.mzML` files, please make sure the data is centroided. This can be done with MSConvert with the command `--filter peakPicking true 1-`
 
 ###
 ### Library Structure  
 
-JMod can be run with a DIANN-style output library in .tsv or .parquet format, or a specific library format whose example can be found [here](/data/filtered_library.tsv).
-
-<!-- TODO: Image of the library headings (?) or something similar -->
+ An example library with the required columns can be found [here](/data/filtered_library.tsv).
 
 ###
-### Running JMod with the Graphic User Interface (GUI)
+### Running JMod with the Graphical User Interface (GUI)
 
-JMod can be run through a GUI. To launch the GUI, use:
+![alt text](/Help/JMod_GUI.jpeg "JMod GUI Image")
+
+The GUI can be launched with the `launch_JMod.bat` file on Windows computers. 
+
+If not on a Windows computer, the GUI can be launched with the following command:
 
 ```
-python path/to/run_jmod_from_GUI.py 
+uv run python path/to/run_jmod_from_GUI.py 
 ```
+
+<!-- TODO: rename the .bat file to launch_JMod.bat // wrap this in a .exe with the icon-->
 
 More detailed instructions on how to run JMod from the GUI can be found
 [here.](/Help/JMod_Tutorial.pdf)
@@ -93,6 +132,8 @@ More detailed instructions on how to run JMod from the GUI can be found
 ### Running JMod with the Command Line Interface (CLI) 
 
 JMod can be run through the command line with various search parameters. An example command is shown below:
+
+
 ```
 uv run python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
 ```
@@ -100,13 +141,13 @@ uv run python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_sear
 Some commonly used search parameters are listed below. A more extensive list of commands can be found [here](/Help/commands.pdf).
 
 <details>
-<summary><strong> Select Parameters </strong></summary>
+<summary><strong> Common Search Parameters </strong></summary>
 
 ```
 -i, --mzml
-  Input file in mzML format or .raw format (see --rawfilereader_path for processing .raw files)
+  Input file in mzML format
 -l, --speclib
-  Spectrum library in DIANN output format (must be .tsv)
+  Spectrum library in DIANN output format (must be .tsv or .parquet)
 -m --atleast_m
   Required number of fragments matched from top N fragments (N=10)
   default = 3
@@ -135,46 +176,55 @@ Some commonly used search parameters are listed below. A more extensive list of 
   default = False
 --ms1_ppm
   User provided MS1 ppm error tolerance.
---rawfilereader_path
-  Path to the folder containing 'ThermoFisher.CommonCore.Data.dll'. see Thermo RAW File Support.
   ```
 
 </details>
 
 
 ####
-JMod can also be run with a preset configuration file. That configuration file will include the path to the raw file and the library alongside other preset search parameters. An example configuration can be found in ```data/default_config.json```, and a sample command can be found here:
+JMod can also be run using a configuration file. Each JMod search produces its own configuration file which can be used to initialize other searches. An example configuration can be found in ```data/default_config.json```, and a sample command can be found here:
 
 ```
-python path/to/run_jmod.py --config_json path/to/config.json
+uv run python path/to/run_jmod.py --config_json path/to/config.json
 ```
-## Thermo RAW File Support
-JMod supports direct processing of Thermo `.raw` files using Thermo's RawFileReader libraries on Windows.
 
-To enable `.raw` file support, the latest RawFileReader release can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
 
-When using the GUI, you will be prompted to point to the 'netstandard2.0' directory. If using the command line interface, use --rawfilereader_path 'path/netstandard2.0'. Both of these options will save this path to data/settings.json which will be used in future runs unless --rawfilereader_path is specified.
+<details>
+<summary><strong> Running JMod with Sample Demo Data </strong></summary>
 
-Thermo RawFileReader is developed and distributed by Pacific Northwest National Laboratory (PNNL) and Thermo Fisher Scientific and is licensed and distributed separately from JMod.
+We have provided a small .mzML file and a small library to run a quick JMod search to check that all dependencies and environment variables are working properly. The raw file and library can be found in data/test_mode_filtered.mzML and data/filtered_library.tsv respectively. This quick search can be run on the command line with the following command:
+
+```
+cd path/to/JMod-Main
+
+uv run python run_jmod.py -i data/test_mode_filtered.mzML -l data/filtered_library.tsv
+```
+
+</details>
+
 
 ###
 ## Output Files
 
-<!-- TODO: Fix wording -->
 
 JMod produces multiple output files. Below is a brief description of the main outputs alongside an example directory structure. A more comprehensive description of each output file can be found [here.](/Help/outputs.pdf)
 
 - ```filtered_IDs.parquet```: IDs filtered at 1% FDR with select columns
 - ```filtered_IDs.csv```: IDs filtered at 1% FDR with extended columns
-- ```config.json```: Configuration file for this current search. If the search ever needs to be repeated, this configuration file can be used in lieu of inputting all search parameters again
-- ```Log.log```: Log of the search. If there are any errors or warnings during the search, they will be printed out here
-- ```Summary.log```: Log showing summary statistics of precursor & protein identification
+- ```config.json```: Configuration file for this current search
+- ```Log.log```: Log of the search
+- ```Summary.txt```: Summary of precursor & protein identifications
 
 ####
 
 ```text
 search_results_directory
 
+├── filtered_IDs.parquet
+├── filtered_IDs.csv
+├── config.json
+├── Log.log
+├── Summary.txt
 ├── first_search/
 │   └── firstSearch.tsv
 ├── outputs/
@@ -183,12 +233,8 @@ search_results_directory
 │   ├── decoylibsearch_coeffs.parquet
 │   └── params.txt
 ├── scoring/
-├── filtered_IDs.parquet
-├── filtered_IDs.csv
-├── config.json
-├── Log.log
-└── Summary.txt
+└────── [scoring_plots].png
+
 ```
 
 
-<!-- TODO: config moved out of outputs + called filtered_IDs.parquet -->

@@ -163,7 +163,7 @@ class Test_has_mass_tag():
         source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
         assert found is True
         assert np.isclose(source_channel_mass, 150)
-        assert name == "(PSMtag-0)"
+        assert name == "PSMtag-0"
 
     def test_two_tags_no_mod(self):
         peptides = ["P(PSMtag-0)EPTIDEK(PSMtag-0)"]
@@ -172,7 +172,7 @@ class Test_has_mass_tag():
         source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
         assert found is True
         assert np.isclose(source_channel_mass, 150)
-        assert name == "(PSMtag-0)"
+        assert name == "PSMtag-0"
 
     def test_mod(self):
         peptides = ["PEP(UniMod:21)TIDEK"]
@@ -190,7 +190,7 @@ class Test_has_mass_tag():
         source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
         assert found is True
         assert np.isclose(source_channel_mass, 150)
-        assert name == "(PSMtag-0)"
+        assert name == "PSMtag-0"
 
     def test_mod_and_tag_same_residue(self):
         peptides = ["PEP(UniMod:21)(PSMtag-0)TIDEK"]
@@ -199,5 +199,5 @@ class Test_has_mass_tag():
         source_channel_mass, found, name = has_mass_tag(peptides, prec_mzs, prec_zs)
         assert found is True
         assert np.isclose(source_channel_mass, 150)
-        assert name == "(PSMtag-0)"
+        assert name == "PSMtag-0"
 

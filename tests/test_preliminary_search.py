@@ -32,7 +32,7 @@ def dia_spectra():
 @pytest.fixture(scope="module")
 def library_spectra():
     """Load library spectra from test TSV file."""
-    return loadSpecLib(TEST_LIBRARY)
+    return loadSpecLib(TEST_LIBRARY)[0]
 
 
 class TestFitWithFeatures:
