@@ -88,31 +88,31 @@ default_dict = {
         'flags': ('--apex_jitter',),
         'default': 0,
         'takes_value': True,
-        'in_GUI': True,
+        'in_GUI': False,
         'type': 'int',
-        'widget': 'dropdown',
+        'widget': '',
         'tk_handle': None,
         'special_upload': False,
         'values': '+'
     },
     'free_apex': {
         'flags': ('--free_apex',),
-        'default': False,
+        'default': True,
         'takes_value': False,
         'in_GUI': False,
         'type': 'bool',
-        'widget': 'checkbox',
+        'widget': '',
         'tk_handle': None,
         'special_upload': False,
         'values': "+"
     },
     'additional_scans': {
         'flags': ('--additional_scans',),
-        'default': 0,
+        'default': 3,
         'takes_value': True,
         'in_GUI': False,
         'type': 'int',
-        'widget': 'dropdown',
+        'widget': '',
         'tk_handle': None,
         'special_upload': False,
         'values': '+'
@@ -392,9 +392,9 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
-    'no_ms1_req': {
-        'flags': ('--no_ms1_req',),
-        'default': True,
+    'ms1_req': {
+        'flags': ('--ms1_req',),
+        'default': False,
         'takes_value': False,
         'in_GUI': False,
         'type': '',

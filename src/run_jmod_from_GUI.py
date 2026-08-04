@@ -307,15 +307,15 @@ class JModGUI(ThemedTk):
         self.isotopes_dropdown.grid(row=1, column=7, padx=5, pady=5, sticky="w")
         self.isotopes_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
 
-        # Apex Jitter (label + combobox)
-        self.apex_jitter_lab = ttk.Label(self.ms_frame, text="Apex Jitter:")
-        self.apex_jitter_lab.grid(row=2, column=0, padx=20, pady=5, sticky="e")
-        Hovertip(self.apex_jitter_lab, "Maximum MS1 cycles a channel's apex can drift from the group-voted apex via monotonic ascent during MS1 quant (0 = no drift, channels pinned to voted apex)")
-        self.apex_jitter_var = tk.IntVar(value=0)
-        default_dict["apex_jitter"]["tk_handle"] = self.apex_jitter_var
-        self.apex_jitter_dropdown = ttk.Combobox(self.ms_frame, textvariable=self.apex_jitter_var, values=list(range(0, 11)), width=3, state="readonly")
-        self.apex_jitter_dropdown.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-        self.apex_jitter_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
+        # # Apex Jitter (label + combobox)
+        # self.apex_jitter_lab = ttk.Label(self.ms_frame, text="Apex Jitter:")
+        # self.apex_jitter_lab.grid(row=2, column=0, padx=20, pady=5, sticky="e")
+        # Hovertip(self.apex_jitter_lab, "Maximum MS1 cycles a channel's apex can drift from the group-voted apex via monotonic ascent during MS1 quant (0 = no drift, channels pinned to voted apex)")
+        # self.apex_jitter_var = tk.IntVar(value=0)
+        # default_dict["apex_jitter"]["tk_handle"] = self.apex_jitter_var
+        # self.apex_jitter_dropdown = ttk.Combobox(self.ms_frame, textvariable=self.apex_jitter_var, values=list(range(0, 11)), width=3, state="readonly")
+        # self.apex_jitter_dropdown.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+        # self.apex_jitter_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
 
         ####         Multiplex Frame      #######
         self.multiplex_frame = ttk.LabelFrame(self, text="Multiplexing")
@@ -517,8 +517,8 @@ class JModGUI(ThemedTk):
         tutorial_button = ttk.Button(self.show_info_window, text="Tutorial PDF", width=12, command=self.open_tutorial)
         tutorial_button.grid(row=0, column=0, padx=42, pady=(10, 0))
 
-        video_button = ttk.Button(self.show_info_window, text="Tutorial Video", width=12, command=self.open_tutorial_video)
-        video_button.grid(row=1, column=0, padx=42)
+        # video_button = ttk.Button(self.show_info_window, text="Tutorial Video", width=12, command=self.open_tutorial_video)
+        # video_button.grid(row=1, column=0, padx=42)
 
         outputs_button = ttk.Button(self.show_info_window, text="Outputs PDF", width=12, command=self.open_outputs)
         outputs_button.grid(row=2, column=0, padx=42)

@@ -171,8 +171,8 @@ Some commonly used search parameters are listed below. A more extensive list of 
   default = False
 --rt_tol
   User provided retention time tolerance.
---no_ms1_req
-  Don't require observation of an MS1 peak for consideration in the search.
+--ms1_req
+  Require observation of an MS1 peak for consideration in the search.
   default = False
 --ms1_ppm
   User provided MS1 ppm error tolerance.
