@@ -28,7 +28,7 @@
     "rt_tol": 0.5,
     "initial_percentile": 50,
     "user_percentile": false,
-    "no_ms1_req": true,
+    "ms1_req": false,
     "ms1_ppm": 0.0,
     "rawfilereader_path": null,
     "config_json": null,
