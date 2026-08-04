@@ -319,9 +319,15 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     #### Tagging #####
 
     if config.tag:
+        config.tag.var_tags=False
         spectrumLibrary = tag_library(spectrumLibrary, config.tag, source_channel=source_channel)
     if config.SILAC:
+        config.SILAC.var_tags=False
         spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
+
+    import pickle
+    with open("PSMtag_5plex_lib_new_JMod.pkl", "wb") as f:
+        pickle.dump(spectrumLibrary, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     ######################################################
     #### RT/MZ Alignment (initial search uses target entries only) #####

@@ -289,6 +289,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False,v
                             channel_names=["0"],
                             name="no_tag",
                             compositions=mass.Composition())
+        tag_to_use.var_tags=False
 
     (
     group_p_corrs,
@@ -1199,7 +1200,10 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         if mass_tag:
             tag_name = mass_tag.name
             tag_channel = [re.findall(f"{tag_name}-(\d+)",i) for i in fdc.seq]
-            fdc["channel"] = [str(int(t))+"_"+i[0] if len(i)>0 else str(int(t)) for i,t in zip(tag_channel,fdc.time_channel)]
+            if not config.tag.var_tags:
+                fdc["channel"] = [str(int(t))+"_"+i[0] if len(i)>0 else str(int(t)) for i,t in zip(tag_channel,fdc.time_channel)]
+            else:
+                fdc["channel"] = [str(int(t))+"__"+"_".join(i) if len(i)>0 else str(int(t)) for i,t in zip(tag_channel,fdc.time_channel)]
         else:
             fdc["channel"] = fdc["time_channel"]
             
@@ -1207,14 +1211,17 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         tag_name = mass_tag.name
         ## mTRAQ label
         tag_channel = [re.findall(f"{tag_name}-(\d+)",i) for i in fdc.seq]
-        fdc["channel"] = [int(i[0]) if len(i)>0 else np.nan for i in tag_channel]
+        if not config.tag.var_tags:
+            fdc["channel"] = [int(i[0]) if len(i)>0 else np.nan for i in tag_channel]
+        else:
+            fdc["channel"] = ["_".join(i) if len(i)>0 else np.nan for i in tag_channel]
 
     else: 
         fdc["channel"] = 0 #if LF
         
     if SILAC is not None:
         silac_channel = [re.findall(f"{SILAC.name}-(\d+)",i) for i in fdc.seq]
-        fdc["silac_channel"] = [int(i[0]) if len(i)>0 else np.nan for i in silac_channel] ### Note: This needs to change for multichannel SILAC
+        fdc["silac_channel"] = ["_".join(i) if len(i)>0 else "0" for i in silac_channel]
     else:
         fdc["silac_channel"] = np.nan 
         

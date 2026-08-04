@@ -1903,6 +1903,7 @@ class SpectrumLibraryStore:
         )
     
     def relabel_tag(self, library_tag_name, source_channel):
+        from src.logger import logger
         """Replace a placeholder tag annotation (e.g. "(tag)") with a concrete
         source channel annotation (e.g. "(PSMtag_5plex-d0)") throughout this store.
 
@@ -1911,6 +1912,8 @@ class SpectrumLibraryStore:
         """
         old_annotation = "(" + library_tag_name + ")"
         new_annotation = "(" + source_channel + ")"
+
+        logger.info(f"Library annotation {old_annotation} replaced with {new_annotation}")
 
         for i in range(len(self.mod_seq)):
             old_seq = self.mod_seq[i]
