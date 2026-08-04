@@ -1103,56 +1103,112 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
 
 def get_other_channels(prec, mz, tags):
     """
-    Return the m/z and sequences for all channels of a given precursor.
-
+    Return the m/z and sequences for all channel combinations of a given precursor.
+    
+    Handles both uniform tags (mTRAQ — all sites same channel) and 
+    per-site independent tags (SILAC — each site independently labeled).
+    
     Parameters
     ----------
     prec : tuple
-        A tuple (unstripped_seq, z) containing the peptide sequence (with tags) 
-        and its charge state.
+        (unstripped_seq, z)
     mz : float
-        The m/z value of the precursor in the current channel.
-    tag : massTag
-        A massTag instance.
-
+        The m/z of the precursor in the current channel.
+    tags : list[massTag]
+        All tags used in the experiment.
     Returns
     -------
-    all_prec_comb : list
-        A list of tuples with each precursor-channel combination and their m/z:
-        [unstripped_seq, float(mz)] for that channel.
+    all_prec_comb : list of [str, float]
+        All [new_seq, new_mz] combinations.
     """
-    ## check which tags are in use and update
-    tags = [tag for tag in tags if len(re.findall(rf"{tag.name}-(\d+)",prec[0]))]
-    ## identify what channel the current prec is in
-    all_channels = [re.findall(rf"{tag.name}-(\d+)",prec[0]) for tag in tags]
-    channels_top = tuple([i[0] for i in all_channels])
-    num_tags = [len(i) for i in all_channels]
+    seq, z = prec
+
+    # Only consider tags that are actually present in this sequence
+    tags = [tag for tag in tags if re.search(rf"{re.escape(tag.name)}-", seq)]
+
+    # For each tag, find all individual site occurrences and their current channel.
+    # Each site is an independent substitution point.
+    # e.g. for 'K(K_6C13-0)...K(K_6C13-6)' we get two sites: ['0', '6']
+    # For uniform tags like mTRAQ, all sites will share the same channel but
+    # we still treat them independently for generality.
     
-    # Get all channel combinations (one channel per tag)
-    channel_options = [tag.channel_names for tag in tags]
-    all_combinations = list(product(*channel_options))
-    
+    # Build a list of (tag, site_positions, current_channels) per tag
+    tag_site_info = []
+    for tag in tags:
+        # Find all occurrences with their span so we can do positional replacement
+        matches = list(re.finditer(rf"\({re.escape(tag.name)}-(\w+)\)", seq))
+        if not matches:
+            continue
+        current_channels = [m.group(1) for m in matches]
+        if tag.var_tags:
+            tag_site_info.append({
+                'tag': tag,
+                'matches': matches,
+                'current_channels': current_channels,
+                'independent': True,
+                'options': list(product(tag.channel_names, repeat=len(matches))),
+            })
+        else:
+            tag_site_info.append({
+                'tag': tag,
+                'matches': matches,
+                'current_channels': current_channels,
+                'independent': False,
+                'options': [[c] * len(matches) for c in tag.channel_names],
+            })
+
+    if not tag_site_info:
+        return [[seq, mz]]
+
+    # Enumerate all combinations across tags
+    all_tag_options = [info['options'] for info in tag_site_info]
+    all_combinations = list(product(*all_tag_options))
+
     all_prec_comb = []
     for combination in all_combinations:
-        # break
-        # if channels==combination:
-        #     all_prec_comb.append([prec[0],mz])
-        # else:
-        last_channels = channels_top
-        new_seq = prec[0]
+        # combination[t] is the channel assignment list for tag t
+        # e.g. for SILAC with 2 sites: ('0', '6')
+        # for mTRAQ with 3 sites: ('8', '8', '8')
+        
         new_mz = mz
-        # For each tag, replace ALL occurrences with the same channel
-        for tag, channel, n, l in zip(tags, combination, num_tags, last_channels):
-            # break
-            # Pattern to match tag-channel combinations
-            pattern = rf'{tag.name}-\d+'
-            replacement = f'{tag.name}-{channel}'
-            new_seq = re.sub(pattern, replacement, new_seq)
-            
-            new_mz = new_mz + (n*(tag.mass_dict[tag.name+"-"+channel]-tag.mass_dict[tag.name+"-"+l])/prec[1])
-            # print(new_seq, combination,new_mz)
-        all_prec_comb.append([new_seq,new_mz])
-    
+        # Build substitution list: (match_span, new_tag_string)
+        # Collect all substitutions across all tags then apply in reverse
+        # order so spans remain valid
+        substitutions = []
+
+        for info, channel_assignment in zip(tag_site_info, combination):
+            tag = info['tag']
+            matches = info['matches']
+            current_channels = info['current_channels']
+
+            for match, new_channel, cur_channel in zip(
+                matches, channel_assignment, current_channels
+            ):
+                substitutions.append((match.span(), tag, new_channel, cur_channel))
+
+            # m/z shift: sum of per-site mass deltas
+            mz_delta = sum(
+                (
+                    tag.mass_dict[f"{tag.name}-{new_c}"]
+                    - tag.mass_dict[f"{tag.name}-{cur_c}"]
+                )
+                for new_c, cur_c in zip(channel_assignment, current_channels)
+            ) / float(z)
+            new_mz += mz_delta
+
+        # Apply substitutions in reverse span order to preserve positions
+        new_seq = seq
+        for (start, end), tag, new_channel, _ in sorted(
+            substitutions, key=lambda x: x[0][0], reverse=True
+        ):
+            new_seq = (
+                new_seq[:start]
+                + f"({tag.name}-{new_channel})"
+                + new_seq[end:]
+            )
+
+        all_prec_comb.append([new_seq, new_mz])
+
     return all_prec_comb
 
 

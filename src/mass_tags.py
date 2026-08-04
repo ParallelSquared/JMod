@@ -191,7 +191,7 @@ mTRAQ = massTag(rules = "nK",
 ##TODO what is going on with mTRAQ and tag_library here
 
 ## potentially add this as module to Tag class
-def tag_library(library,tag=None,source_channel=None):
+def tag_library(library,tag=None,source_channel=None,var_tags=False):
     """
 
 
@@ -210,7 +210,7 @@ def tag_library(library,tag=None,source_channel=None):
     """
     from src.models.spec_lib.library_store import SpectrumLibraryStore
     if isinstance(library, SpectrumLibraryStore):
-        return SpectrumLibraryStore.from_tagged(library, tag, source_channel=source_channel)
+        return SpectrumLibraryStore.from_tagged(library, tag, source_channel=source_channel, var_tags=var_tags)
 
 
 def refresh_tags(mass_tags_dir=None): #set mass tags dir to none for testing purposes

@@ -123,7 +123,156 @@ class Test_get_other_channels():
         with pytest.raises(KeyError):
             get_other_channels(('A(PSMtag_5plex-2)AAAADLANR', 2.0), 780.372376195, [self.mass_tag])
 
-    
+
+    def test_two_independent_sites_same_start_channel(self):
+        """Both sites start on channel 0. Independent (var_tags) assignment
+        must enumerate n_channels**2 = 4 combos, not the 2 a uniform tag
+        would give for the same starting sequence."""
+        base_mz = 464.727463520355
+
+        tag = read_json_to_massTag("tests/MassTags", "test_basic.json")
+        tag.var_tags = True
+        
+        d0 = tag.mass_dict["test_basic-0"]
+        d2 = tag.mass_dict["test_basic-2"]
+        mz = base_mz + d0
+
+        prec = ("P(test_basic-0)EPTIDEK(test_basic-0)", 2.0)
+
+        expected = [
+            ["P(test_basic-0)EPTIDEK(test_basic-0)", mz],
+            ["P(test_basic-0)EPTIDEK(test_basic-2)", base_mz + (d0 + d2) / 2],
+            ["P(test_basic-2)EPTIDEK(test_basic-0)", base_mz + (d0 + d2) / 2],
+            ["P(test_basic-2)EPTIDEK(test_basic-2)", base_mz + d2],
+        ]
+
+        result = get_other_channels(prec, mz, [tag])
+        assert len(result) == tag.n_channels ** 2
+        self.compare_outputs(expected, result)
+
+    def test_two_independent_sites_mixed_start_channel(self):
+        """Sites start on *different* channels. Each site's mz delta must be
+        computed relative to its own current channel, not a shared one."""
+        tag = read_json_to_massTag("tests/MassTags", "test_basic.json")
+        tag.var_tags = True
+        base_mz = 464.727463520355
+        d0 = tag.mass_dict["test_basic-0"]
+        d2 = tag.mass_dict["test_basic-2"]
+        mz = base_mz + (d0 + d2) / 2  # site1 currently channel0, site2 channel2
+
+        prec = ("P(test_basic-0)EPTIDEK(test_basic-2)", 2.0)
+
+        expected = [
+            ["P(test_basic-0)EPTIDEK(test_basic-0)", base_mz + d0],
+            ["P(test_basic-0)EPTIDEK(test_basic-2)", mz],
+            ["P(test_basic-2)EPTIDEK(test_basic-0)", mz],
+            ["P(test_basic-2)EPTIDEK(test_basic-2)", base_mz + d2],
+        ]
+
+        result = get_other_channels(prec, mz, [tag])
+        assert len(result) == tag.n_channels ** 2
+        self.compare_outputs(expected, result)
+
+    def test_var_tags_vs_uniform_combo_count(self):
+        """Same starting sequence should give n_channels combos under uniform
+        assignment but n_channels**n_sites under var_tags."""
+        uniform_tag = read_json_to_massTag("tests/MassTags", "test_basic.json")
+        uniform_tag.var_tags = False
+        var_tag = read_json_to_massTag("tests/MassTags", "test_basic.json")
+        var_tag.var_tags = True
+
+        base_mz = 464.727463520355
+        mz = base_mz + uniform_tag.mass
+        prec = ("P(test_basic-0)EPTIDEK(test_basic-0)", 2.0)
+
+        uniform_result = get_other_channels(prec, mz, [uniform_tag])
+        var_result = get_other_channels(prec, mz, [var_tag])
+
+        assert len(uniform_result) == uniform_tag.n_channels
+        assert len(var_result) == var_tag.n_channels ** 2
+
+    def test_two_independent_sites_same_residue_N_term_lys(self):
+        tag = read_json_to_massTag("tests/MassTags", "test_basic.json")
+        tag.var_tags = True
+        base_mz = 464.727463520355
+        d0 = tag.mass_dict["test_basic-0"]
+        d2 = tag.mass_dict["test_basic-2"]
+        mz = base_mz + d0  # both sites currently channel 0: (d0+d0)/2 = d0
+
+        prec = ("K(test_basic-0)(test_basic-0)EPTIDEP", 2.0)
+
+        expected = [
+            ["K(test_basic-0)(test_basic-0)EPTIDEP", base_mz + d0],
+            ["K(test_basic-0)(test_basic-2)EPTIDEP", base_mz + (d0 + d2) / 2],
+            ["K(test_basic-2)(test_basic-0)EPTIDEP", base_mz + (d0 + d2) / 2],
+            ["K(test_basic-2)(test_basic-2)EPTIDEP", base_mz + d2],
+        ]
+
+        result = get_other_channels(prec, mz, [tag])
+        assert len(result) == tag.n_channels ** 2
+        self.compare_outputs(expected, result)
+
+    def test_silac_var_and_mtraq_novar_combined(self):
+        silac = read_json_to_massTag("tests/MassTags", "test_SILAC.json")
+        silac.var_tags = True
+        mtraq = read_json_to_massTag("tests/MassTags", "test_basic.json")
+        mtraq.var_tags = False
+
+        prec = (
+            "P(test_basic-0)EPTIDEK(test_basic-0)(test_SILAC-0)",
+            2.0
+        )
+        d_mtraq0 = mtraq.mass_dict["test_basic-0"]
+        base_mz = 464.727463520355
+        mz = base_mz + d_mtraq0
+
+        result = get_other_channels(prec, mz, [mtraq, silac])
+
+        # total = mTRAQ uniform options * SILAC independent options (1 site here)
+        assert len(result) == mtraq.n_channels * silac.n_channels
+
+        seqs = [r[0] for r in result]
+        # every mTRAQ channel should appear paired with every SILAC channel
+        for mtraq_ch in mtraq.channel_names:
+            for silac_ch in silac.channel_names:
+                expected_seq = (
+                    f"P(test_basic-{mtraq_ch})"
+                    f"EPTIDEK(test_basic-{mtraq_ch})(test_SILAC-{silac_ch})"
+                )
+                assert expected_seq in seqs, f"missing combo: {expected_seq}"
+
+    def test_silac_var_and_mtraq_var_combined(self):
+        silac = read_json_to_massTag("tests/MassTags", "test_SILAC.json")
+        silac.var_tags = True
+        mtraq = read_json_to_massTag("tests/MassTags", "test_basic.json")
+        mtraq.var_tags = True
+
+        prec = (
+            "P(test_basic-0)EPTIDEK(test_basic-0)(test_SILAC-0)",
+            2.0
+        )
+        d_mtraq0 = mtraq.mass_dict["test_basic-0"]
+        base_mz = 464.727463520355
+        mz = base_mz + d_mtraq0
+
+        result = get_other_channels(prec, mz, [mtraq, silac])
+
+        # mTRAQ now has 2 independent sites -> n_channels**2, times SILAC's
+        # 1 independent site -> n_channels
+        assert len(result) == mtraq.n_channels ** 2 * silac.n_channels
+
+        seqs = [r[0] for r in result]
+
+        # every independent mTRAQ site combo should appear paired with every
+        # SILAC channel, including MIXED mTRAQ combos (N-term != K channel)
+        for mtraq_n_ch in mtraq.channel_names:
+            for mtraq_k_ch in mtraq.channel_names:
+                for silac_ch in silac.channel_names:
+                    expected_seq = (
+                        f"P(test_basic-{mtraq_n_ch})"
+                        f"EPTIDEK(test_basic-{mtraq_k_ch})(test_SILAC-{silac_ch})"
+                    )
+                    assert expected_seq in seqs, f"missing combo: {expected_seq}"
 
 
 class Test_get_seqs_and_mzs():
