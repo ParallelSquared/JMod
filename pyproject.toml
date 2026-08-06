@@ -19,6 +19,7 @@ deps = [
   "numba",
   "pyteomics",
   "pymzml",
+  "psims",
   "brain-isotopic-distribution",
   "biosaur2",
   "lxml",
@@ -61,6 +62,7 @@ deps = [
 
   # OS-specific helper
   "pywin32; platform_system == 'Windows'",
+  "pythonnet",
 
   # TensorFlow per platform
   # Mac
@@ -80,4 +82,28 @@ deps = [
   "tensorboard",
   "tensorboard-data-server",
   "tensorflow-io-gcs-filesystem",
+
+  # Testing
+  "pytest",
+  "pytest-cov"
+]
+dev = [
+    "pyside6<6.8",
+]
+
+[tool.coverage.run]
+omit = [
+    "src/run_jmod_from_GUI.py",
+    "src/utils/gui_utils.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]

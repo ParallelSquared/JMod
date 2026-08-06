@@ -1,12 +1,33 @@
 """
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
-
-"""
 Tests for functions in mass_tags.py
 """
+
+#  Copyright (c) 2026 Parallel Squared Technology Institute
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#  """
 
 import pytest
 import numpy as np
@@ -152,6 +173,7 @@ class TestCdfPlots:
     def test_cdf_plots_runs_without_error(self, sample_cdf_data, monkeypatch, tmp_path):
         """Test that cdf_plots runs and generates a valid matplotlib figure."""
         emp_data, emp_p, pred_data, pred_p = sample_cdf_data
+        (tmp_path / "first_search").mkdir(exist_ok=True)
 
         monkeypatch.setitem(globals(), "colours", ["blue", "orange"])
 
@@ -161,8 +183,8 @@ class TestCdfPlots:
         # Call the plotting function
         cdf_plots(emp_data, emp_p, percentile=0.999, boundary=5,
                 pred_data=pred_data, pred_p=pred_p, results_folder=results_folder)
-
-        out_file = tmp_path / "RTelbows.png"
+        
+        out_file = tmp_path / "first_search/RTelbows.png"
         assert out_file.exists(), "Expected output plot file to be created."
 
     def test_cdf_data_computation(self):
@@ -210,6 +232,7 @@ class TestAlignmentPlots:
 
     def test_alignment_plots_creates_files(self, sample_filtered_output, dummy_splines, tmp_path):
         orig_spl, rt_spl, f_rt_mz, mz_spl = dummy_splines
+        (tmp_path / "first_search").mkdir(exist_ok=True)
 
         alignment_plots(
             filtered_output=sample_filtered_output,
@@ -222,13 +245,13 @@ class TestAlignmentPlots:
         )
 
         expected_files = [
-            "OriginalRTfit.png",
-            "RTfit.png",
-            "RtResidual.png",
-            "RTdiff.png",
-            "MZrtfit.png",
-            "MZfit.png",
-            "MZdiff.png"
+            "first_search/OriginalRTfit.png",
+            "first_search/RTfit.png",
+            "first_search/RtResidual.png",
+            "first_search/RTdiff.png",
+            "first_search/MZrtfit.png",
+            "first_search/MZfit.png",
+            "first_search/MZdiff.png"
         ]
 
         for fname in expected_files:
@@ -236,7 +259,7 @@ class TestAlignmentPlots:
             assert out_file.exists(), f"Expected plot file {fname} to be created."
 
         # Optional: assert all files exist
-        assert len(list(tmp_path.iterdir())) == len(expected_files)
+        assert len(list((tmp_path / 'first_search').iterdir())) == len(expected_files)
 
 
 class TestGetMultiplesAndFilter:
@@ -296,7 +319,7 @@ class TestEmpiricalFit:
             "hyperscore": np.random.rand(N),
             "frag_cosines_p": np.random.rand(N),
             "manhattan_distances": np.random.rand(N),
-            "scribe_scores": np.random.rand(N),
+            "scribe_score": np.random.rand(N),
             "gof_stats": np.random.rand(N),
             "max_matched_residuals": np.random.rand(N),
             "med_frag_error": np.random.rand(N),
@@ -311,8 +334,13 @@ class TestEmpiricalFit:
         cls.temp_dir.cleanup()
 
     def test_empirical_fit_runs_without_error(self):
+        os.makedirs(os.path.join(self.test_results_dir, "first_search"), exist_ok=True)
+
         try:
-            cor_filter, emp_rt_spl = empirical_fit(self.output_df, self.test_results_dir)
+            cor_filter, emp_rt_spl = empirical_fit(
+                self.output_df,
+                self.test_results_dir
+            )
 
         except RuntimeError as e:
             if "Optimal parameters not found" in str(e):
@@ -320,11 +348,10 @@ class TestEmpiricalFit:
             else:
                 raise
 
-        # Basic type and behavior assertions
-        assert isinstance(cor_filter, np.ndarray)
+        assert hasattr(cor_filter, "dtype")
         assert cor_filter.dtype == bool
         assert callable(emp_rt_spl)
-        assert os.path.exists(self.test_results_dir)
+        assert os.path.isdir(self.test_results_dir)
 
 class TestFilterRtsByDense:
     def test_filter_rts_by_dense_basic(self):

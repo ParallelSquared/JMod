@@ -1,95 +1,153 @@
 # JMod
-**JMod is an open and flexible software for increasing the throughput of sensitive proteomics by supporting multiplexing in the mass and time domains**
 
-## Abstract 
-The throughput of mass spectrometry (MS) proteomics can be increased substantially by multiplexing that enables parallelization of data acquisition. Such parallelization in the mass domain (plexDIA) and the time domain (timePlex) increases the density of mass spectra and the overlap between ions originating from different precursors, potentially complicating their analysis. To enhance sequence identification and quantification from such spectra, we developed an open source software for Joint Modeling of mass spectra: JMod. It uses the intrinsic structure in the spectra and explicitly models overlapping peaks as linear superpositions of their components. This modeling enabled performing 9-plexDIA using 2 Da offset PSMtags by deconvolving the resulting overlapping isotopic envelopes in both MS1 and MS2 space. The results demonstrate 9-fold higher throughput with preserved quantitative accuracy and coverage depth. This support for smaller mass offsets increases multiplexing capacity and thus proteomic throughput for a given plexDIA tag, and we demonstrate this generalizability with diethyl labeling. By supporting enhanced decoding of DIA spectra multiplexed in the mass and time domains, JMod provides an open and flexible software that enables increasing the throughput of sensitive proteomics.
+**JMod is an open and flexible software for increasing the throughput of sensitive proteomics by supporting multiplexing in the mass and time domains.**
 
-------
-
-
-## Reference 
+###
+## Reference
 
 **JMod: Joint modeling of mass spectra for empowering multiplexed DIA proteomics**
+
 Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Specht, Nikolai Slavov
 *bioRxiv* 2025.05.22.655512; doi: [10.1101/2025.05.22.655512](https://doi.org/10.1101/2025.05.22.655512)
 
------- 
-
-## Deployment  
-
-### Table of Contents
-- [Environment Setup](#environment-setup)
-  - [Linux/MacOS](#linuxmacos)
-  - [Windows](#windows)
-- [Outputs](#outputs)
+###
+## Table of Contents
+- [Setting up JMod](#setting-up-jmod)
+  - [Windows Setup](#windows-setup)
+  - [Linux/MacOS Setup](#linuxmacos-setup)
+  - [Thermo Raw File Support](#thermo-raw-file-support)
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
-  - [With Command Line Args](#with-command-line-args)
-  - [With JSON Configuration File](#with-json-configuration-file)
-- [Search Parameters](#search-parameters)
-- [Running Tests](#running-tests)
+  - [Library Structure](#library-structure)
+  - [Graphical User Interface (GUI)](#running-jmod-with-the-graphical-user-interface-gui)
+  - [Command Line Interface (CLI)](#running-jmod-with-the-command-line-interface-cli)
+- [Output Files](#output-files)
+
+###
+## Setting up JMod
+
+### Windows Setup
+
+<details>
+<summary><strong> Setup Steps </strong>
+</summary>
+
+JMod has a `.bat` executable that is only compatible with Windows computers. Follow the instructions below to launch the JMod GUI via the `.bat`.
+
+1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
+
+2. Navigate to the JMod directory. Inside that directory is a `launch.bat` file. Double-click on the file to open the JMod GUI.
+    - If this is the first time the computer is setting up a UV environment, it might take a few minutes to download all dependencies and packages.
+3. The JMod GUI should open in a new window.
+
+If you would like to set up the UV environment with the command line, please follow the instructions below in [Linux/MacOS Setup](#linuxmacos-setup).
+
+</details>
 
 
-### Environment Setup
-#### Linux/MacOS
-To set up a Conda environment to run JMod in, please download the `data/jmod_env.yml` file.
+### Linux/MacOS Setup
 
-In a dedicated terminal, type:  
-1. ```conda env create -f jmod_env.yml -n $env_name```
-2. ```conda activate $env_name```
-3. ```python run_jmod.py <args> ```
+<details>
+<summary><strong> Setup Steps </strong>
+</summary>
 
-If run successfully, the inputted configurations alongside `"Loading library..."` should be printed.
-
-To set up a UV environment to run JMod in, please first install UV with either ```pip install uv``` or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed.  
-
-In a dedicated terminal in the JMod source directory (that contains the pyproject.toml), type:
-1. ```uv sync --python 3.11``` (note: this will download the correct python version if it is not already on your system)
-2. ```source .venv/bin/activate```
-3. ```uv run python run_jmod.py <args>```
-
-#### Windows
-If on a Windows machine, please use the `data/jmod_env_windows.yml` file to set up your environment. Set up will follow the same steps as Linux/MacOS.
-
-If on a Windows machine, replace Step 2. with ```.venv/bin/activate``` to enter the virtual environment.
+1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
 
 
-### Outputs
+2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, run the following command:
 
-- `filtered_IDs.csv` – list of precursor identifications that are FDR filtered
-- `all_IDs.csv` – list of peptide identifications that are not FDR filtered
-- `decoylibsearch_coeffs.csv` – list of JMod MS2 precursor coefficients in each
-- `spectrumfirstSearch.csv` – Precursor IDs from the preliminary search
-- `params.txt` – list of parameters used in the JMod search
-- `summary.txt` – summary of the precursor and protein IDs from the search
+    ```pip install uv``` 
+ 
+    or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. 
 
-### Running a Search
+3. Open a new terminal and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: 
 
-#### File Conversion
-JMod supports .mzML files. When converting files to .mzML, the data should be centroided. This can be done with MSconvert through the command `--filter peakPicking true 1-`
+    ```uv sync --python 3.11```
 
-#### With Command Line Args
+4. You can now launch the JMod GUI with ```uv run python run_jmod_from_GUI.py``` or run a search using the command line with ```uv run python run_jmod.py <args>```.
+
+</details>
+
+<!-- TODO: review this -->
+
+### Thermo Raw File Support
+
+<details>
+<summary><strong> Setup Steps </strong>
+</summary>
+
+JMod supports direct processing of Thermo `.raw` files using Thermo's RawFileReader libraries on Windows.
+
+To enable `.raw` file support, please download the latest RawFileReader release, which can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
+
+When using the JMod GUI, you will be prompted to point to the `netstandard2.0` directory. If running JMod with the command line, use `--rawfilereader_path path/netstandard2.0`. Both of these options will save this path to `data/settings.json` which will be used in future runs unless `--rawfilereader_path` is specified.
+
+If running JMod on Linux/MacOS, `mono` will need to be downloaded. This can be done with the following command:
+
+`brew install mono`
+
+If homebrew is not installed, it can be installed with the following command:
+
+`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+
+
+Thermo RawFileReader is developed and distributed by Pacific Northwest National Laboratory (PNNL) and Thermo Fisher Scientific and is licensed and distributed separately from JMod.
+
+</details>
+
+###
+## Running a Search
+
+To run a JMod search, both a spectrum file (either `.raw` or `.mzML`) and a .tsv spectral library are required. If you would like to convert `.raw` files to `.mzML` to run with JMod, please follow the instructions below.
+
+### File Conversion 
+
+JMod currently supports `.mzML` and `.raw` files. Direct support for `.d` files will be added in future releases. To convert `.raw` files to `.mzML` files, please make sure the data is centroided. This can be done with MSConvert with the command `--filter peakPicking true 1-`
+
+###
+### Library Structure  
+
+ An example library with the required columns can be found [here](/data/filtered_library.tsv).
+
+###
+### Running JMod with the Graphical User Interface (GUI)
+
+![alt text](/Help/JMod_GUI.jpeg "JMod GUI Image")
+
+The GUI can be launched with the `launch_JMod.bat` file on Windows computers. 
+
+If not on a Windows computer, the GUI can be launched with the following command:
+
 ```
-python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
-```
-#### With JSON Configuration File 
-Example `config.json` in ./data/default_config.json
-```
-python path/to/run_jmod.py --config_json path/to/config.json
+uv run python path/to/run_jmod_from_GUI.py 
 ```
 
-### Search Parameters
+<!-- TODO: rename the .bat file to launch_JMod.bat // wrap this in a .exe with the icon-->
+
+More detailed instructions on how to run JMod from the GUI can be found
+[here.](/Help/JMod_Tutorial.pdf)
+
+
+###
+### Running JMod with the Command Line Interface (CLI) 
+
+JMod can be run through the command line with various search parameters. An example command is shown below:
+
+
+```
+uv run python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
+```
+
+Some commonly used search parameters are listed below. A more extensive list of commands can be found [here](/Help/commands.pdf).
+
+<details>
+<summary><strong> Common Search Parameters </strong></summary>
+
 ```
 -i, --mzml
   Input file in mzML format
 -l, --speclib
-  Spectrum library in DIANN output format (must be .tsv)
--r, --use_rt
-  Use retention time filtering during search
-  default = False
--f, --use_features
-  Use peptide-like features in the preliminary search. mzML file must have associated Dinosaur/Biosaur output
-  default = True
+  Spectrum library in DIANN output format (must be .tsv or .parquet)
 -m --atleast_m
   Required number of fragments matched from top N fragments (N=10)
   default = 3
@@ -118,9 +176,65 @@ python path/to/run_jmod.py --config_json path/to/config.json
   default = False
 --ms1_ppm
   User provided MS1 ppm error tolerance.
+  ```
+
+</details>
+
+
+####
+JMod can also be run using a configuration file. Each JMod search produces its own configuration file which can be used to initialize other searches. An example configuration can be found in ```data/default_config.json```, and a sample command can be found here:
+
+```
+uv run python path/to/run_jmod.py --config_json path/to/config.json
 ```
 
-### Running Tests
+
+<details>
+<summary><strong> Running JMod with Sample Demo Data </strong></summary>
+
+We have provided a small .mzML file and a small library to run a quick JMod search to check that all dependencies and environment variables are working properly. The raw file and library can be found in data/test_mode_filtered.mzML and data/filtered_library.tsv respectively. This quick search can be run on the command line with the following command:
+
 ```
-python run_tests.py -c 
+cd path/to/JMod-Main
+
+uv run python run_jmod.py -i data/test_mode_filtered.mzML -l data/filtered_library.tsv
 ```
+
+</details>
+
+
+###
+## Output Files
+
+
+JMod produces multiple output files. Below is a brief description of the main outputs alongside an example directory structure. A more comprehensive description of each output file can be found [here.](/Help/outputs.pdf)
+
+- ```filtered_IDs.parquet```: IDs filtered at 1% FDR with select columns
+- ```filtered_IDs.csv```: IDs filtered at 1% FDR with extended columns
+- ```config.json```: Configuration file for this current search
+- ```Log.log```: Log of the search
+- ```Summary.txt```: Summary of precursor & protein identifications
+
+####
+
+```text
+search_results_directory
+
+├── filtered_IDs.parquet
+├── filtered_IDs.csv
+├── config.json
+├── Log.log
+├── Summary.txt
+├── first_search/
+│   └── firstSearch.tsv
+├── outputs/
+│   ├── all_IDs_filtered.parquet
+│   ├── all_IDs.csv
+│   ├── decoylibsearch_coeffs.parquet
+│   └── params.txt
+├── scoring/
+└────── [scoring_plots].png
+
+```
+
+

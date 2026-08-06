@@ -1,3 +1,30 @@
+#  Copyright (c) 2026 Parallel Squared Technology Institute
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#  """
+
 import pytest
 import numpy as np
 import sys, os
@@ -11,6 +38,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.iso_functions import get_seq_comp, precursor_isotopes, fragment_seq, gen_isotopes_dict, iso_library, iso_library_multi
 from brainpy._c.isotopic_distribution import TheoreticalPeak as Peak
 from src.mass_tags import massTag, read_json_to_massTag
+from src.models.spec_lib.library_store import SpectrumLibraryStore
 import src.iso_functions as iso
 import copy
 
@@ -107,97 +135,97 @@ class Test_precursor_isotopes():
             assert peak_a.charge == peak_b.charge
 
     def test_stripped_seq(self):
-        output = precursor_isotopes("MEATSTICK", 2, None, 2)
-        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        output = precursor_isotopes("PEPTIDEK", 2, None, 2)
+        expected_output = [Peak(mz=464.734740, intensity=0.676096, charge=2), Peak(mz=465.236229, intensity=0.323904, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_five_isos(self):
-        output = precursor_isotopes("MEATSTICK", 2, None, 5)
-        expected_output = [Peak(mz=492.230453, intensity=0.548792, charge=2), Peak(mz=492.731859, intensity=0.267757, charge=2), Peak(mz=493.231317, intensity=0.130020, charge=2), Peak(mz=493.731776, intensity=0.041806, charge=2), Peak(mz=494.231870, intensity=0.011625, charge=2)]
+        output = precursor_isotopes("PEPTIDEK", 2, None, 5)
+        expected_output = [Peak(mz=464.734740, intensity=0.601188, charge=2), Peak(mz=465.236229, intensity=0.288017, charge=2), Peak(mz=465.737521, intensity=0.087315, charge=2), Peak(mz=466.238790, intensity=0.019799, charge=2), Peak(mz=466.740027, intensity=0.003682, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_untag_seq_with_tag(self):
-        output = precursor_isotopes("MEATSTICK", 2, self.tag, 2)
-        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        output = precursor_isotopes("PEPTIDEK", 2, [self.tag], 2)
+        expected_output = [Peak(mz=464.734740, intensity=0.676096, charge=2), Peak(mz=465.236229, intensity=0.323904, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_tag_seq_no_tag(self):
-        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK", 2, None, 2)
-        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 2, None, 2)
+        expected_output = [Peak(mz=464.734740, intensity=0.676096, charge=2), Peak(mz=465.236229, intensity=0.323904, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_one_tag(self):
-        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK", 2, self.tag, 2)
-        expected_output = [Peak(mz=646.288499, intensity=0.590711, charge=2), Peak(mz=646.789957, intensity=0.409289, charge=2)]
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 2, [self.tag], 2)
+        expected_output = [Peak(mz=618.792786, intensity=0.593806, charge=2), Peak(mz=619.294302, intensity=0.406194, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_two_tags(self):
-        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK(PSMtag_5plex-0)", 2, self.tag, 2)
-        expected_output = [Peak(mz=800.346546, intensity=0.526913, charge=2), Peak(mz=800.848031, intensity=0.473087, charge=2)]
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-0)", 2, [self.tag], 2)
+        expected_output = [Peak(mz=772.850832, intensity=0.529374, charge=2), Peak(mz=773.352363, intensity=0.470626, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_different_channel(self):
-        output = precursor_isotopes("M(PSMtag_5plex-4)EATSTICK", 2, self.tag, 2)
-        expected_output = [Peak(mz=648.293977, intensity=0.598493, charge=2), Peak(mz=648.795427, intensity=0.401507, charge=2)]
+        output = precursor_isotopes("P(PSMtag_5plex-4)EPTIDEK", 2, [self.tag], 2)
+        expected_output = [Peak(mz=620.798264, intensity=0.601670, charge=2), Peak(mz=621.299775, intensity=0.398330, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_absent_channel(self):
         with pytest.raises(KeyError) as exc_info:
-            precursor_isotopes("M(PSMtag_5plex-2)EATSTICK", 2, self.tag, 2)
+            precursor_isotopes("P(PSMtag_5plex-2)EPTIDEK", 2, [self.tag], 2)
         assert "'2'" in str(exc_info.value)
-        
+
     def test_stripped_seq_z3(self):
-        output = precursor_isotopes("MEATSTICK", 3, None, 2)
-        expected_output = [Peak(mz=328.489394, intensity=0.672087, charge=3), Peak(mz=328.823665, intensity=0.327913, charge=3)]
+        output = precursor_isotopes("PEPTIDEK", 3, None, 2)
+        expected_output = [Peak(mz=310.158919, intensity=0.676096, charge=3), Peak(mz=310.493245, intensity=0.323904, charge=3)]
         self.compare_outputs(output, expected_output)
 
     def test_one_tag_z3(self):
-        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK", 3, self.tag, 2)
-        expected_output = [Peak(mz=431.194758, intensity=0.590711, charge=3), Peak(mz=431.529063, intensity=0.409289, charge=3)]
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 3, [self.tag], 2)
+        expected_output = [Peak(mz=412.864283, intensity=0.593806, charge=3), Peak(mz=413.198627, intensity=0.406194, charge=3)]
         self.compare_outputs(output, expected_output)
 
     def test_two_different_tags(self):
-        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK(PSMtag_5plex-4)", 3, self.tag, 2)
-        expected_output = [Peak(mz=535.237108, intensity=0.533096, charge=3), Peak(mz=535.571428, intensity=0.466904, charge=3)]
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-4)", 3, [self.tag], 2)
+        expected_output = [Peak(mz=516.906632, intensity=0.535615, charge=3), Peak(mz=517.240984, intensity=0.464385, charge=3)]
         self.compare_outputs(output, expected_output)
 
-    def test_oxidation(self):
-        output = precursor_isotopes("M(Unimod:35)EATSTICK", 2, self.tag, 2)
-        expected_output = [Peak(mz=500.227911, intensity=0.671915, charge=2), Peak(mz=500.729317, intensity=0.328085, charge=2)]
+    def test_phosphorylation(self):
+        output = precursor_isotopes("PEPT(Unimod:21)IDEK", 2, [self.tag], 2)
+        expected_output = [Peak(mz=504.717905, intensity=0.675522, charge=2), Peak(mz=505.219396, intensity=0.324478, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_mod_and_tag(self):
-        output = precursor_isotopes("M(Unimod:35)EATSTICK(PSMtag_5plex-0)", 2, self.tag, 2)
-        expected_output = [Peak(mz=654.285957, intensity=0.590578, charge=2), Peak(mz=654.787415, intensity=0.409422, charge=2)]
+        output = precursor_isotopes("PEPT(Unimod:21)IDEK(PSMtag_5plex-0)", 2, [self.tag], 2)
+        expected_output = [Peak(mz=658.775951, intensity=0.593363, charge=2), Peak(mz=659.277469, intensity=0.406637, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_tag_before_mod(self):
-        output = precursor_isotopes("M(PSMtag_5plex-0)(Unimod:35)EATSTICK", 2, self.tag, 2)
-        expected_output = [Peak(mz=654.285957, intensity=0.590578, charge=2), Peak(mz=654.787415, intensity=0.409422, charge=2)]
+        output = precursor_isotopes("PEPT(PSMtag_5plex-0)(Unimod:21)IDEK", 2, [self.tag], 2)
+        expected_output = [Peak(mz=658.775951, intensity=0.593363, charge=2), Peak(mz=659.277469, intensity=0.406637, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_mod_before_tag(self):
-        output = precursor_isotopes("M(Unimod:35)(PSMtag_5plex-0)EATSTICK", 2, self.tag, 2)
-        expected_output = [Peak(mz=654.285957, intensity=0.590578, charge=2), Peak(mz=654.787415, intensity=0.409422, charge=2)]
+        output = precursor_isotopes("PEPT(Unimod:21)(PSMtag_5plex-0)IDEK", 2, [self.tag], 2)
+        expected_output = [Peak(mz=658.775951, intensity=0.593363, charge=2), Peak(mz=659.277469, intensity=0.406637, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_decoy_peptide(self):
-        output = precursor_isotopes("Decoy_MEATSTICK", 2, None, 2)
-        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        output = precursor_isotopes("Decoy_PEPTIDEK", 2, None, 2)
+        expected_output = [Peak(mz=464.734740, intensity=0.676096, charge=2), Peak(mz=465.236229, intensity=0.323904, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_decoy_peptide_explicit(self):
-        output = precursor_isotopes("Decoy_MEATSTICK", 2, None, 2, decoys=True)
-        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        output = precursor_isotopes("Decoy_PEPTIDEK", 2, None, 2, decoys=True)
+        expected_output = [Peak(mz=464.734740, intensity=0.676096, charge=2), Peak(mz=465.236229, intensity=0.323904, charge=2)]
         self.compare_outputs(output, expected_output)
 
     def test_decoy_peptide_decoys_off(self):
-        with pytest.raises(PyteomicsError, match="Unknown label: ecoy_M"):
-            precursor_isotopes("Decoy_MEATSTICK", 2, None, 2, decoys=False)
+        with pytest.raises(PyteomicsError, match="No information for ecoy_P"):
+            precursor_isotopes("Decoy_PEPTIDEK", 2, None, 2, decoys=False)
 
     def test_tag_channel_comp_is_none(self):
-        output = precursor_isotopes("M(PSMtag_5plex-0)EATSTICK", 2, self.tag_no_comps, 2)
-        expected_output = [Peak(mz=492.230453, intensity=0.672087, charge=2), Peak(mz=492.731859, intensity=0.327913, charge=2)]
+        output = precursor_isotopes("P(PSMtag_5plex-0)EPTIDEK", 2, [self.tag_no_comps], 2)
+        expected_output = [Peak(mz=464.734740, intensity=0.676096, charge=2), Peak(mz=465.236229, intensity=0.323904, charge=2)]
         self.compare_outputs(output, expected_output)
 
 
@@ -587,7 +615,7 @@ class Test_iso_library():
 
         n_iso = 3
 
-        new_library_output = iso_library(new_library,tag,n_iso)
+        new_library_output = iso_library(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {
@@ -749,7 +777,7 @@ class Test_iso_library():
 
         n_iso = 2
 
-        new_library_output = iso_library(new_library,tag,n_iso)
+        new_library_output = iso_library(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {
@@ -898,7 +926,7 @@ class Test_iso_library_multi():
 
         n_iso = 3
 
-        new_library_output = iso_library_multi(new_library,tag,n_iso)
+        new_library_output = iso_library_multi(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {
@@ -1060,7 +1088,7 @@ class Test_iso_library_multi():
 
         n_iso = 2
 
-        new_library_output = iso_library_multi(new_library,tag,n_iso)
+        new_library_output = iso_library_multi(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {

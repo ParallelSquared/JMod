@@ -1,8 +1,41 @@
-"""
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
+#  Copyright (c) 2026 Parallel Squared Technology Institute
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#  """
 
 import re
 from matplotlib.path import Path
@@ -51,38 +84,37 @@ library[all_keys[4]]
 # n_channels = 3
 # channel_names = ["0","4","8"]
 # rules = "nK"
- 
+
 # tag_masses = (np.arange(n_channels)*channel_delta)+base_mass
 
 class massTag():
-    
+
     def __init__(self,rules,base_mass,delta,channel_names, name, compositions=None):
-        
+
         self.rules = rules
-        
+
         self.mass = base_mass
-        
+
         self.delta = delta
-        
+
         self.n_channels = len(channel_names)
-        
+
         self.channel_names = channel_names
-        
+
         if type(delta)!= list and len(delta)<2:
             self.channel_masses =(np.arange(self.n_channels)*delta)+base_mass
         else:
             assert len(delta)==len(self.channel_names), "Channel names and deltas do not match"
             self.channel_masses =(np.ones(self.n_channels)*delta)+base_mass
         self.name = name
-        
+
         self.mass_dict = {self.name+"-"+str(i):j for i,j in zip(self.channel_names,self.channel_masses)}
-    
-    
+
         if compositions is not None:
             self.channel_comp = {i:compositions[i] for i in self.channel_names}
-        else: 
+        else:
             self.channel_comp=None
-            
+
     def __repr__(self):
         return("\n".join([
                            "Mass Tag",
@@ -92,10 +124,10 @@ class massTag():
                           f"MassDelta(s): {self.delta}",
                           f"ChannelNames: {self.channel_names}",
                           f"ChannelMasses: {self.channel_masses}"]))
-    
+
     def __getitem__(self,item):
         return getattr(self,item)
-    
+
 
 def read_json_to_massTag(mass_tags_dir,filename):
     mass_tag_JSON = os.path.join(mass_tags_dir,filename)
@@ -135,17 +167,17 @@ def read_json_to_massTag(mass_tags_dir,filename):
             logging.getLogger("GUI").warning("Compositions are not defined for tag")
             return mass_tag_data['name']
         except Exception as e:
-            logging.getLogger("GUI").warning({e}) 
+            logging.getLogger("GUI").warning({e})
             return mass_tag_data['name']
     else:
         return None
-                    
+
 
 
 
 def get_tag_pos(AA_seq,rules):
     """
-    
+
 
     Parameters
     ----------
@@ -162,17 +194,17 @@ def get_tag_pos(AA_seq,rules):
 
     """
     additional_tag_masses = np.zeros(len(AA_seq))
-    
+
     all_tag_pos = []
     for rule in rules:
         # break
         # logger.info(rule)
         if re.match("[A-Z]",rule):
             tag_pos = list(np.where([rule==i[0] for i in AA_seq])[0])
-            
+
         elif rule=="n":
             tag_pos = [0]
-            
+
         else:
             from src.utils.gui_utils import send_raise_to_TK
             send_raise_to_TK("ValueError - Unknown Tag Rule")
@@ -186,110 +218,33 @@ mTRAQ = massTag(rules = "nK",
                 base_mass=140.0949630177,
                 # delta = 4.0070994,
                 # delta = [4.0070994],
-                delta = [0.0,4.0070994,8.0141988132], 
+                delta = [0.0,4.0070994,8.0141988132],
                 channel_names = ["0","4","8"],
                 name = "mTRAQ")
 ##TODO what is going on with mTRAQ and tag_library here
 
 ## potentially add this as module to Tag class
-def tag_library(library,tag=mTRAQ):
+def tag_library(library,tag=None,source_channel=None):
     """
-    
+
 
     Parameters
     ----------
-    library : dict
+    library : dict or SpectrumLibraryStore
         Spectral library
     tag : Tag
-        Curerntly works for mTRAQ, defined above.
+    source_channel : The channel (in "PSMtag_5plex-d0" format) that is currently present on library peptides 
+                        (None if library had been computationally detagged)
 
     Returns
     -------
-    New dictionary with copy of each precursor for each channel.
+    New SpectrumLibraryStore with copy of each precursor for each channel.
 
     """
-    logger.info(f"Generating tagged library with tag: {tag.name}")
-    
-    new_lib = {}
-    
-    
+    from src.models.spec_lib.library_store import SpectrumLibraryStore
+    if isinstance(library, SpectrumLibraryStore):
+        return SpectrumLibraryStore.from_tagged(library, tag, source_channel=source_channel)
 
-    for key in tqdm.tqdm(library):
-        
-        peptide = key[0]
-        peptide = "".join(peptide)
-        # split_peptide = re.findall("([A-Z](?:\(.*?\))?)",peptide)
-        split_peptide = parse_peptide(peptide)
-        
-        
-        
-        
-        ### Qs: 
-        ## Can we have multiple tags on the same AA?
-        ## How do mods effect abilty to tag?
-        ## DIANN puts the n terminus tag before the 1st AA; What is the appropriate nomenclature?
-        
-        all_tag_pos, additional_tag_masses = get_tag_pos(split_peptide, tag.rules)
-        
-        ## use to get number of tags per frag
-        
-        num_tags_n = np.cumsum(additional_tag_masses,dtype=int)
-        num_tags_c = np.cumsum(additional_tag_masses[::-1],dtype=int)
-          
-        for pos in all_tag_pos:
-            split_peptide[pos]+="("+tag.name+")"
-        
-        
-        blank_tags = []
-        frags = library[key]["frags"]
-        for frag in frags:
-
-            
-            ### capture anything in brakets as a modification
-            mods = re.finditer("\((.*?)\)",peptide)
-        
-            stripped_peptide = re.sub("\(.*?\)","",peptide)
-            
-            frag_type,frag_idx,loss,frag_z = split_frag_name(frag)
-            
-            assert int(frag_idx)<len(stripped_peptide)
-            if frag_type in 'abc':
-                seq = split_peptide[:int(frag_idx)]
-                num_tags = num_tags_n[frag_idx-1]
-            elif frag_type in 'xyz':
-                seq = split_peptide[-int(frag_idx):]
-                num_tags = num_tags_c[frag_idx-1]
-            else:
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("ValueError - Invalid Ion Type")
-                raise(ValueError("Invalid ion type"))
-                    
-            # logger.info(library[key]["frags"][frag],seq,num_tags)
-            blank_tags.append([frag,library[key]["frags"][frag],num_tags,frag_z])
-            
-        
-        
-        for tag_idx,tag_n in enumerate(tag.channel_names):
-            lib_entry  = copy.deepcopy(library[key])
-            
-            tag_mass = tag.channel_masses[tag_idx]
-            new_seq = re.sub(tag.name,tag.name+"-"+str(tag_n),"".join(split_peptide))
-            lib_entry["mod_seq"] = new_seq
-            lib_entry["prec_mz"]+= (tag_mass*len(all_tag_pos))/lib_entry["prec_z"]
-            
-            for frag,[mz,I],n_tags,frag_z in blank_tags:
-                
-                lib_entry["frags"][frag] = [mz+(tag_mass*n_tags/int(frag_z)),I]
-                
-            lib_entry["spectrum"],lib_entry["ordered_frags"] = frag_to_peak(lib_entry["frags"],return_frags=True)
-            if "spec_frags" in library[key]:
-                lib_entry["spec_frags"] = specific_frags(lib_entry["frags"])
-            new_lib[new_seq,key[1]] = lib_entry
-            
-        
-    return new_lib
-
-# mTRAQ_lib = tag_library(library, tag=mTRAQ)
 
 def refresh_tags(mass_tags_dir=None): #set mass tags dir to none for testing purposes
     available_tags = {}
@@ -301,7 +256,7 @@ def refresh_tags(mass_tags_dir=None): #set mass tags dir to none for testing pur
             if os.path.splitext(filename)[1].lower() == ".json":
                 mass_tag = read_json_to_massTag(directory, filename)
                 if type(mass_tag) == str:
-                    logging.getLogger("GUI").warning(f"Unable to load mass tag from {filename}\n")  
+                    logging.getLogger("GUI").warning(f"Unable to load mass tag from {filename}\n")
                 elif mass_tag:
                     available_tags[mass_tag.name] = mass_tag
     return available_tags

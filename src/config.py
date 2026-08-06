@@ -1,8 +1,42 @@
-"""
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
+#  Copyright (c) 2026 Parallel Squared Technology Institute
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#  """
+
 import argparse
 import json
 from src.default_dict import default_dict
@@ -57,12 +91,8 @@ error_already_handled = False
 GUI_result_queue = None
 
 
-mz_ppm = args.ppm
-mz_tol = mz_ppm*10**(-6)
 ms1_ppm = 20
 ms1_tol = ms1_ppm*10**(-6)
-
-num_timeplex = args.num_timeplex
 
 rt_tol = 9
 im_tol = 0.5
@@ -74,8 +104,6 @@ top_n_pasef = 10
 atleast_m_pasef = 3
 
 max_window_offset = None
-
-numProc = args.threads
 
 
 chunksize = 10
@@ -95,6 +123,7 @@ opt_rt_tol = rt_tol # set as default to start
 opt_ms1_tol = ms1_tol 
 opt_im_tol = im_tol
 
+max_num_prelim_search = 1e5
 
 
 # protein_column = 'protein_name'
@@ -107,7 +136,6 @@ FT_minimum = 1e3
 ### minimum ms1 tolerance; set to 0 to ignore
 min_ms1_tol = 0#3e-6
 
-num_iso_peaks = args.num_iso
 min_iso_intensity = 1e-3 ## derived empirically
 
 ## how many isotope pearsonR corr to collect
@@ -123,9 +151,6 @@ decoy_mz_offset = 0
 ### moving average window MS1 trace
 smoothing_window = 3
 
-### additional scans beyond MS1 peak found
-additional_scans = 0
-
 ## min number of scans???
 
 
@@ -133,16 +158,7 @@ additional_scans = 0
 test_var = "test_1"
 
 ### filters for picking spectra to fit
-frac_lib_matched = args.lib_frac
-match_ms1 = args.no_ms1_req
 top_n = 10
-atleast_m = args.atleast_m
-
-
-
-
-## How to deal with unmatched intensity:
-unmatched_fit_type = args.unmatched
 """
 3 fit_types:
     a: All summed unmatched intensities are fit to a single zero intensity "obs peak"
@@ -152,7 +168,7 @@ unmatched_fit_type = args.unmatched
 """
 
 
-score_model = "rf"
+score_model = "xg"
 """
 3 options:
     rf: Random Forest
@@ -163,6 +179,8 @@ score_model = "rf"
 tree_max_depth = 20
 
 fdr_threshold = 0.01
+
+target_decoy_ratio = 1 # added to get the tests working
 
 
 #############################################
@@ -256,21 +274,13 @@ def load_config_from_json(json_path):
         with open(json_path, 'r') as f:
             config_data = json.load(f)
         
-        # Update args with values from JSON
+        # Update args with values from JSON. Downstream code reads
+        # ``config.args.X`` directly, so there is no module-level alias to
+        # re-sync — mutating the Namespace is enough.
         for key, value in config_data.items():
             if hasattr(args, key):
                 setattr(args, key, value)
 
-        globals()['mz_ppm'] = args.ppm
-        globals()['mz_tol'] = args.ppm * 10**(-6)
-        globals()['num_timeplex'] = args.num_timeplex
-        globals()['numProc'] = args.threads
-        globals()['num_iso_peaks'] = args.num_iso
-        globals()['frac_lib_matched'] = args.lib_frac
-        globals()['match_ms1'] = args.no_ms1_req
-        globals()['atleast_m'] = args.atleast_m
-        globals()['unmatched_fit_type'] = args.unmatched
-        
         # Set additional config variables if present
         if 'additional_config' in config_data:
             for key, value in config_data['additional_config'].items():

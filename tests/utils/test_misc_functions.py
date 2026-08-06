@@ -1,10 +1,4 @@
 """
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
-
-"""
 Tests for functions in misc_functions.py
 """
 import pytest
@@ -15,7 +9,7 @@ import math
 
 # Import the functions we want to test
 from src.utils.misc_functions import (
-    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_feature, closest_ms1spec, closest_peak_diff, hyperscore_b_y, longest_y, cosim, frag_to_peak, specific_frags, ordered_frags, fragment_cor
+    window_width, createTolWindows, within_tol, get_diff, ms1_error, moving_average, moving_auc, closest_feature, closest_ms1spec, closest_peak_diff, hyperscore_b_y, longest_y, cosim, frag_to_peak, specific_frags, ordered_frags, fragment_cor, unstring_floats
 )
 from tests.fixtures.test_data import SAMPLE_LIBRARY_ENTRY
 
@@ -653,3 +647,37 @@ class TestFragmentCor:
         df = pd.DataFrame(data)
         result = fragment_cor(df, 0, fn="cos")
         assert isinstance(result, float)
+
+
+class TestUnstringFloats:
+    """Test cases for unstring_floats function."""
+
+    def test_basic_semicolon_delimited(self):
+        """Test basic semicolon-delimited string."""
+        result = unstring_floats("1.0;2.0;3.0")
+        expected = np.array([1.0, 2.0, 3.0])
+        np.testing.assert_array_equal(result, expected)
+
+    def test_custom_delimiter(self):
+        """Test with custom delimiter."""
+        result = unstring_floats("1.5,2.5,3.5", delim=",")
+        expected = np.array([1.5, 2.5, 3.5])
+        np.testing.assert_array_equal(result, expected)
+
+    def test_single_value(self):
+        """Test with single value (no delimiter)."""
+        result = unstring_floats("42.0")
+        expected = np.array([42.0])
+        np.testing.assert_array_equal(result, expected)
+
+    def test_negative_values(self):
+        """Test with negative values."""
+        result = unstring_floats("-1.0;-2.5;3.0")
+        expected = np.array([-1.0, -2.5, 3.0])
+        np.testing.assert_array_equal(result, expected)
+
+    def test_scientific_notation(self):
+        """Test with scientific notation."""
+        result = unstring_floats("1e-5;2.5e3;3.0")
+        expected = np.array([1e-5, 2.5e3, 3.0])
+        np.testing.assert_array_equal(result, expected)

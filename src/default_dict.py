@@ -1,5 +1,44 @@
 
-## Defines the defaults and other parameters for JMod. These are used to initialize JMod both when running from the command line 
+#  Copyright (c) 2026 Parallel Squared Technology Institute
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#  """
+
+## Defines the defaults and other parameters for JMod. These are used to initialize JMod both when running from the command line
 ## and when running from GUI
 
 #when changing default values, also think about changing Preset JSONS
@@ -83,6 +122,39 @@ default_dict = {
         'tk_handle': None,
         'special_upload': False,
         'values': '+<10'
+    },
+    'apex_jitter': {
+        'flags': ('--apex_jitter',),
+        'default': 0,
+        'takes_value': True,
+        'in_GUI': True,
+        'type': 'int',
+        'widget': 'dropdown',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
+    },
+    'free_apex': {
+        'flags': ('--free_apex',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': False,
+        'type': 'bool',
+        'widget': 'checkbox',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': "+"
+    },
+    'additional_scans': {
+        'flags': ('--additional_scans',),
+        'default': 0,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': 'dropdown',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
     },
     'threads': {
         'flags': ('-t', '--threads'),
@@ -181,7 +253,7 @@ default_dict = {
         'widget': '',
         'tk_handle': None,
         'special_upload': False,
-        'values': ['rev']
+        'values': ['rev', 'rev_nc', 'shuffle']
     },
     'mTRAQ': {
         'flags': ('--mTRAQ',),
@@ -293,6 +365,17 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    'predict_decoys': {
+        'flags': ('--predict_decoys',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': False,
+        'type': '',
+        'widget': 'checkbutton',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'unfiltered_quant': {
         'flags': ('--unfiltered_quant',),
         'default': True,
@@ -303,17 +386,6 @@ default_dict = {
         'tk_handle': None,
         'special_upload': False,
         'values': 'any'
-    },
-    'score_lib_frac': {
-        'flags': ('--score_lib_frac',),
-        'default': 0.5,
-        'takes_value': True,
-        'in_GUI': False,
-        'type': 'float',
-        'widget': 'entry',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': '+<1'
     },
     'user_rt_tol': {
         'flags': ('--user_rt_tol',),
@@ -380,6 +452,17 @@ default_dict = {
         'tk_handle': None,
         'special_upload': False,
         'values': '+'
+    },
+    'rawfilereader_path': {  ##hardcoded in GUI because it comes from appdata settings
+        'flags': ('--rawfilereader_path',),
+        'default': None,
+        'takes_value': True,
+        'in_GUI': False,    
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
     },
     'config_json': {
         'flags': ('--config_json',),

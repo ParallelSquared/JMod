@@ -1,10 +1,33 @@
-"""
-This Source Code Form is subject to the terms of the Oxford Nanopore
-Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
-at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
-"""
+#  Copyright (c) 2026 Parallel Squared Technology Institute
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#          http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
 #######
 #Parse peptide strings, fragments and modifications from spectral libraries 
+import hashlib
+import random
 import re
 from pyteomics import mass
 import src.config as config
@@ -270,29 +293,33 @@ diann_rules = {
                  'D':'E'
                  }
 
-def change_seq(seq: str, rules: str) -> str:
+def change_seq(seq: str, rules: str, tag=None) -> str:
     """Modifies a peptide sequence to create a complementary decoy sequence.
-    Uses either the sequence reversal method or the DIA-NN rules for sequence
-    'mutation' 
+    Uses either the sequence reversal method, the DIA-NN rules for sequence
+    'mutation', or random shuffling.
 
     Parameters
     ----------
     seq : str
-        The original peptide sequence 
+        The original peptide sequence
     rules : str
-        Method to modify string (must either be 'rev' or 'diann')
+        Method to modify string ('rev', 'diann', or 'shuffle')
+    tag : massTag, optional
+        Channel label tag. When provided, tags are stripped before
+        transformation and re-applied afterward so all channels get
+        the same underlying decoy sequence.
 
     Returns
     -------
     str
-        The modified sequence 
-    
+        The modified sequence
+
     Example
     -------
     >>> change_seq("PEPTIDE", "diann")
     "LDLSVED"
     >>> change_seq("PEPTIDE", "rev")
-    "LDLSVED"
+    "EDITPEP"
     """
     # seq: list of AAs
     # frags: dictionary of frags
@@ -302,20 +329,49 @@ def change_seq(seq: str, rules: str) -> str:
     # else:
     #     seq = [re.sub("\(.*\)","",aa) for aa in seq]\
         
-    if config.tag:   
-       tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
-       seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
+    if tag:
+       tags = [re.findall(f"(\({tag.name}.*?\))",i) for i in seq]
+       seq = [re.sub(f"(\({tag.name}.*?\))","",i) for i in seq]
     else:
         tags = [[] for i in seq]
-        
+
     #mods = [extract_mod(i) for i in seq]
-    ## assume AA is the first 
+    ## assume AA is the first
     #untag_seq = [i[0] for i in seq]
-    
+
     if rules=="diann":
         new_split_seq = [diann_rules[aa] for aa in seq]
+        perm = list(range(len(seq)))
     elif rules=="rev":
         new_split_seq = seq[:-1][::-1]+seq[-1:]
+        perm = list(range(len(seq)-2, -1, -1)) + [len(seq)-1]
+    elif rules=="rev_nc":
+        new_split_seq = seq[:1] + seq[1:-1][::-1] + seq[-1:]
+        perm = [0] + list(range(len(seq)-2, 0, -1)) + [len(seq)-1]
+    elif rules=="shuffle":
+        # Shuffle body (all but C-term), keeping mods attached to their AA.
+        # Seed on the tag-stripped sequence so all channels get the same shuffle.
+        seed_str = "decoy:" + "".join(seq)
+        base_seed = int(hashlib.md5(seed_str.encode()).hexdigest(), 16)
+        if len(seq) > 2 and len(set(seq[:-1])) > 1:
+            for attempt in range(3):
+                rng = random.Random(base_seed + attempt)
+                # body = list(seq[:-1])
+                body = list(range(len(seq) - 1))
+                rng.shuffle(body)
+                perm = body + [len(seq) - 1]
+                new_split_seq = [seq[i] for i in perm]
+                # new_split_seq = body + [seq[-1]]
+                if new_split_seq != list(seq):
+                    break
+            else:
+                # All 3 attempts matched original — fall back to reversal
+                new_split_seq = seq[:-1][::-1] + seq[-1:]
+                perm = list(range(len(seq)-2, -1, -1)) + [len(seq)-1]
+        else:
+            # Not enough unique residues to shuffle — reverse instead
+            new_split_seq = seq[:-1][::-1] + seq[-1:]
+            perm = list(range(len(seq)-2, -1, -1)) + [len(seq)-1]
     else:
         from src.utils.gui_utils import send_raise_to_TK
         send_raise_to_TK("ValueError - Unavailable Rules Selected")
@@ -323,7 +379,15 @@ def change_seq(seq: str, rules: str) -> str:
     # elif rules==None:
     #     new_seq = "".join(seq)
     
-    new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq,tags)])
+    # new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq,tags)])
+    if tag:
+        n_term_tag = tags[0][:1] ##only save the first tag as N terminal sepcific (double tagged n-terminal K)
+        residue_tags_at_0 = tags[0][1:]  
+        new_tags = [tags[i] if i > 0 else residue_tags_at_0 for i in perm]  # non-N-term tags follow their residue
+        new_tags[0] += n_term_tag                              # N-term tag always stays at position 0
+    else:
+        new_tags = tags
+    new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq, new_tags)])
     
     return new_seq
 
@@ -381,7 +445,7 @@ def convert_prec_mz(seq: str, z: int = 1, mass_dict: dict[str, float] = {}) -> f
 ## Note: unsure if this works for modifications
 ####  TO DO:   Need to add tag masses to larger dict with modifications included 
 #@profile
-def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rules) -> dict[str, list[float]]:
+def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rules, tag=None) -> dict[str, list[float]]:
     """Gets the precursors m/z for a peptide sequence given the
     amino acid sequence and the charge state. Accepts sequences with modifications
     in '(' brackets  
@@ -434,15 +498,13 @@ def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rule
     }
     """
 
-    new_seq = change_seq(seq=seq,rules=rules)    
-    
+    new_seq = change_seq(seq=seq,rules=rules,tag=tag)
+
     split_seq = parse_peptide(new_seq)
-    
-    if config.tag:   
-       #tags = [re.findall(f"(\({config.tag.name}.*?\))",i) for i in seq]
-       #seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in seq]
-       tags = [[t.strip("()") for t in re.findall(f"(\({config.tag.name}.*?\))",i)] for i in split_seq]
-       split_seq = [re.sub(f"(\({config.tag.name}.*?\))","",i) for i in split_seq]
+
+    if tag:
+       tags = [[t.strip("()") for t in re.findall(f"(\({tag.name}.*?\))",i)] for i in split_seq]
+       split_seq = [re.sub(f"(\({tag.name}.*?\))","",i) for i in split_seq]
 
     else:
         tags = [[] for i in seq]
@@ -453,8 +515,8 @@ def convert_frags(seq: str,frags: dict[str, list[float]],rules: str = diann_rule
     ## assume AA is the first 
     unmod_seq = [i[0] for i in split_seq]
     
-    if config.tag:
-        tag_masses = [sum([config.tag.mass_dict[j]  for j in i if j in config.tag.mass_dict]) for i in tags]
+    if tag:
+        tag_masses = [sum([tag.mass_dict[j]  for j in i if j in tag.mass_dict]) for i in tags]
     else:
         tag_masses = [0 for i in mods]
         
