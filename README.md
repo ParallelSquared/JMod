@@ -76,7 +76,7 @@ If you would like to set up the UV environment with the command line, please fol
 <summary><strong> Setup Steps </strong>
 </summary>
 
-JMod supports direct processing of Thermo `.raw` files using Thermo's RawFileReader libraries on Windows.
+JMod supports direct processing of Thermo `.raw` files using Thermo's RawFileReader libraries. Thermo's RawFileReader requires .NET Core Framework 4.7.2, 4.4, 4.8.1, or 8.x and newer on Windows or Mono 6.12 or newer on Linux. It does not work with .NET Core 2.x or 3.x on Windows.
 
 To enable `.raw` file support, please download the latest RawFileReader release, which can be found [here](https://pnnl-comp-mass-spec.github.io/Thermo-Raw-File-Reader/).
 
