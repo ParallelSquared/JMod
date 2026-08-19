@@ -7,9 +7,16 @@ per row of ``fdc``.
 
 Thread-safety
 -------------
-Pure function: no module-level mutable state, no shared scratch, no caches.
-Hot paths are ``@nb.njit(cache=False, nogil=True)`` kernels that release the
-GIL so callers can parallelize over rows or files under free-threaded Python.
+No module-level mutable state, no shared scratch. Hot paths are
+``@nb.njit(cache=False, nogil=True)`` kernels that release the GIL so callers can
+parallelize over rows or files under free-threaded Python.
+
+The one caveat is setup: ``compute_fragment_correlations`` asks the SpectrumFile
+for its flattened MS2 peak arrays, which on first call builds them and repoints
+the scans at views into them (see ``SpectrumFile.flatten_ms2_peaks``). That build
+happens once, before the per-row loop, and is not safe to race against another
+first call on the same SpectrumFile. Values are unchanged either way, so the
+per-row work below remains order- and thread-independent.
 """
 
 #  Copyright (c) 2026 Parallel Squared Technology Institute
@@ -70,29 +77,38 @@ _N_KERNEL_FEATURES = len(FEATURE_COLUMNS) - 2
 # ---------------------------------------------------------------------------
 
 
-def _flatten_ms2_peaks(ms2scans):
-    """Flatten per-scan (mz, intens) arrays into CSR-style flat arrays.
+def _flatten_ms2_peaks(spectra):
+    """Get the CSR peak arrays plus per-scan RT and isolation-window bounds.
+
+    The peak arrays come from :meth:`SpectrumFile.flatten_ms2_peaks`, which builds
+    them once and repoints the scans at views, so this costs no additional per-peak
+    memory. Only the small per-scan metadata (three arrays of length n_scans) is
+    built here.
 
     Returns
     -------
-    peak_mz_flat, peak_int_flat : np.ndarray (float64)
+    peak_mz_flat : np.ndarray (float64)
+    peak_int_flat : np.ndarray (float32)
         Concatenated peak arrays in scan order.
-    peak_mob_flat : np.ndarray (float64)
+    peak_mob_flat : np.ndarray (float32)
         Concatenated per-peak ion mobility (1/K0), parallel to ``peak_mz_flat``.
-        All ``NaN`` when the data has no ion mobility (e.g. mzML).
+        Zero-length when the data has no ion mobility (e.g. mzML) — callers must
+        gate on ion mobility before indexing it.
     peak_offsets : np.ndarray (int64, shape n_scans+1)
         Scan ``i``'s peaks live in ``peak_mz_flat[offsets[i]:offsets[i+1]]``.
     scan_rt : np.ndarray (float64, shape n_scans)
     scan_win_lo, scan_win_hi : np.ndarray (float64, shape n_scans)
         Isolation-window bounds per scan.
     """
+    ms2scans = spectra.ms2scans
     n = len(ms2scans)
-    lengths = np.empty(n, dtype=np.int64)
+    (peak_mz_flat, peak_int_flat,
+     peak_mob_flat, peak_offsets) = spectra.flatten_ms2_peaks()
+
     scan_rt = np.empty(n, dtype=np.float64)
     scan_win_lo = np.empty(n, dtype=np.float64)
     scan_win_hi = np.empty(n, dtype=np.float64)
     for i, s in enumerate(ms2scans):
-        lengths[i] = int(len(s.mz))
         scan_rt[i] = float(s.RT)
         iw = s.isolation_window
         target = float(iw["isolation window target m/z"])
@@ -100,24 +116,6 @@ def _flatten_ms2_peaks(ms2scans):
         upper = float(iw["isolation window upper offset"])
         scan_win_lo[i] = target - lower
         scan_win_hi[i] = target + upper
-
-    peak_offsets = np.empty(n + 1, dtype=np.int64)
-    peak_offsets[0] = 0
-    if n > 0:
-        np.cumsum(lengths, out=peak_offsets[1:])
-
-    total = int(peak_offsets[-1])
-    peak_mz_flat = np.empty(total, dtype=np.float64)
-    peak_int_flat = np.empty(total, dtype=np.float64)
-    peak_mob_flat = np.full(total, np.nan, dtype=np.float64)
-    for i, s in enumerate(ms2scans):
-        off = int(peak_offsets[i])
-        ln = int(lengths[i])
-        if ln:
-            peak_mz_flat[off:off + ln] = s.mz
-            peak_int_flat[off:off + ln] = s.intens
-            if getattr(s, "mobility", None) is not None:
-                peak_mob_flat[off:off + ln] = s.mobility
 
     return (peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
             scan_rt, scan_win_lo, scan_win_hi)
@@ -671,7 +669,9 @@ def compute_fragment_correlations(
         Indexed to match ``fdc.index``, one column per entry of
         :data:`FEATURE_COLUMNS`. Rows with ``coeff <= 0``, no covering scans,
         or fewer than two surviving fragments receive NaN for the correlation
-        features. Does not mutate any input.
+        features. Does not mutate ``fdc`` or ``library``. The first call on a given
+        ``spectra`` builds its cached flat MS2 peak arrays and repoints the scans at
+        views into them — same values, dtypes and shapes, no observable change.
     """
     n_rows = len(fdc)
     n_feat = len(FEATURE_COLUMNS)
@@ -689,7 +689,7 @@ def compute_fragment_correlations(
 
     logger.info("Computing fragment-ion correlation features")
     (peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
-     scan_rt, scan_win_lo, scan_win_hi) = _flatten_ms2_peaks(ms2scans)
+     scan_rt, scan_win_lo, scan_win_hi) = _flatten_ms2_peaks(spectra)
     (win_lo, win_hi, win_scan_offsets,
      win_scan_idx, win_scan_rt) = _build_window_csr(scan_rt, scan_win_lo, scan_win_hi)
 

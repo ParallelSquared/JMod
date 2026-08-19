@@ -23,6 +23,18 @@ import pickle
 from src.logger import logger
 import peppy_sage as ps
 
+# Peak-array dtypes for Spectrum. m/z stays float64 — ppm-level matching needs the
+# mantissa. Intensity and mobility are float32: a timsTOF .d run can hold >1e9 peak
+# entries after IM-band denormalization, where each float64 array costs ~9 GB, and
+# neither quantity needs more than float32's ~1e-7 relative precision (1/K0 spans
+# ~0.7-1.3 against IM tolerances of ~1e-2; intensities are used relatively).
+# Sum intensities with ``dtype=np.float64`` to keep float32 accumulation error out
+# of TIC-style reductions.
+PEAK_MZ_DTYPE = np.float64
+PEAK_INT_DTYPE = np.float32
+PEAK_MOB_DTYPE = np.float32
+
+
 # NB this may not work for all mzml files!!!
 class Spectrum:
 
@@ -194,11 +206,65 @@ class SpectrumFile:
     def __init__(self, mzml_file=None, raw_file=None):
         self.filename = None
         self.ms2_to_ms1_map = None
+        self._ms2_flat = None
 
         if mzml_file:
             self.load_spectra(mzml_file)
         elif raw_file:
             self.load_spectra_raw(raw_file)
+
+    def flatten_ms2_peaks(self):
+        """Return the MS2 peaks as CSR-style flat arrays, built at most once.
+
+        Returns ``(peak_mz, peak_int, peak_mob, offsets)``, where scan ``i``'s peaks
+        are ``peak_mz[offsets[i]:offsets[i+1]]``. ``peak_mob`` is zero-length when the
+        data has no ion mobility (e.g. mzML); callers must gate on that before using
+        it. Consumers that need float64 should upcast the slice they actually touch.
+
+        This does not merely copy: as each scan is written into the flat buffer, that
+        scan's ``mz`` / ``intens`` / ``mobility`` are repointed at the corresponding
+        *views*, dropping the last reference to the standalone per-scan arrays. Peak
+        extra memory is therefore one scan, not a second copy of the run — which for a
+        timsTOF .d holding ~1e9 MS2 peak entries is the difference between ~19 GB and
+        an OOM kill. Values, dtypes and shapes are unchanged, so the repointing is
+        invisible to every other consumer of ``ms2scans``.
+
+        The result is cached on the instance; the first caller pays for it. Not
+        safe to call concurrently from multiple threads on the same instance.
+        """
+        if self._ms2_flat is not None:
+            return self._ms2_flat
+
+        scans = self.ms2scans
+        n = len(scans)
+        lengths = np.fromiter((len(s.mz) for s in scans), dtype=np.int64, count=n)
+        offsets = np.zeros(n + 1, dtype=np.int64)
+        if n:
+            np.cumsum(lengths, out=offsets[1:])
+        total = int(offsets[-1])
+
+        peak_mz = np.empty(total, dtype=PEAK_MZ_DTYPE)
+        peak_int = np.empty(total, dtype=PEAK_INT_DTYPE)
+        has_mob = n > 0 and getattr(scans[0], "mobility", None) is not None
+        peak_mob = np.empty(total if has_mob else 0, dtype=PEAK_MOB_DTYPE)
+
+        for i, s in enumerate(scans):
+            off = int(offsets[i])
+            ln = int(lengths[i])
+            end = off + ln
+            if ln:
+                peak_mz[off:end] = s.mz
+                peak_int[off:end] = s.intens
+                if has_mob and getattr(s, "mobility", None) is not None:
+                    peak_mob[off:end] = s.mobility
+            # Adopt views; the per-scan arrays are released here.
+            s.mz = peak_mz[off:end]
+            s.intens = peak_int[off:end]
+            if has_mob and getattr(s, "mobility", None) is not None:
+                s.mobility = peak_mob[off:end]
+
+        self._ms2_flat = (peak_mz, peak_int, peak_mob, offsets)
+        return self._ms2_flat
 
     def load_spectra(self,mzml_file):
         self.filename = mzml_file
@@ -395,7 +461,7 @@ class SpectrumFile:
             b.mz = base.mz[mask]            # base.mz is m/z-sorted; mask preserves order
             b.intens = base.intens[mask]
             b.mobility = base.mobility[mask]
-            b.TIC = float(b.intens.sum())
+            b.TIC = float(b.intens.sum(dtype=np.float64))
             b.injection_time = getattr(base, "injection_time", 1.0)
             b.collision_energy = None
             b.isolation_window = None
