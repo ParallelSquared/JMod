@@ -37,6 +37,7 @@ from src.fragment_correlation import (
     compute_fragment_correlations,
 )
 from src.utils.frag_encoding import encode_frag_names
+from src.utils.io.load_files import SpectrumFile
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +74,18 @@ def _make_im_scan(mz, intens, mob, rt, im_lo, im_hi,
             "isolation window upper offset": float(win_upper),
         },
     )
+
+
+def _make_spectra(scans):
+    """Wrap a list of scan stubs in a SpectrumFile-like holder.
+
+    ``_flatten_ms2_peaks`` takes the SpectrumFile (not a bare list) so it can use
+    the cached, view-adopting ``flatten_ms2_peaks``; reuse the real implementation
+    here rather than duplicating it in the test.
+    """
+    holder = SimpleNamespace(ms2scans=list(scans), _ms2_flat=None)
+    holder.flatten_ms2_peaks = SpectrumFile.flatten_ms2_peaks.__get__(holder)
+    return holder
 
 
 def _make_library(entries):
@@ -118,7 +131,7 @@ def _make_library(entries):
 
 class TestMatchAndFill:
     def _call(self, scans, scan_idx, frag_mz, ppm_tol):
-        pmz, pin, _mob, poff, _rt, _lo, _hi = _flatten_ms2_peaks(scans)
+        pmz, pin, _mob, poff, _rt, _lo, _hi = _flatten_ms2_peaks(_make_spectra(scans))
         si = np.asarray(scan_idx, dtype=np.int64)
         fm = np.asarray(frag_mz, dtype=np.float64)
         out = np.empty((len(si), len(fm)), dtype=np.float64)
@@ -186,7 +199,7 @@ class TestCSRBuilders:
 
     def test_csr_round_trip(self):
         scans = self._build()
-        pmz, pin, _mob, poff, rt, lo, hi = _flatten_ms2_peaks(scans)
+        pmz, pin, _mob, poff, rt, lo, hi = _flatten_ms2_peaks(_make_spectra(scans))
         for i, s in enumerate(scans):
             a = poff[i]
             b = poff[i + 1]
@@ -198,7 +211,7 @@ class TestCSRBuilders:
 
     def test_window_grouping_and_rt_sort(self):
         scans = self._build()
-        _pmz, _pin, _mob, _poff, rt, lo, hi = _flatten_ms2_peaks(scans)
+        _pmz, _pin, _mob, _poff, rt, lo, hi = _flatten_ms2_peaks(_make_spectra(scans))
         wl, wh, offs, idx, rts = _build_window_csr(rt, lo, hi)
         # Two distinct windows: (495, 505) and (505, 515).
         assert wl.shape[0] == 2
@@ -272,7 +285,7 @@ class TestMatchAndFillIM:
 
 class TestCoveringScans:
     def _build(self, scans):
-        _pmz, _pin, _mob, _poff, rt, lo, hi = _flatten_ms2_peaks(scans)
+        _pmz, _pin, _mob, _poff, rt, lo, hi = _flatten_ms2_peaks(_make_spectra(scans))
         return _build_window_csr(rt, lo, hi)
 
     def test_window_coverage_only(self):
@@ -471,7 +484,7 @@ def _build_coherent_scenario(with_isotope=False):
         ints = np.array(ints)[order]
         scans.append(_make_scan(mz, ints, rt=rt, win_target=500, win_lower=5, win_upper=5))
 
-    spectra = SimpleNamespace(ms2scans=scans)
+    spectra = _make_spectra(scans)
     return library, spectra
 
 
@@ -685,7 +698,7 @@ class TestIMBinSelection:
             # bin B [0.95, 1.00]: interfering y4-only peak at a higher IM
             scans.append(_make_im_scan([400.0], [700.0 * g[i]],
                                        [0.975], rt, 0.95, 1.00))
-        return library, SimpleNamespace(ms2scans=scans)
+        return library, _make_spectra(scans)
 
     def test_selects_single_im_bin(self):
         library, spectra = self._scenario()

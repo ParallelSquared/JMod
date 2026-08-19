@@ -21,7 +21,9 @@ import numpy as np
 import numba as nb
 import polars as pl
 
-from src.utils.io.load_files import Spectrum, SpectrumFile
+from src.utils.io.load_files import (
+    Spectrum, SpectrumFile, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
+)
 from src.utils.io import im_watershed
 from src.logger import logger
 
@@ -363,8 +365,13 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         frames = table.column("frame").to_numpy()
         scans = table.column("scan").to_numpy()
         mz_arr = table.column("mz").to_numpy()
-        mob_arr = table.column("im").to_numpy()
-        intensities = table.column("apex_intensity").to_numpy()
+        # Intensity and mobility are stored as float32 on Spectrum (see PEAK_INT_DTYPE
+        # / PEAK_MOB_DTYPE): 1/K0 spans ~0.7-1.3, where float32 resolution (~1e-7) is
+        # orders of magnitude below any IM tolerance, and intensities only need
+        # relative precision. Cast at ingest so the per-row-group accumulators in
+        # ms1_groups / ms2_groups are narrow too, not just the final spectra.
+        mob_arr = table.column("im").to_numpy().astype(PEAK_MOB_DTYPE)
+        intensities = table.column("apex_intensity").to_numpy().astype(PEAK_INT_DTYPE)
 
         # RT and MS level still come from analysis.tdf (indexed by frame)
         rt_arr = rt_by_frame[frames]
@@ -450,7 +457,7 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
     for rt_val in sorted(ms1_groups.keys()):
         mz_list, intens_list, mob_list = ms1_groups[rt_val]
         mz_concat = np.concatenate(mz_list)
-        intens_concat = np.concatenate(intens_list).astype(np.float64)
+        intens_concat = np.concatenate(intens_list)
         mob_concat = np.concatenate(mob_list)
         if len(mz_concat) == 0:
             continue
@@ -469,7 +476,7 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         spec.mz = mz_sorted
         spec.intens = intens_sorted
         spec.mobility = mob_sorted
-        spec.TIC = float(intens_sorted.sum())
+        spec.TIC = float(intens_sorted.sum(dtype=np.float64))
         spec.injection_time = 1.0
         spec.collision_energy = None
         spec.isolation_window = None
@@ -494,7 +501,7 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         rt_val, prec_mz_val, iso_width, ce = key
         mz_list, intens_list, mob_list = ms2_groups[key]
         mz_concat = np.concatenate(mz_list)
-        intens_concat = np.concatenate(intens_list).astype(np.float64)
+        intens_concat = np.concatenate(intens_list)
         mob_concat = np.concatenate(mob_list)
         if len(mz_concat) == 0:
             continue
@@ -535,7 +542,7 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
             spec.mz = mz_sorted
             spec.intens = intens_sorted
             spec.mobility = mob_sorted
-            spec.TIC = float(intens_sorted.sum())
+            spec.TIC = float(intens_sorted.sum(dtype=np.float64))
             spec.injection_time = 1.0
             spec.collision_energy = ce
             spec.prec_mz = prec_mz_val
