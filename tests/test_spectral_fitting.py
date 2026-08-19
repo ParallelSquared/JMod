@@ -21,9 +21,48 @@ from scipy import sparse
 
 # Import the functions we want to test
 from src.spectral_fitting import (
-    get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, gof_stat, huber_nnls_irls
+    get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, gof_stat, huber_nnls_irls,
+    _dia_prep_2d_jit, _match_mz_only, _match_mz_im, _create_entries_direct_jit,
 )
 from src.utils.frag_encoding import encode_frag_name
+
+
+class TestDiaPrep2D:
+    """(m/z, IM) binning + IM-aware matching for the timsTOF main search."""
+
+    def test_bins_split_by_im_and_sum_within(self):
+        mz = np.array([500.0, 500.0, 500.0, 600.0])
+        ints = np.array([10.0, 20.0, 99.0, 5.0])
+        mob = np.array([0.90, 0.905, 1.30, 0.90])
+        bmz, bint, bmob = _dia_prep_2d_jit(mz, ints, mob, 20e-6, 0.05)
+        assert bmz.shape[0] == 3                      # 500@0.9, 500@1.3, 600@0.9
+        assert 30.0 in set(np.round(bint, 6))         # 0.90 pair summed
+        assert 99.0 in set(np.round(bint, 6))         # 1.30 interferer separate
+
+    def test_matchers_pick_the_right_bin(self):
+        mz = np.array([500.0, 500.0]); ints = np.array([30.0, 99.0]); mob = np.array([0.90, 1.30])
+        bmz, bint, bmob = _dia_prep_2d_jit(mz, ints, mob, 20e-6, 0.05)
+        assert abs(bmob[_match_mz_only(bmz, bint, 500.0, 20e-6)] - 1.30) < 1e-9
+        assert abs(bint[_match_mz_im(bmz, bmob, 500.0, 0.90, 20e-6, 0.05)] - 30.0) < 1e-9
+        assert _match_mz_im(bmz, bmob, 500.0, 2.0, 20e-6, 0.05) == -1
+
+    def test_main_search_observation_is_im_clean(self):
+        mz = np.array([200.0, 200.0, 400.0]); ints = np.array([900.0, 100.0, 500.0])
+        mob = np.array([0.90, 1.30, 0.90])
+        bmz, bint, bmob = _dia_prep_2d_jit(mz, ints, mob, 20e-6, 0.05)
+        spec_mz = np.array([200.0, 400.0]); spec_int = np.array([1.0, 1.0])
+        res = _create_entries_direct_jit(
+            np.zeros(0), spec_mz, spec_int,
+            np.array([0], dtype=np.int64), np.array([2], dtype=np.int32),
+            np.array([0, 1], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([2], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([500.0]), np.array([500.0]), 20e-6,
+            0.0, 0, False,
+            bmz, bint, bmob, 20e-6, 0.05, True)
+        passing, flat_rows, all_coords = res[0], res[1], res[6]
+        assert passing.tolist() == [0]
+        assert all(c % 2 == 1 for c in all_coords)              # both matched
+        assert sorted(bint[flat_rows].tolist()) == [500.0, 900.0]  # clean, not the 100 interferer
 
 class TestGetClosestMS1:
     def test_get_closest_ms1(self):

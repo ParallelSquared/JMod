@@ -415,9 +415,16 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     del target_view
 
     ## Merge peaks in spectra (MS2 only; MS1 peaks are summed within
-    ## tolerance during matrix construction in fit_channel_isotopes_numba)
-    for spec in DIAspectra.ms2scans:
-        merge_spectrum_peaks(spec, (config.args.ppm * 1e-6))
+    ## tolerance during matrix construction in fit_channel_isotopes_numba).
+    ## Skipped for timsTOF/IM data (MS2 peaks carry per-peak mobility) while the
+    ## IM-watershed ID-loss investigation is ongoing; still applied to mzML.
+    _is_timstof = (len(DIAspectra.ms2scans) > 0
+                   and DIAspectra.ms2scans[0].mobility is not None)
+    if not _is_timstof:
+        for spec in DIAspectra.ms2scans:
+            merge_spectrum_peaks(spec, (config.args.ppm * 1e-6))
+    else:
+        logger.info("Skipping MS2 peak merge for timsTOF/IM data")
 
     spectra_to_fit = DIAspectra.ms2scans
 

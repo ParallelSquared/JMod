@@ -15,17 +15,23 @@
 import os
 import pickle
 import sqlite3
+from time import perf_counter
 
 import numpy as np
 import numba as nb
 import polars as pl
 
 from src.utils.io.load_files import Spectrum, SpectrumFile
+from src.utils.io import im_watershed
 from src.logger import logger
 
 
-def compute_im_bins(im_lo, im_hi, width=0.025, stride=0.0125):
-    """Return (N, 2) array of [bin_lo, bin_hi] for overlapping IM bins."""
+def compute_im_bins(im_lo, im_hi, width=0.05, stride=0.025):
+    """Return (N, 2) array of [bin_lo, bin_hi] for overlapping IM bins.
+
+    ``width = 2 * stride`` (50% overlap) is required by ``_assign_peaks_to_im_bins``,
+    which only tests two candidate bins per peak.
+    """
     starts = np.arange(im_lo, im_hi - width + stride * 0.5, stride)
     return np.column_stack([starts, starts + width])
 
@@ -289,28 +295,31 @@ def _assign_peaks_to_im_bins(mob_arr, im_bins):
     """Assign each peak to its overlapping IM bins.
 
     Returns arrays (peak_indices, bin_indices) where each peak may appear
-    in up to 2 bins due to 50% overlap.  O(N_peaks) complexity.
+    in up to 2 bins due to 50% overlap.  Vectorized, O(N_peaks).
     """
+    mob_arr = np.asarray(mob_arr, dtype=np.float64)
     bin_lo0 = im_bins[0, 0]
     stride = im_bins[1, 0] - im_bins[0, 0]  # 0.0125
-    width = im_bins[0, 1] - im_bins[0, 0]   # 0.025
     n_bins = len(im_bins)
 
-    # Primary bin index for each peak
+    # Primary bin index for each peak; the two overlapping candidates are
+    # raw_idx and raw_idx-1 (50% overlap => a peak lands in at most 2 bins).
     raw_idx = ((mob_arr - bin_lo0) / stride).astype(np.int64)
+    all_peaks = np.arange(mob_arr.shape[0], dtype=np.int64)
 
-    peak_indices = []
-    bin_indices = []
-    for i in range(len(mob_arr)):
-        m = mob_arr[i]
-        # Check candidate bins: raw_idx and raw_idx-1
-        for candidate in (raw_idx[i], raw_idx[i] - 1):
-            if 0 <= candidate < n_bins:
-                if im_bins[candidate, 0] <= m < im_bins[candidate, 1]:
-                    peak_indices.append(i)
-                    bin_indices.append(candidate)
+    peak_chunks = []
+    bin_chunks = []
+    for cand in (raw_idx, raw_idx - 1):
+        valid = (cand >= 0) & (cand < n_bins)
+        cv = cand[valid]
+        pv = all_peaks[valid]
+        mv = mob_arr[valid]
+        inb = (im_bins[cv, 0] <= mv) & (mv < im_bins[cv, 1])
+        peak_chunks.append(pv[inb])
+        bin_chunks.append(cv[inb])
 
-    return np.array(peak_indices, dtype=np.int64), np.array(bin_indices, dtype=np.int64)
+    return (np.concatenate(peak_chunks) if peak_chunks else np.empty(0, np.int64),
+            np.concatenate(bin_chunks) if bin_chunks else np.empty(0, np.int64))
 
 
 def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: pl.DataFrame, im_bins: np.ndarray) -> SpectrumFile:
@@ -340,8 +349,10 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         )
 
     # Accumulators: group peaks by (rt, bin_idx) for MS1 and (rt, prec_mz, iso_width, ce, bin_idx) for MS2
-    ms1_groups = {}  # (rt, bin_idx) -> (mz_list, intens_list)
-    ms2_groups = {}  # (rt, prec_mz, iso_width, ce, bin_idx) -> (mz_list, intens_list)
+    ms1_groups = {}  # rt -> (mz_list, intens_list, mob_list); one frame per rt
+    # (rt, prec_mz, iso_width, ce) -> (mz_list, intens_list, mob_list); raw peaks
+    # accumulated across row groups, then IM-band segmented in a post-pass.
+    ms2_groups = {}
 
     pf = pq.ParquetFile(peaks_path)
     n_row_groups = pf.metadata.num_row_groups
@@ -359,7 +370,8 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         rt_arr = rt_by_frame[frames]
         level_arr = ms_level_by_frame[frames]
 
-        # MS1 peaks — assign to IM bins
+        # MS1 peaks — accumulate raw peaks per frame (one spectrum per RT),
+        # keeping per-peak mobility (1/K0). No IM binning.
         ms1_mask = level_arr == 1
         if ms1_mask.any():
             ms1_mz = mz_arr[ms1_mask]
@@ -367,30 +379,16 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
             ms1_mob = mob_arr[ms1_mask]
             ms1_rt = rt_arr[ms1_mask]
 
-            peak_idxs, bin_idxs = _assign_peaks_to_im_bins(ms1_mob, im_bins)
+            for rt in np.unique(ms1_rt):
+                sel = ms1_rt == rt
+                key = float(rt)
+                if key not in ms1_groups:
+                    ms1_groups[key] = ([], [], [])
+                ms1_groups[key][0].append(ms1_mz[sel])
+                ms1_groups[key][1].append(ms1_intens[sel])
+                ms1_groups[key][2].append(ms1_mob[sel])
 
-            unique_rts = np.unique(ms1_rt)
-            for rt in unique_rts:
-                rt_mask_peaks = ms1_rt == rt
-                # Get the subset of (peak_idxs, bin_idxs) that correspond to this RT
-                # peak_idxs indexes into ms1_mz/ms1_intens/ms1_mob (which are ms1_mask-filtered)
-                # We need peaks where the original peak is in this RT group
-                rt_peak_mask = rt_mask_peaks[peak_idxs]
-                if not rt_peak_mask.any():
-                    continue
-                rt_pidxs = peak_idxs[rt_peak_mask]
-                rt_bidxs = bin_idxs[rt_peak_mask]
-
-                for bidx in np.unique(rt_bidxs):
-                    sel = rt_bidxs == bidx
-                    pidxs = rt_pidxs[sel]
-                    key = (float(rt), int(bidx))
-                    if key not in ms1_groups:
-                        ms1_groups[key] = ([], [])
-                    ms1_groups[key][0].append(ms1_mz[pidxs])
-                    ms1_groups[key][1].append(ms1_intens[pidxs])
-
-        # MS2 peaks: assign to DIA windows, then IM bins
+        # MS2 peaks: assign to DIA windows
         ms2_mask = level_arr == 2
         if ms2_mask.any():
             ms2_frames = frames[ms2_mask]
@@ -420,15 +418,15 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
                     w_intens = f_intens[win_mask]
                     w_mob = f_mob[win_mask]
 
-                    w_pidxs, w_bidxs = _assign_peaks_to_im_bins(w_mob, im_bins)
-                    for bidx in np.unique(w_bidxs):
-                        sel = w_bidxs == bidx
-                        pidxs = w_pidxs[sel]
-                        key = (f_rt, prec_mz, iso_width, ce, int(bidx))
-                        if key not in ms2_groups:
-                            ms2_groups[key] = ([], [])
-                        ms2_groups[key][0].append(w_mz[pidxs])
-                        ms2_groups[key][1].append(w_intens[pidxs])
+                    # Accumulate raw peaks per (frame, window) across row groups;
+                    # watershed IM-band segmentation runs in a post-pass below
+                    # (it needs the whole window at once).
+                    key = (f_rt, prec_mz, iso_width, ce)
+                    if key not in ms2_groups:
+                        ms2_groups[key] = ([], [], [])
+                    ms2_groups[key][0].append(w_mz)
+                    ms2_groups[key][1].append(w_intens)
+                    ms2_groups[key][2].append(w_mob)
 
     # Build SpectrumFile from accumulated groups
     sf = SpectrumFile()
@@ -441,19 +439,27 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
 
     scan_counter = 1
 
-    # MS1 spectra (sorted by RT then bin_idx), no collapse — raw peaks kept per IM bin
-    logger.info("Building MS1 spectra with IM binning")
-    for (rt_val, bin_idx) in sorted(ms1_groups.keys()):
-        mz_list, intens_list = ms1_groups[(rt_val, bin_idx)]
+    # Global IM range shared by all MS1 frames, so downstream (im_lo, im_hi)
+    # equality checks treat every frame as the same IM context (IM is now
+    # resolved per-peak via spec.mobility, not by binning).
+    im_lo_global = float(im_bins[:, 0].min())
+    im_hi_global = float(im_bins[:, 1].max())
+
+    # MS1 spectra: one per frame (RT), peaks carry per-peak mobility.
+    logger.info("Building MS1 spectra (one per frame, per-peak mobility)")
+    for rt_val in sorted(ms1_groups.keys()):
+        mz_list, intens_list, mob_list = ms1_groups[rt_val]
         mz_concat = np.concatenate(mz_list)
         intens_concat = np.concatenate(intens_list).astype(np.float64)
+        mob_concat = np.concatenate(mob_list)
         if len(mz_concat) == 0:
             continue
 
-        # Sort by m/z
+        # Sort by m/z (mobility kept parallel so spec.mobility[i] matches mz[i])
         order = np.argsort(mz_concat)
         mz_sorted = mz_concat[order]
         intens_sorted = intens_concat[order]
+        mob_sorted = mob_concat[order]
 
         spec = Spectrum()
         spec.id = f"scan={scan_counter}"
@@ -462,13 +468,13 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         spec.RT = rt_val
         spec.mz = mz_sorted
         spec.intens = intens_sorted
-        spec.mobility = None
+        spec.mobility = mob_sorted
         spec.TIC = float(intens_sorted.sum())
         spec.injection_time = 1.0
         spec.collision_energy = None
         spec.isolation_window = None
-        spec.im_lo = float(im_bins[bin_idx, 0])
-        spec.im_hi = float(im_bins[bin_idx, 1])
+        spec.im_lo = im_lo_global
+        spec.im_hi = im_hi_global
         spec.scanwindow = [float(mz_sorted[0]), float(mz_sorted[-1])]
 
         idx = len(sf.ms1scans)
@@ -477,50 +483,84 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         sf.scan_pos[scan_counter] = [1, idx]
         scan_counter += 1
 
-    # MS2 spectra (sorted by RT, then prec_mz, then bin_idx), no collapse
-    logger.info("Building MS2 spectra with IM binning")
+    # MS2 spectra: segment each (frame, window) into IM bands, one Spectrum per
+    # band, retaining per-peak mobility. Overlapping fixed-bin mode (the pre-
+    # watershed "overlapping windows"): each peak lands in up to 2 overlapping
+    # fixed IM bins (denormalized). Swap the `bands = ...` line to re-enable the
+    # data-driven watershed.
+    logger.info("Building MS2 spectra with overlapping fixed IM bins")
+    im_watershed.reset_timings()
     for key in sorted(ms2_groups.keys()):
-        rt_val, prec_mz_val, iso_width, ce, bin_idx = key
-        mz_list, intens_list = ms2_groups[key]
+        rt_val, prec_mz_val, iso_width, ce = key
+        mz_list, intens_list, mob_list = ms2_groups[key]
         mz_concat = np.concatenate(mz_list)
         intens_concat = np.concatenate(intens_list).astype(np.float64)
+        mob_concat = np.concatenate(mob_list)
         if len(mz_concat) == 0:
             continue
 
-        # Sort by m/z
-        order = np.argsort(mz_concat)
-        mz_sorted = mz_concat[order]
-        intens_sorted = intens_concat[order]
+        # Overlapping fixed-bin mode: group peaks by their overlapping IM bins.
+        # bands = im_watershed.segment_window(mob_concat, intens_concat)  # watershed mode
+        _pidxs, _bidxs = _assign_peaks_to_im_bins(mob_concat, im_bins)
+        bands = []
+        if _bidxs.shape[0] > 0:
+            # sort by bin, then split into contiguous per-bin chunks (no repeated scans)
+            _order = np.argsort(_bidxs, kind="stable")
+            _sb = _bidxs[_order]
+            _sp = _pidxs[_order]
+            _cuts = np.flatnonzero(np.diff(_sb)) + 1
+            _starts = np.concatenate(([0], _cuts))
+            for _s, _chunk in zip(_starts, np.split(_sp, _cuts)):
+                b = int(_sb[_s])
+                bands.append((float(im_bins[b, 0]), float(im_bins[b, 1]), _chunk))
 
         half_width = iso_width / 2.0
+        t0 = perf_counter()
+        for im_lo, im_hi, peak_idx in bands:
+            band_mz = mz_concat[peak_idx]
+            band_intens = intens_concat[peak_idx]
+            band_mob = mob_concat[peak_idx]
 
-        spec = Spectrum()
-        spec.id = f"scan={scan_counter}"
-        spec.scan_num = scan_counter
-        spec.level = 2
-        spec.RT = rt_val
-        spec.mz = mz_sorted
-        spec.intens = intens_sorted
-        spec.mobility = None
-        spec.TIC = float(intens_sorted.sum())
-        spec.injection_time = 1.0
-        spec.collision_energy = ce
-        spec.prec_mz = prec_mz_val
-        spec.isolation_window = {
-            "isolation window target m/z": prec_mz_val,
-            "isolation window lower offset": half_width,
-            "isolation window upper offset": half_width,
-        }
-        spec.ms1window = prec_mz_val + np.array([-1, 1]) * half_width
-        spec.im_lo = float(im_bins[bin_idx, 0])
-        spec.im_hi = float(im_bins[bin_idx, 1])
-        spec.scanwindow = [float(mz_sorted[0]), float(mz_sorted[-1])]
+            # Sort by m/z (mobility kept parallel so spec.mobility[i] matches mz[i])
+            order = np.argsort(band_mz)
+            mz_sorted = band_mz[order]
+            intens_sorted = band_intens[order]
+            mob_sorted = band_mob[order]
 
-        idx = len(sf.ms2scans)
-        sf.ms2scans.append(spec)
-        sf.ms2_by_id[scan_counter] = idx
-        sf.scan_pos[scan_counter] = [2, idx]
-        scan_counter += 1
+            spec = Spectrum()
+            spec.id = f"scan={scan_counter}"
+            spec.scan_num = scan_counter
+            spec.level = 2
+            spec.RT = rt_val
+            spec.mz = mz_sorted
+            spec.intens = intens_sorted
+            spec.mobility = mob_sorted
+            spec.TIC = float(intens_sorted.sum())
+            spec.injection_time = 1.0
+            spec.collision_energy = ce
+            spec.prec_mz = prec_mz_val
+            spec.isolation_window = {
+                "isolation window target m/z": prec_mz_val,
+                "isolation window lower offset": half_width,
+                "isolation window upper offset": half_width,
+            }
+            spec.ms1window = prec_mz_val + np.array([-1, 1]) * half_width
+            spec.im_lo = im_lo
+            spec.im_hi = im_hi
+            spec.scanwindow = [float(mz_sorted[0]), float(mz_sorted[-1])]
+
+            idx = len(sf.ms2scans)
+            sf.ms2scans.append(spec)
+            sf.ms2_by_id[scan_counter] = idx
+            sf.scan_pos[scan_counter] = [2, idx]
+            scan_counter += 1
+        im_watershed.TIMINGS["spectrum_construct"] += perf_counter() - t0
+
+    logger.info(im_watershed.format_timings())
+    logger.info(
+        f"MS2 scans after IM binning: {len(sf.ms2scans)} "
+        f"(original windows: {len(ms2_groups)})"
+    )
 
     sf.build_ms2_to_ms1_map()
     return sf
