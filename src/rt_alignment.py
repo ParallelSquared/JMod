@@ -881,6 +881,60 @@ def fit_im_tolerance(im_error):
     return model["tolerance"]
 
 
+def fit_im_alignment(lib_im, obs_im):
+    """
+    Calibrate library ion mobility onto observed 1/K0.
+
+    Structurally identical to the RT alignment in ``empirical_fit``: modal LOWESS
+    through (library, observed), a 4-sigma residual trim from ``fit_gaussian``,
+    then a refit on the survivors.  The only parameter that differs is ``anchors``,
+    scaled to the anchor count -- an IM fit sees hundreds of PSMs where the RT fit
+    sees tens of thousands, and a fixed anchors=1000 would request more anchors
+    than data points.
+
+    Distinct from ``fit_im_tolerance``, which measures the spread of *observed* IM
+    (matched-fragment median minus precursor 1/K0) and never looks at the library.
+
+    Parameters
+    ----------
+    lib_im, obs_im : array
+        Per-PSM library IM and observed 1/K0, same length.
+
+    Returns
+    -------
+    callable or None
+        ``f(library_im) -> observed_im``, or ``None`` when there is nothing to fit.
+    """
+    lib = np.asarray(lib_im, dtype=float)
+    obs = np.asarray(obs_im, dtype=float)
+    if lib.shape != obs.shape:
+        raise ValueError(
+            f"lib_im and obs_im differ in length: {lib.shape} vs {obs.shape}")
+
+    good = np.isfinite(lib) & np.isfinite(obs)
+    n = int(good.sum())
+    if n < 10:
+        logger.info(f"IM alignment: {n} usable anchors; skipping")
+        return None
+
+    x, y = lib[good], obs[good]
+
+    def _anchors(count):
+        return min(1000, max(10, count // 4))
+
+    spl = fast_modal_lowess(x, y, .01, anchors=_anchors(n),
+                            grid_size=1000, post_smooth_frac=0.01)
+
+    diffs = spl(x) - y
+    _, _, sd = fit_gaussian(diffs)
+    keep = np.abs(diffs) < 4 * np.abs(sd)
+    if int(keep.sum()) < 10:
+        return spl
+
+    return fast_modal_lowess(x[keep], y[keep], .01, anchors=_anchors(int(keep.sum())),
+                             grid_size=1000, post_smooth_frac=0.01)
+
+
 def plot_im_error_mixture(im_error, results_folder=None, grid_delta=0.00127):
     """
     Histogram of IM errors with the fitted Laplace core and derived tolerance.
@@ -989,6 +1043,122 @@ def plot_im_spread(frag_mobility_lists, precursor, results_folder=None):
 
     fig.tight_layout()
     fig.savefig(results_folder + "/first_search/im_spread.png",
+                dpi=600, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_im_alignment(lib_im, obs_im, im_spl, results_folder=None,
+                      grid_delta=0.00127):
+    """
+    Diagnostics for the library-IM -> observed-IM calibration.
+
+    Writes IMfit.png (observed vs library 1/K0 with the fitted curve, mirroring
+    RTfit.png) and IMdiff.png (residual histogram).  The residuals are jittered
+    by +/- grid_delta/2, as plot_im_error_mixture does, so the discrete TIMS scan
+    grid doesn't render as a comb.
+    """
+    if results_folder is None:
+        return
+
+    lib = np.asarray(lib_im, dtype=float)
+    obs = np.asarray(obs_im, dtype=float)
+    good = np.isfinite(lib) & np.isfinite(obs)
+    lib, obs = lib[good], obs[good]
+    if lib.size == 0:
+        return
+
+    # Panel 1: the fit itself
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.scatter(lib, obs, s=2, alpha=0.15, edgecolors="none", color="tab:blue")
+    xs = np.linspace(lib.min(), lib.max(), 500)
+    ax.plot(xs, im_spl(xs), color="red", linewidth=1.5, label="modal LOWESS fit")
+    lo = min(lib.min(), obs.min())
+    hi = max(lib.max(), obs.max())
+    ax.plot([lo, hi], [lo, hi], color="grey", linestyle=":", linewidth=1,
+            label="identity")
+    ax.set_xlabel("library 1/K0")
+    ax.set_ylabel("observed 1/K0")
+    ax.set_title(f"IM alignment (n={lib.size})")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(results_folder + "/first_search/IMfit.png",
+                dpi=600, bbox_inches="tight")
+    plt.close(fig)
+
+    # Panel 2: residuals vs library IM, with the tolerance band -- the analogue of
+    # RtResidual.png.  Structure here (a trend rather than a flat band) is what
+    # would show a single global fit is not enough, e.g. a per-charge dependence.
+    resid_vs_x = obs - im_spl(lib)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.scatter(lib, resid_vs_x, s=1,
+               alpha=min(1.0, 5.0 / ((lib.size // 1000) + 1)))
+    lo_x, hi_x = float(lib.min()), float(lib.max())
+    ax.plot([lo_x, hi_x], [0, 0], color="r", linestyle="--", alpha=.5)
+    ax.plot([lo_x, hi_x], [config.opt_im_tol] * 2, color="g", linestyle="--",
+            alpha=.5, label=f"opt_im_tol = {config.opt_im_tol:.4f}")
+    ax.plot([lo_x, hi_x], [-config.opt_im_tol] * 2, color="g", linestyle="--",
+            alpha=.5)
+    span = np.percentile(np.abs(resid_vs_x[np.isfinite(resid_vs_x)]), 98)
+    span = max(span, config.opt_im_tol * 1.5)
+    ax.set_ylim(-span, span)
+    ax.set_xlabel("library 1/K0")
+    ax.set_ylabel("IM residual (observed - aligned)")
+    ax.set_title("IM alignment residuals vs library 1/K0")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(results_folder + "/first_search/IMresidual.png",
+                dpi=600, bbox_inches="tight")
+    plt.close(fig)
+
+    # Panel 3: residuals after alignment, with the Laplace + uniform mixture.
+    # The residuals are a sharp core (correctly aligned PSMs) on a flat background
+    # of false matches whose IM is unrelated to the library, so a plain SD reports
+    # the background rather than the calibration.  Same decomposition
+    # plot_im_error_mixture applies to the tolerance errors.
+    resid = obs - im_spl(lib)
+    resid = resid[np.isfinite(resid)]
+    if resid.size == 0:
+        return
+
+    model = _im_error_model(resid)
+    if model is None:
+        return
+
+    errors = model["clean"]
+    b = model["b"]
+    weight = model["weight"]
+
+    if grid_delta and grid_delta > 0:
+        jitter = np.linspace(-grid_delta / 2.0, grid_delta / 2.0, errors.shape[0])
+        plot_vals = errors + jitter
+    else:
+        plot_vals = errors
+
+    max_abs = np.percentile(np.abs(errors), 99) if errors.size else model["cut"]
+    bins = np.linspace(-max_abs, max_abs, 80)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    # Before/after overlay, as RTdiff.png does: unaligned (observed - raw library)
+    # against aligned, so the correction is visible rather than implied.
+    before = obs - lib
+    ax.hist(before[np.abs(before) <= max_abs], bins=bins, density=True, alpha=0.4,
+            edgecolor="black", linewidth=0.5, label="unaligned")
+    ax.hist(plot_vals, bins=bins, density=True, alpha=0.5,
+            edgecolor="black", linewidth=0.5, label="aligned")
+    xs = np.linspace(-max_abs, max_abs, 500)
+    ax.plot(xs, weight * np.exp(-np.abs(xs) / b) / (2.0 * b), linewidth=2,
+            label=f"Laplace core (b={b:.4f}, w={weight:.2f})")
+    ax.axvline(0, color="black", linewidth=1)
+    core_sd = b * np.sqrt(2.0)
+    ax.axvline(core_sd, color="red", linestyle="--", linewidth=1,
+               label=f"core SD = {core_sd:.4f}")
+    ax.axvline(-core_sd, color="red", linestyle="--", linewidth=1)
+    ax.set_xlabel("observed - aligned library 1/K0")
+    ax.set_ylabel("density")
+    ax.set_title("IM alignment residuals")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(results_folder + "/first_search/IMdiff.png",
                 dpi=600, bbox_inches="tight")
     plt.close(fig)
 
@@ -1677,6 +1847,59 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                 frag_lists = output_df["frag_ion_mobility"].to_numpy()[cor_filter]
                 plot_im_spread(frag_lists, precursor[cor_filter],
                                results_folder=results_folder)
+
+            ############################################
+            ###### Align library IM to observed IM #####
+            ############################################
+            # Mirrors the RT alignment: calibrate the library's predicted 1/K0
+            # onto what was actually observed.  Independent of the tolerance
+            # above, which never looks at the library.  Nothing consumes the
+            # result yet -- it is fitted, logged, dilled and plotted only.
+            if "lib_im" not in output_df.columns:
+                logger.info("No lib_im column; skipping IM alignment")
+            else:
+                lib_im_all = pd.to_numeric(output_df["lib_im"],
+                                           errors="coerce").to_numpy(dtype=float)
+                if not np.isfinite(lib_im_all).any():
+                    # A library without an IM column is normal, not an error.
+                    logger.info("Library has no ion mobility values; skipping IM alignment")
+                else:
+                    # Observed IM = median of the matched fragments' 1/K0, not
+                    # `precursor`.  The MS1 value comes from lookup_ms1_data_list,
+                    # which takes the nearest-m/z MS1 peak with no mobility
+                    # constraint, so on IM-unbanded MS1 frames it frequently picks
+                    # a co-isolated ion at an unrelated mobility (observed values
+                    # outside the acquisition's own window range).  The fragment
+                    # median is IM-gated by construction -- the fragments come from
+                    # an IM-banded MS2 spectrum -- and tracks library IM better at
+                    # every PSM-confidence level.
+                    lib_anchor = lib_im_all[cor_filter]
+                    obs_anchor = frag_median[cor_filter]
+                    im_spl = fit_im_alignment(lib_anchor, obs_anchor)
+                    if im_spl is not None:
+                        config.im_spl = im_spl
+                        resid = obs_anchor - im_spl(lib_anchor)
+                        resid = resid[np.isfinite(resid)]
+                        n_anchor = int((np.isfinite(lib_anchor)
+                                        & np.isfinite(obs_anchor)).sum())
+                        # Report the Laplace core, not SD: the anchors keep a heavy
+                        # tail of false matches whose IM is unrelated to the library,
+                        # so SD describes that background instead of the calibration.
+                        _rmodel = _im_error_model(resid)
+                        if _rmodel is None:
+                            logger.info(f"IM alignment fitted on {n_anchor} anchors "
+                                        f"(residual mixture fit failed)")
+                        else:
+                            logger.info(
+                                f"IM alignment fitted on {n_anchor} anchors; "
+                                f"residual core SD {_rmodel['b'] * np.sqrt(2.0):.5f} 1/K0, "
+                                f"{_rmodel['weight']:.0%} of anchors in core "
+                                f"(IM tolerance {config.opt_im_tol:.5f})")
+                        if results_folder is not None:
+                            plot_im_alignment(lib_anchor, obs_anchor, im_spl,
+                                              results_folder=results_folder)
+                            with open(results_folder + "/first_search/im_spl", "wb") as dill_file:
+                                dill.dump(im_spl, dill_file)
     else:
         logger.info("No ion mobility columns; keeping default IM tolerance: "
                     f"{config.opt_im_tol}")

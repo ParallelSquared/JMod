@@ -195,10 +195,12 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
     # Get RTs for alignment
     lib_rts = {v['mod_seq'] : v['iRT'] for v in library_spectra.values()}
+    # Library ion mobilities, for the IM alignment (NaN when the library has no IM column)
+    lib_ims = {v['mod_seq'] : v['IonMob'] for v in library_spectra.values()}
 
     # Adapt the dataframe to the format expected downstream
     logger.info("Adapting output dataframe")
-    df = adapt_output_df(df, lib_rts, rev_map)
+    df = adapt_output_df(df, lib_rts, rev_map, lib_ims=lib_ims)
 
     # Calculate spectral angle
     logger.info("Creating fragment library map")
@@ -663,7 +665,8 @@ def lookup_fragment_mobilities(df: pl.DataFrame, dia_spectra):
     return out
 
 
-def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFrame:
+def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict,
+                    lib_ims: dict = None) -> pl.DataFrame:
     """
     Performs column normalization and peptide sequence reconstruction using Polars.
     """
@@ -714,6 +717,16 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFr
           .map_elements(map_rt_wrapper, return_dtype=pl.Float64)
           .alias("lib_rt")
     )
+
+    # Grab library ion mobilities based on seq.  Mirrors lib_rt above; stays all-NaN
+    # when the library carries no IM column, which the alignment gate treats as
+    # "no library IM" rather than an error.
+    if lib_ims is not None:
+        df = df.with_columns(
+            pl.col("seq")
+              .map_elements(lambda s: lib_ims.get(s, np.nan), return_dtype=pl.Float64)
+              .alias("lib_im")
+        )
 
     return df
 

@@ -98,6 +98,10 @@ opt_rt_tol = rt_tol # set as default to start
 opt_ms1_tol = ms1_tol 
 opt_im_tol = im_tol
 
+# Library-IM -> observed-IM calibration fitted in MZRTfit, or None when the data
+# or the library carries no ion mobility.  Nothing consumes it yet.
+im_spl = None
+
 max_num_prelim_search = 1e5
 
 
