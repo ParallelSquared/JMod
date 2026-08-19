@@ -1,0 +1,5 @@
+# timsTOF .d test fixtures are binary -- never apply line-ending normalization,
+# and don't try to diff them as text.
+**/*.d/** binary
+*.parquet binary
+*.tdf binary
