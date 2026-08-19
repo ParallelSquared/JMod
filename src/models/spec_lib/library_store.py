@@ -28,6 +28,11 @@ _SCALAR_FLOAT_FIELDS = frozenset({
     'prec_mz', 'prec_z', 'iRT', 'IonMob',
 })
 _ALL_SCALAR_FIELDS = _SCALAR_STR_FIELDS | _SCALAR_FLOAT_FIELDS
+
+# Residues pyteomics can assign a mass to (mass.std_aa_mass).  Anything else --
+# notably the ambiguity codes B, X and Z that DIA-NN libraries sometimes carry --
+# has no defined mass and raises inside fast_mass during decoy generation.
+_STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
 _ALL_KNOWN_FIELDS = _ALL_SCALAR_FIELDS | frozenset({
     'spectrum', 'ordered_frags', 'ordered_frag_codes', 'frag_intensities',
     'frags', 'top_n', 'parent_idx', 'spec_frags',
@@ -1617,6 +1622,7 @@ class SpectrumLibraryStore:
         precursor_order = []
         precursor_data = {}
         decoy_precursors = set()
+        nonstandard_precursors = set()
 
         for row in cls._iter_rows(spec_lib_file, file_type):
 
@@ -1656,10 +1662,20 @@ class SpectrumLibraryStore:
                 raise ValueError("SpecLib Charge Cannot be Converted to Float")
             unique_id = (mod_pep, charge)
 
+            if unique_id in nonstandard_precursors:
+                continue
+
             if unique_id not in precursor_data:
+                seq = get_field(row, "StrippedPeptide", "PeptideSequence", "Stripped.Sequence")
+
+                # Skip precursors carrying residues with no defined mass rather than
+                # letting them reach decoy generation, where fast_mass raises.
+                if seq and set(seq) - _STANDARD_RESIDUES:
+                    nonstandard_precursors.add(unique_id)
+                    continue
+
                 precursor_order.append(unique_id)
 
-                seq = get_field(row, "StrippedPeptide", "PeptideSequence", "Stripped.Sequence")
                 rt = get_field(row, "Tr_recalibrated", "RT", "iRT")
 
                 if rt is None:
@@ -1721,6 +1737,11 @@ class SpectrumLibraryStore:
 
         if len(decoy_precursors) > 0:
             logger.info(f"{len(decoy_precursors)} decoy precursors removed from input library")
+
+        if len(nonstandard_precursors) > 0:
+            example = sorted(nonstandard_precursors)[0][0]
+            logger.info(f"{len(nonstandard_precursors)} precursors with non-standard residues "
+                        f"removed from input library (e.g. {example})")
 
         # Second pass: convert to columnar arrays
         n = len(precursor_order)
