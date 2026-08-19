@@ -1094,12 +1094,12 @@ def plot_im_alignment(lib_im, obs_im, im_spl, results_folder=None,
                alpha=min(1.0, 5.0 / ((lib.size // 1000) + 1)))
     lo_x, hi_x = float(lib.min()), float(lib.max())
     ax.plot([lo_x, hi_x], [0, 0], color="r", linestyle="--", alpha=.5)
-    ax.plot([lo_x, hi_x], [config.opt_im_tol] * 2, color="g", linestyle="--",
-            alpha=.5, label=f"opt_im_tol = {config.opt_im_tol:.4f}")
-    ax.plot([lo_x, hi_x], [-config.opt_im_tol] * 2, color="g", linestyle="--",
+    ax.plot([lo_x, hi_x], [config.opt_im_precision] * 2, color="g", linestyle="--",
+            alpha=.5, label=f"opt_im_precision = {config.opt_im_precision:.4f}")
+    ax.plot([lo_x, hi_x], [-config.opt_im_precision] * 2, color="g", linestyle="--",
             alpha=.5)
     span = np.percentile(np.abs(resid_vs_x[np.isfinite(resid_vs_x)]), 98)
-    span = max(span, config.opt_im_tol * 1.5)
+    span = max(span, config.opt_im_precision * 1.5)
     ax.set_ylim(-span, span)
     ax.set_xlabel("library 1/K0")
     ax.set_ylabel("IM residual (observed - aligned)")
@@ -1831,7 +1831,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
         if not has_frag and not has_prec:
             logger.info("No ion mobility data; keeping default IM tolerance: "
-                        f"{config.opt_im_tol}")
+                        f"{config.opt_im_precision}")
         elif has_frag != has_prec:
             raise ValueError(
                 "Inconsistent ion mobility data: one of frag_ion_mobility / "
@@ -1840,8 +1840,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             im_error = (frag_median - precursor)[cor_filter]
             new_im_tol = fit_im_tolerance(im_error)
             if new_im_tol is not None:
-                config.opt_im_tol = np.abs(new_im_tol)
-            logger.info(f"Optimized IM tolerance: {config.opt_im_tol}")
+                config.opt_im_precision = np.abs(new_im_tol)
+            logger.info(f"Optimized IM tolerance: {config.opt_im_precision}")
             if results_folder is not None:
                 plot_im_error_mixture(im_error, results_folder=results_folder)
                 frag_lists = output_df["frag_ion_mobility"].to_numpy()[cor_filter]
@@ -1894,7 +1894,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                                 f"IM alignment fitted on {n_anchor} anchors; "
                                 f"residual core SD {_rmodel['b'] * np.sqrt(2.0):.5f} 1/K0, "
                                 f"{_rmodel['weight']:.0%} of anchors in core "
-                                f"(IM tolerance {config.opt_im_tol:.5f})")
+                                f"(IM tolerance {config.opt_im_precision:.5f})")
                         if results_folder is not None:
                             plot_im_alignment(lib_anchor, obs_anchor, im_spl,
                                               results_folder=results_folder)
@@ -1902,7 +1902,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                                 dill.dump(im_spl, dill_file)
     else:
         logger.info("No ion mobility columns; keeping default IM tolerance: "
-                    f"{config.opt_im_tol}")
+                    f"{config.opt_im_precision}")
 
 
     ################################################################

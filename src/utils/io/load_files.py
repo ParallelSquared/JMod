@@ -350,7 +350,7 @@ class SpectrumFile:
         in each band's MS1 spectrum. Downstream, ``im_bin_ms1`` keyed by
         ``(im_lo, im_hi)`` then resolves each MS2 band to its matching MS1 band.
 
-        Must run after the preliminary search (so ``im_tol`` = ``config.opt_im_tol``
+        Must run after the preliminary search (so ``im_tol`` = ``config.opt_im_precision``
         is known) and before the main search. No-op if MS1 lacks per-peak mobility.
         """
         if len(self.ms1scans) == 0 or len(self.ms2scans) == 0:

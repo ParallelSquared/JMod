@@ -1246,7 +1246,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         fdc=fdc,
         fwhm=elution_fwhm,
         mz_tol=(config.args.ppm * 1e-6),
-        im_tol=config.opt_im_tol,
+        im_tol=config.opt_im_precision,
         prec_im=(fdc["prec_im"].to_numpy() if "prec_im" in fdc.columns else None),
     )
     for col in corr_features.columns:

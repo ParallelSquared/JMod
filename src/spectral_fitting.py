@@ -2387,7 +2387,7 @@ def fit_to_lib2(dia_spec,
 
     # Per-peak ion mobility (timsTOF); zeros for non-IM data (merged_mob unused).
     _has_im = getattr(spec, "mobility", None) is not None
-    _im_tol = config.opt_im_tol if _has_im else 0.0
+    _im_tol = config.opt_im_precision if _has_im else 0.0
     if _has_im and _im_tol > 0.0:
         # timsTOF: bin DIA peaks by (m/z, IM) so same-m/z peaks at different
         # mobility stay separate; the summed bin intensity is the NNLS observation.

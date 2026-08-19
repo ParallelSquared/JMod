@@ -70,6 +70,11 @@ ms1_ppm = 20
 ms1_tol = ms1_ppm*10**(-6)
 
 rt_tol = 9
+# Ion mobility, two distinct quantities (both half-widths; gates are |d| <= tol):
+#   im_precision -- spread of a precursor's fragments about their own median.
+#   im_tol       -- error of the library's predicted IM after alignment.
+# Both are defaults only; MZRTfit refits them from the data.
+im_precision = 0.5
 im_tol = 0.5
 im_merge_tol = 0.005
 rt_width = 1.5
@@ -96,11 +101,16 @@ rt_percentile = .95
 
 opt_rt_tol = rt_tol # set as default to start
 opt_ms1_tol = ms1_tol 
+opt_im_precision = im_precision
 opt_im_tol = im_tol
 
 # Library-IM -> observed-IM calibration fitted in MZRTfit, or None when the data
-# or the library carries no ion mobility.  Nothing consumes it yet.
+# or the library carries no ion mobility.
 im_spl = None
+
+# True once the library is known to carry ion mobility. Set at library load; the
+# single flag every IM gate keys off, so the condition is decided in one place.
+library_has_im = False
 
 max_num_prelim_search = 1e5
 
