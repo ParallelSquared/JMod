@@ -209,16 +209,25 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
     )
 
     # 2. FIX: Get the 0-indexed rank as an integer (subtracting 1)
+    #
+    # Ties are broken on spec_id, not on row order.  Ordinal rank resolves ties by
+    # position, and rows arrive in whatever order the parallel search batches
+    # finished in, so an rt tie would rank differently between otherwise identical
+    # runs.  With IM banding rt ties are common -- one frame produces several band
+    # spectra sharing an rt -- which shifts the +/-n_scans window and changes every
+    # *_nearby_* feature, and through them PredVal and Qvalue.  spec_id is unique
+    # within a (seq, z) group, so it makes the ordering total and reproducible.
     df = df.with_columns(
-        (pl.col("rt").rank(method="ordinal", descending=False).over(group_cols) - 1)
+        (pl.struct(["rt", "spec_id"]).rank(method="ordinal", descending=False).over(group_cols) - 1)
         .cast(pl.Int32)
         .alias("rt_rank")
     )
 
     # 3. Find the rank of the row with the maximum 'coeff' within each group
+    #    (coeff ties broken on spec_id for the same reason)
     df = df.with_columns(
         pl.col("rt_rank")
-        .sort_by(pl.col("coeff"), descending=True)
+        .sort_by(pl.struct(["coeff", "spec_id"]), descending=True)
         .first()
         .over(group_cols)
         .alias("max_coeff_rank")
@@ -295,7 +304,13 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
 
     # The calculation needs values relative to the current row, sorted by RT:
     #   weights[i-1], weights[i+1], rts[i-1], rts[i+1]
-    df_with_shifts = df.sort(rt_column).with_columns(
+    #
+    # Sort on (rt, spec_id) rather than rt alone: rows arrive in parallel-search
+    # completion order, and with IM banding several band spectra share an rt, so
+    # sorting on rt alone leaves tied rows in an arbitrary order and shift(1) /
+    # shift(-1) pick different neighbours between otherwise identical runs.
+    _sort_keys = [rt_column, "spec_id"] if "spec_id" in df.collect_schema().names() else [rt_column]
+    df_with_shifts = df.sort(_sort_keys).with_columns(
         # Weights (Value Column) shifts
         pl.col(value_column).shift(1).over(group_cols).alias("w_prev"),
         pl.col(value_column).shift(-1).over(group_cols).alias("w_next"),
