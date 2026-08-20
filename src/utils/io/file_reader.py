@@ -324,13 +324,104 @@ def _assign_peaks_to_im_bins(mob_arr, im_bins):
             np.concatenate(bin_chunks) if bin_chunks else np.empty(0, np.int64))
 
 
-def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: pl.DataFrame, im_bins: np.ndarray) -> SpectrumFile:
-    """Read pre-calibrated peaks, assign DIA windows and IM bins, and build SpectrumFile.
+def _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter):
+    """Segment each (frame, window) group into IM bands, one Spectrum per band.
+
+    ``ms2_groups`` maps ``(rt, prec_mz, iso_width, ce)`` to concatenated
+    ``(mz, intens, mob)`` arrays of that window's un-banded peaks.  Appends a
+    Spectrum per band to ``sf.ms2scans`` and updates ``sf.ms2_by_id`` /
+    ``sf.scan_pos``; returns the next free scan number.
+
+    Consumes ``ms2_groups``: each window's un-banded arrays are released as soon
+    as its bands are built.  The bands are ~2x the size of the un-banded peaks
+    they come from (the 50% overlap duplicates every boundary peak), so holding
+    both in full at once costs an extra ~9 GB on a large timsTOF .d.  Callers
+    that need the un-banded peaks afterwards pass a shallow copy of the dict.
+
+    Overlapping fixed-bin mode (the pre-watershed "overlapping windows"): each
+    peak lands in up to 2 overlapping fixed IM bins (denormalized).  Swap the
+    ``bands = ...`` line to re-enable the data-driven watershed.
+    """
+    im_watershed.reset_timings()
+    for key in sorted(ms2_groups.keys()):
+        rt_val, prec_mz_val, iso_width, ce = key
+        mz_concat, intens_concat, mob_concat = ms2_groups.pop(key)
+        if len(mz_concat) == 0:
+            continue
+
+        # bands = im_watershed.segment_window(mob_concat, intens_concat)  # watershed mode
+        _pidxs, _bidxs = _assign_peaks_to_im_bins(mob_concat, im_bins)
+        bands = []
+        if _bidxs.shape[0] > 0:
+            # sort by bin, then split into contiguous per-bin chunks (no repeated scans)
+            _order = np.argsort(_bidxs, kind="stable")
+            _sb = _bidxs[_order]
+            _sp = _pidxs[_order]
+            _cuts = np.flatnonzero(np.diff(_sb)) + 1
+            _starts = np.concatenate(([0], _cuts))
+            for _s, _chunk in zip(_starts, np.split(_sp, _cuts)):
+                b = int(_sb[_s])
+                bands.append((float(im_bins[b, 0]), float(im_bins[b, 1]), _chunk))
+
+        half_width = iso_width / 2.0
+        t0 = perf_counter()
+        for im_lo, im_hi, peak_idx in bands:
+            band_mz = mz_concat[peak_idx]
+            band_intens = intens_concat[peak_idx]
+            band_mob = mob_concat[peak_idx]
+
+            # Sort by m/z (mobility kept parallel so spec.mobility[i] matches mz[i])
+            order = np.argsort(band_mz)
+            mz_sorted = band_mz[order]
+            intens_sorted = band_intens[order]
+            mob_sorted = band_mob[order]
+
+            spec = Spectrum()
+            spec.id = f"scan={scan_counter}"
+            spec.scan_num = scan_counter
+            spec.level = 2
+            spec.RT = rt_val
+            spec.mz = mz_sorted
+            spec.intens = intens_sorted
+            spec.mobility = mob_sorted
+            spec.TIC = float(intens_sorted.sum(dtype=np.float64))
+            spec.injection_time = 1.0
+            spec.collision_energy = ce
+            spec.prec_mz = prec_mz_val
+            spec.isolation_window = {
+                "isolation window target m/z": prec_mz_val,
+                "isolation window lower offset": half_width,
+                "isolation window upper offset": half_width,
+            }
+            spec.ms1window = prec_mz_val + np.array([-1, 1]) * half_width
+            spec.im_lo = im_lo
+            spec.im_hi = im_hi
+            spec.scanwindow = [float(mz_sorted[0]), float(mz_sorted[-1])]
+
+            idx = len(sf.ms2scans)
+            sf.ms2scans.append(spec)
+            sf.ms2_by_id[scan_counter] = idx
+            sf.scan_pos[scan_counter] = [2, idx]
+            scan_counter += 1
+        im_watershed.TIMINGS["spectrum_construct"] += perf_counter() - t0
+    return scan_counter
+
+
+def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
+                      include_ms1: bool = True):
+    """Read peaks.parquet and group peaks by acquisition, without IM banding.
+
+    Returns ``(ms1_groups, ms2_groups)``:
+
+    - ``ms1_groups``: ``rt -> (mz_list, intens_list, mob_list)``, one frame per RT,
+      left as per-row-group lists for the caller to concatenate.  Empty when
+      ``include_ms1`` is False.
+    - ``ms2_groups``: ``(rt, prec_mz, iso_width, ce) -> (mz, intens, mob)``, already
+      concatenated -- the form ``_band_ms2_groups`` consumes.
 
     Processes the parquet in row-group batches to avoid loading 6+ GB at once.
-    Expects columns: frame, scan, mz, inv_mobility, apex_intensity
-    (mz and inv_mobility are pre-calibrated).
-    Each non-empty IM bin produces a separate Spectrum object.
+    ``include_ms1=False`` skips MS1 entirely, for callers that only need to redraw
+    the MS2 bands (see ``reband_ms2``).
     """
     import pyarrow.parquet as pq
 
@@ -350,7 +441,7 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
             (int(scan_begin), int(scan_end), float(prec_mz), float(iso_width), float(ce))
         )
 
-    # Accumulators: group peaks by (rt, bin_idx) for MS1 and (rt, prec_mz, iso_width, ce, bin_idx) for MS2
+    # Accumulators: group peaks by rt for MS1 and (rt, prec_mz, iso_width, ce) for MS2
     ms1_groups = {}  # rt -> (mz_list, intens_list, mob_list); one frame per rt
     # (rt, prec_mz, iso_width, ce) -> (mz_list, intens_list, mob_list); raw peaks
     # accumulated across row groups, then IM-band segmented in a post-pass.
@@ -379,8 +470,8 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
 
         # MS1 peaks — accumulate raw peaks per frame (one spectrum per RT),
         # keeping per-peak mobility (1/K0). No IM binning.
-        ms1_mask = level_arr == 1
-        if ms1_mask.any():
+        ms1_mask = level_arr == 1 if include_ms1 else None
+        if include_ms1 and ms1_mask.any():
             ms1_mz = mz_arr[ms1_mask]
             ms1_intens = intensities[ms1_mask]
             ms1_mob = mob_arr[ms1_mask]
@@ -426,14 +517,34 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
                     w_mob = f_mob[win_mask]
 
                     # Accumulate raw peaks per (frame, window) across row groups;
-                    # watershed IM-band segmentation runs in a post-pass below
-                    # (it needs the whole window at once).
+                    # IM-band segmentation runs in a post-pass (it needs the whole
+                    # window at once).
                     key = (f_rt, prec_mz, iso_width, ce)
                     if key not in ms2_groups:
                         ms2_groups[key] = ([], [], [])
                     ms2_groups[key][0].append(w_mz)
                     ms2_groups[key][1].append(w_intens)
                     ms2_groups[key][2].append(w_mob)
+
+    # Concatenate MS2 in place, dropping the per-row-group fragments as we go so
+    # the list-of-chunks form never coexists in full with the concatenated form.
+    for key in list(ms2_groups):
+        v = ms2_groups.pop(key)
+        ms2_groups[key] = (np.concatenate(v[0]), np.concatenate(v[1]),
+                           np.concatenate(v[2]))
+
+    return ms1_groups, ms2_groups
+
+
+def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: pl.DataFrame, im_bins: np.ndarray) -> SpectrumFile:
+    """Read pre-calibrated peaks, assign DIA windows and IM bins, and build SpectrumFile.
+
+    Processes the parquet in row-group batches to avoid loading 6+ GB at once.
+    Expects columns: frame, scan, mz, inv_mobility, apex_intensity
+    (mz and inv_mobility are pre-calibrated).
+    Each non-empty IM bin produces a separate Spectrum object.
+    """
+    ms1_groups, ms2_groups = _read_peak_groups(peaks_path, cal, dia_lookup)
 
     # Build SpectrumFile from accumulated groups
     sf = SpectrumFile()
@@ -495,82 +606,98 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
     # watershed "overlapping windows"): each peak lands in up to 2 overlapping
     # fixed IM bins (denormalized). Swap the `bands = ...` line to re-enable the
     # data-driven watershed.
+    # These bands are provisional: reband_ms2 redraws them once the preliminary
+    # search has fitted the IM precision.  Rather than keeping the un-banded peaks
+    # in memory for that (~9 GB on a large .d, untouched across the whole initial
+    # search), record what it takes to re-read them from the parquet, which is
+    # still on disk.  Re-reading costs ~25 s; holding them costs 9 GB for minutes.
+    sf._peaks_path = peaks_path
+    sf._cal = cal
+    sf._dia_lookup = dia_lookup
+    sf._im_range = (float(im_bins[:, 0].min()), float(im_bins[:, 1].max()))
+    n_windows = len(ms2_groups)
+
     logger.info("Building MS2 spectra with overlapping fixed IM bins")
-    im_watershed.reset_timings()
-    for key in sorted(ms2_groups.keys()):
-        rt_val, prec_mz_val, iso_width, ce = key
-        mz_list, intens_list, mob_list = ms2_groups[key]
-        mz_concat = np.concatenate(mz_list)
-        intens_concat = np.concatenate(intens_list)
-        mob_concat = np.concatenate(mob_list)
-        if len(mz_concat) == 0:
-            continue
-
-        # Overlapping fixed-bin mode: group peaks by their overlapping IM bins.
-        # bands = im_watershed.segment_window(mob_concat, intens_concat)  # watershed mode
-        _pidxs, _bidxs = _assign_peaks_to_im_bins(mob_concat, im_bins)
-        bands = []
-        if _bidxs.shape[0] > 0:
-            # sort by bin, then split into contiguous per-bin chunks (no repeated scans)
-            _order = np.argsort(_bidxs, kind="stable")
-            _sb = _bidxs[_order]
-            _sp = _pidxs[_order]
-            _cuts = np.flatnonzero(np.diff(_sb)) + 1
-            _starts = np.concatenate(([0], _cuts))
-            for _s, _chunk in zip(_starts, np.split(_sp, _cuts)):
-                b = int(_sb[_s])
-                bands.append((float(im_bins[b, 0]), float(im_bins[b, 1]), _chunk))
-
-        half_width = iso_width / 2.0
-        t0 = perf_counter()
-        for im_lo, im_hi, peak_idx in bands:
-            band_mz = mz_concat[peak_idx]
-            band_intens = intens_concat[peak_idx]
-            band_mob = mob_concat[peak_idx]
-
-            # Sort by m/z (mobility kept parallel so spec.mobility[i] matches mz[i])
-            order = np.argsort(band_mz)
-            mz_sorted = band_mz[order]
-            intens_sorted = band_intens[order]
-            mob_sorted = band_mob[order]
-
-            spec = Spectrum()
-            spec.id = f"scan={scan_counter}"
-            spec.scan_num = scan_counter
-            spec.level = 2
-            spec.RT = rt_val
-            spec.mz = mz_sorted
-            spec.intens = intens_sorted
-            spec.mobility = mob_sorted
-            spec.TIC = float(intens_sorted.sum(dtype=np.float64))
-            spec.injection_time = 1.0
-            spec.collision_energy = ce
-            spec.prec_mz = prec_mz_val
-            spec.isolation_window = {
-                "isolation window target m/z": prec_mz_val,
-                "isolation window lower offset": half_width,
-                "isolation window upper offset": half_width,
-            }
-            spec.ms1window = prec_mz_val + np.array([-1, 1]) * half_width
-            spec.im_lo = im_lo
-            spec.im_hi = im_hi
-            spec.scanwindow = [float(mz_sorted[0]), float(mz_sorted[-1])]
-
-            idx = len(sf.ms2scans)
-            sf.ms2scans.append(spec)
-            sf.ms2_by_id[scan_counter] = idx
-            sf.scan_pos[scan_counter] = [2, idx]
-            scan_counter += 1
-        im_watershed.TIMINGS["spectrum_construct"] += perf_counter() - t0
-
+    scan_counter = _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter)
+    del ms2_groups
     logger.info(im_watershed.format_timings())
     logger.info(
         f"MS2 scans after IM binning: {len(sf.ms2scans)} "
-        f"(original windows: {len(ms2_groups)})"
+        f"(original windows: {n_windows})"
     )
 
     sf.build_ms2_to_ms1_map()
     return sf
+
+
+def reband_ms2(sf: SpectrumFile, width: float) -> bool:
+    """Rebuild the MS2 IM bands at a new width, in place.
+
+    The bands built at load time use a hardcoded width, chosen before anything
+    about the data's mobility resolution is known.  Once the IM precision has
+    been fitted from the preliminary search, the bands can be redrawn to match
+    it.  Call between the preliminary search and the main search.
+
+    ``width`` is the full band width; bins overlap by 50%, so the stride is
+    ``width / 2``.  That relationship is required by ``_assign_peaks_to_im_bins``,
+    which only ever tests two candidate bins per peak.
+
+    The un-banded peaks are not kept in memory for this -- they are re-read from
+    the peaks parquet, which is still on disk.  A re-read costs ~25 s; retaining
+    them would cost ~9 GB on a large .d, held untouched across the whole initial
+    search.
+
+    Returns True if the bands were rebuilt, False if there was nothing to do
+    (non-IM data, i.e. anything but the .d path).
+    """
+    peaks_path = getattr(sf, "_peaks_path", None)
+    im_range = getattr(sf, "_im_range", None)
+    if peaks_path is None or im_range is None:
+        logger.info("Re-banding MS2: not a .d acquisition; skipping")
+        return False
+    if not np.isfinite(width) or width <= 0:
+        logger.info(f"Re-banding MS2: invalid width {width}; skipping")
+        return False
+
+    im_lo, im_hi = im_range
+    new_bins = compute_im_bins(im_lo, im_hi, width=width, stride=width / 2.0)
+    if len(new_bins) == 0:
+        logger.info(f"Re-banding MS2: width {width:.5f} yields no bins over "
+                    f"[{im_lo:.4f}, {im_hi:.4f}]; keeping existing bands")
+        return False
+
+    n_before = len(sf.ms2scans)
+
+    # Drop the old MS2 spectra and their index entries *before* re-reading, so the
+    # old bands are freed rather than sitting alongside the un-banded peaks and the
+    # new bands. MS1 keeps its scan numbers, so MS2 renumbering restarts above the
+    # highest MS1 number to stay disjoint -- scan_pos is a single dict shared by
+    # both levels.
+    for scan_num in list(sf.ms2_by_id):
+        sf.scan_pos.pop(scan_num, None)
+    sf.ms2scans = []
+    sf.ms2_by_id = {}
+    # The flattened MS2 peak arrays (if any) describe the bands we just dropped.
+    sf._ms2_flat = None
+    scan_counter = (max(sf.ms1_by_id) + 1) if sf.ms1_by_id else 1
+
+    logger.info("Re-banding MS2: re-reading un-banded peaks")
+    _, groups = _read_peak_groups(peaks_path, sf._cal, sf._dia_lookup,
+                                  include_ms1=False)
+
+    # _band_ms2_groups drains the dict as it goes, so the un-banded peaks are
+    # released window by window instead of sitting in memory alongside the ~2x
+    # larger banded set being allocated.
+    _band_ms2_groups(sf, groups, new_bins, scan_counter)
+    del groups
+    sf.build_ms2_to_ms1_map()
+
+    logger.info(
+        f"Re-banded MS2 at width {width:.5f} (stride {width / 2.0:.5f}): "
+        f"{len(new_bins)} bins over [{im_lo:.4f}, {im_hi:.4f}], "
+        f"{n_before} -> {len(sf.ms2scans)} MS2 spectra"
+    )
+    return True
 
 
 def loadSpectra(input_file: str) -> SpectrumFile:

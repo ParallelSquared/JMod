@@ -114,39 +114,35 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     )
 
 
-    # Convert spectra into a Rust-friendly format
-    logger.info("Converting spectra")
-    rust_specs = []
-    # TODO this should probably be done in chunks if it becomes a bottleneck
-    for spec in tqdm(dia_spectra.ms2scans):
-        rust_specs += [spec.to_rust_spectrum()]
-
-
-
-    # Process spectra in chunks of 1000
+    # Convert and search spectra in chunks of 1000.
     # Smaller chunks increases the amount of time spent passing things back and forth between Python and Rust
     # Multi-threading happens spectrum-by-spectrum at the Rust level
     #   (not sure how Rust does concurrency, processing in groups of spectra should reduce overhead incurred in spinning
     #   up new threads)
-    logger.info("Searching spectra in chunks")
+    #
+    # Conversion is fused into the search loop, and each chunk's hits are turned into
+    # Polars immediately, so three whole-run copies never pile up at once. Converting
+    # every spectrum up front held a second copy of every MS2 peak on the Rust side for
+    # the whole search (the `del rust_specs` below the loop was commented out, so it was
+    # still live at `to_polars`), and accumulating one Rust hits object meant that object
+    # and the full DataFrame built from it coexisted at peak. On a large timsTOF .d
+    # (~9e5 MS2 band spectra) either one is enough to get the process OOM-killed.
+    logger.info("Converting and searching spectra in chunks")
     chunk_size = 1000
-    hits = None # Rust object holding arrays of hits
-    for i in tqdm(range(0, len(rust_specs), chunk_size)):
-        chunk = rust_specs[i:i + chunk_size]
+    ms2scans = dia_spectra.ms2scans
+    hit_frames = []
+    for i in tqdm(range(0, len(ms2scans), chunk_size)):
+        chunk = [spec.to_rust_spectrum() for spec in ms2scans[i:i + chunk_size]]
         batch_hits = scorer.score_many(db, chunk)
-        if hits is None:
-            hits = batch_hits
-        else:
-            hits.extend(batch_hits)
+        # to_polars() per chunk: the Rust hits for this chunk are released here rather
+        # than at the end of the whole search.
+        hit_frames.append(batch_hits.to_polars())
+        del batch_hits, chunk
 
-    # Once spectra are searched, delete rust verison to free up memory
-    # Realistically these should be zero copy in the first place
-    #del rust_specs
-
-
-    # Make Polars dataframe directly from Rust
-    df = hits.to_polars()
-    del hits
+    # rechunk=False keeps this a cheap multi-chunk view over the per-chunk buffers
+    # instead of allocating a second full copy of the concatenated result.
+    df = pl.concat(hit_frames, rechunk=False)
+    del hit_frames
 
 
 
