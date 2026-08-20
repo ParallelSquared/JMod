@@ -49,6 +49,7 @@ names = ["coeff", "spec_id", "Ms1_spec_id",
          "cosine",
          "mz",
          "tic",
+         "im_error",
          "frag_names",
          "frag_errors",
          "frag_mz",
@@ -95,6 +96,7 @@ dtypes  = {"coeff":np.float32,
             "cosine":np.float32,
             "mz":np.float32,
             "tic":np.float32,
+            "im_error":np.float32,
             "frag_names":str,
             "frag_errors":str,
             "frag_mz":str,
@@ -121,7 +123,7 @@ _SCHEMA_SPEC = [
     ("window_mz",                   pl.Float32,             0.0),
     ("rt",                          pl.Float32,             0.0),
     ("prec_im",                     pl.Float32,             0.0),
-    # 27 feature columns
+    # 28 feature columns
     ("num_lib",                     pl.Float32,             0.0),
     ("frac_lib_int",                pl.Float32,             0.0),
     ("frac_dia_int",                pl.Float32,             0.0),
@@ -149,6 +151,8 @@ _SCHEMA_SPEC = [
     ("cosine",                      pl.Float32,             0.0),
     ("mz",                          pl.Float32,             0.0),
     ("tic",                         pl.Float32,             0.0),
+    # observed prec_im minus the aligned library IM; NaN on non-IM runs, as prec_im is
+    ("im_error",                    pl.Float32,             0.0),
     # 7 fragment list columns
     ("frag_names",                  pl.List(pl.Int32),       None),
     ("frag_errors",                 pl.List(pl.Float64),     None),

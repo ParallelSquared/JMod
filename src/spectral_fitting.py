@@ -809,11 +809,11 @@ def _assemble_features_jit(
     scribe_scores, max_unmatched_residuals, max_matched_residuals,
     gof_stats, manhattan_distances, fitted_spectral_contrasts,
     frac_int_matched_pred, lc_frac, lc_cosine,
-    prec_mz, tic):
-    """Assemble the 27-column feature matrix in one nogil pass.
+    prec_mz, tic, im_error):
+    """Assemble the 28-column feature matrix in one nogil pass.
 
     Replaces np.ones_like * scalar broadcasts (5 allocations) + np.stack of
-    27 arrays (~1500 GIL-holding samples). Fills a pre-allocated (n, 27)
+    28 arrays (~1500 GIL-holding samples). Fills a pre-allocated (n, 28)
     array directly — no intermediate arrays, no GIL.
 
     Per-candidate arrays (length n) are copied directly into their column.
@@ -821,7 +821,7 @@ def _assemble_features_jit(
     lc_frac, lc_cosine, tic) are broadcast by filling the column with the value.
     """
     n = len(num_lib_peaks_matched)
-    out = np.empty((n, 27), dtype=np.float64)
+    out = np.empty((n, 28), dtype=np.float64)
     for i in range(n):
         out[i, 0] = num_lib_peaks_matched[i]
         out[i, 1] = frac_lib_intensity[i]
@@ -850,6 +850,7 @@ def _assemble_features_jit(
         out[i, 24] = lc_cosine              # scalar broadcast
         out[i, 25] = prec_mz[i]
         out[i, 26] = tic                    # scalar broadcast
+        out[i, 27] = im_error[i]
     return out
 
 
@@ -2063,6 +2064,7 @@ def hyperscore2(frag_intensities, frag_codes):
 #@profile
 def get_features(
     rt_mz,
+    prec_im,
     ref_rows, ref_vals, ref_cols, ref_offsets,
     dec_rows, dec_vals, dec_cols, dec_offsets,
     ref_peaks_in_dia,
@@ -2155,6 +2157,11 @@ def get_features(
     # mz tol
     rel_error = np.where(~np.isnan(ms1_error), np.abs(ms1_error), -1.0)
     rt_error = prec_rt-rt_mz[:,0]
+    # Observed IM minus the library's aligned prediction -- the IM analogue of
+    # rt_error, signed for the same reason.  rt_mz column 2 is the aligned
+    # library IM; both sides are NaN on non-IM runs, exactly as prec_im already
+    # is, so the feature is NaN there and finite whenever IM is in play.
+    im_error = np.asarray(prec_im, dtype=np.float64).ravel() - rt_mz[:, 2]
 
     frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
 
@@ -2257,7 +2264,8 @@ def get_features(
         _lc_frac,                       # 23: large-coeff predicted/observed intensity ratio (scalar → broadcast)
         _lc_cosine,                     # 24: large-coeff subset cosine similarity (scalar → broadcast)
         _prec_mz,                       # 25: calibrated precursor m/z
-        tic                              # 26: total ion current (scalar → broadcast)
+        tic,                             # 26: total ion current (scalar → broadcast)
+        im_error                         # 27: observed IM - aligned library IM
     )
     return features
 
@@ -2678,6 +2686,7 @@ def fit_to_lib2(dia_spec,
         _dec_cols = decoy_flat_cols if (decoy and len(decoy_flat_cols) > 0) else np.empty(0, np.int32)
         _dec_offsets = decoy_flat_offsets if (decoy and len(decoy_flat_offsets) > 1) else np.zeros(1, np.int32)
         features = get_features(rt_mz[window_idxs[ref_peaks_in_dia]],
+                                np.asarray(ref_prec_im, dtype=np.float64),
                                 ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
                                 _dec_rows, _dec_vals, _dec_cols, _dec_offsets,
                                 ref_peaks_in_dia,
@@ -2707,7 +2716,13 @@ def fit_to_lib2(dia_spec,
 
         ####################################
         if decoy:
-            decoy_features = get_features(np.stack([rt_mz[decoy_window_idxs[decoy_peaks_in_dia],0],decoy_mz[decoy_peaks_in_dia]],1),
+            # Column 2 (aligned library IM) has to be carried through here too --
+            # this array is rebuilt rather than sliced, so it would otherwise be
+            # 2 columns wide and the IM error feature would fail on decoys.
+            decoy_features = get_features(np.stack([rt_mz[decoy_window_idxs[decoy_peaks_in_dia],0],
+                                                    decoy_mz[decoy_peaks_in_dia],
+                                                    rt_mz[decoy_window_idxs[decoy_peaks_in_dia],2]],1),
+                                            np.asarray(dec_prec_im, dtype=np.float64),
                                             decoy_flat_rows, decoy_flat_vals, decoy_flat_cols, decoy_flat_offsets,
                                             ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
                                             decoy_peaks_in_dia,
