@@ -1131,7 +1131,7 @@ def _create_entries_direct_jit(
     spec_data_mz, spec_data_int, spec_offsets, spec_lengths,
     topn_data, topn_offsets, topn_lengths,
     cand_indices,
-    prec_mzs, ms1_mz, ms1_tol,
+    prec_mzs, ms1_mz, ms1_mob, ms1_tol,
     frac_lib_threshold, atleast_m, match_ms1,
     bin_mz, bin_int, bin_mob, mz_tol, im_tol, has_im):
     """Like _create_entries_core_jit but reads directly from library backing arrays.
@@ -1263,23 +1263,44 @@ def _create_entries_direct_jit(
             if all_coords[k] % 2 == 1:
                 frac_matched_arr[i] += all_norm_int[k]
 
-    # Step 4: MS1 closest-peak error
+    # Step 4: MS1 closest-peak error.
+    #
+    # IM gate first, m/z as the selector.  Taking the nearest peak by m/z alone
+    # regularly lands on a co-isolated ion at unrelated mobility, because MS1
+    # frames are not IM-banded -- they carry per-peak mobility across the whole
+    # acquisition range.  So scan every MS1 peak within ms1_tol and keep the
+    # m/z-closest one that also sits within im_tol of this candidate's
+    # fragment-derived IM.  Falls back to pure m/z when there is no mobility to
+    # gate on: non-IM data, or a candidate whose fragments yielded no prec_im.
     n_ms1 = len(ms1_mz)
     ms1_error = np.full(n_cands, np.nan)
+    ms1_has_mob = len(ms1_mob) == n_ms1
     if n_ms1 > 0:
         for i in range(n_cands):
             q = prec_mzs[i]
+            p_im = prec_im_out[i]
+            gate_im = ms1_has_mob and im_tol > 0.0 and p_im == p_im
+            tol_da = ms1_tol * q
+            best = np.nan
+            best_abs = ms1_tol
             idx = np.searchsorted(ms1_mz, q)
-            left = max(0, idx - 1)
-            right = min(idx, n_ms1 - 1)
-            left_diff = (ms1_mz[left] - q) / q
-            right_diff = (ms1_mz[right] - q) / q
-            if abs(left_diff) <= abs(right_diff):
-                closest = left_diff
-            else:
-                closest = right_diff
-            if abs(closest) <= ms1_tol:
-                ms1_error[i] = closest
+            j = idx
+            while j < n_ms1 and (ms1_mz[j] - q) <= tol_da:
+                if (not gate_im) or abs(ms1_mob[j] - p_im) <= im_tol:
+                    d = (ms1_mz[j] - q) / q
+                    if abs(d) <= best_abs:
+                        best_abs = abs(d)
+                        best = d
+                j += 1
+            j = idx - 1
+            while j >= 0 and (q - ms1_mz[j]) <= tol_da:
+                if (not gate_im) or abs(ms1_mob[j] - p_im) <= im_tol:
+                    d = (ms1_mz[j] - q) / q
+                    if abs(d) <= best_abs:
+                        best_abs = abs(d)
+                        best = d
+                j -= 1
+            ms1_error[i] = best
 
     # Candidate filtering
     n_passing = 0
@@ -1364,7 +1385,7 @@ def create_entries_direct(centroid_breaks,
         mass_window_candidates: list — candidate keys (for output reconstruction)
         atleast_m: int — minimum top-N fragments matched
         prec_mzs: float64[] — precursor m/z per candidate
-        ms1_spec: MS1 spectrum object with .mz attribute
+        ms1_spec: MS1 spectrum object with .mz (and .mobility when the data carries IM)
         ms1_tol: float64 — relative MS1 tolerance
 
     Returns:
@@ -1391,6 +1412,9 @@ def create_entries_direct(centroid_breaks,
             cand_idx_arr,
             np.ascontiguousarray(prec_mzs, dtype=np.float64),
             np.ascontiguousarray(ms1_spec.mz, dtype=np.float64),
+            np.ascontiguousarray(ms1_spec.mobility, dtype=np.float64)
+            if getattr(ms1_spec, "mobility", None) is not None
+            else np.empty(0, dtype=np.float64),
             float(ms1_tol),
             float(config.args.lib_frac), int(atleast_m),
             bool(config.args.no_ms1_req),

@@ -319,6 +319,9 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False,v
                                 num_iso_r = config.num_iso_r,
                                 additional_scans = config.args.additional_scans,
                                 vote_sigma = vote_sigma,
+                                # Gate MS1 peaks to those co-mobile with the
+                                # precursor; inert when the data has no IM.
+                                im_tol = config.opt_im_precision,
                                 fit_whole_MS1=fit_whole_MS1
                                 )
     

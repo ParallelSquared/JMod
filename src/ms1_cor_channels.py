@@ -60,6 +60,7 @@ def ms1_cor_channels(all_spectra,
                      num_iso_r = None,
                      additional_scans = None,
                      vote_sigma = 1.0,
+                     im_tol = 0.0,
                      fit_whole_MS1 = False,
                      dump_precursors = None
                      ):
@@ -159,6 +160,9 @@ def ms1_cor_channels(all_spectra,
                 logger.info(f"Fitting - {frac_done}%")
 
         tag_group = fdc_group.get_group(key)
+        # Observed IM for this precursor; gates the MS1 peaks used for both
+        # the isotope traces and the channel fit below.  NaN disables the gate.
+        _grp_im = group_prec_im(tag_group)
         group_protein = tag_group["protein"].iloc[0] if "protein" in tag_group.columns else ""
 
         prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC)
@@ -202,7 +206,8 @@ def ms1_cor_channels(all_spectra,
             interp_func = build_ms2_interpolator(ms2_vals)
             interp_funcs.append(interp_func)
 
-            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, [tag,SILAC], all_scans, prec_mz, mz_ppm, spectra_subset, interp_func)
+            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, [tag,SILAC], all_scans, prec_mz, mz_ppm, spectra_subset, interp_func,
+                                                                                      prec_im=_grp_im, im_tol=im_tol)
             group_iso.append(isotopes)
 
             ## filter to voted apex neighborhood
@@ -226,7 +231,8 @@ def ms1_cor_channels(all_spectra,
         group_pred, group_obs_peaks, group_matrices, group_fit_cor, group_kept_mz = ([] for _ in range(5))
 
         for ms1_spec_idx in scans_to_search:
-            pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+            pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm,
+                                                                                     prec_im=_grp_im, im_tol=im_tol)
             group_pred.append(pred_coeff)
             group_obs_peaks.append(obs_peaks)
             group_matrices.append(fit_matrix)
@@ -553,9 +559,48 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
 
 
 
-def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tags, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func):
+def im_filtered_peaks(spec, prec_im, im_tol):
+    """(mz, intens) for this MS1 spectrum, restricted to peaks co-mobile with the precursor.
+
+    MS1 frames are not IM-banded -- they carry per-peak mobility across the whole
+    acquisition range -- so matching an isotope by m/z alone regularly picks up a
+    co-isolated ion at unrelated mobility.  Filtering the peak list once per
+    (spectrum, precursor) keeps the downstream m/z matching kernels unchanged and
+    is cheaper than gating per isotope.
+
+    Returns the spectrum's own arrays untouched when there is nothing to gate on
+    (non-IM data, no fitted precursor IM, or no tolerance), so the non-IM path is
+    bit-identical to before.  The mask preserves m/z order, which the kernels'
+    searchsorted calls rely on.
+    """
+    mz, intens = spec.mz, spec.intens
+    mob = getattr(spec, "mobility", None)
+    if mob is None or im_tol is None or not im_tol > 0.0:
+        return mz, intens
+    if prec_im is None or not np.isfinite(prec_im):
+        return mz, intens
+    keep = np.abs(np.asarray(mob) - prec_im) <= im_tol
+    return mz[keep], intens[keep]
+
+
+def group_prec_im(tag_group):
+    """Median observed IM for a precursor group, or NaN when unavailable.
+
+    All channels of one precursor share a mobility, so a single value per group
+    is enough; the median shrugs off the odd NaN or outlier channel.
+    """
+    if "prec_im" not in tag_group:
+        return np.nan
+    vals = np.asarray(tag_group["prec_im"], dtype=np.float64)
+    vals = vals[np.isfinite(vals)]
+    return float(np.median(vals)) if vals.size else np.nan
+
+
+def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tags, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func,
+                          prec_im=None, im_tol=0.0):
     isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tags)
-    all_isotope_traces = get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset)
+    all_isotope_traces = get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset,
+                                                       prec_im=prec_im, im_tol=im_tol)
     all_ms2_vals = fill_scan_values(all_scans, interp_func, all_isotope_traces[0])
 
     return all_isotope_traces[0], all_ms2_vals, all_isotope_traces[1:], isotopes, interp_func
@@ -566,7 +611,7 @@ def build_ms2_interpolator(ms2_vals):
 
 
 
-def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset):
+def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset, prec_im=None, im_tol=0.0):
     """
     Get a trace of each isotopic peak across a set of MS1 spectra
 
@@ -594,7 +639,8 @@ def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset):
     all_isotope_traces=[{} for _ in isotopes]
 
     for spec in spectra_subset:
-        iso_ints = get_trace_int_numba(spec.mz, spec.intens, np.array([isotope.mz for isotope in isotopes]), mz_ppm, min_int)
+        _mz, _intens = im_filtered_peaks(spec, prec_im, im_tol)
+        iso_ints = get_trace_int_numba(_mz, _intens, np.array([isotope.mz for isotope in isotopes]), mz_ppm, min_int)
         for i in range(len(isotopes)):
             all_isotope_traces[i][spec.scan_num] = iso_ints[i]
 
@@ -816,10 +862,12 @@ def select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, windo
     return scans_to_search
 
 
-def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm):
+def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm,
+                           prec_im=None, im_tol=0.0):
     spec = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
 
-    pred_coeff, obs_peaks, fit_matrix, kept_mz = fit_channel_isotopes_numba(spec,group_iso,mz_ppm)
+    pred_coeff, obs_peaks, fit_matrix, kept_mz = fit_channel_isotopes_numba(
+        spec, group_iso, mz_ppm, prec_im=prec_im, im_tol=im_tol)
 
     if len(obs_peaks)==0:
         fit_cor = np.nan
@@ -1239,7 +1287,7 @@ def _compute_cooks_d(fit_matrix, obs_peaks, pred_coeff):
 
 
 
-def fit_channel_isotopes_numba(spec, all_iso, mz_ppm):
+def fit_channel_isotopes_numba(spec, all_iso, mz_ppm, prec_im=None, im_tol=0.0):
     """
     Takes observed peaks fom spectra and expected peaks from from all_iso for one plex-group and builds a matrix to fit them
 
@@ -1279,7 +1327,10 @@ def fit_channel_isotopes_numba(spec, all_iso, mz_ppm):
     flat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso], dtype=np.float64)
     ms1_iso_patterns = flat.reshape(len(all_iso), len(all_iso[0]), 2)
 
-    dia_spectrum = np.array(spec.peak_list(), dtype=np.float64).T
+    # peak_list() drops mobility, so the IM gate is applied here rather than
+    # inside the matching kernel.
+    _mz, _intens = im_filtered_peaks(spec, prec_im, im_tol)
+    dia_spectrum = np.array([_mz, _intens], dtype=np.float64).T
 
     group_lengths = np.array([len(g) for g in all_iso])
 
