@@ -988,73 +988,91 @@ def plot_im_error_mixture(im_error, results_folder=None, grid_delta=0.00127,
     plt.close()
 
 
-def plot_im_spread(frag_mobility_lists, results_folder=None):
-    """
-    Two-panel diagnostic of IM spread among matched fragments.
+def plot_im_error_vs_intensity(frag_mobility_lists, frag_intensity_lists,
+                               results_folder=None, tol=None):
+    """IM error against fragment intensity.
 
-    Panel A: each matched fragment's ``1/K0 - PSM fragment median`` across ALL
-    fragments — the un-binned view of the distribution the precision tolerance is
-    fitted from, showing the per-fragment spread a single per-PSM number hides.
-    Panel B: within-PSM spread (max - min of each PSM's matched-fragment ``1/K0``) —
-    shows how wide a single precursor's fragments span in the IM dimension.
+    Each matched fragment contributes one point: its deviation from its own PSM's
+    median 1/K0 (the quantity the precision tolerance gates on) against its
+    observed intensity. The question this answers is whether IM error is
+    intensity-dependent -- weak fragments are measured over fewer mobility scans,
+    so if their spread is materially wider, a single flat tolerance is either too
+    loose for strong fragments or too tight for weak ones.
 
-    Deliberately does not reference the MS1 precursor mobility: that peak is
-    picked by m/z with no mobility constraint, so it regularly lands on a
-    co-isolated ion and would show an error the search never gates on.
+    Overlays the per-decile 95th percentile of |deviation| so the trend is
+    readable through the density.
     """
     if results_folder is None:
         return
 
-    per_frag_dev = []   # frag 1/K0 - that PSM's fragment median, one per fragment
-    psm_spread = []      # max - min of a PSM's matched-fragment 1/K0 values
-    for vals in frag_mobility_lists:
-        if vals is None:
+    devs, ints = [], []
+    for vals, intens in zip(frag_mobility_lists, frag_intensity_lists):
+        if vals is None or intens is None:
             continue
-        arr = np.array([v for v in vals if v is not None and np.isfinite(v)],
-                       dtype=float)
-        if arr.size < 2:
+        m = np.array([v if v is not None else np.nan for v in vals], dtype=float)
+        w = np.array([v if v is not None else np.nan for v in intens], dtype=float)
+        if m.shape != w.shape:
             continue
-        per_frag_dev.extend(arr - np.median(arr))
-        psm_spread.append(arr.max() - arr.min())
-
-    per_frag_dev = np.asarray(per_frag_dev, dtype=float)
-    psm_spread = np.asarray(psm_spread, dtype=float)
-    if per_frag_dev.size == 0:
+        ok = np.isfinite(m) & np.isfinite(w) & (w > 0)
+        if ok.sum() < 2:
+            continue
+        m = m[ok]
+        devs.append(m - np.median(m))
+        ints.append(w[ok])
+    if not devs:
+        return
+    devs = np.concatenate(devs)
+    ints = np.concatenate(ints)
+    if devs.size == 0:
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    log_int = np.log10(ints)
+    y_max = np.percentile(np.abs(devs), 99)
+    y_max = y_max if y_max > 0 else 0.01
+    if tol is not None and np.isfinite(tol):
+        y_max = max(y_max, tol * 1.2)
 
-    # Panel A: per-fragment deviation from that PSM's fragment median
-    a_max = np.percentile(np.abs(per_frag_dev), 99) if per_frag_dev.size else 0.05
-    a_max = a_max if a_max > 0 else 0.05
-    axes[0].hist(per_frag_dev, bins=np.linspace(-a_max, a_max, 80),
-                 alpha=0.6, edgecolor="black", linewidth=0.5)
-    axes[0].axvline(0, color="black", linewidth=1)
-    axes[0].set_xlabel("fragment 1/K0 - PSM fragment median")
-    axes[0].set_ylabel("matched fragments")
-    axes[0].set_title(f"Per-fragment IM deviation (n={per_frag_dev.size})")
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    hb = ax.hexbin(log_int, devs, gridsize=60,
+                   extent=(log_int.min(), log_int.max(), -y_max, y_max),
+                   bins="log", cmap="Blues", mincnt=1)
+    fig.colorbar(hb, ax=ax, label="fragments (log count)")
 
-    # Panel B: within-PSM fragment IM spread (max - min)
-    if psm_spread.size:
-        b_max = np.percentile(psm_spread, 99)
-        b_max = b_max if b_max > 0 else psm_spread.max() or 0.05
-        axes[1].hist(psm_spread, bins=np.linspace(0, b_max, 80),
-                     alpha=0.6, edgecolor="black", linewidth=0.5, color="tab:orange")
-        axes[1].axvline(np.median(psm_spread), color="red", linestyle="--",
-                        linewidth=1, label=f"median = {np.median(psm_spread):.4f}")
-        axes[1].legend()
-    axes[1].set_xlabel("within-PSM fragment 1/K0 spread (max - min)")
-    axes[1].set_ylabel("PSMs")
-    axes[1].set_title(f"Within-PSM IM spread (n={psm_spread.size})")
+    # Per-decile spread: 95th percentile of |deviation| within each intensity bin
+    edges = np.percentile(log_int, np.linspace(0, 100, 11))
+    edges = np.unique(edges)
+    if edges.size >= 3:
+        centers, spreads = [], []
+        for lo_e, hi_e in zip(edges[:-1], edges[1:]):
+            sel = (log_int >= lo_e) & (log_int <= hi_e)
+            if sel.sum() < 20:
+                continue
+            centers.append(0.5 * (lo_e + hi_e))
+            spreads.append(np.percentile(np.abs(devs[sel]), 95))
+        if centers:
+            ax.plot(centers, spreads, color="darkorange", marker="o", markersize=3,
+                    linewidth=1.5, label="95th pct |deviation| per intensity decile")
+            ax.plot(centers, -np.array(spreads), color="darkorange", marker="o",
+                    markersize=3, linewidth=1.5)
 
+    ax.axhline(0, color="black", linewidth=1)
+    if tol is not None and np.isfinite(tol):
+        ax.axhline(tol, color="red", linestyle="--", linewidth=1,
+                   label=f"precision tol = {tol:.4f}")
+        ax.axhline(-tol, color="red", linestyle="--", linewidth=1)
+    ax.set_ylim(-y_max, y_max)
+    ax.set_xlabel("log10(fragment intensity)")
+    ax.set_ylabel("fragment 1/K0 - PSM fragment median")
+    ax.set_title(f"IM error vs fragment intensity (n={devs.size})")
+    ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
-    fig.savefig(results_folder + "/first_search/im_spread.png",
+    fig.savefig(results_folder + "/first_search/im_error_vs_intensity.png",
                 dpi=600, bbox_inches="tight")
     plt.close(fig)
 
 
 def plot_im_alignment(lib_im, obs_im, im_spl, results_folder=None,
-                      grid_delta=0.00127):
+                      grid_delta=0.00127, resid_model=None):
     """
     Diagnostics for the library-IM -> observed-IM calibration.
 
@@ -1077,8 +1095,9 @@ def plot_im_alignment(lib_im, obs_im, im_spl, results_folder=None,
     # tolerance from it.  This is the error of the *library's* prediction, which
     # is what these figures are about -- distinct from config.opt_im_precision,
     # the spread of a precursor's fragments, which belongs on im_precision.png.
-    resid_all = obs - im_spl(lib)
-    resid_model = _im_error_model(resid_all[np.isfinite(resid_all)])
+    if resid_model is None:
+        resid_all = obs - im_spl(lib)
+        resid_model = _im_error_model(resid_all[np.isfinite(resid_all)])
     acc_tol = resid_model["tolerance"] if resid_model is not None else np.nan
 
     # Panel 1: the fit itself
@@ -1907,7 +1926,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                                       filename="im_precision.png",
                                       xlabel="fragment 1/K0 - PSM fragment median",
                                       title="IM Precision (fragment spread)")
-                plot_im_spread(frag_lists, results_folder=results_folder)
+                if "frag_intensities" in output_df.columns:
+                    plot_im_error_vs_intensity(
+                        frag_lists,
+                        output_df["frag_intensities"].to_numpy()[cor_filter],
+                        results_folder=results_folder,
+                        tol=config.opt_im_precision)
 
             ############################################
             ###### Align library IM to observed IM #####
@@ -1943,23 +1967,30 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                         resid = resid[np.isfinite(resid)]
                         n_anchor = int((np.isfinite(lib_anchor)
                                         & np.isfinite(obs_anchor)).sum())
-                        # Report the Laplace core, not SD: the anchors keep a heavy
+                        # Library IM accuracy: how far observed 1/K0 sits from the
+                        # aligned library prediction.  Fitted once here and stored;
+                        # the log line and the figures read the stored value rather
+                        # than refitting, so they cannot disagree.  Reported as the
+                        # Laplace core rather than an SD -- the anchors keep a heavy
                         # tail of false matches whose IM is unrelated to the library,
-                        # so SD describes that background instead of the calibration.
+                        # and an SD would describe that background, not the calibration.
                         _rmodel = _im_error_model(resid)
                         if _rmodel is None:
                             logger.info(f"IM alignment fitted on {n_anchor} anchors "
-                                        f"(residual mixture fit failed)")
+                                        f"(residual mixture fit failed; keeping default "
+                                        f"IM accuracy {config.opt_im_tol})")
                         else:
+                            config.opt_im_tol = float(np.abs(_rmodel["tolerance"]))
                             logger.info(
                                 f"IM alignment fitted on {n_anchor} anchors; "
                                 f"residual core SD {_rmodel['b'] * np.sqrt(2.0):.5f} 1/K0, "
                                 f"{_rmodel['weight']:.0%} of anchors in core; "
-                                f"library IM accuracy {_rmodel['tolerance']:.5f} "
+                                f"library IM accuracy {config.opt_im_tol:.5f} "
                                 f"(vs precision {config.opt_im_precision:.5f})")
                         if results_folder is not None:
                             plot_im_alignment(lib_anchor, obs_anchor, im_spl,
-                                              results_folder=results_folder)
+                                              results_folder=results_folder,
+                                              resid_model=_rmodel)
                             with open(results_folder + "/first_search/im_spl", "wb") as dill_file:
                                 dill.dump(im_spl, dill_file)
     else:

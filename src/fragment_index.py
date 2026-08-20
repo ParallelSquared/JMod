@@ -67,8 +67,11 @@ def _query_all_partitions_jit(
         all_bin_offsets, all_bin_lengths,
         bin_meta_offsets,   # int64[n_partitions+1] — into bin arrays
         # Precursor metadata — concatenated across partitions
-        all_prec_global_idx, all_prec_rt,
+        all_prec_global_idx, all_prec_rt, all_prec_im,
         prec_offsets,       # int64[n_partitions+1] — into precursor arrays
+        # IM admission window: aligned library IM must fall inside it.
+        # Pass (-inf, +inf) to disable.
+        im_gate_lo, im_gate_hi,
         # Output buffer (pre-allocated, max possible size)
         out_indices):
     """Full query across all partitions in one nogil pass.
@@ -192,6 +195,12 @@ def _query_all_partitions_jit(
             if counter[k] >= atleast_m:
                 p_rt = all_prec_rt[prec_start + k]
                 if p_rt - prec_rt < rt_tol and prec_rt - p_rt < rt_tol:
+                    # IM admission: the library's aligned 1/K0 must be compatible
+                    # with this spectrum's mobility band.  NaN means the library
+                    # has no IM for this precursor, which is not a rejection.
+                    p_im = all_prec_im[prec_start + k]
+                    if p_im == p_im and (p_im < im_gate_lo or p_im > im_gate_hi):
+                        continue
                     out_indices[n_results] = all_prec_global_idx[prec_start + k]
                     n_results += 1
 
@@ -216,8 +225,10 @@ class FragmentIndex:
             library: SpectrumLibraryStore — library[key]['spectrum'] is n×2 (mz, intensity),
                      library[key]['top_n'] is array of indices into spectrum.
             all_keys: list of keys into library (tuples of (mod_seq, charge, ...)).
-            rt_mz: ndarray shape (len(all_keys), 2) — col 0 = calibrated RT, col 1 = calibrated precursor m/z.
-                   Any precursor m/z offsets (e.g. for decoys) should be pre-applied.
+            rt_mz: ndarray shape (len(all_keys), 2 or 3) — col 0 = calibrated RT, col 1 = calibrated
+                   precursor m/z, optional col 2 = library IM aligned onto observed 1/K0 (NaN where
+                   the library has no IM). Any precursor m/z offsets (e.g. for decoys) should be
+                   pre-applied; IM must NOT be offset for decoys.
             mz_tol_ppm: float — fragment m/z tolerance in ppm.
             max_frags_per_partition: int — max fragments per partition (~312K for L3 cache fit).
         """
@@ -250,6 +261,10 @@ class FragmentIndex:
 
             prec_rts = rt_mz[p_indices, 0].astype(np.float32)
             prec_mzs = rt_mz[p_indices, 1].astype(np.float32)
+            if rt_mz.shape[1] > 2:
+                prec_ims = rt_mz[p_indices, 2].astype(np.float32)
+            else:
+                prec_ims = np.full(n_prec, np.nan, dtype=np.float32)
 
             # Gather all fragment data
             all_frag_mz = []
@@ -273,6 +288,7 @@ class FragmentIndex:
                     'n_precursors': n_prec,
                     'precursor_global_idx': p_indices.astype(np.uint32),
                     'precursor_rt': prec_rts,
+                    'precursor_im': prec_ims,
                     'flat_prec_mz': np.empty(0, dtype=np.float32),
                     'flat_deficit': np.empty(0, dtype=np.int32),
                     'flat_prec_idx': np.empty(0, dtype=np.int32),
@@ -319,6 +335,7 @@ class FragmentIndex:
                 'n_precursors': n_prec,
                 'precursor_global_idx': p_indices.astype(np.uint32),
                 'precursor_rt': prec_rts,
+                'precursor_im': prec_ims,
                 'flat_prec_mz': frag_prec_mz,
                 'flat_deficit': deficit,
                 'flat_prec_idx': frag_prec_idx,
@@ -347,6 +364,7 @@ class FragmentIndex:
             self.bin_meta_offsets = np.zeros(1, dtype=np.int64)
             self.all_prec_global_idx = np.empty(0, dtype=np.uint32)
             self.all_prec_rt = np.empty(0, dtype=np.float32)
+            self.all_prec_im = np.empty(0, dtype=np.float32)
             self.prec_offsets = np.zeros(1, dtype=np.int64)
             self._total_precursors = 0
             self._finalized = True
@@ -381,8 +399,10 @@ class FragmentIndex:
         # Concatenate precursor arrays with offset table
         prec_arrays_gidx = [p['precursor_global_idx'] for p in self.partitions]
         prec_arrays_rt = [p['precursor_rt'] for p in self.partitions]
+        prec_arrays_im = [p['precursor_im'] for p in self.partitions]
         self.all_prec_global_idx = np.concatenate(prec_arrays_gidx)
         self.all_prec_rt = np.concatenate(prec_arrays_rt)
+        self.all_prec_im = np.concatenate(prec_arrays_im)
         self.prec_offsets = np.zeros(n_parts + 1, dtype=np.int64)
         for i in range(n_parts):
             self.prec_offsets[i + 1] = self.prec_offsets[i] + len(prec_arrays_gidx[i])
@@ -393,7 +413,8 @@ class FragmentIndex:
         # Free the partition dicts — all data is in flat arrays now
         self.partitions = None
 
-    def query(self, dia_mz_array, win_lo, win_hi, prec_rt, rt_tol, atleast_m):
+    def query(self, dia_mz_array, win_lo, win_hi, prec_rt, rt_tol, atleast_m,
+              im_gate_lo=-np.inf, im_gate_hi=np.inf):
         """Return global indices of precursors with >= atleast_m fragment matches within RT window.
 
         Args:
@@ -403,6 +424,9 @@ class FragmentIndex:
             prec_rt: float — retention time of the DIA spectrum.
             rt_tol: float — RT tolerance for candidate filtering.
             atleast_m: int — minimum fragment match count.
+            im_gate_lo/im_gate_hi: float — admission window for the aligned library IM
+                (spectrum band widened by the library-IM accuracy). Defaults to
+                (-inf, +inf), i.e. no IM constraint.
 
         Returns:
             np.ndarray of uint32 global indices into all_keys/rt_mz.
@@ -422,8 +446,9 @@ class FragmentIndex:
             self.flat_offsets,
             self.all_bin_offsets, self.all_bin_lengths,
             self.bin_meta_offsets,
-            self.all_prec_global_idx, self.all_prec_rt,
+            self.all_prec_global_idx, self.all_prec_rt, self.all_prec_im,
             self.prec_offsets,
+            np.float32(im_gate_lo), np.float32(im_gate_hi),
             out_indices,
         )
 

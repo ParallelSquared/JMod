@@ -44,6 +44,28 @@ from src.logger import logger, set_log_filepath, log_exceptions
 import logging
 
 
+def _aligned_library_im(library):
+    """Library ion mobility mapped onto observed 1/K0 by the fitted alignment.
+
+    Returns an all-NaN array when the library has no IM column or the alignment
+    did not fit, so every IM gate keyed off this value is inert on such runs.
+    """
+    lib_im = np.asarray(library.ion_mob, dtype=np.float64)
+    aligned = np.full(lib_im.shape, np.nan, dtype=np.float64)
+    ok = np.isfinite(lib_im)
+    if config.im_spl is not None and ok.any():
+        aligned[ok] = config.im_spl(lib_im[ok])
+        logger.info(f"Aligned library IM for {int(ok.sum())} of {ok.size} entries "
+                    f"(range {np.nanmin(aligned):.4f}-{np.nanmax(aligned):.4f})")
+    elif config.library_has_im:
+        # The library has IM but there is no calibration to map it with; the
+        # admission gate would be comparing un-aligned values against observed
+        # ones, so it stays off rather than silently mis-gating.
+        logger.info("Library has IM but no alignment was fitted; "
+                    "IM candidate admission disabled")
+    return aligned
+
+
 @log_exceptions
 def main(GUI_config_json=None, GUI_result_queue=None):
     """Main function to run JMod analysis."""
@@ -368,6 +390,10 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 plex_lib[key+(idx,)] = spectrumLibrary[key]
             rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.concatenate(rt_mz)
+        # Column 2 as in the standard path.  This path replicates the library once
+        # per plex, so the aligned IM has to be tiled to match row-for-row.
+        _plex_im = _aligned_library_im(spectrumLibrary)
+        rt_mz = np.column_stack([rt_mz, np.tile(_plex_im, len(rt_spls))])
         
         from src.models.spec_lib.library_store import SpectrumLibraryStore
         spectrumLibrary = SpectrumLibraryStore.from_dict(plex_lib)
@@ -409,6 +435,12 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # Build rt_mz for ALL entries (target + decoy)
         rt_mz = np.array([[rt_spl(spectrumLibrary.iRT[i]), mz_func(spectrumLibrary.prec_mz[i], spectrumLibrary.iRT[i])]
                           for i in range(len(spectrumLibrary))])
+        # Column 2: the library's IM mapped onto observed 1/K0 by the alignment.
+        # Left all-NaN when the library carries no IM or the alignment did not
+        # fit, which leaves every downstream IM gate inert.  Decoys keep their
+        # parent's IM unchanged -- unlike m/z there is no decoy offset, since
+        # shifting it would reject decoys systematically and break FDR.
+        rt_mz = np.column_stack([rt_mz, _aligned_library_im(spectrumLibrary)])
         # Apply decoy m/z offset to decoy entries
         rt_mz[spectrumLibrary.n_targets:, 1] -= config.decoy_mz_offset
 

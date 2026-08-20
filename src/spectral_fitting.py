@@ -2408,12 +2408,24 @@ def fit_to_lib2(dia_spec,
 
     # Get candidates via fragment index or fallback to m/z + RT window
     # Single query returns both target and decoy candidates from unified index
+    # IM admission window: a library precursor is only a candidate for this
+    # spectrum if its aligned IM is compatible with the spectrum's mobility band,
+    # widened by the library-IM accuracy.  Inert (-inf, +inf) whenever the
+    # spectrum has no band, the library has no IM, or no alignment was fitted --
+    # in which case rt_mz has no IM column and every value is NaN anyway.
+    _im_gate_lo, _im_gate_hi = -np.inf, np.inf
+    if (rt_mz.shape[1] > 2 and getattr(spec, "im_lo", None) is not None
+            and config.im_spl is not None):
+        _im_gate_lo = spec.im_lo - config.opt_im_tol
+        _im_gate_hi = spec.im_hi + config.opt_im_tol
+
     if frag_index is not None and not ms1_mz:
         win_lo = prec_mz - windowWidth / 2
         win_hi = prec_mz + windowWidth / 2
         all_window_idxs = frag_index.query(
             dia_spectrum[:, 0], win_lo, win_hi,
-            prec_rt, rt_tol, atleast_m
+            prec_rt, rt_tol, atleast_m,
+            im_gate_lo=_im_gate_lo, im_gate_hi=_im_gate_hi
         )
     else:
         if ms1_mz:
@@ -2423,6 +2435,14 @@ def fit_to_lib2(dia_spec,
                 _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
             else:
                 _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
+        if np.isfinite(_im_gate_lo):
+            # Mirror the index gate. NaN IM (library without mobility) is not a
+            # rejection, so it is explicitly admitted rather than compared.
+            _im = rt_mz[:, 2]
+            _bool = np.logical_and(
+                _bool,
+                np.isnan(_im) | ((_im >= _im_gate_lo) & (_im <= _im_gate_hi)),
+            )
         all_window_idxs = np.where(_bool)[0]
 
     # Split into target and decoy candidates
