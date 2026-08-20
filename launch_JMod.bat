@@ -20,7 +20,7 @@ for %%i in ("%DIRNAME%") do set APP_HOME=%%~fi
 cd /d "%APP_HOME%"
 
 @rem ---------------------------------------------------------------------------------------------------------------------------------------
-s
+
 @rem Check if UV already exists on system, if there is no error jump down to uvFound (no need to install UV again)
 where uv >nul 2>&1
 if %ERRORLEVEL% equ 0 goto uvFound
