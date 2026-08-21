@@ -787,11 +787,22 @@ def fit_zero_mean_laplace_uniform_1d(x, max_iter=200, tol=1e-6):
 
     abs_x = np.abs(x)
 
+    # Floor the Laplace scale at half the data's own resolution.  Mobility is
+    # quantised to the TIMS scan grid, so |x| has an atom at zero; without a floor
+    # the EM can drive b -> 0 to put infinite density on that atom, which is a
+    # degenerate maximum and returns NaN rather than a usable width.
+    _nonzero = abs_x[abs_x > 0.0]
+    min_scale = 0.5 * float(_nonzero.min()) if _nonzero.size else 0.0
+    if min_scale <= 0.0:
+        return np.nan, np.nan
+
     # init: split on the median of |x| into core (Laplace) vs background (uniform)
     split = np.median(abs_x)
     resp_l = (abs_x <= split).astype(float)
     w = resp_l.mean()
     b = np.sum(resp_l * abs_x) / (np.sum(resp_l) + 1e-300)
+    if b < min_scale:
+        b = min_scale
 
     def laplace_pdf(scale):
         return np.exp(-abs_x / scale) / (2.0 * scale)
@@ -812,6 +823,8 @@ def fit_zero_mean_laplace_uniform_1d(x, max_iter=200, tol=1e-6):
         # M-step
         w = resp_l.mean()
         b = np.sum(resp_l * abs_x) / (np.sum(resp_l) + 1e-300)
+        if b < min_scale:
+            b = min_scale
 
         ll = log_likelihood()
         if abs(ll - prev_ll) < tol:
@@ -851,8 +864,15 @@ def _im_error_model(im_error):
     if not np.isfinite(b) or b <= 0:
         return None
 
-    # 4*SD of the zero-mean Laplace (SD = b*sqrt(2)), matching the RT/MS1 idiom
-    tolerance = float(4.0 * b * np.sqrt(2.0))
+    # 99% central coverage of the zero-mean Laplace core: P(|x| <= t) = 1-exp(-t/b),
+    # so t = -b*ln(0.01) = b*ln(100) = 4.605*b (= 3.26 core SD).
+    #
+    # Not the 4*SD (= 5.657*b, 99.65%) idiom the RT/MS1 tolerances use.  Coverage
+    # of the core is the criterion that matters here: matching is far more damaged
+    # by dropping real co-mobile fragments than by admitting a few interferers, so
+    # the tolerance is set by how much genuine signal it keeps, not by how likely
+    # a fragment at the boundary is to be real (at 99% coverage that is only ~20%).
+    tolerance = float(b * np.log(100.0))
     return {"errors": errors, "sigma": sigma, "cut": cut, "clean": clean,
             "weight": weight, "b": b, "tolerance": tolerance}
 
@@ -1874,9 +1894,18 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         a co-isolated ion), and it keeps one value per *fragment* instead of
         collapsing each PSM to a single median.
 
-        PSMs with fewer than two matched fragments are skipped: their deviation is
-        exactly zero by construction and would pile up a false spike at the origin,
-        shrinking the fitted core.
+        Two contributions are excluded because they are zero by construction rather
+        than by measurement:
+
+        * PSMs with fewer than two matched fragments -- a lone fragment is its own
+          median.
+        * For an odd fragment count the median *is* one of the observed values, so
+          that fragment's deviation is exactly zero no matter how the ion behaved.
+          Left in, these produced a point mass at the origin (17.5% of all
+          deviations on a real run) which drives the Laplace scale toward zero,
+          NaNs the mixture fit, and silently falls the tolerance back to its
+          default.  Only the element that *is* the median is dropped, so genuine
+          ties -- two fragments recorded on the same mobility scan -- still count.
         """
         out = []
         for vals in frag_lists:
@@ -1886,7 +1915,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                            dtype=float)
             if arr.size < 2:
                 continue
-            out.append(arr - np.median(arr))
+            dev = arr - np.median(arr)
+            if arr.size % 2 == 1:
+                dev = np.delete(dev, np.argsort(arr, kind="stable")[arr.size // 2])
+            out.append(dev)
         return np.concatenate(out) if out else np.empty(0, dtype=float)
 
     if {"frag_ion_mobility", "precursor_mobility"}.issubset(output_df.columns):
@@ -1898,7 +1930,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         has_prec = np.isfinite(precursor).any()
 
         if not has_frag and not has_prec:
-            logger.info("No ion mobility data; keeping default IM precision: "
+            logger.info("No ion mobility data; keeping default IM band tolerance: "
                         f"{config.opt_im_precision}")
         elif has_frag != has_prec:
             raise ValueError(
@@ -1914,11 +1946,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             if new_im_tol is not None:
                 config.opt_im_precision = np.abs(new_im_tol)
                 logger.info(
-                    f"Optimized IM precision (fragment about median): "
-                    f"{config.opt_im_precision} "
+                    f"Fitted IM fragment spread: {config.opt_im_precision} "
+                    f"(band width {4*config.opt_im_precision:.5f}) "
                     f"[{frag_dev.size} fragment deviations from {len(frag_lists)} PSMs]")
             else:
-                logger.info("IM precision fit failed; keeping default: "
+                logger.info("IM fragment-spread fit failed; keeping default band tol: "
                             f"{config.opt_im_precision}")
 
             if results_folder is not None:
@@ -1978,15 +2010,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                         if _rmodel is None:
                             logger.info(f"IM alignment fitted on {n_anchor} anchors "
                                         f"(residual mixture fit failed; keeping default "
-                                        f"IM accuracy {config.opt_im_tol})")
+                                        f"IM accuracy {config.opt_im_accuracy})")
                         else:
-                            config.opt_im_tol = float(np.abs(_rmodel["tolerance"]))
+                            config.opt_im_accuracy = float(np.abs(_rmodel["tolerance"]))
                             logger.info(
                                 f"IM alignment fitted on {n_anchor} anchors; "
                                 f"residual core SD {_rmodel['b'] * np.sqrt(2.0):.5f} 1/K0, "
                                 f"{_rmodel['weight']:.0%} of anchors in core; "
-                                f"library IM accuracy {config.opt_im_tol:.5f} "
-                                f"(vs precision {config.opt_im_precision:.5f})")
+                                f"library IM accuracy {config.opt_im_accuracy:.5f} "
+                                f"(vs fragment spread {config.opt_im_precision:.5f})")
                         if results_folder is not None:
                             plot_im_alignment(lib_anchor, obs_anchor, im_spl,
                                               results_folder=results_folder,
@@ -1994,7 +2026,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                             with open(results_folder + "/first_search/im_spl", "wb") as dill_file:
                                 dill.dump(im_spl, dill_file)
     else:
-        logger.info("No ion mobility columns; keeping default IM precision: "
+        logger.info("No ion mobility columns; keeping default IM band tolerance: "
                     f"{config.opt_im_precision}")
 
 

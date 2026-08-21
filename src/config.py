@@ -72,10 +72,16 @@ ms1_tol = ms1_ppm*10**(-6)
 rt_tol = 9
 # Ion mobility, two distinct quantities (both half-widths; gates are |d| <= tol):
 #   im_precision -- spread of a precursor's fragments about their own median.
-#   im_tol       -- error of the library's predicted IM after alignment.
+#                   Gates fragment/MS1/quant peak matching, and sets band width.
+#   im_accuracy  -- error of the library's predicted IM after alignment.
+#                   Gates candidate admission only.
 # Both are defaults only; MZRTfit refits them from the data.
-im_precision = 0.5
-im_tol = 0.5
+# Fragment spread: how far a fragment's 1/K0 may sit from its precursor's and
+# still count as co-mobile.  Refitted in MZRTfit as the 99% coverage of the
+# Laplace core.  Consumers: _match_mz_im, the 2D (m/z, IM) binner, the MS1
+# m/z-error gate, MS1 quant, and the MS2 band width (4 x this).
+im_precision = 0.01
+im_accuracy = 0.5
 im_merge_tol = 0.005
 rt_width = 1.5
 
@@ -101,8 +107,8 @@ rt_percentile = .95
 
 opt_rt_tol = rt_tol # set as default to start
 opt_ms1_tol = ms1_tol 
-opt_im_precision = im_precision
-opt_im_tol = im_tol
+opt_im_precision = im_precision   # refitted in MZRTfit
+opt_im_accuracy = im_accuracy
 
 # Library-IM -> observed-IM calibration fitted in MZRTfit, or None when the data
 # or the library carries no ion mobility.

@@ -449,9 +449,12 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ## Re-band MS2 on the fitted IM precision.  The bands built at load time use
     ## a hardcoded width, chosen before anything about this run's mobility
     ## resolution was known; the preliminary search has now fitted the precision,
-    ## so redraw them to match.  A band spans +/-precision, so its full width is
-    ## 2 x precision.  No-op on non-IM data (reband_ms2 self-guards on the
-    ## retained un-banded peaks, which only the .d path stores).
+    ## so redraw them to match.  Width is 4 x precision -- the band spans
+    ## +/-2*precision, deliberately wider than the match gate so a precursor's
+    ## mobility profile stays inside one spectrum rather than being split across
+    ## bands; the tight gating happens later, within the band.  No-op on non-IM
+    ## data (reband_ms2 self-guards on the retained un-banded peaks, which only
+    ## the .d path stores).
     _ms2_has_im = (len(DIAspectra.ms2scans) > 0
                    and getattr(DIAspectra.ms2scans[0], "mobility", None) is not None)
     if _ms2_has_im:
@@ -461,7 +464,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # alive while the new, larger set is being allocated -- on a large .d that
         # is an extra ~18 GB held for no reason.  Rebound from the new bands below.
         spectra_to_fit = None
-        file_reader.reband_ms2(DIAspectra, 2.0 * config.opt_im_precision)
+        file_reader.reband_ms2(DIAspectra, 4.0 * config.opt_im_precision)
 
     ## Merge peaks in spectra (MS2 only; MS1 peaks are summed within
     ## tolerance during matrix construction in fit_channel_isotopes_numba).

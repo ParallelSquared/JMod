@@ -2448,8 +2448,8 @@ def fit_to_lib2(dia_spec,
     _im_gate_lo, _im_gate_hi = -np.inf, np.inf
     if (rt_mz.shape[1] > 2 and getattr(spec, "im_lo", None) is not None
             and config.im_spl is not None):
-        _im_gate_lo = spec.im_lo - config.opt_im_tol
-        _im_gate_hi = spec.im_hi + config.opt_im_tol
+        _im_gate_lo = spec.im_lo - config.opt_im_accuracy
+        _im_gate_hi = spec.im_hi + config.opt_im_accuracy
 
     if frag_index is not None and not ms1_mz:
         win_lo = prec_mz - windowWidth / 2
