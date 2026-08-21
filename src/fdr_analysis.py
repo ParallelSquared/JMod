@@ -808,6 +808,15 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   "file_name",
                   "protein"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
+    # Internal bookkeeping columns are never features. __fdc_idx in particular is
+    # a row index whose ordering encodes the label -- each spectrum writes its
+    # targets before its decoys -- so leaving it in lets the model read the answer
+    # off the index and inflates the apparent separation. Dropped by prefix rather
+    # than by name so future internal columns cannot leak the same way.
+    _internal = [c for c in X.columns if str(c).startswith("__")]
+    if _internal:
+        logger.info(f"Dropping internal columns from the feature matrix: {_internal}")
+        X = X.drop(columns=_internal)
 
     # Compute predicted RT (library RT) from observed RT minus RT error
     if 'rt' in X.columns and 'rt_error' in X.columns:
@@ -1252,8 +1261,11 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         im_tol=config.opt_im_precision,
         prec_im=(fdc["prec_im"].to_numpy() if "prec_im" in fdc.columns else None),
     )
-    for col in corr_features.columns:
-        fdc[col] = corr_features[col].values
+    # One concat rather than a column-at-a-time insert: with the IM correlation
+    # block this adds 80 columns, and inserting them individually fragments the
+    # frame (the PerformanceWarning pandas raises further down).
+    corr_features.index = fdc.index
+    fdc = pd.concat([fdc, corr_features], axis=1)
 
     fdx = score_precursors(fdc.reset_index(drop=True), config.score_model, config.fdr_threshold, folder=results_folder)
 

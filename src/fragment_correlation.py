@@ -64,7 +64,44 @@ FEATURE_COLUMNS = (
     # Precursor–fragment correlation (unfragmented precursor in MS2 vs fragment traces)
     "mean_prec_frag_corr",     # mean Pearson r between precursor trace and each fragment
     "max_prec_frag_corr",      # max r
+    # Same correlation taken across the ION MOBILITY axis instead of RT: at the
+    # apex scan only, each fragment's matched intensity is binned by its peaks'
+    # own 1/K0 across the band, giving a mobility profile per fragment.  A real
+    # fragment co-migrates with the precursor -- same profile shape -- while an
+    # interferer at another mobility does not.  Complements the RT features
+    # rather than replacing them.
+    "im_prec_frag_mean",       # mean Pearson r(precursor, fragment) over the IM profile
+    "im_prec_frag_max",        # max r
+    # Full mirror of the RT pairwise block above, computed on the IM profile
+    # matrix by the same kernel. Slot order matches _pairwise_corr_and_features_numba.
+    "im_mean_frag_corr",
+    "im_median_frag_corr",
+    "im_max_frag_corr",
+    "im_min_frag_corr",
+    "im_std_frag_corr",
+    "im_mean_top3_frag_corr",
+    "im_frac_corr_above_0p5",
+    "im_mean_frag_mean_corr",
+    *[f"im_top{i}_frag_mean_corr" for i in range(1, 11)],
+    *[f"im_top{i}_frag_sum_corr" for i in range(1, 11)],
+    *[f"im_top{i}_pair_corr" for i in range(1, 11)],
 )
+
+# Explicit output slots. These were previously written by negative index, which
+# silently breaks the moment any column is appended.
+_IDX_PREC_MEAN = FEATURE_COLUMNS.index("mean_prec_frag_corr")
+_IDX_PREC_MAX = FEATURE_COLUMNS.index("max_prec_frag_corr")
+_IDX_IM_MEAN = FEATURE_COLUMNS.index("im_prec_frag_mean")
+_IDX_IM_MAX = FEATURE_COLUMNS.index("im_prec_frag_max")
+# Start of the 38-slot IM pairwise block (same layout as the RT block).
+_IDX_IM_PAIRWISE = FEATURE_COLUMNS.index("im_mean_frag_corr")
+
+# Gaussian width on the mobility axis for the grid-free kernel, as a fraction
+# of the fitted IM tolerance. opt_im_precision is the 99% coverage of the Laplace
+# core, b*ln(100), and the core SD is b*sqrt(2), so sigma = sqrt(2)/ln(100).
+# Expressed as a fraction so it tracks the fitted tolerance instead of being a
+# second hand-set constant.
+_IM_KERNEL_SIGMA_FRAC = 1.4142135623730951 / 4.605170185988092
 
 _N_RANKED = 10  # how many ranked slots per category
 
@@ -377,79 +414,16 @@ def _match_and_fill_im_numba(
 
 
 @nb.njit(cache=False, nogil=True)
-def _pairwise_corr_and_features_numba(matrix, out_features):
-    """Compute Pearson correlations between columns of ``matrix`` and write
-    summary + ranked features into ``out_features`` (shape (23,), float64).
+def _summarize_pairs_numba(pair_vals, valid_pairs, per_col_sum_r, per_col_cnt_r,
+                           n_cols, out_features):
+    """Turn a set of pairwise similarity values into the 38-slot feature block.
 
-    Output slot layout (aligns with ``FEATURE_COLUMNS[2:]``):
-        0  mean_frag_corr
-        1  median_frag_corr
-        2  max_frag_corr
-        3  min_frag_corr
-        4  std_frag_corr
-        5  mean_top3_frag_corr
-        6  frac_corr_above_0p5
-        7  mean_frag_mean_corr
-        8-17  top1..top10 per-fragment mean correlation (descending; -1 = missing)
-        18-27 top1..top10 per-fragment sum correlation (same rank order; -1 = missing)
-        28-37 top1..top10 pairwise correlation (descending; -1 = missing)
-
-    The diagonal is never included: only upper-triangle pairs (a < b) are
-    computed, so per-fragment means/sums exclude self-correlation. Zero-variance
-    columns are excluded from all pair computations.
-
-    Degenerate inputs (< 2 rows, < 2 columns, all zero-variance columns) write
-    NaN to summary slots [0:8] and -1 to ranked slots [8:23].
+    Split out of _pairwise_corr_and_features_numba so the Pearson path and the
+    kernel-similarity path produce byte-identical summaries from the same code.
+    Slot layout is unchanged; see that function's docstring.
     """
     nan = np.nan
     n_out = out_features.shape[0]
-    n_rows, n_cols = matrix.shape
-    if n_rows < 2 or n_cols < 2:
-        for k in range(8):
-            out_features[k] = nan
-        for k in range(8, n_out):
-            out_features[k] = -1.0
-        return
-
-    means = np.zeros(n_cols, dtype=np.float64)
-    for j in range(n_cols):
-        s = 0.0
-        for i in range(n_rows):
-            s += matrix[i, j]
-        means[j] = s / n_rows
-
-    norms = np.zeros(n_cols, dtype=np.float64)
-    for j in range(n_cols):
-        s2 = 0.0
-        for i in range(n_rows):
-            d = matrix[i, j] - means[j]
-            s2 += d * d
-        norms[j] = np.sqrt(s2)
-
-    max_pairs = n_cols * (n_cols - 1) // 2
-    pair_vals = np.empty(max_pairs, dtype=np.float64)
-    per_col_sum_r = np.zeros(n_cols, dtype=np.float64)
-    per_col_cnt_r = np.zeros(n_cols, dtype=np.int64)
-    valid_pairs = 0
-    for a in range(n_cols):
-        if norms[a] == 0.0:
-            continue
-        for b in range(a + 1, n_cols):
-            if norms[b] == 0.0:
-                continue
-            cov = 0.0
-            for i in range(n_rows):
-                cov += (matrix[i, a] - means[a]) * (matrix[i, b] - means[b])
-            r = cov / (norms[a] * norms[b])
-            if abs(r - 1.0) < 1e-12:
-                continue  # same fragment matched twice — skip
-            pair_vals[valid_pairs] = r
-            valid_pairs += 1
-            per_col_sum_r[a] += r
-            per_col_cnt_r[a] += 1
-            per_col_sum_r[b] += r
-            per_col_cnt_r[b] += 1
-
     if valid_pairs == 0:
         for k in range(8):
             out_features[k] = nan
@@ -555,6 +529,193 @@ def _pairwise_corr_and_features_numba(matrix, out_features):
             out_features[28 + k] = sorted_vals[valid_pairs - 1 - k]
         else:
             out_features[28 + k] = -1.0
+
+
+
+
+@nb.njit(cache=False, nogil=True)
+def _pairwise_corr_and_features_numba(matrix, out_features):
+    """Compute Pearson correlations between columns of ``matrix`` and write
+    summary + ranked features into ``out_features`` (shape (23,), float64).
+
+    Output slot layout (aligns with ``FEATURE_COLUMNS[2:]``):
+        0  mean_frag_corr
+        1  median_frag_corr
+        2  max_frag_corr
+        3  min_frag_corr
+        4  std_frag_corr
+        5  mean_top3_frag_corr
+        6  frac_corr_above_0p5
+        7  mean_frag_mean_corr
+        8-17  top1..top10 per-fragment mean correlation (descending; -1 = missing)
+        18-27 top1..top10 per-fragment sum correlation (same rank order; -1 = missing)
+        28-37 top1..top10 pairwise correlation (descending; -1 = missing)
+
+    The diagonal is never included: only upper-triangle pairs (a < b) are
+    computed, so per-fragment means/sums exclude self-correlation. Zero-variance
+    columns are excluded from all pair computations.
+
+    Degenerate inputs (< 2 rows, < 2 columns, all zero-variance columns) write
+    NaN to summary slots [0:8] and -1 to ranked slots [8:23].
+    """
+    nan = np.nan
+    n_out = out_features.shape[0]
+    n_rows, n_cols = matrix.shape
+    if n_rows < 2 or n_cols < 2:
+        for k in range(8):
+            out_features[k] = nan
+        for k in range(8, n_out):
+            out_features[k] = -1.0
+        return
+
+    means = np.zeros(n_cols, dtype=np.float64)
+    for j in range(n_cols):
+        s = 0.0
+        for i in range(n_rows):
+            s += matrix[i, j]
+        means[j] = s / n_rows
+
+    norms = np.zeros(n_cols, dtype=np.float64)
+    for j in range(n_cols):
+        s2 = 0.0
+        for i in range(n_rows):
+            d = matrix[i, j] - means[j]
+            s2 += d * d
+        norms[j] = np.sqrt(s2)
+
+    max_pairs = n_cols * (n_cols - 1) // 2
+    pair_vals = np.empty(max_pairs, dtype=np.float64)
+    per_col_sum_r = np.zeros(n_cols, dtype=np.float64)
+    per_col_cnt_r = np.zeros(n_cols, dtype=np.int64)
+    valid_pairs = 0
+    for a in range(n_cols):
+        if norms[a] == 0.0:
+            continue
+        for b in range(a + 1, n_cols):
+            if norms[b] == 0.0:
+                continue
+            cov = 0.0
+            for i in range(n_rows):
+                cov += (matrix[i, a] - means[a]) * (matrix[i, b] - means[b])
+            r = cov / (norms[a] * norms[b])
+            if abs(r - 1.0) < 1e-12:
+                continue  # same fragment matched twice — skip
+            pair_vals[valid_pairs] = r
+            valid_pairs += 1
+            per_col_sum_r[a] += r
+            per_col_cnt_r[a] += 1
+            per_col_sum_r[b] += r
+            per_col_cnt_r[b] += 1
+
+    _summarize_pairs_numba(pair_vals, valid_pairs, per_col_sum_r, per_col_cnt_r,
+                           n_cols, out_features)
+
+
+@nb.njit(cache=False, nogil=True)
+def _kernel_pairwise_numba(peak_mz, peak_int, peak_mob, peak_offsets,
+                           scans, n_scans, queries, mz_tol, sigma_im,
+                           out_features, prec_out):
+    """Grid-free RT x IM similarity between ions, and its feature block.
+
+    No binning.  Fragments of one precursor are recorded in the *same* MS2
+    spectra, so their RT coordinates coincide exactly -- peaks are paired only
+    within a scan, with no RT kernel.  On the mobility axis, where two peaks of
+    the same ion differ by measurement jitter, pairs are weighted by a Gaussian
+    of width ``sigma_im``:
+
+        <A,B> = sum_scans sum_{i in A(s)} sum_{j in B(s)} wi*wj*exp(-dIM^2 / 2s^2)
+        sim   = <A,B> / sqrt(<A,A> * <B,B>)
+
+    That is a cosine similarity in the kernel's feature space: bounded [0,1],
+    invariant to intensity scale, and free of the bin-edge artefacts a grid
+    introduces (two peaks 1e-4 apart can straddle a bin boundary while two
+    0.005 apart share one).
+
+    ``queries[0]`` is the precursor; ``queries[1:]`` the fragments.  Pairwise
+    features are computed over the fragments only; ``prec_out`` receives the
+    (mean, max) precursor-vs-fragment similarity.
+    """
+    n_q = queries.shape[0]
+    gram = np.zeros((n_q, n_q), dtype=np.float64)
+    inv2s2 = 1.0 / (2.0 * sigma_im * sigma_im)
+    p0 = np.empty(n_q, dtype=np.int64)
+    p1 = np.empty(n_q, dtype=np.int64)
+
+    for si in range(n_scans):
+        sc = scans[si]
+        lo = peak_offsets[sc]
+        hi = peak_offsets[sc + 1]
+        if hi <= lo:
+            continue
+        scan_mz = peak_mz[lo:hi]
+        for j in range(n_q):
+            q = queries[j]
+            tol = q * mz_tol
+            p0[j] = np.searchsorted(scan_mz, q - tol)
+            p1[j] = np.searchsorted(scan_mz, q + tol, side="right")
+        for a in range(n_q):
+            if p1[a] <= p0[a]:
+                continue
+            for b in range(a, n_q):
+                if p1[b] <= p0[b]:
+                    continue
+                acc = 0.0
+                for i in range(p0[a], p1[a]):
+                    mi = peak_mob[lo + i]
+                    wi = peak_int[lo + i]
+                    for k in range(p0[b], p1[b]):
+                        d = mi - peak_mob[lo + k]
+                        acc += wi * peak_int[lo + k] * np.exp(-d * d * inv2s2)
+                gram[a, b] += acc
+                if b != a:
+                    gram[b, a] += acc
+
+    n_frag = n_q - 1
+    max_pairs = n_frag * (n_frag - 1) // 2
+    if max_pairs < 1:
+        max_pairs = 1
+    pair_vals = np.empty(max_pairs, dtype=np.float64)
+    per_col_sum_r = np.zeros(n_frag, dtype=np.float64)
+    per_col_cnt_r = np.zeros(n_frag, dtype=np.int64)
+    valid_pairs = 0
+    for a in range(1, n_q):
+        if gram[a, a] <= 0.0:
+            continue
+        for b in range(a + 1, n_q):
+            if gram[b, b] <= 0.0:
+                continue
+            r = gram[a, b] / np.sqrt(gram[a, a] * gram[b, b])
+            if abs(r - 1.0) < 1e-12:
+                continue  # same peak matched by two library fragments
+            pair_vals[valid_pairs] = r
+            valid_pairs += 1
+            per_col_sum_r[a - 1] += r
+            per_col_cnt_r[a - 1] += 1
+            per_col_sum_r[b - 1] += r
+            per_col_cnt_r[b - 1] += 1
+
+    _summarize_pairs_numba(pair_vals, valid_pairs, per_col_sum_r, per_col_cnt_r,
+                           n_frag, out_features)
+
+    # precursor (index 0) against each fragment
+    tot = 0.0
+    cnt = 0
+    mx = -1.0
+    if gram[0, 0] > 0.0:
+        for b in range(1, n_q):
+            if gram[b, b] <= 0.0:
+                continue
+            r = gram[0, b] / np.sqrt(gram[0, 0] * gram[b, b])
+            tot += r
+            cnt += 1
+            if r > mx:
+                mx = r
+    if cnt > 0:
+        prec_out[0] = tot / cnt
+        prec_out[1] = mx
+    else:
+        prec_out[0] = np.nan
+        prec_out[1] = np.nan
 
 
 @nb.njit(cache=False, nogil=True)
@@ -716,8 +877,12 @@ def compute_fragment_correlations(
     # Bound for the scan-index scratch buffer: a precursor cannot match more
     # scans than there are MS2 scans total.
     scan_buf = np.empty(len(ms2scans), dtype=np.int64)
-    _n_pairwise_feats = _N_KERNEL_FEATURES - 2  # exclude the 2 precursor-frag slots
+    # Derived from the precursor slot's position, not the total column count, so
+    # appending feature columns cannot shift it.
+    _n_pairwise_feats = _IDX_PREC_MEAN - 2
     feat_scratch = np.empty(_n_pairwise_feats, dtype=np.float64)
+    im_feat_scratch = np.empty(_n_pairwise_feats, dtype=np.float64)
+    im_prec_scratch = np.empty(2, dtype=np.float64)
     prec_corr_mean = np.empty(1, dtype=np.float64)
     prec_corr_max = np.empty(1, dtype=np.float64)
 
@@ -733,7 +898,7 @@ def compute_fragment_correlations(
     frag_names = library.frag_names_data
     prec_mz_arr = library.prec_mz
 
-    for row in tqdm.tqdm(range(n_rows), desc="Fragment correlations", unit="prec"):
+    for row in tqdm.tqdm(range(n_rows)):
         if not (coeffs[row] > 0) or not np.isfinite(rts[row]):
             continue
         key = (seqs[row], int(zs[row]))
@@ -839,7 +1004,51 @@ def compute_fragment_correlations(
         _precursor_frag_corr_numba(
             prec_matrix[:, 0], sub_matrix, prec_corr_mean, prec_corr_max,
         )
-        out[row, -2] = prec_corr_mean[0]
-        out[row, -1] = prec_corr_max[0]
+        out[row, _IDX_PREC_MEAN] = prec_corr_mean[0]
+        out[row, _IDX_PREC_MAX] = prec_corr_max[0]
+
+        # ---- same correlation across the mobility axis, at the apex scan ----
+        if _use_im and n_use > 0:
+            # Mobility axis is pinned to the apex scan's band: use_scans may pick
+            # different bands at different RTs, and profiles are only addable on a
+            # common axis.  Peaks falling outside it are clamped to the edge bins.
+            apex_pos = int(np.argmin(np.abs(scan_rt[use_scans] - float(rts[row]))))
+            apex_scan = int(use_scans[apex_pos])
+            band_lo = float(scan_im_lo[apex_scan])
+            band_hi = float(scan_im_hi[apex_scan])
+            if np.isfinite(band_lo) and np.isfinite(band_hi) and band_hi > band_lo:
+                kept_mz = np.ascontiguousarray(frag_mz_kept[keep_cols])
+                # Summed across every covering scan rather than the apex alone:
+                # one scan gives ~8 sparse bins, and summing over the elution
+                # fills them without blurring the mobility axis (a precursor's
+                # 1/K0 does not drift with RT).
+                # Joint RT x IM grid, neither axis collapsed. Only scans from
+                # the apex scan's own band contribute: a precursor's 1/K0 does
+                # not drift with RT, so a neighbouring band (picked at an RT
+                # where this band held no peaks) is offset by half a width and
+                # would land its peaks in the wrong mobility rows.
+                _same_band = ((scan_im_lo[use_scans] == band_lo)
+                              & (scan_im_hi[use_scans] == band_hi))
+                _band_scans = np.ascontiguousarray(use_scans[_same_band])
+                _n_band = int(_band_scans.shape[0])
+                if _n_band == 0:
+                    continue
+                # queries[0] is the precursor so the kernel can produce both the
+                # pairwise block and the precursor-vs-fragment pair in one pass
+                # over the peaks.
+                _q = np.empty(kept_mz.shape[0] + 1, dtype=np.float64)
+                _q[0] = prec_mz
+                _q[1:] = kept_mz
+                _sigma_im = _IM_KERNEL_SIGMA_FRAC * float(im_tol)
+                if _sigma_im > 0.0:
+                    _kernel_pairwise_numba(
+                        peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
+                        _band_scans, _n_band, _q, float(mz_tol), _sigma_im,
+                        im_feat_scratch, im_prec_scratch,
+                    )
+                    out[row, _IDX_IM_MEAN] = im_prec_scratch[0]
+                    out[row, _IDX_IM_MAX] = im_prec_scratch[1]
+                    out[row, _IDX_IM_PAIRWISE:_IDX_IM_PAIRWISE + _n_pairwise_feats] = \
+                        im_feat_scratch
 
     return pd.DataFrame(out, index=fdc.index, columns=list(FEATURE_COLUMNS))
