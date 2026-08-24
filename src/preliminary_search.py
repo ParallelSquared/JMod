@@ -29,6 +29,39 @@ from src.utils.io.load_files import Spectrum
 
 
 
+def _dtype_is_null(dt) -> bool:
+    """True for Null, and for List(...) nested down to a Null inner type."""
+    if dt == pl.Null:
+        return True
+    inner = getattr(dt, "inner", None)
+    return _dtype_is_null(inner) if inner is not None else False
+
+
+def _reconcile_chunk_schemas(frames: list) -> list:
+    """Cast Null-typed columns so a list of per-chunk frames can be concatenated.
+
+    Polars infers a column's type per frame, so a chunk with no data for a column
+    gets Null / List(Null) while another gets Int32 / List(Float32). Concat then
+    refuses to vstack them. For each column, adopt the first non-Null dtype any
+    chunk produced and cast the Null-typed chunks to it. Columns that are Null
+    everywhere are left alone -- there is no evidence of what they should be, and
+    concat handles the all-Null case fine.
+    """
+    if len(frames) < 2:
+        return frames
+    target = {}
+    for f in frames:
+        for name, dt in f.schema.items():
+            if name not in target and not _dtype_is_null(dt):
+                target[name] = dt
+    out = []
+    for f in frames:
+        fixes = {n: target[n] for n, dt in f.schema.items()
+                 if _dtype_is_null(dt) and n in target}
+        out.append(f.cast(fixes) if fixes else f)
+    return out
+
+
 def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=10):
     # Get tag plex
     if mass_tag is not None:
@@ -138,6 +171,9 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         # than at the end of the whole search.
         hit_frames.append(batch_hits.to_polars())
         del batch_hits, chunk
+
+    # Reconcile per-chunk dtypes before concatenating
+    hit_frames = _reconcile_chunk_schemas(hit_frames)
 
     # rechunk=False keeps this a cheap multi-chunk view over the per-chunk buffers
     # instead of allocating a second full copy of the concatenated result.

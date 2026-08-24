@@ -813,10 +813,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     # targets before its decoys -- so leaving it in lets the model read the answer
     # off the index and inflates the apparent separation. Dropped by prefix rather
     # than by name so future internal columns cannot leak the same way.
-    _internal = [c for c in X.columns if str(c).startswith("__")]
-    if _internal:
-        logger.info(f"Dropping internal columns from the feature matrix: {_internal}")
-        X = X.drop(columns=_internal)
+    X = X.drop(columns=[c for c in X.columns if str(c).startswith("__")])
 
     # Compute predicted RT (library RT) from observed RT minus RT error
     if 'rt' in X.columns and 'rt_error' in X.columns:
