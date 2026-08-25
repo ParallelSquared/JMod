@@ -1,16 +1,8 @@
-#  Copyright (c) 2026 Parallel Squared Technology Institute
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#          http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
+"""
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
 
 import os
 import pickle
@@ -140,18 +132,15 @@ class FileReader:
 
 
 def _load_mzml(filepath: str) -> SpectrumFile:
-    logger.info("Loading Spectra... from .mzML file")
-    return SpectrumFile(mzml_file=filepath)
+    return SpectrumFile(filepath)
 
 
 def _load_raw(filepath: str) -> SpectrumFile:
-    logger.info("Loading Spectra... from .raw file")
-    return SpectrumFile(raw_file=filepath)
+    raise NotImplementedError(f".raw file support is not yet implemented ({filepath})")
 
 
 def _load_d(filepath: str) -> SpectrumFile:
     """Load timsTOF .d data from peaks.parquet + analysis.tdf."""
-    logger.info("Loading Spectra... from .d file")
     d_path = filepath.rstrip("/")
 
     peaks_path = os.path.join(d_path, "peaks.parquet")
@@ -531,6 +520,7 @@ def loadSpectra(input_file: str) -> SpectrumFile:
     logger.info("Loading Spectra...")
     # python_spec_file = input_file + "_pythonspec"
     # if not os.path.exists(python_spec_file):
+    logger.info("Loading Spectra... from file")
     reader = FileReader(input_file)
     spectra = reader.read()
     #     with open(python_spec_file, "wb") as f:
@@ -544,54 +534,3 @@ def loadSpectra(input_file: str) -> SpectrumFile:
     logger.info(f"Loaded {len(spectra.ms2scans)} MS2 spectra")
     logger.info("finished")
     return spectra
-
-def load_rawfilereader(sdk_path):
-    import sys
-    from pathlib import Path
-
-    try:
-        import clr
-    except Exception as e:
-        from src.utils.gui_utils import send_raise_to_TK
-        if sys.platform == "darwin":
-            send_raise_to_TK("Failure on import clr. Please use 'brew install mono' to use Thermo RawFileReader .dlls or convert to mzML")
-            raise RuntimeError("Failure on import clr. Please use 'brew install mono' to use Thermo RawFileReader .dlls or convert to mzML")
-        else:
-            raise e
-        
-    try:
-        sdk_path = Path(sdk_path)
-    except:
-        from src.utils.gui_utils import send_raise_to_TK
-        send_raise_to_TK(f"Thermo RawFileReader path does not exist: {sdk_path}\n          If using command line please add with --rawfilereader_path 'path' or manually update in JMod/Data/Settings.json.")
-        raise FileNotFoundError(f"Thermo RawFileReader path does not exist: {sdk_path}\n          If using command line please add with --rawfilereader_path 'path' or manually update in JMod/Data/Settings.json.")
-
-    if not sdk_path.exists():
-        from src.utils.gui_utils import send_raise_to_TK
-        send_raise_to_TK(f"Thermo RawFileReader path could not be found: {sdk_path}")
-        raise FileNotFoundError(f"Thermo RawFileReader path could not be found: {sdk_path}")
-
-    if str(sdk_path) not in sys.path:
-        sys.path.append(str(sdk_path))
-
-    logger.info("Attempting to load Thermo RawFileReader .dlls")
-
-    try:
-        clr.AddReference("ThermoFisher.CommonCore.Data")
-        clr.AddReference("ThermoFisher.CommonCore.RawFileReader")
-        from ThermoFisher.CommonCore.RawFileReader import RawFileReaderAdapter # type: ignore
-        logger.info("Thermo RawFileReader .dlls loaded successfully")
-    except Exception as e:
-        error_message = ("Failed to load the Thermo RawFileReader SDK.\n\n"
-                        "Please verify that:\n"
-                        "  1. The RawFileReader SDK path is correct.\n"
-                        "  2. The folder contains the ThermoFisher.CommonCore*.dll files.\n"
-                        "  3. 'ThermoFisher.CommonCore.Data.dll' and 'ThermoFisher.CommonCore.RawFileReader.dll' have been unblocked after downloading "
-                        "(Right-click the ZIP → Properties → Unblock.\n"
-                        "  4. The required .NET runtime is installed.\n\n"
-                        f"Configured SDK path: {sdk_path}\n\n"
-                        f"Original error:\n{e}")
-        from src.utils.gui_utils import send_raise_to_TK
-        send_raise_to_TK(error_message)
-        raise ValueError(error_message) from e
-

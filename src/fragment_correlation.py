@@ -12,20 +12,6 @@ Hot paths are ``@nb.njit(cache=False, nogil=True)`` kernels that release the
 GIL so callers can parallelize over rows or files under free-threaded Python.
 """
 
-#  Copyright (c) 2026 Parallel Squared Technology Institute
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#          http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-
 from __future__ import annotations
 
 import numpy as np
@@ -513,6 +499,7 @@ def compute_fragment_correlations(
     mz_tol,
     fwhm_multiplier=4.0,
     min_obs=3,
+    timeplex=False,
 ):
     """Compute pairwise fragment-ion correlation features for every row of ``fdc``.
 
@@ -578,6 +565,9 @@ def compute_fragment_correlations(
     zs = fdc["z"].to_numpy()
     rts = fdc["rt"].to_numpy(dtype=np.float64)
     coeffs = fdc["coeff"].to_numpy(dtype=np.float64)
+    # In timeplex the library is keyed by (seq, z, channel); match that here so
+    # the key_to_idx lookup below resolves instead of silently missing every row.
+    channels = fdc["time_channel"].to_numpy() if timeplex else None
 
     key_to_idx = library.key_to_idx
     spec_mz = library.spectrum_mz
@@ -589,7 +579,7 @@ def compute_fragment_correlations(
     for row in tqdm.tqdm(range(n_rows), desc="Fragment correlations", unit="prec"):
         if not (coeffs[row] > 0) or not np.isfinite(rts[row]):
             continue
-        key = (seqs[row], int(zs[row]))
+        key = (seqs[row], int(zs[row]), int(channels[row])) if timeplex else (seqs[row], int(zs[row]))
         lib_idx = key_to_idx.get(key)
         if lib_idx is None:
             continue

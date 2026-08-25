@@ -1,17 +1,9 @@
+"""
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
 
-#  Copyright (c) 2026 Parallel Squared Technology Institute
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#          http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
 
 import numpy as np
 
@@ -2146,7 +2138,8 @@ def fit_to_lib2(dia_spec,
                output_folder=None,
                frag_index=None,
                ms1_rt=None,
-               im_bin_ms1=None):
+               im_bin_ms1=None,
+               rt_tol_row=None):
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
@@ -2199,12 +2192,25 @@ def fit_to_lib2(dia_spec,
                 _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
         all_window_idxs = np.where(_bool)[0]
 
-    # Split into target and decoy candidates
+    # Narrow each candidate to its OWN time channel's RT window. With timePlex the
+    # library is replicated per channel, so a row's position implies its channel;
+    # `rt_tol` above was the widest channel's window, deliberately a superset, so
+    # that the coarse lookup (including the compiled fragment-index loop) needs no
+    # per-channel knowledge. Without this the tightest channel had to govern all of
+    # them, since only one scalar reached the search.
+    if rt_tol_row is not None and rt_filter and not ms1_mz and len(all_window_idxs):
+        _keep = (np.abs(rt_mz[all_window_idxs, 0] - prec_rt)
+                 < rt_tol_row[all_window_idxs])
+        all_window_idxs = all_window_idxs[_keep]
+
+    # Split into target and decoy candidates using the per-entry is_decoy flag.
+    # This is layout-independent: it works for the contiguous [targets|decoys]
+    # ordering (non-timeplex) and the channel-interleaved ordering (timeplex),
+    # unlike an `idx < n_targets` threshold which assumes targets are contiguous.
     # TODO: unify target/decoy processing paths to eliminate this split
-    n_targets = library.n_targets
-    target_mask = all_window_idxs < n_targets
-    window_idxs = all_window_idxs[target_mask]
-    decoy_window_idxs = all_window_idxs[~target_mask] if decoy else np.empty(0, dtype=all_window_idxs.dtype)
+    decoy_mask = library.is_decoy[all_window_idxs]
+    window_idxs = all_window_idxs[~decoy_mask]
+    decoy_window_idxs = all_window_idxs[decoy_mask] if decoy else np.empty(0, dtype=all_window_idxs.dtype)
 
     mass_window_candidates = [all_keys[i] for i in window_idxs]
     _ref_idxs = library.resolve_indices(mass_window_candidates)

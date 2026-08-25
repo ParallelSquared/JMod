@@ -1,17 +1,9 @@
 
-#  Copyright (c) 2026 Parallel Squared Technology Institute
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#          http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
+"""
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
 
 # Update imports to relative imports
 import src.config as config
@@ -32,13 +24,13 @@ from src.spectral_fitting import fit_to_lib2, merge_spectrum_peaks
 from src.rt_alignment import MZRTfit, MZRTfit_timeplex
 from src.utils.misc_functions import write_to_csv
 import polars as pl
+import pyarrow as pa
 import pyarrow.parquet as pq
 from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
 from src.finetune_funs import predict_decoy_rts
-from src.utils.gui_utils import load_settings, save_settings
 
 from src.logger import logger, set_log_filepath, log_exceptions
 import logging
@@ -63,9 +55,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     if config.args.config_json:
         if not config.load_config_from_json(config.args.config_json):
             pass
-
-    if config.args.tag != "None":
-        config.args.plexDIA = True
 
     # Check if running in test mode
     if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
@@ -99,18 +88,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     tag = config.args.tag
     is_timeplex = "timeplex" if config.args.timeplex else ""
     dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
-    use_feat = ""
-    dino_features=None
-    feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv" #TODO this breaks if you run from cd
-    if config.args.use_features and os.path.exists(feature_path):
-        use_feat = "Dino"
-        dino_features = pd.read_csv(feature_path,delimiter="\t")
-
-    if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
-        import subprocess
-        subprocess.run(["biosaur2", mzml_file], check=True)
-        use_feat = "Dino"
-        dino_features = pd.read_csv(feature_path,delimiter="\t")
+    dino_features = None
 
     results_folder_name = spec_file_name + "_results" + "_" + dummy_val
     results_folder_name = results_folder_name.rstrip("_")
@@ -199,32 +177,14 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     logger.info("")
 
 
-    if config.args.use_features and os.path.exists(feature_path) and config.args.timeplex:
-        logger.info("loading Dinosaur features")
-    if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
-        logger.info("Dinosaur feature file not found, running biosaur2")
-
-    
     overall_start_time = time.time()
     # python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
     logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
 
-    if config.args.mzml.lower().endswith(".raw"):
-        settings = load_settings()
-        
-        if config.args.rawfilereader_path is not None:
-            reader_path = config.args.rawfilereader_path
-            settings["rawfilereader_path"] = reader_path
-            save_settings(settings)
-        else:
-            reader_path = settings["rawfilereader_path"]            
-
-        file_reader.load_rawfilereader(reader_path)
-
     
     ######################################################
     #### Load the data
-    spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
+    spectrumLibrary = spec_lib.loadSpecLib(lib_file)
     DIAspectra=file_reader.loadSpectra(mzml_file)
 
     if config.args.test_mode:
@@ -254,17 +214,33 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 filtered_library[key] = entry
         
         logger.info(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
-        spectrumLibrary = filtered_library
+        # Rebuild the STORE. Assigning the plain dict here left every downstream
+        # consumer without the store's index (create_decoy_lib reads
+        # .key_to_idx), so --test_mode aborted at decoy generation with
+        # AttributeError: 'dict' object has no attribute 'key_to_idx'.
+        from src.models.spec_lib.library_store import SpectrumLibraryStore
+        spectrumLibrary = SpectrumLibraryStore.from_dict(filtered_library)
     else:
         spectra_to_fit = DIAspectra.ms2scans
+    ######################################################
+    #### Generate decoys (before tagging/isotopes so they apply to both)
+    logger.info("Creating Decoy Library")
+    spectrumLibrary = spec_lib.create_decoy_lib(spectrumLibrary, rules=config.args.decoy)
+    config.target_decoy_ratio = spectrumLibrary.target_decoy_ratio
+    logger.info(f"Combined library: {spectrumLibrary.n_targets} targets, "
+                f"{spectrumLibrary.n_decoys} decoys "
+                f"(ratio={config.target_decoy_ratio:.4f})")
+    # TODO: use target_decoy_ratio to correct FDR calculation
 
-    ### Finding tags moved to above decoy generation, library is still tagged afterwards
-    ## TODO Running SILAC + a Tag without an untagged library is probably not currently functional
+    ######################################################
+    #### Tagging #####
+
     if config.args.SILAC:
         # Find the tag object based on the tag name
         if config.args.SILAC in available_tags:
             config.SILAC = available_tags[config.args.SILAC]
             logger.info(f"Using SILAC: {config.SILAC.name} - {config.SILAC.n_channels} channels")
+            spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
             SILAC = config.SILAC
         else:
             if config.args.SILAC != "None":
@@ -283,18 +259,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         if config.args.tag in available_tags:
             config.tag = available_tags[config.args.tag]
             logger.info(f"Using tag: {config.tag.name} - {config.tag.n_channels} channels")
+            spectrumLibrary = tag_library(spectrumLibrary, config.tag)
             mass_tag = config.tag
-            if library_tag_bool:
-                diffs = np.abs(config.tag.channel_masses - source_channel_mass)
-                closest_idx = int(np.argmin(diffs))
-                closest_channel_name = config.tag.channel_names[closest_idx]
-                closest_channel_mass = config.tag.channel_masses[closest_idx]
-                mass_diff = closest_channel_mass - source_channel_mass
-                source_channel = config.tag.name + "-" + str(closest_channel_name)
-                logger.info(f"Tag found in library: {source_channel}. (mass difference: {mass_diff:.6f} Da)")
-                spectrumLibrary.relabel_tag(library_tag_name, source_channel)
-            else:
-                source_channel = None
         else:
             if config.args.tag != "None":
                 from src.utils.gui_utils import send_raise_to_TK
@@ -308,43 +274,17 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         config.tag = None
 
     ######################################################
-    #### Generate decoys (before tagging/isotopes so they apply to both)
-    logger.info("Creating Decoy Library")
-    # if "diann_tagged" in lib_file_name:
-    if library_tag_bool:
-        lib_gen_tag = mass_tag
-    else:
-        lib_gen_tag = None
-    spectrumLibrary = spec_lib.create_decoy_lib(spectrumLibrary, rules=config.args.decoy, tag=lib_gen_tag)
-    config.target_decoy_ratio = spectrumLibrary.target_decoy_ratio
-    logger.info(f"Combined library: {spectrumLibrary.n_targets} targets, "
-                f"{spectrumLibrary.n_decoys} decoys "
-                f"(ratio={config.target_decoy_ratio:.4f})")
-    # TODO: use target_decoy_ratio to correct FDR calculation
-
-    ######################################################
-    #### Tagging #####
-
-    if config.tag:
-        spectrumLibrary = tag_library(spectrumLibrary, config.tag, source_channel=source_channel)
-    if config.SILAC:
-        spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
-
-    ######################################################
     #### RT/MZ Alignment (initial search uses target entries only) #####
 
     target_view = spectrumLibrary.target_view()
 
     if config.args.timeplex:
-        if config.args.use_features and os.path.exists(feature_path):
-            logger.info("Loading Dinosaur features")
-            dino_features = pd.read_csv(feature_path, delimiter="\t")
-            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align)
-        else:
-            logger.info("Not using features")
-            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, None, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align)
+        funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(
+            DIAspectra, target_view, (config.args.ppm * 1e-6),
+            results_folder=results_folder_path,
+            ms2=config.args.ms2_align,
+            mass_tag=mass_tag, SILAC=SILAC,
+        )
         # Timeplex path doesn't compute elution SD yet — use the historical default.
         vote_sigma = 1.0
 
@@ -361,19 +301,69 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
         rt_spls,mz_func = funcs[:2]
 
+        # Per-(entry, channel) search RT. Empirical: iRT->RT curves. Per-channel CNN:
+        # rt_spls is K dicts {target_seq: RT_k}; targets look up by sequence and decoys
+        # inherit their parent target's per-channel RT (same rule as the iRT inheritance
+        # above), so decoys stay co-located with their targets for FDR.
+        n_lib, K = len(spectrumLibrary), len(rt_spls)
+        per_ch = np.empty((n_lib, K))
+        # The empirical-vs-fine-tuned choice is made PER TIME CHANNEL, so rt_spls
+        # can be MIXED: some entries iRT->RT callables, others {seq: RT} dicts.
+        # Testing only rt_spls[0] would apply one branch to every channel and
+        # raise as soon as the run picked different models for different channels.
+        is_call = [callable(s) for s in rt_spls]
+        if all(is_call):
+            for i in range(n_lib):
+                per_ch[i] = [rt_spls[k](spectrumLibrary.iRT[i]) for k in range(K)]
+        elif any(is_call):
+            # mixed: callables evaluate on iRT, dicts look up by sequence with the
+            # same decoy-inherits-parent rule used in the all-dict branch below.
+            for i in range(spectrumLibrary.n_targets):
+                per_ch[i] = [rt_spls[k](spectrumLibrary.iRT[i]) if is_call[k]
+                             else rt_spls[k][spectrumLibrary.seq[i]]
+                             for k in range(K)]
+            for i in range(spectrumLibrary.n_targets, n_lib):
+                parent = spectrumLibrary.parent_idx[i]
+                src = parent if parent >= 0 else i
+                per_ch[i] = [rt_spls[k](spectrumLibrary.iRT[i]) if is_call[k]
+                             else rt_spls[k][spectrumLibrary.seq[src]]
+                             for k in range(K)]
+        else:
+            for i in range(spectrumLibrary.n_targets):
+                per_ch[i] = [rt_spls[k][spectrumLibrary.seq[i]] for k in range(K)]
+            for i in range(spectrumLibrary.n_targets, n_lib):
+                parent = spectrumLibrary.parent_idx[i]
+                if parent >= 0:
+                    per_ch[i] = per_ch[parent]
+
         plex_lib = {}
         rt_mz = []
-        for idx in range(len(rt_spls)):
+        for idx in range(K):
             for key in spectrumLibrary:
                 plex_lib[key+(idx,)] = spectrumLibrary[key]
-            rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
+            rt_mz.append([[per_ch[i, idx], mz_func(e["prec_mz"], e["iRT"])]
+                          for i, e in enumerate(spectrumLibrary.values())])
         rt_mz = np.concatenate(rt_mz)
-        
+
+        # Per-channel RT windows. rt_mz is stacked channel-block by channel-block
+        # (n_lib rows each), so a row's channel is row // n_lib and the tolerance
+        # array is just each channel's boundary repeated over its own block.
+        from src.rt_alignment import RT_PER_CHANNEL_TOL
+        _pcb = getattr(config, "rt_per_ch_boundary", None)
+        if RT_PER_CHANNEL_TOL and _pcb and len(_pcb) == K:
+            rt_tol_row = np.repeat(np.asarray(_pcb, dtype=float), n_lib)
+            config.opt_rt_tol = float(max(_pcb))   # coarse superset for lookup
+            logger.info(f"Per-channel RT tolerance ON: {[round(b,3) for b in _pcb]} "
+                        f"(coarse lookup window {config.opt_rt_tol:.3f})")
+        else:
+            rt_tol_row = None
+
         from src.models.spec_lib.library_store import SpectrumLibraryStore
         spectrumLibrary = SpectrumLibraryStore.from_dict(plex_lib)
         del plex_lib
 
     else:
+        rt_tol_row = None    # single channel: one window, nothing to vary
         funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma = MZRTfit(
             DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6),
             results_folder=results_folder_path,
@@ -482,7 +472,10 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    n_threads = 3
+    # ``--threads`` (default 10). fit_to_lib2 is numpy-bound and releases the
+    # GIL, so this scales close to linearly -- past runs logged 2.6-2.85
+    # effective cores at n_threads=3. Cap at cpu_count to avoid oversubscribing.
+    n_threads = max(1, min(int(config.args.threads), os.cpu_count() or 1))
     logger.info(f"Using {n_threads} threads for main search")
 
     # Precompute MS1 RT array once (shared across all threads, read-only)
@@ -507,7 +500,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     _pl_schema = get_parquet_schema(timeplex=config.args.timeplex)
     _pa_schema = pl.DataFrame(schema=_pl_schema).to_arrow().schema
-    _BUFFER_SIZE = 1000  # results to buffer before flushing to disk
+    _BUFFER_SIZE = 10000  # results to buffer before flushing to disk
 
     # Measure CPU utilization across the search to assess GIL contention
     import psutil as _psutil
@@ -531,13 +524,14 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         with pq.ParquetWriter(batch_parquet_path, _pa_schema) as writer:
             buffer = []
             with ThreadPoolExecutor(max_workers=n_threads) as pool:
-                futures = {pool.submit(fit_to_lib2, dia_spec,
+                futures = [pool.submit(fit_to_lib2, dia_spec,
                                        library=spectrumLibrary,
                                        rt_mz=rt_mz,
                                        all_keys=all_keys,
                                        dino_features=None,
                                        rt_filter=True,
                                        rt_tol=config.opt_rt_tol,
+                                       rt_tol_row=rt_tol_row,
                                        ms1_tol=config.opt_ms1_tol,
                                        mz_tol=(config.args.ppm * 1e-6),
                                        ms1_spectra=DIAspectra.ms1scans,
@@ -546,10 +540,20 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                        output_folder=results_folder_path,
                                        frag_index=frag_index,
                                        ms1_rt=_ms1_rt,
-                                       im_bin_ms1=_im_bin_ms1): i
-                          for i, dia_spec in enumerate(batch_spectra)}
+                                       im_bin_ms1=_im_bin_ms1)
+                           for dia_spec in batch_spectra]
 
-                for f in tqdm.tqdm(as_completed(futures), total=len(futures)):
+                # A Future holds onto its result until the Future itself is
+                # collected, so any container we keep pins every row produced by
+                # the whole batch (~1.5 KB/row x 10M rows here -> OOM). Hand
+                # ``as_completed`` its own copy and drop ours; it discards each
+                # Future as it yields, so only the in-flight one stays alive.
+                n_futures = len(futures)
+                completed = as_completed(list(futures))
+                futures.clear()
+                del futures
+
+                for f in tqdm.tqdm(completed, total=n_futures):
                     result = f.result()
                     if result:
                         buffer.extend(result)
@@ -559,6 +563,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                          for i, col in enumerate(_pl_schema)}
                             writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
                             buffer.clear()
+                    del f, result
 
             # Flush remaining buffered results
             if buffer:
@@ -588,20 +593,66 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     batch_files = sorted(_glob.glob(results_folder_path + "/decoylibsearch_coeffs_batch*.parquet"))
     decoylib_search_path = results_folder_path + "/outputs/decoylibsearch_coeffs.parquet"
     merge_writer = None
+    _merge_expected = _merge_recovered = 0
+    _merge_lost = []
     try:
         for bf in batch_files:
-            table = pq.read_table(bf)
+            # Read row-group-wise: a single batch file can hold >10M rows with
+            # nested fragment lists, and pq.read_table would materialise all of
+            # it at once — the same blow-up the search loop just avoided.
+            reader = pq.ParquetFile(bf)
+            schema = reader.schema_arrow
+            n_row_groups = reader.metadata.num_row_groups
+            _merge_expected += reader.metadata.num_rows
+            reader.close()
+            del reader
             if merge_writer is None:
-                merge_writer = pq.ParquetWriter(decoylib_search_path, table.schema)
-            merge_writer.write_table(table)
-            del table
+                merge_writer = pq.ParquetWriter(decoylib_search_path, schema)
+            # A batch that matched nothing still writes a valid parquet carrying
+            # the schema, but with zero row groups — and iter_batches raises
+            # OSError on it rather than yielding nothing. The tail batch does
+            # this legitimately whenever its slice has no hits.
+            for rg_idx in range(n_row_groups):
+                # One row group at a time, each read through a fresh handle:
+                # a corrupt page on the SMB mount (seen as "Corrupt snappy
+                # compressed data") then costs one row group instead of the
+                # whole 3-hour search, and the re-open sidesteps a bad page the
+                # client may have cached. Re-reading is cheap next to re-searching.
+                table = None
+                for _attempt in range(3):
+                    try:
+                        _rg_reader = pq.ParquetFile(bf)
+                        try:
+                            table = _rg_reader.read_row_group(rg_idx)
+                        finally:
+                            _rg_reader.close()
+                        break
+                    except Exception as _err:
+                        _last_err = _err
+                if table is None:
+                    _merge_lost.append((os.path.basename(bf), rg_idx))
+                    logger.error(f"Merge: unreadable row group {rg_idx} in "
+                                 f"{os.path.basename(bf)} ({type(_last_err).__name__}: "
+                                 f"{_last_err}); skipping it and keeping the batch files")
+                    continue
+                merge_writer.write_table(table)
+                _merge_recovered += table.num_rows
+                del table
     finally:
         # Guarantee close even on read/write failure mid-merge — same Synology
         # oplock leak story as the batch writer above.
         if merge_writer is not None:
             merge_writer.close()
-    for bf in batch_files:
-        os.remove(bf)
+    if _merge_lost:
+        # Never delete the only copy of rows we failed to read: salvage_merge.py
+        # can retry them, and scoring downstream is still worth running on what
+        # survived — as long as the shortfall is on the record.
+        logger.error(f"Merge recovered {_merge_recovered}/{_merge_expected} rows; "
+                     f"{len(_merge_lost)} row groups lost. Batch parquets kept in "
+                     f"{results_folder_path} — rerun with salvage_merge.py to retry them.")
+    else:
+        for bf in batch_files:
+            os.remove(bf)
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
                  library=spectrumLibrary,

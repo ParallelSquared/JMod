@@ -1,17 +1,8 @@
-#  Copyright (c) 2026 Parallel Squared Technology Institute
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#          http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-
+"""
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
 import argparse
 import json
 from src.default_dict import default_dict
@@ -42,21 +33,8 @@ else:
 #    args = argparse.Namespace()
 #    # Set all the default values here
 
-# args.mzml = "/Volumes/Lab/Quant/CC20170118_SAM_Specter_Ecolidigest_DIA_01.mzML"
-# args.speclib = "/Volumes/Lab/Quant/SpecLibs/EcoliSpPrositLib.msp.tsv"
-# args.mzml = "/Users/kevinmcdonnell/Programming/Data/2023_10_05_lf-dia_375pg_ce24.mzml"
 # args.use_rt=True
 # args.use_features=True
-# args.mzml = "/Users/kevinmcdonnell/Programming/Data/2023_08_28_LF-DIA_E480.mzML"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/BrukerHumanPrositLib.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/s6Thermo_prosit.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositFrags.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/Human_Bruker_Library_PrositFrags.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/ecoli_hb_thermo_prosit.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE27.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE39.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE45.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE51.msp.tsv"
 # logger.info(args)
 
 RANDOM_SEED = 42

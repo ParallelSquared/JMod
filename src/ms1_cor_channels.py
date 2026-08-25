@@ -1,17 +1,3 @@
-#  Copyright (c) 2026 Parallel Squared Technology Institute
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#          http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-
 import numpy as np
 import polars as pl
 import re
@@ -1313,14 +1299,6 @@ def fit_channel_isotopes_numba(spec, all_iso, mz_ppm):
     dense_matrix = dense_matrix[keep, :]
     dia_spec_int = dia_spec_int[keep]
     kept_mz = all_mz[keep]
-
-    if dense_matrix.shape[0] == 0:
-        return (
-            np.zeros(len(all_iso), dtype=float),
-            dia_spec_int,
-            dense_matrix,
-            kept_mz,
-        )
 
     lib_coefficients, _ = optimize.nnls(dense_matrix, dia_spec_int)
     lib_coefficients[lib_coefficients < 1] = 0.0

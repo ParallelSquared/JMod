@@ -1,17 +1,8 @@
-#  Copyright (c) 2026. Parallel Squared Technology Institute
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#          http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-
+"""
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
 import numpy as np
 import os
 import csv
@@ -27,12 +18,9 @@ import copy
 import src.config as config
 from src.iso_functions import gen_isotopes_dict
 from src.logger import logger
-import re
-from pyteomics import mass
 
 
 # load in spec library (tsv)
-# file = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HeLa+K562-1prcGlobProt-5prcLocPep-PeakViewConverted.txt"
 # spec_lib = pd.read_csv(file,delimiter="\t")
 
 
@@ -278,52 +266,7 @@ def load_blib(spec_lib_file):
     return python_lib
 
     
-# lib = load_blib("/Volumes/One Touch/PTI/Specter/EcoliSpectralLibrary.blib")    
-_MOD_PATTERN = re.compile(r"\(([^)]+)\)")
 
-def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
-    """
-    Returns True if any ModifiedPeptide string contains a non-UniMod
-    parenthetical modification (a mass tag),
-    along with the back-calculated mass of that tag.
-
-    Parameters
-    ----------
-    modified_peptides : Iterable[str]
-        ModifiedPeptide strings, e.g. "P(PSMtag_5plex-0)EPTIDEK"
-    prec_mzs : Iterable[float]
-        PrecursorMz values, same order/length as modified_peptides
-    prec_zs : Iterable[float]
-        PrecursorCharge values, same order/length as modified_peptides
-
-    Returns
-    -------
-    (source_channel_mass, library_tag_bool, library_tag_name) : (float, bool, str)
-        Back-calculated mass of the tag channel from the first tagged
-        peptide found, and whether any tag was found at all. Returns
-        (0, False, None) if no tag is present.
-    """
-    diann_mods = config.diann_mods
-    for pep, prec_mz, prec_z in zip(modified_peptides, prec_mzs, prec_zs):
-        if not pep:
-            continue
-        all_mods = [m.strip() for m in _MOD_PATTERN.findall(pep)]
-        tag_mods = [m for m in all_mods if m not in diann_mods]
-        if not tag_mods:
-            continue
-
-        known_mods_attached = [m for m in all_mods if m in diann_mods]
-        stripped_peptide = re.sub(r"\([^)]*\)", "", pep)
-        stripped_mass = mass.fast_mass(stripped_peptide)
-        known_mods_mass = sum(diann_mods[m] for m in known_mods_attached)
-
-        untagged_mz = (stripped_mass + known_mods_mass + prec_z * 1.00727647) / prec_z
-        mz_delta = prec_mz - untagged_mz
-        source_channel_mass = (mz_delta * prec_z) / len(tag_mods)
-
-        return source_channel_mass, True, tag_mods[0]
-
-    return 0, False, None
 
 def loadSpecLib(lib_file):
     from src.models.spec_lib.library_store import SpectrumLibraryStore
@@ -347,18 +290,12 @@ def loadSpecLib(lib_file):
         logger.info("Loading Library... from file")
         if lib_ext == "blib":
             spec_lib = SpectrumLibraryStore.from_blib(lib_file)
-        elif lib_ext == "tsv":
+        else:
             spec_lib = SpectrumLibraryStore.from_tsv(lib_file)
-        elif lib_ext == "parquet":
-            spec_lib = SpectrumLibraryStore.from_parquet(lib_file)
         spec_lib.save(store_file)
 
-    source_channel_mass, library_tag_bool, library_tag_name = has_mass_tag(spec_lib.mod_seq, spec_lib.prec_mz, spec_lib.prec_z)
-    if library_tag_bool:
-        logger.info("Spectral Library Contains Tagged Peptides")
-
     logger.info(f"Loaded {len(spec_lib)} library precursors")
-    return spec_lib, library_tag_bool, source_channel_mass, library_tag_name
+    return spec_lib
 
 
 # TODO add a test for this, make sure decoys are being generated correctly
@@ -415,7 +352,6 @@ def create_decoy_lib(library, rules, tag=None, n_iso=0):
     return store
             
             
-# spec_lib = loadSpecLib("/Volumes/Lab/KMD/SpectralLibraries/8ng_LF_24nce.tsv")
 
 def write_speclib_tsv(library,filename):
     ## create a new library from a library dictionary created by the above functions

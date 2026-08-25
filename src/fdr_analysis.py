@@ -1,18 +1,10 @@
+"""
+This Source Code Form is subject to the terms of the Oxford Nanopore
+Technologies, Ltd. Public License, v. 1.0.  Full licence can be found
+at https://github.com/ParallelSquared/JMod/blob/main/LICENSE.txt
+"""
 
 
-#  Copyright (c) 2026 Parallel Squared Technology Institute
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#          http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
 
 from src.utils.io.read_output import get_large_prec
 
@@ -38,9 +30,12 @@ import pandas as pd
 
 # from src.ms1_cor_channels import ms1_cor_channels
 import src.ms1_cor_channels as ms1_mod
+from src.utils.io.load_files import loadSpectra
+from src.models.spec_lib.spec_lib import loadSpecLib
 
 #from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 from src.utils.misc_functions import unstring_floats
+from src.utils.frag_encoding import get_index
 
 from src import config
 from src.logger import logger
@@ -49,6 +44,12 @@ from src.mass_tags import massTag
 from pyteomics import mass
 from numba import njit
 
+
+
+# Grouping key for the cross-channel scoring features: one plexDIA set, i.e. the
+# co-isolated mass-tag channels of a precursor within a single acquisition. Built
+# by _plex_set_key.
+PLEX_SET_COL = "plex_set"
 
 
 @njit(nogil=True)
@@ -78,16 +79,20 @@ def _compute_shared_frac_jit(target_mz, target_int, other_mz_flat, mz_tol):
     return shared_int / total_int
 
 
-def _compute_frac_shared_intensity(fdc, mz_tol):
+def _compute_frac_shared_intensity(fdc, mz_tol, group_col="untag_prec"):
     """Compute fraction of library intensity from fragments shared across channels.
 
-    For each untag_prec group with 2+ channels, compares fragment m/z lists
+    For each ``group_col`` group with 2+ channels, compares fragment m/z lists
     across channels using relative PPM tolerance. Single-channel groups get -1.
+
+    ``group_col`` is the plexDIA set (see :func:`_plex_set_key`): on a timeplex
+    run it is scoped to one time channel, so a precursor is only ever compared
+    against the channels it was co-isolated with.
     """
     result = np.full(len(fdc), -1.0)
-    groups = fdc.groupby("untag_prec").indices
+    groups = fdc.groupby(group_col).indices
 
-    for untag_prec, indices in groups.items():
+    for _group_key, indices in groups.items():
         if len(indices) < 2:
             continue
 
@@ -117,23 +122,26 @@ def _compute_frac_shared_intensity(fdc, mz_tol):
     return result
 
 
-def _compute_frac_shared_intensity_from_polars(fdc, fdc_list_cols, mz_tol):
+def _compute_frac_shared_intensity_from_polars(fdc, fdc_list_cols, mz_tol,
+                                               group_col="untag_prec"):
     """Variant that reads frag_mz/frag_int from a polars list-cols frame.
 
     Avoids materializing the list columns as pandas (which inflates 4-5× over
     polars). Per-group iteration converts only the small per-precursor slice
     to numpy arrays — the inner JIT function is unchanged.
+
+    ``group_col`` has the same meaning as in :func:`_compute_frac_shared_intensity`.
     """
     n = len(fdc)
     result = np.full(n, -1.0)
 
-    # Join untag_prec into the list-cols frame so we can group_by in polars.
-    untag_lookup = pl.from_pandas(fdc[["__fdc_idx", "untag_prec"]])
+    # Join the group key into the list-cols frame so we can group_by in polars.
+    untag_lookup = pl.from_pandas(fdc[["__fdc_idx", group_col]])
     joined = fdc_list_cols.join(untag_lookup, on="__fdc_idx").select(
-        "__fdc_idx", "untag_prec", "frag_mz", "frag_int"
+        "__fdc_idx", group_col, "frag_mz", "frag_int"
     )
 
-    for _, group in joined.group_by("untag_prec"):
+    for _, group in joined.group_by(group_col):
         indices = group["__fdc_idx"].to_list()
         if len(indices) < 2:
             continue
@@ -176,6 +184,70 @@ def _compute_med_frag_error_from_polars(fdc_list_cols):
             (pl.element() - global_median).abs()
         ).list.median().alias("med_frag_error")
     ).to_pandas()
+
+
+# The fragment ordinal lives in bits [10:3] of the packed int32 fragment code
+# (src/utils/frag_encoding.py). For b/y/a/c/x/z ions that ordinal is the number
+# of residues in the fragment, so it is the fragment's length in amino acids.
+# Spelled as //8 %256 rather than >>3 &0xFF so the same arithmetic works inside
+# a polars expression.
+_FRAG_IDX_DIV = 1 << 3    # == 1 << _IDX_SHIFT
+_FRAG_IDX_MOD = 0xFF + 1  # == _IDX_MASK + 1
+
+
+def _compute_wtd_frag_len_from_polars(fdc_list_cols):
+    """Intensity-weighted mean fragment length per PSM, computed in polars.
+
+    ``sum((b / x) * a)`` over a precursor's matched fragments, where ``a`` is
+    the fragment's length in residues, ``b`` its observed MS2 intensity, and
+    ``x`` the precursor's total matched MS2 intensity. Because the weights sum
+    to one this is the mean fragment length weighted by observed signal.
+
+    Stays list-native (no explode) to keep peak memory down. Returns a pandas
+    frame keyed by ``__fdc_idx``.
+    """
+    frag_len = pl.col("frag_names").list.eval(
+        (pl.element() // _FRAG_IDX_DIV) % _FRAG_IDX_MOD
+    ).cast(pl.List(pl.Float64))
+    # obs_int is a measured intensity so it is never negative, but a fragment
+    # can come back null; those contribute no signal.
+    obs = pl.col("obs_int").list.eval(pl.element().fill_null(0.0))
+    total = obs.list.sum()
+    return fdc_list_cols.select(
+        pl.col("__fdc_idx"),
+        pl.when(total > 0)
+          .then((frag_len * obs).list.sum() / total)
+          .otherwise(None)
+          .alias("wtd_frag_len"),
+    ).to_pandas()
+
+
+def _compute_wtd_frag_len(frag_names, obs_int):
+    """Pandas-path equivalent of :func:`_compute_wtd_frag_len_from_polars`.
+
+    NaN where a PSM has no matched fragments or no observed signal.
+    """
+    frag_names = list(frag_names)
+    obs_int = list(obs_int)
+    out = np.full(len(frag_names), np.nan)
+    for i, (codes, ints) in enumerate(zip(frag_names, obs_int)):
+        if codes is None or ints is None or len(codes) == 0 or len(codes) != len(ints):
+            continue
+        b = np.nan_to_num(np.asarray(ints, dtype=float), nan=0.0)
+        a = get_index(np.asarray(codes, dtype=np.int32)).astype(float)
+        x = b.sum()
+        if x > 0:
+            out[i] = float((b * a).sum() / x)
+    return out
+
+
+def _central(vals, n):
+    """The central 2n+1 values of a ";"-joined trace (all of it when n is None)."""
+    v = np.array(list(map(float, vals.split(";")))) if isinstance(vals, str) else np.asarray(vals, float)
+    if n is None or v.size <= 2 * n + 1:
+        return v
+    c = v.size // 2
+    return v[c - n:c + n + 1]
 
 
 def area(x, apex_idx):
@@ -416,6 +488,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         apex_scans.append(int(specs[apex_pos]))
     fdc["plex_Area"] = plex_areas
     fdc["ms1_apex_scan"] = apex_scans
+
        
 
 
@@ -449,7 +522,18 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         fdc[f"all_ms1_iso{i}vals"] = [";".join(map(str,trace[i].values())) for trace in ms1_traces]
     # fdc["ms2_trace"] = [";".join(map(str,trace.values())) for trace in ms2_traces]
     
-    fdc["MS1_Area"]=[auc(list(map(float,fdc.all_ms1_specs.iloc[idx].split(";"))),list(map(float,fdc.all_ms1_iso0vals.iloc[idx].split(";")))) for idx in range(len(fdc))]
+    # Integrate over scan *index*, not spectrum id. Scans are evenly spaced in
+    # time, but the spectrum-id gap between consecutive MS1 scans is the number
+    # of MS2 windows in the cycle, which is not constant: measured 8-12 on
+    # JD0311_re. Using it as the x axis multiplied each precursor's area by its
+    # own local cycle length, injecting pure artifact spread between precursors
+    # that has nothing to do with abundance (robust SD 1.203 -> 1.181).
+    # Integrate the whole extracted MS1 trace. _central also PARSES the
+    # ";"-joined trace strings into arrays, so it is still needed with n=None.
+    fdc["MS1_Area"] = [
+        float(np.trapz(_central(vals, None)))
+        for vals in fdc.all_ms1_iso0vals
+    ]
 
 
         # Define selected columns that we want to merge
@@ -457,7 +541,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps",
         "plexfittrace_spec_all", "plexfittrace_all", "plexfittrace_ps_all",
         "plex_Area", "ms1_apex_scan", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
-        "all_ms1_specs", "MS1_Area"
+        "all_ms1_specs", "MS1_Area",
     ] + [f"all_ms1_iso{i}vals" for i in range(config.num_iso_ms1)]
     
     # Ensure we only select columns that actually exist in fdc
@@ -797,13 +881,39 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
                   'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
                   "plexfittrace_ps_all",
                   "unique_frag_mz", "untag_prec",
-                  "channels_matched",
+                  "channels_matched", PLEX_SET_COL,
                   "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor","plexfitMS1","plexfitMS1_p","plex_Area", "untag_prec","channel","time_channel",
                   "silac_channel",
                   "unique_frag_mz",
                   "unique_obs_int",
                   "file_name",
-                  "protein"]
+                  "protein",
+                  # Parquet row index, carried through so the held-back list
+                  # columns can be merged back later.  It must never be a
+                  # feature: rows are interleaved but not uniformly, and on
+                  # JD0413 the decoy fraction runs monotonically from 0.512 in
+                  # the first decile of row order to 0.353 in the last, which a
+                  # tree can split on.
+                  "__fdc_idx",
+                  # MS2 areas are reported quantities, not evidence of
+                  # correctness -- dropped for the same reason plex_Area,
+                  # MS1_Area and MS1_Int are, and because they measured
+                  # neutral-to-worse as features.
+                  "coeff_Area", "coeff_ChannelUnique_Area",
+                  # single-scan value at the apex the whole plex group shares.
+                  # Reported so it can be compared against the per-channel-scan
+                  # value; an abundance, so never a scoring feature.
+                  "coeff_CommonApex", "coeff_ChannelUnique_CommonApex",
+                  # fragment-purity diagnostic: reported so it can be compared
+                  # against coeff_ChannelUnique, never scored -- it is the same
+                  # abundance measured two ways, so scoring on it would leak
+                  # the quantity into the identification it is meant to test
+                  "coeff_CU_cleanFrags", "coeff_CU_dirtyFrags",
+                  "coeff_CU_cleanFrags_a0", "coeff_CU_dirtyFrags_a0",
+                  "cu_purity_median_s",
+                  "coeff_CU_pw1", "coeff_CU_pw2", "coeff_CU_pw4",
+                  "coeff_CU_pw8", "coeff_CU_pw16",
+                  "coeff_CU_pwInv", "coeff_CU_pwInv2"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
 
     # Compute predicted RT (library RT) from observed RT minus RT error
@@ -915,51 +1025,24 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
 
         feat = 'mz_error'
         func = np.array#np.log10#
-
-        valid = fdc[feat] != -1
-        plot_vals = fdc.loc[fdc[feat] != -1, feat]
-
-        n_unmatched = (fdc[feat] == -1).sum()
-        n_matched = (fdc[feat] != -1).sum()
-        n_total = n_unmatched + n_matched
-
         plt.subplots()
-        # vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
-        # # plt.hist([],[])
-        # vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
-        # vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low scoring")
-        # vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
-
-        vals,bins,_ = plt.hist(func([i for i in plot_vals]),40,label="All")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
         # plt.hist([],[])
-        vals,bins,_ = plt.hist(func([i for i in plot_vals[above_t[valid]]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in plot_vals[np.logical_and(~above_t[valid],~fdc.is_decoy[valid])]]),bins,alpha=.5,label="Low scoring")
-        vals,bins,_ = plt.hist(func([i for i in plot_vals[fdc.is_decoy[valid]]]),bins,alpha=.5,label="Decoy")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low scoring")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
 
         # putting a xlim so that you can see entire distribution of the mz errors better
-        # xmin, xmax = plt.xlim()
-        # max_abs = max(abs(xmin), abs(xmax))
-        # plt.xlim(-max_abs, max_abs)
+        xmin, xmax = plt.xlim()
+        max_abs = max(abs(xmin), abs(xmax))
+        plt.xlim(-max_abs, max_abs)
 
-        def human_fmt(n):
-            if n >= 1e6:
-                return f'{n/1e6:.3f}M'
-            if n >= 1e3:
-                return f'{n/1e3:.1f}K'
-            return str(n)
-
-        plt.title(
-            f'{human_fmt(n_matched)} / {human_fmt(n_total)} Precursors have an MS1 Error'
-        )
-
+        plt.xlabel(feat)
         plt.ylabel("Frequency")
-        plt.xlabel('Absolute MS1 Error')
-        # plt.xlabel(feat)
         # plt.title(model_name+ f" - Type {config.args.unmatched}")
-        # plt.title(model_name)
+        plt.title(model_name)
         plt.legend()
-        plt.margins(x=0)
-        plt.savefig(folder+"/scoring/ms1_error.png",dpi=600,bbox_inches="tight")
+        plt.savefig(folder+"/scoring/mz_error.png",dpi=600,bbox_inches="tight")
 
         plt.close()
         plt.close("all")
@@ -1097,6 +1180,33 @@ def compute_protein_FDR(df,results_folder=None):
 
     return df
 
+def _plex_set_key(fdc, timeplex):
+    """Grouping key for the cross-channel features: one plexDIA set.
+
+    A plexDIA set is the group of channels that are multiplexed *together in one
+    acquisition* — the mass-tag (mTRAQ/SILAC) channels of a given precursor, which
+    are co-isolated and fragmented in the same scan. ``untag_prec`` alone is not
+    that set on a timeplex run: the same precursor also appears once per TIME
+    channel, and those are separate injections. Grouping on ``untag_prec`` therefore
+    pools a precursor with copies of itself from other acquisitions, so
+    ``median_*``/``diff_*_from_median`` measure run-to-run variation as much as
+    channel-to-channel, and ``frac_shared_intensity`` counts fragment m/z overlap
+    with channels that were never co-isolated (which is trivially near-total, since
+    it is largely the same precursor).
+
+    Appending ``time_channel`` scopes the key to a single plexDIA set. Off timeplex
+    (or when the column is absent) there is only one acquisition and the key is
+    ``untag_prec`` unchanged.
+
+    Built as a string so that a null ``time_channel`` becomes its own stable group
+    rather than being silently dropped by pandas' groupby NaN handling.
+    """
+    key = fdc["untag_prec"].astype(str)
+    if timeplex and "time_channel" in fdc.columns:
+        key = key + "|tc" + fdc["time_channel"].astype(str)
+    return key
+
+
 def add_median_based_features(df, metric_columns, group_col="untag_prec", count_col="channels_matched", verbose=True):
     """
     Calculate median-based features for specified metrics across groups.
@@ -1171,6 +1281,35 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     fdc["sq_rt_error"] = np.power(fdc["rt_error"],2)
     fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
 
+    # RT error standardised against the spread of the TIME CHANNEL it came from.
+    # Each time channel gets its own RT model and its own residual sigma (they
+    # differ by ~25% within a run), so a raw rt_error of 0.3 min is ordinary in a
+    # wide channel and a 2-sigma outlier in a narrow one. Scoring on rt_error
+    # alone cannot tell those apart; this makes the comparison per channel.
+    _sig = getattr(config, "rt_narrow_sigmas", None)
+    if not _sig:
+        try:
+            import json
+            with open(os.path.join(results_folder, "first_search",
+                                   "rt_channel_sigmas.json")) as _fh:
+                _sig = json.load(_fh).get("narrow_sigmas")
+        except Exception:
+            _sig = None
+    if _sig and "time_channel" in fdc.columns and "rt_error" in fdc.columns:
+        _s = np.asarray(_sig, dtype=float)
+        _s[~np.isfinite(_s) | (_s <= 0)] = np.nan
+        _tc = pd.to_numeric(fdc["time_channel"], errors="coerce").to_numpy()
+        _ok = np.isfinite(_tc) & (_tc >= 0) & (_tc < len(_s))
+        _den = np.full(len(fdc), np.nan)
+        _den[_ok] = _s[_tc[_ok].astype(int)]
+        # fall back to the pooled spread where a channel sigma is unusable, so the
+        # column is never silently all-NaN for a run
+        _fallback = np.nanmedian(_s) if np.isfinite(_s).any() else np.nan
+        _den = np.where(np.isfinite(_den), _den, _fallback)
+        fdc["rt_error_z_time_channel"] = fdc["rt_error"].to_numpy() / _den
+        fdc["abs_rt_error_z_time_channel"] = np.abs(fdc["rt_error_z_time_channel"])
+        logger.info(f"per-time-channel RT z-score added (sigmas {[round(float(x),3) for x in _s]})")
+
     # Handle untag_seq
     if mass_tag and SILAC:
         fdc["untag_seq"] = [re.sub(f"(\({SILAC.name}-\d+\))?","",re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide)) for peptide in fdc["seq"]]
@@ -1185,22 +1324,29 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     # Add untag_prec and channels_matched
     fdc["untag_prec"] = ["_".join([i[0],str(int(i[1]))]) for i in zip(fdc["untag_seq"],fdc["z"])]
     
-    channel_matches_counts = fdc["untag_prec"].value_counts()
+    # The cross-channel features below compare a precursor against the other
+    # channels of its own plexDIA set -- the channels it was co-isolated with --
+    # and NOT against its copies in other timeplex time channels, which are
+    # separate acquisitions. See _plex_set_key.
+    fdc[PLEX_SET_COL] = _plex_set_key(fdc, timeplex)
+
+    channel_matches_counts = fdc[PLEX_SET_COL].value_counts()
     channel_matches_counts_dict = {i:j for i,j in zip(channel_matches_counts.index,channel_matches_counts)}
-    fdc["channels_matched"] = [channel_matches_counts_dict[i] for i in fdc["untag_prec"]]
+    fdc["channels_matched"] = [channel_matches_counts_dict[i] for i in fdc[PLEX_SET_COL]]
 
     # Use the helper function to add median-based features
     metrics_to_process = ["gof_stats", "scribe_scores", "max_matched_residuals", "manhattan_distances"]
-    fdc = add_median_based_features(fdc, metrics_to_process)
+    fdc = add_median_based_features(fdc, metrics_to_process, group_col=PLEX_SET_COL)
 
-    # Compute frac_shared_intensity: fraction of library intensity from fragments shared across channels
+    # Compute frac_shared_intensity: fraction of library intensity from fragments
+    # shared across the channels of the same plexDIA set
     if fdc_list_cols is not None:
         fdc["frac_shared_intensity"] = _compute_frac_shared_intensity_from_polars(
-            fdc, fdc_list_cols, mz_tol=(config.args.ppm * 1e-6)
+            fdc, fdc_list_cols, mz_tol=(config.args.ppm * 1e-6), group_col=PLEX_SET_COL
         )
     else:
         fdc["frac_shared_intensity"] = _compute_frac_shared_intensity(
-            fdc, mz_tol=(config.args.ppm * 1e-6)
+            fdc, mz_tol=(config.args.ppm * 1e-6), group_col=PLEX_SET_COL
         )
 
     if timeplex:
@@ -1238,6 +1384,22 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
         fdc["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
 
+    # Signal-weighted mean fragment length. Each matched fragment contributes
+    # its length in residues weighted by its share of the precursor's total
+    # observed MS2 intensity, so a precursor whose signal sits in long fragments
+    # scores high and one carrying it in short ions scores low. The _frac form
+    # expresses that as a fraction of the precursor's own length, which makes it
+    # comparable between a 9-mer and a 25-mer.
+    if fdc_list_cols is not None:
+        _wfl_pd = _compute_wtd_frag_len_from_polars(fdc_list_cols)
+        fdc = fdc.merge(_wfl_pd, on="__fdc_idx", how="left")
+        del _wfl_pd
+    elif "frag_names" in fdc.columns and "obs_int" in fdc.columns:
+        fdc["wtd_frag_len"] = _compute_wtd_frag_len(fdc["frag_names"], fdc["obs_int"])
+    else:
+        fdc["wtd_frag_len"] = np.nan
+    fdc["wtd_frag_len_frac"] = fdc["wtd_frag_len"] / fdc["pep_len"]
+
     # Fragment-ion correlation features (pairwise Pearson across MS2 scans)
     from src.fragment_correlation import compute_fragment_correlations
     corr_features = compute_fragment_correlations(
@@ -1246,9 +1408,64 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         fdc=fdc,
         fwhm=elution_fwhm,
         mz_tol=(config.args.ppm * 1e-6),
+        timeplex=timeplex,
     )
     for col in corr_features.columns:
         fdc[col] = corr_features[col].values
+
+    # Cross-channel RT-residual consistency feature: SD of the per-PSM RT residual
+    # (rt_error = observed - predicted) for each peptide, pooled across ALL timeplex
+    # channels AND charge states (group = tag-stripped sequence). A peptide seen
+    # consistently across channels/charges has a tight residual spread (small SD); a
+    # spurious ID scatters. Grouped by is_decoy as well so targets and decoys never mix.
+    # Guard: groups with < 2 finite residuals can't have a dispersion -> sentinel -1.
+    if "untag_seq" in fdc.columns and "rt_error" in fdc.columns:
+        _grp = fdc.groupby(["untag_seq", "is_decoy"])["rt_error"]
+        _sd = _grp.transform("std")              # ddof=1; NaN for n<2, skips NaN residuals
+        _n = _grp.transform("count")             # count of finite residuals in the group
+        fdc["rt_resid_xchannel_sd"] = np.where(_n.to_numpy() >= 2,
+                                               _sd.to_numpy(), -1.0)
+    else:
+        fdc["rt_resid_xchannel_sd"] = -1.0
+
+    # Channel-unique MS2 refit + cross-channel empirical-library features.
+    #
+    # Deliberately BEFORE scoring and with no q-value gate.  These are scoring
+    # features, and a column that exists only for rows already past 1% FDR
+    # predicts the label outright.  It also produces the uncompressed
+    # coeff_ChannelUnique that the RT normalizer prefers as its MS2 primary.
+    #
+    # The per-fragment list columns are still held out of fdc at this point, so
+    # this joins them back one precursor-chunk at a time rather than merging the
+    # whole frame -- the slim-frame memory guard is the reason they were held
+    # back, and undoing it is what previously ran large searches out of RAM.
+    if getattr(config.args, "ms2_prescoring", True):
+        from src.ms2_prescoring import add_prescoring_ms2
+        fdc = add_prescoring_ms2(
+            fdc, fdc_list_cols=fdc_list_cols, spectra=spectra,
+            plexDIA=bool(config.args.plexDIA or mass_tag is not None),
+            ppm=float(config.args.ppm),
+            n_chunks=int(getattr(config.args, "ms2_prescoring_chunks", 12)),
+            want_areas=bool(getattr(config.args, "ms2_areas", True)),
+            n_adjacent=int(getattr(config.args,
+                                   "ms2_area_adjacent_scans", 1)),
+            shared_frag_mode=str(getattr(config.args, "ms2_shared_frags",
+                                         "proportional")),
+            tag=mass_tag,
+            # Always on: measured on JD0588 in a single-variable production
+            # A/B (baseline_run vs area_run, one flag apart) it cuts
+            # sample-level mean |error| 0.185 -> 0.134 and lifts the
+            # compression slope 0.841 -> 0.902.  Not exposed, because there is
+            # no configuration in which turning it off was better.
+            isotope_correct=True,
+            n_iso=int(getattr(config.args, "ms2_channel_unique_isotope_n", 5)),
+            purity_diag=bool(getattr(config.args,
+                                     "ms2_fragment_purity_diag", False)),
+            min_siblings=int(getattr(config.args,
+                                     "ms2_channel_unique_min_siblings", 0)),
+            weighted_apex=bool(getattr(config.args,
+                                       "ms2_weighted_common_apex", True)),
+            )
 
     fdx = score_precursors(fdc.reset_index(drop=True), config.score_model, config.fdr_threshold, folder=results_folder)
 
@@ -1266,6 +1483,22 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "is_decoy"])["Qvalue"].transform("min") #within a run
     else:
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
+
+    # Best q-value across a plexDIA set but WITHIN one time channel.
+    # BestChannel_Qvalue above minimises over the whole run, so it collapses the
+    # time dimension too: a precursor found confidently in T0 is reported at that
+    # same q-value in every other time channel, whether or not any evidence for it
+    # exists there. That makes it unusable for per-time-channel counting and for
+    # carryover measurements. This column keeps the time channels independent.
+    # Label-free: one row per (time_channel, untag_prec), so it equals Qvalue.
+    # dropna=False so rows with a NaN time_channel keep a value instead of NaN.
+    if "time_channel" in fdx.columns and {"untag_prec", "is_decoy"}.issubset(fdx.columns):
+        _btp_keys = [c for c in ("file_name", "time_channel", "untag_prec", "is_decoy")
+                     if c in fdx.columns]
+        fdx["Best_tP_specific_channelQvalue"] = (
+            fdx.groupby(_btp_keys, dropna=False)["Qvalue"].transform("min"))
+    else:
+        fdx["Best_tP_specific_channelQvalue"] = fdx["Qvalue"]
 
     
     fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, timeplex, vote_sigma=vote_sigma)
@@ -1288,6 +1521,56 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         _gc_attach.collect()
     if "__fdc_idx" in fdx_quant.columns:
         fdx_quant = fdx_quant.drop(columns=["__fdc_idx"])
+
+    # ---- quantitation add-ons ------------------------------------------------
+    # Placed here, after the list columns are back and before the write, so the
+    # normalizer can reach the per-fragment intensities as well as the scalars,
+    # and so nothing upstream (scoring, FDR, protein rollup) ever sees an
+    # adjusted value.
+
+    # MS2 quant from fragments that can be assigned to a single plexDIA channel.
+    # y-ions of an R-terminating peptide carry no mTRAQ tag, so they land at the
+    # same m/z in every channel and their observed intensity is a superposition.
+    # Skipped when the pre-scoring pass already produced the column: it fits the
+    # same quantity from the same spectra, ungated, and re-running it here would
+    # both cost a second pass and overwrite the ungated values with gated ones.
+    if (getattr(config.args, "ms2_channel_unique", True)
+            and "coeff_ChannelUnique" not in fdx_quant.columns):
+        from src.ms2_unique_quant import add_channel_unique_coeff
+        fdx_quant = add_channel_unique_coeff(
+            fdx_quant,
+            spectra=spectra,
+            plexDIA=bool(config.args.plexDIA or mass_tag is not None),
+            ppm=float(config.args.ppm),
+            q_gate=float(getattr(config.args, "ms2_channel_unique_qvalue",
+                                 0.01)),
+            tag=mass_tag,
+            # Always on: measured on JD0588 in a single-variable production
+            # A/B (baseline_run vs area_run, one flag apart) it cuts
+            # sample-level mean |error| 0.185 -> 0.134 and lifts the
+            # compression slope 0.841 -> 0.902.  Not exposed, because there is
+            # no configuration in which turning it off was better.
+            isotope_correct=True,
+            n_iso=int(getattr(config.args, "ms2_channel_unique_isotope_n", 5)))
+
+    # RT-dependent quantitative normalization: one factor curve per time channel
+    # for MS1 and another for MS2, applied to every reported intensity.
+    if getattr(config.args, "rt_norm", True):
+        from src.quant_normalization import (apply_rt_channel_normalization,
+                                             config_from_args)
+        _plot = (None if getattr(config.args, "no_rt_norm_plot", False)
+                 else os.path.join(results_folder, "outputs", "rtnorm_qc.png"))
+        fdx_quant = apply_rt_channel_normalization(
+            fdx_quant,
+            timeplex=timeplex,
+            plexDIA=bool(config.args.plexDIA or mass_tag is not None
+                         or SILAC is not None),
+            cfg=config_from_args(config.args),
+            spectra=spectra,
+            inplace_cols=bool(getattr(config.args, "rt_norm_inplace", False)),
+            plot_path=_plot,
+        )
+
 
     logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
@@ -1312,9 +1595,19 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
-                       "protein",'BestChannel_Qvalue', 'plex_Area', 'seq', 'silac_channel', 'untag_seq',"rt","mz","coeffs"]
+                       "protein",'BestChannel_Qvalue', 'Best_tP_specific_channelQvalue',
+                       'plex_Area', 'seq', 'silac_channel', 'untag_seq',"rt","mz",
+                       # Quantities and their RT-normalized counterparts. Absent
+                       # under --rt_norm_inplace (the base columns carry the
+                       # normalized values then) and filtered out below either way.
+                       'coeff', 'MS1_Area',
+                       'coeff_ChannelUnique',
+                       'plex_Area_rtnorm', 'MS1_Area_rtnorm',
+                       'coeff_rtnorm',
+                       'coeff_ChannelUnique_rtnorm',
+                       'rtnorm_factor_MS1', 'rtnorm_factor_MS2', 'time_channel']
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")
 
     # filtered IDs with parquet columns 
-    filtered[parquet_columns].to_parquet(results_folder + "/filtered_IDs.parquet", index=False)
+    filtered[parquet_columns].to_parquet(results_folder + "/filtered_IDs_parquet_columns.parquet", index=False)
