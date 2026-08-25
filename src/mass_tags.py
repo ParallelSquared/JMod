@@ -31,19 +31,6 @@ from src.utils.parse_peptides import parse_peptide, split_frag_name
 
 import logging
 from src.logger import logger
-"""
-## Load in the library
-from SpecLib import loadSpecLib, write_speclib_tsv
-# library = loadSpecLib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/tims_library_dec_23.tsv")
-library = loadSpecLib("/Users/kevinmcdonnell/Programming/Data/SpecLibs/timstof60Kprosit_speclib.tsv")
-lib_file = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/tims_library_dec_23_PrositFrags.tsv"
-library = loadSpecLib(lib_file)
-
-all_keys = list(library)
-
-library[all_keys[4]]
-
-"""
 #### Diann inputs
 # --fixed-mod mTRAQ, 140.0949630177, nK
 # --lib-fixed-mod mTRAQ

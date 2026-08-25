@@ -42,21 +42,8 @@ else:
 #    args = argparse.Namespace()
 #    # Set all the default values here
 
-# args.mzml = "/Volumes/Lab/Quant/CC20170118_SAM_Specter_Ecolidigest_DIA_01.mzML"
-# args.speclib = "/Volumes/Lab/Quant/SpecLibs/EcoliSpPrositLib.msp.tsv"
-# args.mzml = "/Users/kevinmcdonnell/Programming/Data/2023_10_05_lf-dia_375pg_ce24.mzml"
 # args.use_rt=True
 # args.use_features=True
-# args.mzml = "/Users/kevinmcdonnell/Programming/Data/2023_08_28_LF-DIA_E480.mzML"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/BrukerHumanPrositLib.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/s6Thermo_prosit.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositFrags.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/Human_Bruker_Library_PrositFrags.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/ecoli_hb_thermo_prosit.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE27.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE39.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE45.msp.tsv"
-# args.speclib = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HBthermo_PrositPepsNCE51.msp.tsv"
 # logger.info(args)
 
 RANDOM_SEED = 42

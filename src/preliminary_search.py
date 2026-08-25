@@ -110,7 +110,14 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         annotate_matches=True, # Add fragment annotation
         min_matched_peaks=3,
         max_fragment_charge=2,
-        report_psms=int(5*plex)
+        report_psms=int(15*plex)   # was 5; see note below
+        # A wide-window DIA scan contains far more than 5 identifiable precursors.
+        # Measured on JD0319: EVERY rank contributes ~6,000-6,900 unique peptides and
+        # rank 5 still added +1,970 (+15.5%) -- the cap was binding, not saturating.
+        # Worse for timeplex: the cap is per SPECTRUM while competition differs per
+        # time channel, so a peptide can rank 3rd in one channel and 7th in another,
+        # be found in one and missed in the other, then fail cross-channel
+        # completeness and be discarded entirely -- including where it was clean.
     )
 
 
@@ -142,6 +149,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # Once spectra are searched, delete rust verison to free up memory
     # Realistically these should be zero copy in the first place
     #del rust_specs
+
 
 
     # Make Polars dataframe directly from Rust

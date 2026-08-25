@@ -32,7 +32,6 @@ from pyteomics import mass
 
 
 # load in spec library (tsv)
-# file = "/Users/kevinmcdonnell/Programming/Data/SpecLibs/HeLa+K562-1prcGlobProt-5prcLocPep-PeakViewConverted.txt"
 # spec_lib = pd.read_csv(file,delimiter="\t")
 
 
@@ -415,7 +414,6 @@ def create_decoy_lib(library, rules, tag=None, n_iso=0):
     return store
             
             
-# spec_lib = loadSpecLib("/Volumes/Lab/KMD/SpectralLibraries/8ng_LF_24nce.tsv")
 
 def write_speclib_tsv(library,filename):
     ## create a new library from a library dictionary created by the above functions
