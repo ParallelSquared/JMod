@@ -25,7 +25,13 @@ from src.utils.io.load_files import (
     Spectrum, SpectrumFile, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
 )
 from src.utils.io import im_watershed
+from src.utils.io.tdf_bin import TdfBinReader, frame_peak_counts
 from src.logger import logger
+
+# Centroiding noise thresholds. TODO: expose via settings/CLI alongside
+# --bruker_sdk_path; constant for now.
+MIN_ION_COUNT_MS1 = 0.5
+MIN_ION_COUNT_MS2 = 2.0
 
 
 def compute_im_bins(im_lo, im_hi, width=0.05, stride=0.025):
@@ -123,8 +129,9 @@ class FileReader:
 
     _FORMATS = {".mzml", ".d", ".raw"}
 
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, bruker_sdk_path: str = None):
         self.filepath = filepath.replace("\\", "/")
+        self.bruker_sdk_path = bruker_sdk_path
         self.format = self._detect_format()
 
     def _detect_format(self) -> str:
@@ -142,7 +149,7 @@ class FileReader:
         if self.format == ".mzml":
             return _load_mzml(self.filepath)
         elif self.format == ".d":
-            return _load_d(self.filepath)
+            return _load_d(self.filepath, self.bruker_sdk_path)
         elif self.format == ".raw":
             return _load_raw(self.filepath)
 
@@ -157,21 +164,108 @@ def _load_raw(filepath: str) -> SpectrumFile:
     return SpectrumFile(raw_file=filepath)
 
 
-def _load_d(filepath: str) -> SpectrumFile:
-    """Load timsTOF .d data from peaks.parquet + analysis.tdf."""
+def _centroid_d(d_path: str, peaks_path: str, sdk_path: str = None) -> None:
+    """Centroid a .d in place, writing peaks.parquet, via peppy_sage.
+
+    Replaces the manual step of running the timscentroid binary beforehand;
+    the result is the same file, with the same columns, read the same way.
+
+    ``sdk_path`` points at Bruker's timsdata library, or the directory holding
+    it, and comes from ``--bruker_sdk_path`` or the stored setting.  Without it
+    m/z and 1/K0 are approximated from analysis.tdf and will not match an
+    SDK-centroided run.
+    """
+    try:
+        from peppy_sage import _peppy_sage
+    except ImportError as e:
+        raise FileNotFoundError(
+            f"Peaks file not found: {peaks_path}, and peppy_sage is not "
+            f"importable to create it ({e}). Either place a peaks.parquet "
+            f"inside {d_path} or install peppy_sage."
+        ) from e
+
+    if not hasattr(_peppy_sage, "centroid_d"):
+        raise FileNotFoundError(
+            f"Peaks file not found: {peaks_path}, and the installed peppy_sage "
+            f"has no centroid_d. Rebuild peppy_sage, or place a peaks.parquet "
+            f"inside {d_path}."
+        )
+
+    sdk_path = sdk_path or None
+    # TODO: plumb these through the settings/CLI like bruker_sdk_path once we
+    # know which values we actually want. Lowering them keeps signal the
+    # defaults discard, which is worth revisiting.
+    min_ms1 = MIN_ION_COUNT_MS1
+    min_ms2 = MIN_ION_COUNT_MS2
+
+    if sdk_path:
+        logger.info(f"Centroiding with Bruker SDK at {sdk_path}")
+    else:
+        logger.warning(
+            "Centroiding WITHOUT the Bruker SDK: m/z and 1/K0 are approximated "
+            "from analysis.tdf and will not match an SDK-centroided run. Pass "
+            "--bruker_sdk_path to use the real calibration."
+        )
+    logger.info(f"  min_ion_count_ms1={min_ms1}, min_ion_count_ms2={min_ms2}")
+
+    # Write beside the target and rename, so an interrupted run cannot leave a
+    # partial peaks.parquet that the next run would treat as complete.
+    tmp_path = peaks_path + ".partial"
+    t0 = perf_counter()
+
+    # centroid_d reports (done, total) every 64 frames from its worker threads.
+    # tqdm.total is not known until the first callback, so the bar is created
+    # lazily and only closed if it was ever opened.
+    from tqdm.auto import tqdm
+    bar = {"obj": None}
+
+    def _on_progress(done, total):
+        if bar["obj"] is None:
+            bar["obj"] = tqdm(total=total, desc="Centroiding", unit="frame")
+        bar["obj"].update(done - bar["obj"].n)
+
+    try:
+        n = _peppy_sage.centroid_d(d_path, tmp_path, min_ms1, min_ms2, sdk_path,
+                                   _on_progress)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+    finally:
+        if bar["obj"] is not None:
+            bar["obj"].close()
+    os.replace(tmp_path, peaks_path)
+    logger.info(f"Centroided {n:,} peaks -> {peaks_path} "
+                f"({perf_counter() - t0:.0f}s)")
+
+
+def _load_d(filepath: str, bruker_sdk_path: str = None) -> SpectrumFile:
+    """Load timsTOF .d data from peaks.parquet + analysis.tdf.
+
+    If peaks.parquet is absent it is generated first, by centroiding the raw
+    signal in analysis.tdf_bin (see ``_centroid_d``), and then read normally.
+    Delete peaks.parquet to force a re-centroid, e.g. after changing the
+    thresholds.
+    """
     logger.info("Loading Spectra... from .d file")
     d_path = filepath.rstrip("/")
 
     peaks_path = os.path.join(d_path, "peaks.parquet")
     tdf_path = os.path.join(d_path, "analysis.tdf")
+    bin_path = os.path.join(d_path, "analysis.tdf_bin")
 
     if not os.path.exists(tdf_path):
         raise FileNotFoundError(f"analysis.tdf not found in {d_path}")
+
     if not os.path.exists(peaks_path):
-        raise FileNotFoundError(
-            f"Peaks file not found: {peaks_path}. "
-            f"Place peaks.parquet inside {d_path}."
-        )
+        if not os.path.exists(bin_path):
+            raise FileNotFoundError(
+                f"Peaks file not found: {peaks_path}, and {bin_path} is absent "
+                f"too, so it cannot be created. Place a peaks.parquet inside "
+                f"{d_path}."
+            )
+        logger.info(f"No peaks.parquet in {d_path}; centroiding the raw data")
+        _centroid_d(d_path, peaks_path, bruker_sdk_path)
 
     logger.info(f"Loading calibration from {d_path}")
     cal = _load_calibration(tdf_path)
@@ -536,15 +630,161 @@ def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
     return ms1_groups, ms2_groups
 
 
-def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: pl.DataFrame, im_bins: np.ndarray) -> SpectrumFile:
-    """Read pre-calibrated peaks, assign DIA windows and IM bins, and build SpectrumFile.
+def _read_raw_peak_groups(d_path: str, cal: dict, dia_lookup: pl.DataFrame,
+                          include_ms1: bool = True, min_intensity: int = 0):
+    """Group raw ``analysis.tdf_bin`` peaks by acquisition, without IM banding.
 
-    Processes the parquet in row-group batches to avoid loading 6+ GB at once.
-    Expects columns: frame, scan, mz, inv_mobility, apex_intensity
-    (mz and inv_mobility are pre-calibrated).
-    Each non-empty IM bin produces a separate Spectrum object.
+    Same contract as :func:`_read_peak_groups` -- returns
+    ``(ms1_groups, ms2_groups)`` in the shapes ``_build_spectrum_file`` and
+    ``_band_ms2_groups`` expect -- but reads every stored ion from the binary
+    instead of the centroider's peak list.  Downstream code cannot tell the two
+    apart.
+
+    Calibration is estimation mode: the ``mz_values`` / ``mobility_values``
+    lookup arrays that ``_load_calibration`` already builds from
+    ``GlobalMetadata``.  These approximate the instrument response rather than
+    reproducing it, so m/z here is *not* equivalent to a peaks.parquet produced
+    with the Bruker SDK.  The real calibration coefficients sit unused in the
+    ``MzCalibration`` / ``TimsCalibration`` tables of the same database; when a
+    converter for them exists, it drops in at the two lookups below and nothing
+    else in this function changes.
+
+    ``min_intensity`` drops peaks at or below a raw detector count before
+    grouping.  It defaults to 0 (keep everything), since recovering the signal
+    the centroider discards is the point of this path; raise it if the
+    accumulators do not fit in memory.
     """
-    ms1_groups, ms2_groups = _read_peak_groups(peaks_path, cal, dia_lookup)
+    mz_values = cal["mz_values"]
+    mobility_values = cal["mobility_values"]
+
+    max_frame = int(cal["frame_ids"].max())
+    rt_by_frame = np.zeros(max_frame + 1, dtype=np.float64)
+    ms_level_by_frame = np.zeros(max_frame + 1, dtype=np.uint8)
+    for i, fid in enumerate(cal["frame_ids"]):
+        rt_by_frame[int(fid)] = cal["rt_values"][i]
+        ms_level_by_frame[int(fid)] = cal["ms_level"][i]
+
+    dia_dict = {}
+    for row in dia_lookup.iter_rows():
+        frame, scan_begin, scan_end, prec_mz, iso_width, ce = row
+        dia_dict.setdefault(int(frame), []).append(
+            (int(scan_begin), int(scan_end), float(prec_mz), float(iso_width), float(ce))
+        )
+
+    ms1_groups = {}
+    ms2_groups = {}
+
+    total_peaks = frame_peak_counts(d_path)
+    logger.info(f"Reading raw frames from {d_path}/analysis.tdf_bin "
+                f"({total_peaks} stored peaks)")
+
+    kept = 0
+    with TdfBinReader(d_path) as reader:
+        for frame_id in reader.frame_ids:
+            fid = int(frame_id)
+            level = ms_level_by_frame[fid]
+            if level == 0:
+                continue  # frame absent from the calibration table
+            if level == 1 and not include_ms1:
+                continue
+            if level == 2 and fid not in dia_dict:
+                continue
+
+            scans, tof_indices, intensities = reader.read_frame(fid)
+            if scans.shape[0] == 0:
+                continue
+
+            if min_intensity > 0:
+                keep = intensities > min_intensity
+                if not keep.any():
+                    continue
+                scans = scans[keep]
+                tof_indices = tof_indices[keep]
+                intensities = intensities[keep]
+
+            # Estimation-mode calibration by table lookup. Indices come from the
+            # instrument and should always be in range; clipping keeps a corrupt
+            # frame from taking the whole run down.
+            mz = mz_values[np.clip(tof_indices, 0, len(mz_values) - 1)]
+            mob = mobility_values[
+                np.clip(scans, 0, len(mobility_values) - 1)
+            ].astype(PEAK_MOB_DTYPE)
+            intens = intensities.astype(PEAK_INT_DTYPE)
+            rt = float(rt_by_frame[fid])
+            kept += scans.shape[0]
+
+            if level == 1:
+                # One frame per RT, so this key is written exactly once.
+                ms1_groups.setdefault(rt, ([], [], []))
+                ms1_groups[rt][0].append(mz)
+                ms1_groups[rt][1].append(intens)
+                ms1_groups[rt][2].append(mob)
+                continue
+
+            for scan_begin, scan_end, prec_mz, iso_width, ce in dia_dict[fid]:
+                win_mask = (scans >= scan_begin) & (scans < scan_end)
+                if not win_mask.any():
+                    continue
+                key = (rt, prec_mz, iso_width, ce)
+                if key not in ms2_groups:
+                    ms2_groups[key] = ([], [], [])
+                ms2_groups[key][0].append(mz[win_mask])
+                ms2_groups[key][1].append(intens[win_mask])
+                ms2_groups[key][2].append(mob[win_mask])
+
+    # Match _read_peak_groups: MS2 arrives concatenated, MS1 as chunk lists.
+    for key in list(ms2_groups):
+        v = ms2_groups.pop(key)
+        ms2_groups[key] = (np.concatenate(v[0]), np.concatenate(v[1]),
+                           np.concatenate(v[2]))
+
+    logger.info(f"Read {kept} raw peaks into {len(ms1_groups)} MS1 frames "
+                f"and {len(ms2_groups)} MS2 windows")
+    return ms1_groups, ms2_groups
+
+
+def _reread_peak_groups(sf: SpectrumFile, include_ms1: bool = False):
+    """Re-read un-banded peaks from whichever source built ``sf``.
+
+    ``reband_ms2`` deliberately does not keep the un-banded peaks in memory, so
+    it needs to go back to the data. Both ingest paths leave the .d on disk;
+    this picks the right reader.
+    """
+    raw_path = getattr(sf, "_raw_d_path", None)
+    if raw_path is not None:
+        return _read_raw_peak_groups(raw_path, sf._cal, sf._dia_lookup,
+                                     include_ms1=include_ms1,
+                                     min_intensity=getattr(sf, "_min_intensity", 0))
+    return _read_peak_groups(sf._peaks_path, sf._cal, sf._dia_lookup,
+                             include_ms1=include_ms1)
+
+
+def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
+                         im_bins: np.ndarray, raw_d_path: str = None,
+                         min_intensity: int = 0) -> SpectrumFile:
+    """Assign peaks to DIA windows and IM bins, and build a SpectrumFile.
+
+    Peaks come from one of two sources, and everything after the read is
+    identical for both:
+
+    - ``peaks_path`` -- a centroider peaks.parquet, already calibrated, read in
+      row-group batches to avoid loading 6+ GB at once.  Expects columns
+      ``frame, scan, mz, im, apex_intensity``.
+    - ``raw_d_path`` -- a stock .d, decoded frame by frame from analysis.tdf_bin
+      and calibrated here in estimation mode (see ``_read_raw_peak_groups``).
+
+    Exactly one of the two must be given.  Each non-empty IM bin produces a
+    separate Spectrum object.
+    """
+    if (peaks_path is None) == (raw_d_path is None):
+        raise ValueError("Pass exactly one of peaks_path or raw_d_path")
+
+    if raw_d_path is not None:
+        ms1_groups, ms2_groups = _read_raw_peak_groups(
+            raw_d_path, cal, dia_lookup, min_intensity=min_intensity
+        )
+    else:
+        ms1_groups, ms2_groups = _read_peak_groups(peaks_path, cal, dia_lookup)
 
     # Build SpectrumFile from accumulated groups
     sf = SpectrumFile()
@@ -612,6 +852,8 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
     # search), record what it takes to re-read them from the parquet, which is
     # still on disk.  Re-reading costs ~25 s; holding them costs 9 GB for minutes.
     sf._peaks_path = peaks_path
+    sf._raw_d_path = raw_d_path
+    sf._min_intensity = min_intensity
     sf._cal = cal
     sf._dia_lookup = dia_lookup
     sf._im_range = (float(im_bins[:, 0].min()), float(im_bins[:, 1].max()))
@@ -643,16 +885,18 @@ def reband_ms2(sf: SpectrumFile, width: float) -> bool:
     which only ever tests two candidate bins per peak.
 
     The un-banded peaks are not kept in memory for this -- they are re-read from
-    the peaks parquet, which is still on disk.  A re-read costs ~25 s; retaining
-    them would cost ~9 GB on a large .d, held untouched across the whole initial
-    search.
+    whichever source built ``sf`` (peaks parquet or raw .d), which is still on
+    disk.  A parquet re-read costs ~25 s; retaining the peaks would cost ~9 GB
+    on a large .d, held untouched across the whole initial search.  Re-reading
+    raw costs whatever the initial raw read cost.
 
     Returns True if the bands were rebuilt, False if there was nothing to do
     (non-IM data, i.e. anything but the .d path).
     """
-    peaks_path = getattr(sf, "_peaks_path", None)
     im_range = getattr(sf, "_im_range", None)
-    if peaks_path is None or im_range is None:
+    has_source = (getattr(sf, "_peaks_path", None) is not None
+                  or getattr(sf, "_raw_d_path", None) is not None)
+    if not has_source or im_range is None:
         logger.info("Re-banding MS2: not a .d acquisition; skipping")
         return False
     if not np.isfinite(width) or width <= 0:
@@ -682,8 +926,7 @@ def reband_ms2(sf: SpectrumFile, width: float) -> bool:
     scan_counter = (max(sf.ms1_by_id) + 1) if sf.ms1_by_id else 1
 
     logger.info("Re-banding MS2: re-reading un-banded peaks")
-    _, groups = _read_peak_groups(peaks_path, sf._cal, sf._dia_lookup,
-                                  include_ms1=False)
+    _, groups = _reread_peak_groups(sf, include_ms1=False)
 
     # _band_ms2_groups drains the dict as it goes, so the un-banded peaks are
     # released window by window instead of sitting in memory alongside the ~2x
@@ -700,12 +943,12 @@ def reband_ms2(sf: SpectrumFile, width: float) -> bool:
     return True
 
 
-def loadSpectra(input_file: str) -> SpectrumFile:
+def loadSpectra(input_file: str, bruker_sdk_path: str = None) -> SpectrumFile:
     """Drop-in replacement for load_files.loadSpectra with format dispatch."""
     logger.info("Loading Spectra...")
     # python_spec_file = input_file + "_pythonspec"
     # if not os.path.exists(python_spec_file):
-    reader = FileReader(input_file)
+    reader = FileReader(input_file, bruker_sdk_path)
     spectra = reader.read()
     #     with open(python_spec_file, "wb") as f:
     #         pickle.dump(spectra, f)

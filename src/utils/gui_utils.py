@@ -68,6 +68,7 @@ SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 
 DEFAULT_SETTINGS = {
     "rawfilereader_path": None,
+    "bruker_sdk_path": None,
 }
 
 def load_settings():

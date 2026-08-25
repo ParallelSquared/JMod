@@ -243,11 +243,24 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
         file_reader.load_rawfilereader(reader_path)
 
-    
+    # Bruker SDK, resolved the same way: a CLI arg wins and is persisted,
+    # otherwise fall back to the stored setting. Only used for a .d with no
+    # peaks.parquet yet, where it supplies the calibration for centroiding.
+    bruker_sdk_path = None
+    if config.args.mzml.rstrip("/").lower().endswith(".d"):
+        settings = load_settings()
+
+        if config.args.bruker_sdk_path is not None:
+            bruker_sdk_path = config.args.bruker_sdk_path
+            settings["bruker_sdk_path"] = bruker_sdk_path
+            save_settings(settings)
+        else:
+            bruker_sdk_path = settings.get("bruker_sdk_path")
+
     ######################################################
     #### Load the data
     spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
-    DIAspectra=file_reader.loadSpectra(mzml_file)
+    DIAspectra=file_reader.loadSpectra(mzml_file, bruker_sdk_path=bruker_sdk_path)
 
     if config.args.test_mode:
         logger.info(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
