@@ -581,6 +581,26 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     _pa_schema = pl.DataFrame(schema=_pl_schema).to_arrow().schema
     _BUFFER_SIZE = 1000  # results to buffer before flushing to disk
 
+    # Spectra submitted per chunk.  Bounds how many results are held at once.
+    _CHUNK = 100
+
+    # Constant across every spectrum and every batch, so build the kwargs once.
+    _fit_kwargs = dict(library=spectrumLibrary,
+                       rt_mz=rt_mz,
+                       all_keys=all_keys,
+                       dino_features=None,
+                       rt_filter=True,
+                       rt_tol=config.opt_rt_tol,
+                       ms1_tol=config.opt_ms1_tol,
+                       mz_tol=(config.args.ppm * 1e-6),
+                       ms1_spectra=DIAspectra.ms1scans,
+                       return_frags=False,
+                       decoy=True,
+                       output_folder=results_folder_path,
+                       frag_index=frag_index,
+                       ms1_rt=_ms1_rt,
+                       im_bin_ms1=_im_bin_ms1)
+
     # Measure CPU utilization across the search to assess GIL contention
     import psutil as _psutil
     _search_proc = _psutil.Process(os.getpid())
@@ -602,35 +622,29 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # stays "Resource busy" until the next mount cycle.
         with pq.ParquetWriter(batch_parquet_path, _pa_schema) as writer:
             buffer = []
-            with ThreadPoolExecutor(max_workers=n_threads) as pool:
-                futures = {pool.submit(fit_to_lib2, dia_spec,
-                                       library=spectrumLibrary,
-                                       rt_mz=rt_mz,
-                                       all_keys=all_keys,
-                                       dino_features=None,
-                                       rt_filter=True,
-                                       rt_tol=config.opt_rt_tol,
-                                       ms1_tol=config.opt_ms1_tol,
-                                       mz_tol=(config.args.ppm * 1e-6),
-                                       ms1_spectra=DIAspectra.ms1scans,
-                                       return_frags=False,
-                                       decoy=True,
-                                       output_folder=results_folder_path,
-                                       frag_index=frag_index,
-                                       ms1_rt=_ms1_rt,
-                                       im_bin_ms1=_im_bin_ms1): i
-                          for i, dia_spec in enumerate(batch_spectra)}
-
-                for f in tqdm.tqdm(as_completed(futures), total=len(futures)):
-                    result = f.result()
-                    if result:
-                        buffer.extend(result)
-                        n_results += len(result)
-                        if len(buffer) >= _BUFFER_SIZE:
-                            _col_data = {col: [row[i] for row in buffer]
-                                         for i, col in enumerate(_pl_schema)}
-                            writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
-                            buffer.clear()
+            # Submit in chunks and drain each before submitting the next.
+            # Holding every future for the whole batch (the previous dict, keyed
+            # by an index nothing read) kept each completed future -- and so its
+            # result rows -- alive until the batch ended, so flushing ``buffer``
+            # freed nothing and peak memory grew with the task count.  ~190k
+            # tasks was enough to exhaust the machine.
+            with ThreadPoolExecutor(max_workers=n_threads) as pool, \
+                    tqdm.tqdm(total=len(batch_spectra)) as bar:
+                for _start in range(0, len(batch_spectra), _CHUNK):
+                    futures = [pool.submit(fit_to_lib2, dia_spec, **_fit_kwargs)
+                               for dia_spec in batch_spectra[_start:_start + _CHUNK]]
+                    for f in as_completed(futures):
+                        result = f.result()
+                        bar.update(1)
+                        if result:
+                            buffer.extend(result)
+                            n_results += len(result)
+                            if len(buffer) >= _BUFFER_SIZE:
+                                _col_data = {col: [row[i] for row in buffer]
+                                             for i, col in enumerate(_pl_schema)}
+                                writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+                                buffer.clear()
+                    futures.clear()
 
             # Flush remaining buffered results
             if buffer:
