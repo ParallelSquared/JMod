@@ -31,6 +31,7 @@ from src.fragment_correlation import (
     _build_window_csr,
     _covering_scans_numba,
     _build_peak_lists,
+    feature_columns,
     _scan_metadata,
     _match_and_fill_numba,
     _match_and_fill_im_numba,
@@ -521,7 +522,9 @@ class TestPublicAPI:
             fwhm=2.0,
             mz_tol=50e-6,
         )
-        assert list(result.columns) == list(FEATURE_COLUMNS)
+        # No mobility on these scans, so the IM block is omitted.
+        assert list(result.columns) == feature_columns(False)
+        assert not any(c.startswith("im_") for c in result.columns)
         assert list(result.index) == [11, 22]
 
     def test_negative_coeff_yields_nan_or_missing(self):
@@ -730,3 +733,38 @@ class TestIMBinSelection:
             spectra=spectra, library=library, fdc=fdc,
             fwhm=3.0, mz_tol=50e-6, im_tol=0.0)
         assert off["n_corr_scans"].iloc[0] == 22
+
+    def test_im_columns_only_emitted_for_im_runs(self):
+        library, spectra = self._scenario()
+        fdc = pd.DataFrame({"seq": ["PEPTIDE"], "z": [2], "rt": [10.0], "coeff": [5.0]})
+
+        on = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.02)
+        assert list(on.columns) == feature_columns(True) == list(FEATURE_COLUMNS)
+
+        # Mobility present but no tolerance: the IM features cannot be computed,
+        # so they are dropped rather than handed to the model as all-NaN.
+        off = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.0)
+        assert list(off.columns) == feature_columns(False)
+        assert not any(c.startswith("im_") for c in off.columns)
+        # The non-IM columns keep their positions, so shared features line up.
+        assert list(off.columns) == list(on.columns)[:len(off.columns)]
+
+    def test_ranked_defaults_do_not_overwrite_scalar_slots(self):
+        # A row that never reaches the kernels: ranked slots default to -1,
+        # scalar correlation features stay NaN.
+        library, spectra = self._scenario()
+        fdc = pd.DataFrame({"seq": ["NOPE"], "z": [2], "rt": [10.0], "coeff": [5.0]})
+        res = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.02)
+
+        assert res["top1_frag_mean_corr"].iloc[0] == -1.0
+        assert res["im_top1_frag_mean_corr"].iloc[0] == -1.0
+        assert np.isnan(res["mean_prec_frag_corr"].iloc[0])
+        assert np.isnan(res["max_prec_frag_corr"].iloc[0])
+        assert np.isnan(res["im_prec_frag_mean"].iloc[0])
+        assert np.isnan(res["im_mean_frag_corr"].iloc[0])

@@ -682,8 +682,6 @@ def empirical_fit(output_df, results_folder=None):
                 (cor_filter.sum() - bad_IDs.sum()) < 800):
             break
 
-    logger.debug(f"{feature_percentile} {np.round(outside_ratio, 4)} {cor_filter.sum()}")
-
     cor_filter = np.logical_and(
         cor_filter,
         np.abs(first_rt_diffs) < first_rt_tolerance

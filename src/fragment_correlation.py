@@ -99,6 +99,9 @@ _IDX_IM_MAX = FEATURE_COLUMNS.index("im_prec_frag_max")
 # Start of the 38-slot IM pairwise block (same layout as the RT block).
 _IDX_IM_PAIRWISE = FEATURE_COLUMNS.index("im_mean_frag_corr")
 
+# Every IM-derived column is a suffix of FEATURE_COLUMNS, starting here.
+_N_NON_IM_FEATURES = _IDX_IM_MEAN
+
 # Gaussian width on the mobility axis for the grid-free kernel, as a fraction
 # of the fitted IM tolerance. opt_im_precision is the 99% coverage of the Laplace
 # core, b*ln(100), and the core SD is b*sqrt(2), so sigma = sqrt(2)/ln(100).
@@ -110,6 +113,16 @@ _N_RANKED = 10  # how many ranked slots per category
 
 # Number of kernel output slots (everything after n_corr_scans and n_corr_frags)
 _N_KERNEL_FEATURES = len(FEATURE_COLUMNS) - 2
+
+# Ranked slots default to -1 (missing); the scalar features stay NaN.
+_IDX_RANKED_RT = FEATURE_COLUMNS.index("top1_frag_mean_corr")
+_IDX_RANKED_IM = FEATURE_COLUMNS.index("im_top1_frag_mean_corr")
+_N_RANKED_SLOTS = 3 * _N_RANKED
+
+
+def feature_columns(use_im):
+    """The columns emitted for a run with or without ion mobility."""
+    return list(FEATURE_COLUMNS if use_im else FEATURE_COLUMNS[:_N_NON_IM_FEATURES])
 
 
 # ---------------------------------------------------------------------------
@@ -842,34 +855,43 @@ def compute_fragment_correlations(
     Returns
     -------
     pandas.DataFrame
-        Indexed to match ``fdc.index``, one column per entry of
-        :data:`FEATURE_COLUMNS`. Rows with ``coeff <= 0``, no covering scans,
-        or fewer than two surviving fragments receive NaN for the correlation
-        features. Does not mutate ``fdc`` or ``library``. The first call on a given
-        ``spectra`` builds its cached flat MS2 peak arrays and repoints the scans at
-        views into them — same values, dtypes and shapes, no observable change.
+        Indexed to match ``fdc.index``, with the columns :func:`feature_columns`
+        gives for this run. Rows with ``coeff <= 0``, no covering scans, or fewer
+        than two surviving fragments receive NaN for the correlation features.
+        Does not mutate ``fdc``, ``library`` or ``spectra``.
     """
     n_rows = len(fdc)
-    n_feat = len(FEATURE_COLUMNS)
-    out = np.full((n_rows, n_feat), np.nan, dtype=np.float64)
-    # Ranked feature columns default to -1 (missing), not NaN.
-    # Last 2 columns (precursor-fragment corr) stay NaN.
-    out[:, 10:-2] = -1.0
 
+    def _empty(use_im):
+        cols = feature_columns(use_im)
+        arr = np.full((n_rows, len(cols)), np.nan, dtype=np.float64)
+        arr[:, _IDX_RANKED_RT:_IDX_RANKED_RT + _N_RANKED_SLOTS] = -1.0
+        if use_im:
+            arr[:, _IDX_RANKED_IM:_IDX_RANKED_IM + _N_RANKED_SLOTS] = -1.0
+        return pd.DataFrame(arr, index=fdc.index, columns=cols)
+
+    # Nothing to correlate: bail before touching spectra.
     if n_rows == 0 or fwhm is None or not np.isfinite(fwhm) or fwhm <= 0:
-        return pd.DataFrame(out, index=fdc.index, columns=list(FEATURE_COLUMNS))
+        return _empty(False)
 
     ms2scans = spectra.ms2scans
     if len(ms2scans) == 0:
-        return pd.DataFrame(out, index=fdc.index, columns=list(FEATURE_COLUMNS))
+        return _empty(False)
+
+    # IM-aware matching only when the data has ion mobility and a tolerance is set.
+    _use_im = im_tol > 0.0 and getattr(ms2scans[0], "mobility", None) is not None
+
+    columns = feature_columns(_use_im)
+    out = np.full((n_rows, len(columns)), np.nan, dtype=np.float64)
+    out[:, _IDX_RANKED_RT:_IDX_RANKED_RT + _N_RANKED_SLOTS] = -1.0
+    if _use_im:
+        out[:, _IDX_RANKED_IM:_IDX_RANKED_IM + _N_RANKED_SLOTS] = -1.0
 
     logger.info("Computing fragment-ion correlation features")
     scan_rt, scan_win_lo, scan_win_hi = _scan_metadata(ms2scans)
     (win_lo, win_hi, win_scan_offsets,
      win_scan_idx, win_scan_rt) = _build_window_csr(scan_rt, scan_win_lo, scan_win_hi)
 
-    # IM-aware matching only when the data has ion mobility and a tolerance is set.
-    _use_im = im_tol > 0.0 and getattr(ms2scans[0], "mobility", None) is not None
     peaks_mz, peaks_int, peaks_mob = _build_peak_lists(ms2scans, _use_im)
     if _use_im:
         logger.info(f"IM-aware fragment correlations (im_tol={im_tol:.5f})")
@@ -1066,4 +1088,4 @@ def compute_fragment_correlations(
                     out[row, _IDX_IM_PAIRWISE:_IDX_IM_PAIRWISE + _n_pairwise_feats] = \
                         im_feat_scratch
 
-    return pd.DataFrame(out, index=fdc.index, columns=list(FEATURE_COLUMNS))
+    return pd.DataFrame(out, index=fdc.index, columns=columns)

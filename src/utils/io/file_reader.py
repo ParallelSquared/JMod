@@ -24,7 +24,6 @@ import polars as pl
 from src.utils.io.load_files import (
     Spectrum, SpectrumFile, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
 )
-from src.utils.io import im_watershed
 from src.utils.io.tdf_bin import TdfBinReader, frame_peak_counts
 from src.logger import logger
 
@@ -451,18 +450,14 @@ def _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter):
     both in full at once costs an extra ~9 GB on a large timsTOF .d.  Callers
     that need the un-banded peaks afterwards pass a shallow copy of the dict.
 
-    Overlapping fixed-bin mode (the pre-watershed "overlapping windows"): each
-    peak lands in up to 2 overlapping fixed IM bins (denormalized).  Swap the
-    ``bands = ...`` line to re-enable the data-driven watershed.
+    Each peak lands in up to 2 overlapping fixed IM bins (denormalized).
     """
-    im_watershed.reset_timings()
     for key in sorted(ms2_groups.keys()):
         rt_val, prec_mz_val, iso_width, ce = key
         mz_concat, intens_concat, mob_concat = ms2_groups.pop(key)
         if len(mz_concat) == 0:
             continue
 
-        # bands = im_watershed.segment_window(mob_concat, intens_concat)  # watershed mode
         _pidxs, _bidxs = _assign_peaks_to_im_bins(mob_concat, im_bins)
         bands = []
         if _bidxs.shape[0] > 0:
@@ -477,7 +472,6 @@ def _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter):
                 bands.append((float(im_bins[b, 0]), float(im_bins[b, 1]), _chunk))
 
         half_width = iso_width / 2.0
-        t0 = perf_counter()
         for im_lo, im_hi, peak_idx in bands:
             band_mz = mz_concat[peak_idx]
             band_intens = intens_concat[peak_idx]
@@ -516,7 +510,6 @@ def _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter):
             sf.ms2_by_id[scan_counter] = idx
             sf.scan_pos[scan_counter] = [2, idx]
             scan_counter += 1
-        im_watershed.TIMINGS["spectrum_construct"] += perf_counter() - t0
     return scan_counter
 
 
@@ -881,7 +874,6 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
     logger.info("Building MS2 spectra with overlapping fixed IM bins")
     scan_counter = _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter)
     del ms2_groups
-    logger.info(im_watershed.format_timings())
     logger.info(
         f"MS2 scans after IM binning: {len(sf.ms2scans)} "
         f"(original windows: {n_windows})"
