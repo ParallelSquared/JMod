@@ -63,8 +63,11 @@ class Spectrum:
         self.level=scan["ms level"]
         self.RT = scan['scanList']['scan'][0]["scan start time"]
         self.injection_time = scan["scanList"]["scan"][0]["ion injection time"]/1000 # assume milliseconds
-        self.mz = scan["m/z array"]
-        self.intens = scan["intensity array"]#/self.injection_time # Normalize by injection time
+        # Normalized to the peak dtypes at ingest, as the .d reader already does,
+        # so every path hands downstream the same types and no consumer has to
+        # re-cast (which for a large run means a second copy of every peak).
+        self.mz = np.ascontiguousarray(scan["m/z array"], dtype=PEAK_MZ_DTYPE)
+        self.intens = np.ascontiguousarray(scan["intensity array"], dtype=PEAK_INT_DTYPE)#/self.injection_time # Normalize by injection time
         self.scanwindow = [scan["scanList"]["scan"][0]["scanWindowList"]["scanWindow"][0][i] for i in ["scan window lower limit","scan window upper limit"]]
         if self.level==2:
             self.collision_energy = scan["precursorList"]["precursor"][0]["activation"]["collision energy"]
@@ -105,18 +108,18 @@ class Spectrum:
         centroid_stream = raw_file.GetCentroidStream(scan_number, True) if is_ftms else None
 
         if centroid_stream is not None and centroid_stream.Length > 0:
-            self.mz = np.array(list(centroid_stream.Masses), dtype=np.float64)
-            self.intens = np.array(list(centroid_stream.Intensities), dtype=np.float64)
+            self.mz = np.array(list(centroid_stream.Masses), dtype=PEAK_MZ_DTYPE)
+            self.intens = np.array(list(centroid_stream.Intensities), dtype=PEAK_INT_DTYPE)
         else:
             scan = Scan.FromFile(raw_file, scan_number)
             # pwiz guard: degenerate scans get an empty spectrum, not an exception
             if scan.SegmentedScanAccess.Positions.Length == 0 or scan.ScanStatistics.BasePeakIntensity == 0:
-                self.mz = np.array([], dtype=np.float64)
-                self.intens = np.array([], dtype=np.float64)
+                self.mz = np.array([], dtype=PEAK_MZ_DTYPE)
+                self.intens = np.array([], dtype=PEAK_INT_DTYPE)
             else:
                 centroided = Scan.ToCentroid(scan)
-                self.mz = np.array(list(centroided.SegmentedScanAccess.Positions), dtype=np.float64)
-                self.intens = np.array(list(centroided.SegmentedScanAccess.Intensities), dtype=np.float64)
+                self.mz = np.array(list(centroided.SegmentedScanAccess.Positions), dtype=PEAK_MZ_DTYPE)
+                self.intens = np.array(list(centroided.SegmentedScanAccess.Intensities), dtype=PEAK_INT_DTYPE)
 
         self.scanwindow = [scan_stats.LowMass, scan_stats.HighMass]
 

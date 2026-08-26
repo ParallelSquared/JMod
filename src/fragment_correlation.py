@@ -11,12 +11,12 @@ No module-level mutable state, no shared scratch. Hot paths are
 ``@nb.njit(cache=False, nogil=True)`` kernels that release the GIL so callers can
 parallelize over rows or files under free-threaded Python.
 
-The one caveat is setup: ``compute_fragment_correlations`` asks the SpectrumFile
-for its flattened MS2 peak arrays, which on first call builds them and repoints
-the scans at views into them (see ``SpectrumFile.flatten_ms2_peaks``). That build
-happens once, before the per-row loop, and is not safe to race against another
-first call on the same SpectrumFile. Values are unchanged either way, so the
-per-row work below remains order- and thread-independent.
+Setup wraps the scans' existing peak arrays in numba typed lists rather than
+concatenating them into flat buffers. The kernels read one scan at a time, so
+per-scan contiguity is all they need, and the peaks are never copied: a
+~1e9-peak timsTOF .d would otherwise need a second ~18 GB of buffers alongside
+the originals. Nothing is mutated, so the per-row work below remains order- and
+thread-independent, and setup is safe to run concurrently.
 """
 
 #  Copyright (c) 2026 Parallel Squared Technology Institute
@@ -42,6 +42,9 @@ import tqdm
 
 from src.logger import logger
 from src.utils.frag_encoding import is_isotope
+from src.utils.io.load_files import (
+    PEAK_MZ_DTYPE, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
+)
 
 
 FEATURE_COLUMNS = (
@@ -114,34 +117,17 @@ _N_KERNEL_FEATURES = len(FEATURE_COLUMNS) - 2
 # ---------------------------------------------------------------------------
 
 
-def _flatten_ms2_peaks(spectra):
-    """Get the CSR peak arrays plus per-scan RT and isolation-window bounds.
+def _scan_metadata(ms2scans):
+    """Per-scan RT and isolation-window bounds.
 
-    The peak arrays come from :meth:`SpectrumFile.flatten_ms2_peaks`, which builds
-    them once and repoints the scans at views, so this costs no additional per-peak
-    memory. Only the small per-scan metadata (three arrays of length n_scans) is
-    built here.
+    Three arrays of length n_scans, so this is negligible next to the peak data.
 
     Returns
     -------
-    peak_mz_flat : np.ndarray (float64)
-    peak_int_flat : np.ndarray (float32)
-        Concatenated peak arrays in scan order.
-    peak_mob_flat : np.ndarray (float32)
-        Concatenated per-peak ion mobility (1/K0), parallel to ``peak_mz_flat``.
-        Zero-length when the data has no ion mobility (e.g. mzML) — callers must
-        gate on ion mobility before indexing it.
-    peak_offsets : np.ndarray (int64, shape n_scans+1)
-        Scan ``i``'s peaks live in ``peak_mz_flat[offsets[i]:offsets[i+1]]``.
     scan_rt : np.ndarray (float64, shape n_scans)
     scan_win_lo, scan_win_hi : np.ndarray (float64, shape n_scans)
-        Isolation-window bounds per scan.
     """
-    ms2scans = spectra.ms2scans
     n = len(ms2scans)
-    (peak_mz_flat, peak_int_flat,
-     peak_mob_flat, peak_offsets) = spectra.flatten_ms2_peaks()
-
     scan_rt = np.empty(n, dtype=np.float64)
     scan_win_lo = np.empty(n, dtype=np.float64)
     scan_win_hi = np.empty(n, dtype=np.float64)
@@ -154,8 +140,43 @@ def _flatten_ms2_peaks(spectra):
         scan_win_lo[i] = target - lower
         scan_win_hi[i] = target + upper
 
-    return (peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
-            scan_rt, scan_win_lo, scan_win_hi)
+    return scan_rt, scan_win_lo, scan_win_hi
+
+
+def _build_peak_lists(ms2scans, need_mob):
+    """Wrap the existing per-scan peak arrays in numba typed lists.
+
+    The kernels only ever read one scan's peaks at a time, so they need
+    per-scan contiguity -- which the scans already have. Handing them typed
+    lists therefore costs no per-peak memory at all, where the previous
+    CSR-flattening built a second full copy of the run alongside the first: for
+    a ~1e9-peak timsTOF .d that was ~18 GB extra, and on Windows (no
+    overcommit) it failed outright at np.empty.
+
+    All three ingest paths now normalize to the peak dtypes at read time, so
+    ``ascontiguousarray`` is a no-op here and the lists are pure views. It stays
+    as a cheap guard: numba needs one concrete element type per list, and a
+    single stray dtype would otherwise fail to compile deep inside a kernel.
+    """
+    peaks_mz = nb.typed.List()
+    peaks_int = nb.typed.List()
+    peaks_mob = nb.typed.List()
+
+    for s in ms2scans:
+        peaks_mz.append(np.ascontiguousarray(s.mz, dtype=PEAK_MZ_DTYPE))
+        peaks_int.append(np.ascontiguousarray(s.intens, dtype=PEAK_INT_DTYPE))
+        if need_mob:
+            mob = getattr(s, "mobility", None)
+            if mob is None:
+                mob = np.full(len(s.mz), np.nan, dtype=PEAK_MOB_DTYPE)
+            peaks_mob.append(np.ascontiguousarray(mob, dtype=PEAK_MOB_DTYPE))
+
+    if not need_mob:
+        # Never indexed (the IM kernels only run when mobility exists), but the
+        # list still needs a concrete element type for numba to compile against.
+        peaks_mob.append(np.empty(0, dtype=PEAK_MOB_DTYPE))
+
+    return peaks_mz, peaks_int, peaks_mob
 
 
 def _build_window_csr(scan_rt, scan_win_lo, scan_win_hi):
@@ -251,9 +272,8 @@ def _covering_scans_numba(
 
 @nb.njit(cache=False, nogil=True)
 def _match_and_fill_numba(
-    peak_mz_flat,
-    peak_int_flat,
-    peak_offsets,
+    peaks_mz,
+    peaks_int,
     scan_idx,
     n_scans_used,
     frag_mz,
@@ -267,15 +287,13 @@ def _match_and_fill_numba(
     n_frags = frag_mz.shape[0]
     for i in range(n_scans_used):
         s = scan_idx[i]
-        lo = peak_offsets[s]
-        hi = peak_offsets[s + 1]
-        n_peaks = hi - lo
+        scan_mz = peaks_mz[s]
+        scan_in = peaks_int[s]
+        n_peaks = scan_mz.shape[0]
         if n_peaks == 0:
             for j in range(n_frags):
                 out_matrix[i, j] = 0.0
             continue
-        scan_mz = peak_mz_flat[lo:hi]
-        scan_in = peak_int_flat[lo:hi]
         for j in range(n_frags):
             q = frag_mz[j]
             pos = np.searchsorted(scan_mz, q)
@@ -301,10 +319,9 @@ def _match_and_fill_numba(
 
 @nb.njit(cache=False, nogil=True)
 def _match_and_fill_im_numba(
-    peak_mz_flat,
-    peak_int_flat,
-    peak_mob_flat,
-    peak_offsets,
+    peaks_mz,
+    peaks_int,
+    peaks_mob,
     scan_idx,
     n_scans_used,
     frag_mz,
@@ -343,12 +360,11 @@ def _match_and_fill_im_numba(
         n_matched = 0
         for i in range(n_scans_used):
             s = scan_idx[i]
-            lo = peak_offsets[s]
-            hi = peak_offsets[s + 1]
-            n_peaks = hi - lo
+            scan_mz = peaks_mz[s]
+            scan_mob = peaks_mob[s]
+            n_peaks = scan_mz.shape[0]
             if n_peaks == 0:
                 continue
-            scan_mz = peak_mz_flat[lo:hi]
             for j in range(n_frags):
                 q = frag_mz[j]
                 pos = np.searchsorted(scan_mz, q)
@@ -365,7 +381,7 @@ def _match_and_fill_im_numba(
                 if diff < 0.0:
                     diff = -diff
                 if diff <= q * ppm_tol:
-                    m = peak_mob_flat[lo + cand]
+                    m = scan_mob[cand]
                     if m == m:
                         out_mob[i, j] = m
                         n_matched += 1
@@ -387,15 +403,14 @@ def _match_and_fill_im_numba(
     # ── Summation pass: sum all peaks within m/z tol (and, if gating, im_tol) ──
     for i in range(n_scans_used):
         s = scan_idx[i]
-        lo = peak_offsets[s]
-        hi = peak_offsets[s + 1]
-        n_peaks = hi - lo
+        scan_mz = peaks_mz[s]
+        scan_in = peaks_int[s]
+        scan_mob = peaks_mob[s]
+        n_peaks = scan_mz.shape[0]
         if n_peaks == 0:
             for j in range(n_frags):
                 out_matrix[i, j] = 0.0
             continue
-        scan_mz = peak_mz_flat[lo:hi]
-        scan_in = peak_int_flat[lo:hi]
         for j in range(n_frags):
             q = frag_mz[j]
             tol = q * ppm_tol
@@ -404,7 +419,7 @@ def _match_and_fill_im_numba(
             acc = 0.0
             for p in range(lo_pos, hi_pos):
                 if gate:
-                    mob = peak_mob_flat[lo + p]
+                    mob = scan_mob[p]
                     if mob == mob and abs(mob - prec_im) <= im_tol:
                         acc += scan_in[p]
                 else:
@@ -612,7 +627,7 @@ def _pairwise_corr_and_features_numba(matrix, out_features):
 
 
 @nb.njit(cache=False, nogil=True)
-def _kernel_pairwise_numba(peak_mz, peak_int, peak_mob, peak_offsets,
+def _kernel_pairwise_numba(peaks_mz, peaks_int, peaks_mob,
                            scans, n_scans, queries, mz_tol, sigma_im,
                            out_features, prec_out):
     """Grid-free RT x IM similarity between ions, and its feature block.
@@ -643,11 +658,11 @@ def _kernel_pairwise_numba(peak_mz, peak_int, peak_mob, peak_offsets,
 
     for si in range(n_scans):
         sc = scans[si]
-        lo = peak_offsets[sc]
-        hi = peak_offsets[sc + 1]
-        if hi <= lo:
+        scan_mz = peaks_mz[sc]
+        scan_int = peaks_int[sc]
+        scan_mob = peaks_mob[sc]
+        if scan_mz.shape[0] == 0:
             continue
-        scan_mz = peak_mz[lo:hi]
         for j in range(n_q):
             q = queries[j]
             tol = q * mz_tol
@@ -661,11 +676,11 @@ def _kernel_pairwise_numba(peak_mz, peak_int, peak_mob, peak_offsets,
                     continue
                 acc = 0.0
                 for i in range(p0[a], p1[a]):
-                    mi = peak_mob[lo + i]
-                    wi = peak_int[lo + i]
+                    mi = scan_mob[i]
+                    wi = scan_int[i]
                     for k in range(p0[b], p1[b]):
-                        d = mi - peak_mob[lo + k]
-                        acc += wi * peak_int[lo + k] * np.exp(-d * d * inv2s2)
+                        d = mi - scan_mob[k]
+                        acc += wi * scan_int[k] * np.exp(-d * d * inv2s2)
                 gram[a, b] += acc
                 if b != a:
                     gram[b, a] += acc
@@ -849,13 +864,13 @@ def compute_fragment_correlations(
         return pd.DataFrame(out, index=fdc.index, columns=list(FEATURE_COLUMNS))
 
     logger.info("Computing fragment-ion correlation features")
-    (peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
-     scan_rt, scan_win_lo, scan_win_hi) = _flatten_ms2_peaks(spectra)
+    scan_rt, scan_win_lo, scan_win_hi = _scan_metadata(ms2scans)
     (win_lo, win_hi, win_scan_offsets,
      win_scan_idx, win_scan_rt) = _build_window_csr(scan_rt, scan_win_lo, scan_win_hi)
 
     # IM-aware matching only when the data has ion mobility and a tolerance is set.
     _use_im = im_tol > 0.0 and getattr(ms2scans[0], "mobility", None) is not None
+    peaks_mz, peaks_int, peaks_mob = _build_peak_lists(ms2scans, _use_im)
     if _use_im:
         logger.info(f"IM-aware fragment correlations (im_tol={im_tol:.5f})")
         # Per-scan IM-bin bounds (parallel to ms2scans / scan indices), used to
@@ -959,7 +974,7 @@ def compute_fragment_correlations(
             # intensity only when its peak mobility is within `im_tol` of prec_im.
             # Cheap here because use_scans holds one scan per RT (not all bands).
             _match_and_fill_im_numba(
-                peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
+                peaks_mz, peaks_int, peaks_mob,
                 use_scans, n_use, frag_mz_kept, float(mz_tol), float(im_tol),
                 prec_im, matrix, _mob_scratch,
             )
@@ -968,7 +983,7 @@ def compute_fragment_correlations(
             n_use = n_scans
             matrix = np.empty((n_use, n_frags_kept), dtype=np.float64)
             _match_and_fill_numba(
-                peak_mz_flat, peak_int_flat, peak_offsets,
+                peaks_mz, peaks_int,
                 use_scans, n_use, frag_mz_kept, float(mz_tol), matrix,
             )
 
@@ -992,13 +1007,13 @@ def compute_fragment_correlations(
             # measured at the fragment-derived mobility.
             _prec_mob_scratch = np.empty((n_use, 1), dtype=np.float64)
             _match_and_fill_im_numba(
-                peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
+                peaks_mz, peaks_int, peaks_mob,
                 use_scans, n_use, prec_mz_arr_q, float(mz_tol), float(im_tol),
                 prec_im, prec_matrix, _prec_mob_scratch,
             )
         else:
             _match_and_fill_numba(
-                peak_mz_flat, peak_int_flat, peak_offsets,
+                peaks_mz, peaks_int,
                 use_scans, n_use, prec_mz_arr_q, float(mz_tol), prec_matrix,
             )
         _precursor_frag_corr_numba(
@@ -1042,7 +1057,7 @@ def compute_fragment_correlations(
                 _sigma_im = _IM_KERNEL_SIGMA_FRAC * float(im_tol)
                 if _sigma_im > 0.0:
                     _kernel_pairwise_numba(
-                        peak_mz_flat, peak_int_flat, peak_mob_flat, peak_offsets,
+                        peaks_mz, peaks_int, peaks_mob,
                         _band_scans, _n_band, _q, float(mz_tol), _sigma_im,
                         im_feat_scratch, im_prec_scratch,
                     )
