@@ -56,7 +56,7 @@ class TestDiaPrep2D:
             np.array([0], dtype=np.int64), np.array([2], dtype=np.int32),
             np.array([0, 1], dtype=np.int32), np.array([0], dtype=np.int64),
             np.array([2], dtype=np.int32), np.array([0], dtype=np.int64),
-            np.array([500.0]), np.array([500.0]), 20e-6,
+            np.array([500.0]), np.array([500.0]), np.array([0.90]), 20e-6,
             0.0, 0, False,
             bmz, bint, bmob, 20e-6, 0.05, True)
         passing, flat_rows, all_coords = res[0], res[1], res[6]
