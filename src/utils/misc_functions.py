@@ -558,9 +558,6 @@ def cosim(x: npt.NDArray[np.float64],y: npt.NDArray[np.float64]) -> np.float64:
 
 
 
-import warnings
-
-from scipy import stats
 
 
 
@@ -763,16 +760,14 @@ def unstring_floats(string,delim=";"):
 
 
 
-from sklearn.ensemble import RandomForestClassifier
 def fit_model(data):
+    from sklearn.ensemble import RandomForestClassifier
     rf = RandomForestClassifier(n_estimators = 100, max_depth=10)
     rf.fit(*data)
     return rf
 
 
 
-from scipy.interpolate import interp1d
-import statsmodels.api as sm
 
 
 def fragment_cor(df: pd.core.frame.DataFrame,didx: int,fn: str="cos") -> np.float64:

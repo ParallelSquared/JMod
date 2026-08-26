@@ -413,7 +413,8 @@ def create_decoy_lib(library, rules, tag=None, n_iso=0):
     all_keys = list(library.keys())
     n_total = len(all_keys)
 
-    p = multiprocessing.Pool(min(multiprocessing.cpu_count(), 61))
+    p = multiprocessing.Pool(min(multiprocessing.cpu_count(), 61),
+                             initializer=config.limit_blas_threads)
     results = []
     chunksize = 1000
     arg_gen = _decoy_arg_gen(library, all_keys, rules, tag, n_iso)
