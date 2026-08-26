@@ -33,6 +33,18 @@ from src.logger import logger
 MIN_ION_COUNT_MS1 = 0.5
 MIN_ION_COUNT_MS2 = 2.0
 
+# Bruker's timsdata SDK (5.0.4) unpacks to a folder holding exactly two platform
+# directories -- win64/ and linux64/ -- alongside include/, examples/ and
+# thirdparty/. Bruker publishes no macOS build, so there is deliberately no
+# .dylib name and no 32-bit directory here; both would be dead entries.
+_BRUKER_LIB_NAME = {"win32": "timsdata.dll"}
+_BRUKER_LIB_DEFAULT = "libtimsdata.so"
+_BRUKER_PLATFORM_DIR = {"win32": "win64"}
+_BRUKER_PLATFORM_DIR_DEFAULT = "linux64"
+# Deep enough to find <sdk_root>/linux64/lib when pointed one level above the
+# root; shallow enough that pointing at a large directory stays cheap.
+_BRUKER_SDK_MAX_DEPTH = 2
+
 
 def compute_im_bins(im_lo, im_hi, width=0.05, stride=0.025):
     """Return (N, 2) array of [bin_lo, bin_hi] for overlapping IM bins.
@@ -192,6 +204,13 @@ def _centroid_d(d_path: str, peaks_path: str, sdk_path: str = None) -> None:
         )
 
     sdk_path = sdk_path or None
+    # run_jmod resolves this to a concrete library file before we ever get here.
+    # Re-check, because the GUI writes bruker_sdk_path into settings directly and
+    # a stale value would otherwise reach peppy_sage and hit its directory
+    # fallback instead of failing with something the user can act on.
+    if sdk_path and not os.path.isfile(sdk_path):
+        _fail_bruker(f"Bruker timsdata library not found: {sdk_path}")
+
     # TODO: plumb these through the settings/CLI like bruker_sdk_path once we
     # know which values we actually want. Lowering them keeps signal the
     # defaults discard, which is worth revisiting.
@@ -1011,4 +1030,139 @@ def load_rawfilereader(sdk_path):
         from src.utils.gui_utils import send_raise_to_TK
         send_raise_to_TK(error_message)
         raise ValueError(error_message) from e
+
+
+_BRUKER_REMEDIATION = (
+    "Point --bruker_sdk_path at the unzipped Bruker timsdata SDK folder (the one "
+    "containing win64/ and linux64/), at the platform subfolder itself, or directly "
+    "at the library file. You can also set \"bruker_sdk_path\" in JMod/data/settings.json. "
+    "Omit --bruker_sdk_path entirely to centroid without the SDK, with m/z and 1/K0 "
+    "approximated from analysis.tdf (results will not match an SDK-centroided run)."
+)
+
+
+def _bruker_lib_name(platform):
+    return _BRUKER_LIB_NAME.get(platform, _BRUKER_LIB_DEFAULT)
+
+
+def _fail_bruker(message):
+    """Report a bad --bruker_sdk_path the way the rest of the codebase does.
+
+    send_raise_to_TK sets config.error_already_handled, which lets @log_exceptions
+    exit cleanly instead of dumping a traceback, so it must come before the raise.
+    """
+    from src.utils.gui_utils import send_raise_to_TK
+    full = f"{message}\n\n{_BRUKER_REMEDIATION}"
+    send_raise_to_TK(full)
+    raise FileNotFoundError(full)
+
+
+def _safe_iterdir(path):
+    """Children of ``path``, or nothing if it cannot be read.
+
+    An unreadable sibling directory should not abort the search.
+    """
+    try:
+        return list(path.iterdir())
+    except (OSError, PermissionError):
+        return []
+
+
+def _search_bruker_lib(root, lib_name, max_depth):
+    """Breadth-first search for ``lib_name`` under ``root``, bounded to max_depth.
+
+    Breadth-first so a shallower hit always beats a deeper one, and sorted at every
+    level so the result never depends on filesystem iteration order. Depth is
+    capped, which also bounds any symlink cycle without tracking visited paths.
+    """
+    level = [root]
+    for _ in range(max_depth):
+        children = sorted(
+            (c for parent in level for c in _safe_iterdir(parent) if c.is_dir()),
+            key=str,
+        )
+        for child in children:
+            candidate = child / lib_name
+            if candidate.is_file():
+                return candidate
+        level = children
+    return None
+
+
+def resolve_bruker_sdk_path(sdk_path, *, platform=None):
+    """Resolve ``--bruker_sdk_path`` to a concrete timsdata library file.
+
+    Returns None if and only if nothing was specified (None or blank), in which
+    case the caller may fall back to centroiding without the SDK. Otherwise
+    returns an absolute path to an existing library file -- never a directory.
+    Raises FileNotFoundError (after send_raise_to_TK) when a path was given but
+    no library could be found: a specified-but-unresolvable SDK is an error, not
+    a reason to silently approximate.
+
+    The library name and platform directory follow ``sys.platform``, so this
+    picks timsdata.dll/win64 on Windows and libtimsdata.so/linux64 elsewhere.
+    ``platform`` is injectable purely so tests can cover all three.
+
+    Resolving all the way to a file means peppy_sage takes its ``p.is_file()``
+    fast path, so its own non-recursive directory search never runs and this is
+    the single source of truth for where the library lives.
+    """
+    import sys
+    from pathlib import Path
+
+    platform = platform or sys.platform
+
+    if sdk_path is None:
+        return None
+    # Strip quotes left over from shell copy-paste of a path with spaces.
+    raw = str(sdk_path).strip().strip("\"'").strip()
+    if not raw:
+        return None
+
+    if platform == "darwin":
+        _fail_bruker(
+            f"--bruker_sdk_path was given ({raw}), but Bruker does not publish a "
+            f"macOS build of the timsdata SDK -- there is no library to load. "
+            f"Real-calibration centroiding of .d data requires Linux or Windows "
+            f"(for example the JMod Docker container)."
+        )
+
+    lib_name = _bruker_lib_name(platform)
+    p = Path(raw).expanduser()
+
+    # An explicit file is taken at the user's word, whatever it is named -- this
+    # covers versioned or renamed copies such as libtimsdata.so.2.21.
+    if p.is_file():
+        return str(p.resolve())
+
+    if not p.is_dir():
+        _fail_bruker(
+            f"Bruker timsdata SDK path does not exist: {raw}\n"
+            f"(this may have come from --bruker_sdk_path, or from "
+            f"\"bruker_sdk_path\" in JMod/data/settings.json)"
+        )
+
+    direct = p / lib_name
+    if direct.is_file():
+        return str(direct.resolve())
+
+    # The real SDK layout, checked by exact name before any general search: the
+    # SDK also ships a thirdparty/ folder, so a name-agnostic walk is not the
+    # thing to rely on first.
+    platform_dir = _BRUKER_PLATFORM_DIR.get(platform, _BRUKER_PLATFORM_DIR_DEFAULT)
+    candidate = p / platform_dir / lib_name
+    if candidate.is_file():
+        return str(candidate.resolve())
+
+    found = _search_bruker_lib(p, lib_name, _BRUKER_SDK_MAX_DEPTH)
+    if found is not None:
+        return str(found.resolve())
+
+    _fail_bruker(
+        f"No Bruker timsdata library ({lib_name}) found in {raw} or in its "
+        f"subdirectories (searched {_BRUKER_SDK_MAX_DEPTH} levels deep).\n"
+        f"The Bruker SDK zip unpacks to a folder containing win64/timsdata.dll "
+        f"and linux64/libtimsdata.so -- point at that folder, or at {lib_name} "
+        f"directly."
+    )
 

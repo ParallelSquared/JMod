@@ -66,6 +66,28 @@ def _aligned_library_im(library):
     return aligned
 
 
+def _resolve_bruker_setting(cli_value):
+    """Resolve the Bruker SDK path, persisting a CLI value once it validates.
+
+    A CLI arg wins and is stored; otherwise the stored setting is used. Both are
+    validated. Returns the resolved library file, or None when nothing was set.
+    """
+    settings = load_settings()
+
+    from_cli = cli_value is not None
+    raw_sdk_path = cli_value if from_cli else settings.get("bruker_sdk_path")
+
+    resolved = file_reader.resolve_bruker_sdk_path(raw_sdk_path)
+
+    if from_cli:
+        # Resolves first, so a bad path cannot poison settings.json. Storing None
+        # for an empty --bruker_sdk_path gives it the meaning "forget my SDK".
+        settings["bruker_sdk_path"] = resolved
+        save_settings(settings)
+
+    return resolved
+
+
 @log_exceptions
 def main(GUI_config_json=None, GUI_result_queue=None):
     """Main function to run JMod analysis."""
@@ -248,14 +270,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     # peaks.parquet yet, where it supplies the calibration for centroiding.
     bruker_sdk_path = None
     if config.args.mzml.rstrip("/").lower().endswith(".d"):
-        settings = load_settings()
-
-        if config.args.bruker_sdk_path is not None:
-            bruker_sdk_path = config.args.bruker_sdk_path
-            settings["bruker_sdk_path"] = bruker_sdk_path
-            save_settings(settings)
-        else:
-            bruker_sdk_path = settings.get("bruker_sdk_path")
+        bruker_sdk_path = _resolve_bruker_setting(config.args.bruker_sdk_path)
 
     ######################################################
     #### Load the data
