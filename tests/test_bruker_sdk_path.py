@@ -162,6 +162,20 @@ def test_darwin_unspecified_still_returns_none():
     assert resolve_bruker_sdk_path(None, platform="darwin") is None
 
 
+@pytest.mark.parametrize("plat", ["linux", "win32", "darwin"])
+def test_non_strict_returns_none_without_reporting(tmp_path, _silence_tk, plat):
+    # The GUI validates candidate paths with strict=False: no exception, and no
+    # send_raise_to_TK, which would otherwise mark the run as already errored.
+    assert resolve_bruker_sdk_path(str(tmp_path / "nope"),
+                                   platform=plat, strict=False) is None
+    assert _silence_tk.call_count == 0
+
+
+def test_non_strict_still_resolves_a_good_path(fake_sdk):
+    got = resolve_bruker_sdk_path(str(fake_sdk), platform="linux", strict=False)
+    assert got == str(fake_sdk / "linux64" / "libtimsdata.so")
+
+
 class TestResolveBrukerSetting:
     """CLI-vs-settings precedence and persistence in run_jmod."""
 

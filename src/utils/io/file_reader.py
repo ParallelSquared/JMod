@@ -1081,7 +1081,7 @@ def _search_bruker_lib(root, lib_name, max_depth):
     return None
 
 
-def resolve_bruker_sdk_path(sdk_path, *, platform=None):
+def resolve_bruker_sdk_path(sdk_path, *, platform=None, strict=True):
     """Resolve ``--bruker_sdk_path`` to a concrete timsdata library file.
 
     Returns None if and only if nothing was specified (None or blank), in which
@@ -1089,7 +1089,9 @@ def resolve_bruker_sdk_path(sdk_path, *, platform=None):
     returns an absolute path to an existing library file -- never a directory.
     Raises FileNotFoundError (after send_raise_to_TK) when a path was given but
     no library could be found: a specified-but-unresolvable SDK is an error, not
-    a reason to silently approximate.
+    a reason to silently approximate. Pass ``strict=False`` to get None instead
+    -- for callers merely testing a candidate path, where send_raise_to_TK's
+    error state would be wrong.
 
     The library name and platform directory follow ``sys.platform``, so this
     picks timsdata.dll/win64 on Windows and libtimsdata.so/linux64 elsewhere.
@@ -1104,6 +1106,11 @@ def resolve_bruker_sdk_path(sdk_path, *, platform=None):
 
     platform = platform or sys.platform
 
+    def _fail(message):
+        if strict:
+            _fail_bruker(message)
+        return None
+
     if sdk_path is None:
         return None
     # Strip quotes left over from shell copy-paste of a path with spaces.
@@ -1112,7 +1119,7 @@ def resolve_bruker_sdk_path(sdk_path, *, platform=None):
         return None
 
     if platform == "darwin":
-        _fail_bruker(
+        return _fail(
             f"--bruker_sdk_path was given ({raw}), but Bruker does not publish a "
             f"macOS build of the timsdata SDK -- there is no library to load. "
             f"Real-calibration centroiding of .d data requires Linux or Windows "
@@ -1128,7 +1135,7 @@ def resolve_bruker_sdk_path(sdk_path, *, platform=None):
         return str(p.resolve())
 
     if not p.is_dir():
-        _fail_bruker(
+        return _fail(
             f"Bruker timsdata SDK path does not exist: {raw}\n"
             f"(this may have come from --bruker_sdk_path, or from "
             f"\"bruker_sdk_path\" in JMod/data/settings.json)"
@@ -1150,7 +1157,7 @@ def resolve_bruker_sdk_path(sdk_path, *, platform=None):
     if found is not None:
         return str(found.resolve())
 
-    _fail_bruker(
+    return _fail(
         f"No Bruker timsdata library ({lib_name}) found in {raw} or in its "
         f"subdirectories (searched {_BRUKER_SDK_MAX_DEPTH} levels deep).\n"
         f"The Bruker SDK zip unpacks to a folder containing win64/timsdata.dll "

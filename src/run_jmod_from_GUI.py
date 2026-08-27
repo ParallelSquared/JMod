@@ -198,11 +198,15 @@ class JModGUI(ThemedTk):
         # Not saving this in default dict because we are only running one at a time
         self.mzml_label = ttk.Label(self.input_frame, text="Mass Spec Files:")
         self.mzml_label.grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        Hovertip(self.mzml_label, "Add any number of .mzML or .raw files to be ran sequentially ")
+        Hovertip(self.mzml_label, "Add any number of .mzML, .raw or Bruker .d files to be ran sequentially ")
         self.file_dropdown = FileListDropdown(self.input_frame)
         self.file_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         self.mzml_button = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=self.select_mzml)
         self.mzml_button.grid(row=0, column=2, padx=10, pady=10)
+        # .d is a directory, so it needs askdirectory rather than the file dialog.
+        self.d_button = ttk.Button(self.input_frame, text="Browse .d", command=self.select_d_folder)
+        self.d_button.grid(row=0, column=3, padx=(0, 10), pady=10)
+        Hovertip(self.d_button, "Add a Bruker timsTOF .d folder ")
         # Add a "Clear All" button
         # self.clear_button = ttk.Button(self.input_frame, text="Clear All", command=lambda: self.file_dropdown.clear_all())
         # self.clear_button.grid(row=0, column=3, padx=10, pady=10)
@@ -510,6 +514,57 @@ class JModGUI(ThemedTk):
         return (p / "ThermoFisher.CommonCore.Data.dll").exists()
 
 
+    BRUKER_SDK_URL = "https://www.bruker.com/en/services/software-downloads/mass-spectrometry.html"
+
+    def locate_bruker_sdk_path(self):
+        """Prompt for the Bruker timsdata SDK folder. Returns a path or None."""
+        dlg = tk.Toplevel(self)
+        dlg.title("Bruker SDK")
+        dlg.transient(self)
+        dlg.resizable(False, False)
+
+        frame = ttk.Frame(dlg, padding=20)
+        frame.grid(sticky="nsew")
+        ttk.Label(
+            frame,
+            text="Bruker .d centroiding uses the timsdata SDK.\n"
+                 "Select the unzipped SDK folder (the one containing win64/ and linux64/).",
+            justify="left",
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+
+        link = ttk.Label(frame, text="Download the Bruker SDK",
+                         foreground="#0a66c2", cursor="hand2")
+        link.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 16))
+        link.bind("<Button-1>", lambda _e: webbrowser.open(self.BRUKER_SDK_URL))
+
+        chosen = {"path": None}
+
+        def _select():
+            folder = filedialog.askdirectory(title="Select the Bruker timsdata SDK folder")
+            if folder:
+                chosen["path"] = folder
+                dlg.destroy()
+
+        ttk.Button(frame, text="Select folder...", style="Accent.TButton",
+                   command=_select).grid(row=2, column=0, sticky="e", padx=(0, 8))
+        ttk.Button(frame, text="Cancel", command=dlg.destroy).grid(row=2, column=1, sticky="w")
+
+        dlg.grab_set()
+        self.wait_window(dlg)
+        return chosen["path"]
+
+    def _bruker_sdk_path_resolved(self, path):
+        """The timsdata library ``path`` resolves to, or None.
+
+        Defers to the resolver the search itself uses, so the GUI cannot
+        disagree with it about what counts as a valid SDK location.
+        """
+        if not path:
+            return None
+        from src.utils.io import file_reader
+        return file_reader.resolve_bruker_sdk_path(path, strict=False)
+
+
     # Info button
     def show_info(self):
         """
@@ -657,6 +712,48 @@ class JModGUI(ThemedTk):
                     self.file_dropdown.add_files([file])
                     self.last_opened_dir = os.path.dirname(file)
 
+    def select_d_folder(self):
+        """
+        Open filedialog for a Bruker .d folder
+        Button: Browse .d button
+        """
+        folder = filedialog.askdirectory(title="Select a Bruker .d folder",
+                                         initialdir=self.last_opened_dir)
+        if not folder:
+            return
+        folder = folder.rstrip("/\\")
+        if os.path.splitext(folder)[1].lower() != ".d":
+            tk.messagebox.showerror("Not a .d folder", f"{folder} is not a Bruker .d folder.")
+            return
+        if folder in self.file_dropdown.files:
+            return
+
+        # Only needed to centroid a .d that has no peaks.parquet yet; an already
+        # centroided folder is read without it.
+        if not os.path.exists(os.path.join(folder, "peaks.parquet")):
+            settings = load_settings()
+            if not self._bruker_sdk_path_resolved(settings.get("bruker_sdk_path")):
+                new_path = self.locate_bruker_sdk_path()
+                resolved = self._bruker_sdk_path_resolved(new_path)
+                if new_path and not resolved:
+                    tk.messagebox.showerror(
+                        "Bruker SDK Error",
+                        f"No timsdata library found in {new_path}.")
+                settings["bruker_sdk_path"] = resolved
+                save_settings(settings)
+
+            if not settings.get("bruker_sdk_path"):
+                proceed = messagebox.askyesno(
+                    "Continue without the Bruker SDK?",
+                    "Without the SDK, m/z and 1/K0 are approximated from "
+                    "analysis.tdf and will not match an SDK-centroided run.\n\n"
+                    "Add this file anyway?")
+                if not proceed:
+                    return
+
+        self.file_dropdown.add_files([folder])
+        self.last_opened_dir = os.path.dirname(folder)
+
     
 
     def select_tsv(self):
@@ -717,7 +814,7 @@ class JModGUI(ThemedTk):
             # Update args with values from JSON
             for key, value in config_data.items():
                 if key in default_dict.keys():
-                    if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF", "rawfilereader_path"]: ##does not allow file input from JSON. plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects
+                    if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF", "rawfilereader_path", "bruker_sdk_path"]: ##does not allow file input from JSON. plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects
                         continue
                     if key == "speclib" or key == "output_folder":
                         if value is None or value == "":
@@ -1539,9 +1636,9 @@ class JModGUI(ThemedTk):
                     config_args_dict[key] = True if os.path.splitext(mzml_path)[1].lower() == ".d" else False
                 else:
                     config_args_dict[key] = False
-            elif key == 'rawfilereader_path':
+            elif key in ('rawfilereader_path', 'bruker_sdk_path'):
                 settings = load_settings()
-                config_args_dict[key] = settings["rawfilereader_path"]
+                config_args_dict[key] = settings[key]
             elif callable(data['special_upload']):  ##if special upload function is defined
                 try:
                     config_args_dict[key] = data['special_upload'](data['tk_handle'], handles_map)
