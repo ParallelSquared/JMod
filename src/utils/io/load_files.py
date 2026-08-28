@@ -62,12 +62,15 @@ class Spectrum:
         self.scan_num = int(re.search("scan=(\d+)",self.id)[1])
         self.level=scan["ms level"]
         self.RT = scan['scanList']['scan'][0]["scan start time"]
-        self.injection_time = scan["scanList"]["scan"][0]["ion injection time"]/1000 # assume milliseconds
+        self.injection_time = 1.0
+        if "ion injection time" in scan["scanList"]["scan"][0]:
+            self.injection_time = scan["scanList"]["scan"][0]["ion injection time"]/1000 # assume milliseconds
         self.mz = scan["m/z array"]
         self.intens = scan["intensity array"]#/self.injection_time # Normalize by injection time
         self.scanwindow = [scan["scanList"]["scan"][0]["scanWindowList"]["scanWindow"][0][i] for i in ["scan window lower limit","scan window upper limit"]]
         if self.level==2:
-            self.collision_energy = scan["precursorList"]["precursor"][0]["activation"]["collision energy"]
+            if "collision energy" in scan["precursorList"]["precursor"][0]["activation"]:
+                self.collision_energy = scan["precursorList"]["precursor"][0]["activation"]["collision energy"]
             self.isolation_window = scan["precursorList"]["precursor"][0]["isolationWindow"]
             self.prec_mz = self.isolation_window["isolation window target m/z"]
             self.ms1window = self.isolation_window["isolation window target m/z"]+np.array([-1,1])*[self.isolation_window['isolation window lower offset'],self.isolation_window['isolation window upper offset']]
