@@ -5,19 +5,19 @@ All JMod tests can be run with the ```pytest``` Python package. This should alre
 
 ```bash
 # Run all tests
-pytest tests/
+uv run pytest tests/
 
 # Run with verbose output
-pytest tests/ -v
+uv run pytest tests/ -v
 
 # Run a specific test class
-pytest tests/test_misc_functions.py::TestChangeSeq
+uv run pytest tests/test_misc_functions.py::TestChangeSeq
 
 # Run a specific test function in a class
-pytest tests/utils/test_misc_functions.py::TestWithinTol::test_within_tol_exact_match
+uv run pytest tests/utils/test_misc_functions.py::TestWithinTol::test_within_tol_exact_match
 
 # Run with coverage report
-pytest --cov=. --cov-report=html tests/
+uv run pytest --cov=. --cov-report=html tests/
 ```
 
 ## Test Structure
