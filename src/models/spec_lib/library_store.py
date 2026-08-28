@@ -1630,6 +1630,7 @@ class SpectrumLibraryStore:
         precursor_order = []
         precursor_data = {}
         decoy_precursors = set()
+        invalid_precursors = set()
 
         for row in cls._iter_rows(spec_lib_file, file_type):
 
@@ -1640,6 +1641,14 @@ class SpectrumLibraryStore:
                 decoy_precursors.add((mod_pep, charge))
                 continue #skip this peptide if it is a decoy
 
+            ## Check for non-valid AAs
+            peptide = get_field(row, "StrippedPeptide", "PeptideSequence", "Stripped.Sequence")
+            if "X" in peptide:
+                mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence").strip("_")
+                charge = float(get_field(row, "PrecursorCharge", "Precursor.Charge"))
+                invalid_precursors.add((mod_pep, charge))
+                continue #skip this peptide 
+            
             # Resolve ModifiedPeptide
             mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence")
             if mod_pep is None:
