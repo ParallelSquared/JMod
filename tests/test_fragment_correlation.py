@@ -30,12 +30,16 @@ from src.fragment_correlation import (
     _N_KERNEL_FEATURES,
     _build_window_csr,
     _covering_scans_numba,
-    _flatten_ms2_peaks,
+    _build_peak_lists,
+    feature_columns,
+    _scan_metadata,
     _match_and_fill_numba,
+    _match_and_fill_im_numba,
     _pairwise_corr_and_features_numba,
     compute_fragment_correlations,
 )
 from src.utils.frag_encoding import encode_frag_names
+from src.utils.io.load_files import SpectrumFile
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +58,29 @@ def _make_scan(mz, intens, rt, win_target, win_lower, win_upper):
             "isolation window upper offset": float(win_upper),
         },
     )
+
+
+def _make_im_scan(mz, intens, mob, rt, im_lo, im_hi,
+                  win_target=500, win_lower=5, win_upper=5):
+    """Like _make_scan but with per-peak mobility and IM-bin bounds."""
+    return SimpleNamespace(
+        mz=np.asarray(mz, dtype=np.float64),
+        intens=np.asarray(intens, dtype=np.float64),
+        mobility=np.asarray(mob, dtype=np.float64),
+        RT=float(rt),
+        im_lo=float(im_lo),
+        im_hi=float(im_hi),
+        isolation_window={
+            "isolation window target m/z": float(win_target),
+            "isolation window lower offset": float(win_lower),
+            "isolation window upper offset": float(win_upper),
+        },
+    )
+
+
+def _make_spectra(scans):
+    """Wrap a list of scan stubs in a SpectrumFile-like holder."""
+    return SimpleNamespace(ms2scans=list(scans))
 
 
 def _make_library(entries):
@@ -99,11 +126,11 @@ def _make_library(entries):
 
 class TestMatchAndFill:
     def _call(self, scans, scan_idx, frag_mz, ppm_tol):
-        pmz, pin, poff, _rt, _lo, _hi = _flatten_ms2_peaks(scans)
+        pmz, pin, _mob = _build_peak_lists(list(scans), False)
         si = np.asarray(scan_idx, dtype=np.int64)
         fm = np.asarray(frag_mz, dtype=np.float64)
         out = np.empty((len(si), len(fm)), dtype=np.float64)
-        _match_and_fill_numba(pmz, pin, poff, si, len(si), fm, ppm_tol, out)
+        _match_and_fill_numba(pmz, pin, si, len(si), fm, ppm_tol, out)
         return out
 
     def test_matched_query_returns_exact_intensity(self):
@@ -152,7 +179,7 @@ class TestMatchAndFill:
 
 
 # ---------------------------------------------------------------------------
-# _flatten_ms2_peaks + _build_window_csr
+# _scan_metadata + _build_peak_lists + _build_window_csr
 # ---------------------------------------------------------------------------
 
 
@@ -165,21 +192,20 @@ class TestCSRBuilders:
         ]
         return scans
 
-    def test_csr_round_trip(self):
+    def test_peak_lists_round_trip(self):
         scans = self._build()
-        pmz, pin, poff, rt, lo, hi = _flatten_ms2_peaks(scans)
+        pmz, pin, _mob = _build_peak_lists(list(scans), False)
+        rt, lo, hi = _scan_metadata(list(scans))
         for i, s in enumerate(scans):
-            a = poff[i]
-            b = poff[i + 1]
-            np.testing.assert_array_equal(pmz[a:b], s.mz)
-            np.testing.assert_array_equal(pin[a:b], s.intens)
+            np.testing.assert_array_equal(pmz[i], s.mz)
+            np.testing.assert_array_equal(pin[i], s.intens)
         np.testing.assert_array_equal(rt, np.array([5.0, 1.0, 3.0]))
         np.testing.assert_array_equal(lo, np.array([495.0, 495.0, 505.0]))
         np.testing.assert_array_equal(hi, np.array([505.0, 505.0, 515.0]))
 
     def test_window_grouping_and_rt_sort(self):
         scans = self._build()
-        _pmz, _pin, _poff, rt, lo, hi = _flatten_ms2_peaks(scans)
+        rt, lo, hi = _scan_metadata(list(scans))
         wl, wh, offs, idx, rts = _build_window_csr(rt, lo, hi)
         # Two distinct windows: (495, 505) and (505, 515).
         assert wl.shape[0] == 2
@@ -194,6 +220,79 @@ class TestCSRBuilders:
                 assert scans[s_idx].RT == s_rt
 
 
+class TestMatchAndFillIM:
+    """IM-gated matching kernel: keep only peaks within im_tol of the reference IM."""
+
+    @staticmethod
+    def _lists(mz_per_scan, int_per_scan, mob_per_scan):
+        """Typed peak lists from per-scan values, via the real builder.
+
+        Note this casts mobility to PEAK_MOB_DTYPE (float32), exactly as the
+        production path does, so IM comparisons here carry float32 precision.
+        """
+        scans = [
+            SimpleNamespace(mz=np.asarray(m, dtype=np.float64),
+                            intens=np.asarray(i, dtype=np.float64),
+                            mobility=np.asarray(b, dtype=np.float64))
+            for m, i, b in zip(mz_per_scan, int_per_scan, mob_per_scan)
+        ]
+        return _build_peak_lists(scans, True)
+
+    def _peaks(self):
+        # 3 scans, one peak each at m/z 500; scans 0,1 at IM ~0.90, scan 2 an
+        # interferer at IM 1.30.
+        pmz, pin, pmob = self._lists(
+            [[500.0], [500.0], [500.0]],
+            [[10.0], [20.0], [99.0]],
+            [[0.90], [0.91], [1.30]],
+        )
+        scan_idx = np.array([0, 1, 2], dtype=np.int64)
+        frag_mz = np.array([500.0])
+        return pmz, pin, pmob, scan_idx, frag_mz
+
+    def test_median_reference_gates_interferer(self):
+        pmz, pin, pmob, si, fm = self._peaks()
+        out = np.empty((3, 1)); mob = np.empty((3, 1))
+        pim = _match_and_fill_im_numba(pmz, pin, pmob, si, 3, fm,
+                                       20e-6, 0.05, np.nan, out, mob)
+        # median(0.90, 0.91, 1.30); float32 mobility, so not exact to 1e-9.
+        assert abs(pim - 0.91) < 1e-6
+        assert out[0, 0] == 10.0 and out[1, 0] == 20.0 and out[2, 0] == 0.0
+
+    def test_fixed_reference(self):
+        pmz, pin, pmob, si, fm = self._peaks()
+        out = np.empty((3, 1)); mob = np.empty((3, 1))
+        _match_and_fill_im_numba(pmz, pin, pmob, si, 3, fm,
+                                 20e-6, 0.05, 1.30, out, mob)
+        assert out[0, 0] == 0.0 and out[1, 0] == 0.0 and out[2, 0] == 99.0
+
+    def test_co_matching_peaks_are_summed(self):
+        # One scan with two peaks at m/z 500 within im_tol of the reference IM,
+        # plus an out-of-tol interferer. The two in-tol peaks must be summed.
+        pmz, pin, pmob = self._lists(          # single scan, 3 peaks
+            [[500.0, 500.0, 500.0]], [[10.0, 20.0, 99.0]], [[0.90, 0.91, 1.30]])
+        si = np.array([0], dtype=np.int64)
+        fm = np.array([500.0])
+        out = np.empty((1, 1)); mob = np.empty((1, 1))
+        _match_and_fill_im_numba(pmz, pin, pmob, si, 1, fm,
+                                 20e-6, 0.05, 0.905, out, mob)
+        assert out[0, 0] == 30.0   # 10 + 20; the 1.30 interferer excluded
+
+    def test_no_mobility_falls_back_to_no_gating(self):
+        pmz, pin, pmob = self._lists(
+            [[500.0], [500.0], [500.0]],
+            [[10.0], [20.0], [99.0]],
+            [[np.nan], [np.nan], [np.nan]],
+        )
+        si = np.array([0, 1, 2], dtype=np.int64)
+        fm = np.array([500.0])
+        out = np.empty((3, 1)); mob = np.empty((3, 1))
+        r = _match_and_fill_im_numba(pmz, pin, pmob, si, 3, fm,
+                                     20e-6, 0.05, np.nan, out, mob)
+        assert np.isnan(r)
+        assert out[0, 0] == 10.0 and out[1, 0] == 20.0 and out[2, 0] == 99.0
+
+
 # ---------------------------------------------------------------------------
 # _covering_scans_numba
 # ---------------------------------------------------------------------------
@@ -201,7 +300,7 @@ class TestCSRBuilders:
 
 class TestCoveringScans:
     def _build(self, scans):
-        _pmz, _pin, _poff, rt, lo, hi = _flatten_ms2_peaks(scans)
+        rt, lo, hi = _scan_metadata(list(scans))
         return _build_window_csr(rt, lo, hi)
 
     def test_window_coverage_only(self):
@@ -400,7 +499,7 @@ def _build_coherent_scenario(with_isotope=False):
         ints = np.array(ints)[order]
         scans.append(_make_scan(mz, ints, rt=rt, win_target=500, win_lower=5, win_upper=5))
 
-    spectra = SimpleNamespace(ms2scans=scans)
+    spectra = _make_spectra(scans)
     return library, spectra
 
 
@@ -423,7 +522,9 @@ class TestPublicAPI:
             fwhm=2.0,
             mz_tol=50e-6,
         )
-        assert list(result.columns) == list(FEATURE_COLUMNS)
+        # No mobility on these scans, so the IM block is omitted.
+        assert list(result.columns) == feature_columns(False)
+        assert not any(c.startswith("im_") for c in result.columns)
         assert list(result.index) == [11, 22]
 
     def test_negative_coeff_yields_nan_or_missing(self):
@@ -586,3 +687,84 @@ class TestThreadSafety:
                 np.where(np.isnan(r), -1.0, r),
                 np.where(np.isnan(reference), -1.0, reference),
             )
+
+
+# ---------------------------------------------------------------------------
+# IM-aware single-bin covering-scan selection
+# ---------------------------------------------------------------------------
+
+
+class TestIMBinSelection:
+    """With IM data, each precursor's XIC must be built from ONE IM bin across RT,
+    not the union of all overlapping IM bins at each RT."""
+
+    def _scenario(self):
+        library = _make_library([
+            {"seq": "PEPTIDE", "z": 2, "prec_mz": 500.0,
+             "frag_names": ["b3_1", "y4_1"], "frag_mz": [200.0, 400.0]},
+        ])
+        rts = np.linspace(5.0, 15.0, 11)
+        g = np.exp(-0.5 * ((rts - 10.0) / 1.0) ** 2)
+        b = 1000.0 * g
+        y = 1500.0 * g + np.array([0, 0, 1, 0, -1, 2, 0, -1, 0, 1, 0], dtype=np.float64)
+        scans = []
+        for i, rt in enumerate(rts):
+            # bin A [0.90, 0.95]: the precursor's real, coherent fragments
+            scans.append(_make_im_scan([200.0, 400.0], [b[i], y[i]],
+                                       [0.925, 0.925], rt, 0.90, 0.95))
+            # bin B [0.95, 1.00]: interfering y4-only peak at a higher IM
+            scans.append(_make_im_scan([400.0], [700.0 * g[i]],
+                                       [0.975], rt, 0.95, 1.00))
+        return library, _make_spectra(scans)
+
+    def test_selects_single_im_bin(self):
+        library, spectra = self._scenario()
+        fdc = pd.DataFrame({"seq": ["PEPTIDE"], "z": [2], "rt": [10.0], "coeff": [5.0]})
+
+        # IM on: precursor IM ~0.925 -> only bin A scans, one per RT (11), clean corr.
+        on = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.02)
+        assert on["n_corr_scans"].iloc[0] == 11
+        assert on["mean_frag_corr"].iloc[0] > 0.99
+
+        # IM off: all bins mixed -> both bins' scans used (22).
+        off = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.0)
+        assert off["n_corr_scans"].iloc[0] == 22
+
+    def test_im_columns_only_emitted_for_im_runs(self):
+        library, spectra = self._scenario()
+        fdc = pd.DataFrame({"seq": ["PEPTIDE"], "z": [2], "rt": [10.0], "coeff": [5.0]})
+
+        on = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.02)
+        assert list(on.columns) == feature_columns(True) == list(FEATURE_COLUMNS)
+
+        # Mobility present but no tolerance: the IM features cannot be computed,
+        # so they are dropped rather than handed to the model as all-NaN.
+        off = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.0)
+        assert list(off.columns) == feature_columns(False)
+        assert not any(c.startswith("im_") for c in off.columns)
+        # The non-IM columns keep their positions, so shared features line up.
+        assert list(off.columns) == list(on.columns)[:len(off.columns)]
+
+    def test_ranked_defaults_do_not_overwrite_scalar_slots(self):
+        # A row that never reaches the kernels: ranked slots default to -1,
+        # scalar correlation features stay NaN.
+        library, spectra = self._scenario()
+        fdc = pd.DataFrame({"seq": ["NOPE"], "z": [2], "rt": [10.0], "coeff": [5.0]})
+        res = compute_fragment_correlations(
+            spectra=spectra, library=library, fdc=fdc,
+            fwhm=3.0, mz_tol=50e-6, im_tol=0.02)
+
+        assert res["top1_frag_mean_corr"].iloc[0] == -1.0
+        assert res["im_top1_frag_mean_corr"].iloc[0] == -1.0
+        assert np.isnan(res["mean_prec_frag_corr"].iloc[0])
+        assert np.isnan(res["max_prec_frag_corr"].iloc[0])
+        assert np.isnan(res["im_prec_frag_mean"].iloc[0])
+        assert np.isnan(res["im_mean_frag_corr"].iloc[0])

@@ -1,0 +1,2332 @@
+<?xml version="1.0"?>
+<Metadata xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" schemaVersion="1.0.0.1" CreateDate="2026-03-05T02:01:10.0743444-05:00" GeneratorName="Bruker Compass HyStar" GeneratorVersion="6.4.1.9" xmlns="https://www.bruker.com/compass/metadata">
+  <Plugin ID="f2ddbe4b-1a92-4a5a-b104-a56a4a3361e8" Name="Bruker OTOF MS" InternalPluginName="Bruker OTOF MS">
+    <PluginMetadata PluginSoftwareVersion="4.2.1.3 (1)" schemaVersion="1.0.0.0">
+      <ParameterGroup ID="Connection" Name="Connection" Source="Configuration">
+        <Parameter ID="Series" Name="Series">
+          <Value>otof-series</Value>
+        </Parameter>
+        <Parameter ID="Product Name" Name="Product Name">
+          <Value>timsTOF SCP</Value>
+        </Parameter>
+        <Parameter ID="Part Number" Name="Part Number">
+          <Value>1885933</Value>
+        </Parameter>
+        <Parameter ID="Serial Number" Name="Serial Number" Category="SerialNumber">
+          <Value>1885933.00072</Value>
+        </Parameter>
+        <Parameter ID="Connected Since" Name="Connected Since">
+          <DateTime>2026-03-02T16:00:22.902Z</DateTime>
+        </Parameter>
+        <Parameter ID="MS Control" Name="MS Control">
+          <Value>timsControl</Value>
+        </Parameter>
+        <Parameter ID="MS Control Process Id" Name="MS Control Process Id">
+          <Int>7080</Int>
+        </Parameter>
+        <Parameter ID="MS Engine" Name="MS Engine">
+          <Value>timsEngine</Value>
+        </Parameter>
+        <Parameter ID="MS Engine Process Id" Name="MS Engine Process Id">
+          <Int>10472</Int>
+        </Parameter>
+      </ParameterGroup>
+    </PluginMetadata>
+    <TraceInfo>
+      <TraceData Name="BPC:350-621,625-921,925-1221,1225-1700,±MS" SubDeviceName="MS" Channel="1" DeviceType="ChromMs" Unit="Intensity" Color="-16777088" />
+      <TraceData Name="TIC,±AllMS/MS" SubDeviceName="MS" Channel="2" DeviceType="ChromMs" Unit="Intensity" Color="-65536" />
+      <TraceData Name="TIC,±MS" SubDeviceName="MS" Channel="3" DeviceType="ChromMs" Unit="Intensity" Color="-16711936" />
+    </TraceInfo>
+  </Plugin>
+  <Application ID="GenericInformation" Name="Generic Information">
+    <ParameterGroup ID="MemoryUsage" Name="Memory usage" Source="Internal">
+      <Parameter ID="PhysicalMemoryUsage" Name="Physical memory usage" Unit="MB">
+        <Int>425</Int>
+      </Parameter>
+      <Parameter ID="PagedSystemMemorySize" Name="Paged system memory size" Unit="MB">
+        <Int>1</Int>
+      </Parameter>
+      <Parameter ID="PagedMemorySize" Name="Paged memory size" Unit="MB">
+        <Int>511</Int>
+      </Parameter>
+    </ParameterGroup>
+    <ParameterGroup ID="Runtime" Name="Runtime" Source="Internal">
+      <Parameter ID="UserProcessorTime" Name="User processor time" Unit="h">
+        <Double>2.03</Double>
+      </Parameter>
+      <Parameter ID="PrivilegedProcessorTime" Name="Privileged processor time" Unit="h">
+        <Double>0.49</Double>
+      </Parameter>
+      <Parameter ID="TotalProcessorTime" Name="Total processor time" Unit="h">
+        <Double>2.52</Double>
+      </Parameter>
+      <Parameter ID="ApplicationRuntime" Name="Application runtime" Unit="h">
+        <Double>62.95</Double>
+      </Parameter>
+      <Parameter ID="WindowsRuntime" Name="Windows runtime" Unit="h">
+        <Double>63.19</Double>
+      </Parameter>
+    </ParameterGroup>
+  </Application>
+  <Application ID=".Net" Name=".Net">
+    <ParameterGroup ID="LoadedAssemblies" Name="Loaded Assemblies" Source="Internal">
+      <Table ID="LoadedAssemblies" Name="Loaded Assemblies">
+        <Col ColIndex="0" Name="Assembly Name" />
+        <Col ColIndex="1" Name="Version" />
+        <Col ColIndex="2" Name="Location" />
+        <Col ColIndex="3" Name="Architecture" />
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Accessibility</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0 built by: NET48REL1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>antlr.runtime</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.7.6.2</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Acquisition.CosEdmServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.6.0.0 (1.6.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Acquisition.CosEdmServices.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Acquisition.EdmServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.6.0.0 (1.6.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Acquisition.EdmServices.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.CDPMObjectFactory</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>5.6.0.0 (5.6.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.CDPMObjectFactory.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.AnalyteDB.Services</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.AnalyteDB.Services.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.Cdr.Services</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.Cdr.Services.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.CosAnalyteDBServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.CosAnalyteDBServices.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.CosCdrServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.CosCdrServices.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.CosCommon</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.CosCommon.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.CosGumServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.CosGumServices.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.CosReportingServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.CosReportingServices.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.CosSamServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.CosSamServices.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.CosSystemServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.CosSystemServices.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.CosTasqServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.3.0.0 (1.3.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.CosTasqServices.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.Gum.Services</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.Gum.Services.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.Reporting.Services</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.Reporting.Services.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.Sam.Services</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.Sam.Services.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.ServerConnectors</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.ServerConnectors.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.Services.BaseObjects</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.Services.BaseObjects.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.System.Services</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.System.Services.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.Tasq.Services</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.3.0.0 (1.3.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.Tasq.Services.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.UI.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.UI.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.UI.WinForms</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.UI.WinForms.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.Compass.Utils</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.1.0.0 (1.1.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.Compass.Utils.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassMethodEditor</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.3.0.0 (2.3.107.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassMethodEditor.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassMethodEditor.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.3.0.0 (1.3.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassMethodEditor.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.CompassNavigator</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.3.0.0 (1.3.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.CompassNavigator.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.BaseObjects</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.BaseObjects.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.BatchNavigator</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.BatchNavigator.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.BatchResultNavigator</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.BatchResultNavigator.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.CosEdmConnector</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.9.0.0 (1.9.106.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.CosEdmConnector.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.CosHyStarConnector</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.12.0.0 (2.12.106.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.CosHyStarConnector.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.CosInstrumentRegistry</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.CosInstrumentRegistry.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.CosTasqConnector</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.3.0.0 (1.3.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.CosTasqConnector.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.Editor</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.Editor.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.EdmConnector</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.9.0.0 (1.9.106.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.EdmConnector.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.EdmConnector.Common</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.EdmConnector.Common.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.EdmConnector.CosCommon</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.EdmConnector.CosCommon.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.HyStarConnector</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.12.0.0 (2.12.106.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.HyStarConnector.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.ImportExport</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.ImportExport.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.7.0.0 (1.7.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.ServerConnections</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.ServerConnections.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.Services</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.Services.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.TasqConnector</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.3.0.0 (1.3.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.TasqConnector.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.CompassSampleTable.TrayView</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.CompassSampleTable.TrayView.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.ConnectingBridgeClient</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>5.6.0.0 (5.6.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.ConnectingBridgeClient.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.ConnectingBridgeCore</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>5.6.0.0 (5.6.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.ConnectingBridgeCore.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.Data.Chromatography.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.5.0.0 (2.1.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.Data.Chromatography.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.Data.Chromatography.SqliteObjects</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.7.0.0 (1.7.106.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.Data.Chromatography.SqliteObjects.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.DynamicSettings</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.3.0.0 (1.3.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.DynamicSettings.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.ExtendedControls</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>5.4.0.0 (5.4.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.ExtendedControls.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.HardwareSetupServer</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>3.3.0.0 (3.3.106.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.HardwareSetupServer.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.HardwareSetupServer.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.3.0.0 (2.3.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.HardwareSetupServer.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.HyStar.AsyncWrapper</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.4.0.0 (6.4.209.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.HyStar.AsyncWrapper.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.HyStar.AutomationUtility</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.0.0.0 (6.0.103.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.HyStar.AutomationUtility.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.HyStar.BaseObjects</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.4.0.0 (6.4.209.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.HyStar.BaseObjects.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.HyStar.ChromatogramUploader</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.3.0.0 (1.3.106.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.HyStar.ChromatogramUploader.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.HyStar.DataViewerCtrl</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.HyStar.DataViewerCtrl.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.HyStar.DataViewerCtrl.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.HyStar.DataViewerCtrl.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.HyStar.PlateView</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.0.0.0 (6.0.103.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.HyStar.PlateView.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.HyStar.ReportControl</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.4.0.0 (2.4.107.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.HyStar.ReportControl.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.HyStar.UI</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.4.0.0 (6.4.209.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.HyStar.UI.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.HyStar.UI.WPF</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.4.0.0 (6.4.209.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.HyStar.UI.WPF.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.HyStar.Workflow</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.4.0.0 (6.4.209.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.HyStar.Workflow.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.HyStar.Workflow.CHS</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.4.0.0 (6.4.209.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.HyStar.Workflow.CHS.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.HyStar.Workflow.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.4.0.0 (6.4.209.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.HyStar.Workflow.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.LCMethodControl</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>3.3.0.0 (3.3.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.LCMethodControl.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.LCMethodCtrlInterfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.5.0.0 (1.5.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.LCMethodCtrlInterfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.LCMethodDataManager</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.0.3.0 (2.2.104.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.LCMethodDataManager.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.LCMethodDataManagerInterfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.5.0.0 (1.5.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.LCMethodDataManagerInterfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.LcPlugin.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.2.0.0 (2.2.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.LcPlugin.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.LcPluginManager</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>5.6.0.0 (5.6.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.LcPluginManager.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.LcPluginManager.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.2.0.0 (2.2.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.LcPluginManager.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.LcPluginTools</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.2.0.0 (2.2.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.LcPluginTools.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.Logbook</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.0.1.0 (2.4.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.LogbookInterfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.0.1.0 (2.2.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.Methods.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.5.0.0 (3.3.0.1 (3.3.0.4))</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.Methods.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.Methods.SMM</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.5.0.0 (2.3.100.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.Methods.SMM.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.Methods.Smm.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.5.0.0 (3.3.0.1 (3.3.0.4))</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.Methods.Smm.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.MultiDisplay.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.0.0.0 (1.0.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.MultiDisplay.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.MultiDisplay.SciChart</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.0.0.0 (1.0.103.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.MultiDisplay.SciChart.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.PluginDefines</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.4.0.0 (2.2.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.PluginLib</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.2.0.0 (2.2.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.PluginLib.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.PluginSampleData</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>5.6.0.0 (5.6.111.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.PluginSampleData.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.PlugInToolsInterfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.2 (1.4.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.PlugInToolsInterfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDal.SMM.Wrapper.SxS</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>7.2.2.0 (7.2.308.1-0-vc143)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDal.SMM.Wrapper.SxS.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>Amd64</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.UserActionRights</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.105.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.UserActionRights.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.UserActionRights.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0 (1.2.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.UserActionRights.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.UserSettings</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.0.0.0 (1.0.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.UserSettings.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>BDAL.UserSettings.Interfaces</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.0.0.0 (1.0.101.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\BDAL.UserSettings.Interfaces.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Common.Logging</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>None</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Common.Logging.Log4Net</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.2</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>CosNotify</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.9.3.23 (1.9.424.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\CosNotify.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Google.Protobuf</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>3.30.0.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Google.Protobuf.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Grpc.Core</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.0.0.0 (2.46.6.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Grpc.Core.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Grpc.Core.Api</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.0.0.0 (2.46.6.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Grpc.Core.Api.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>HyStarNT</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>6.4.0.0 (6.4.209.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\HyStarNT.exe</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>HyStarTool</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>3.1.0.0 (3.1.102.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\HyStarTool.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>Amd64</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>IIOPChannel</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.9.3.23 (1.9.424.1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\IIOPChannel.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>log4net</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.10.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>methoddataextractordll</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.0.0.0 (2.3.100.1-0-vc143)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\methoddataextractordll.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>Amd64</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Microsoft.CSharp</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>mscorlib</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4770.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>Amd64</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>netstandard</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>2.0.0.0 (4.8.3761.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>PresentationCore</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4762.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>Amd64</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>PresentationFramework</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4762.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>PresentationFramework.Aero2</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0 built by: NET48REL1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>PresentationFramework-SystemData</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4762.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>PresentationFramework-SystemXml</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>PresentationFramework-SystemXmlLinq</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>ReachFramework</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4110.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>SciChart.Charting</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>8.6.0.28199 (8.6.0.28199 built from 0c3a4f498f)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\SciChart.Charting.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>SciChart.Core</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>8.6.0.28199 (8.6.0.28199 built from 0c3a4f498f)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\SciChart.Core.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>SciChart.Data</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>8.6.0.28199 (8.6.0.28199 built from 0c3a4f498f)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\SciChart.Data.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>SciChart.Drawing</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>8.6.0.28199 (8.6.0.28199 built from 0c3a4f498f)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\SciChart.Drawing.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Spring.Core</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.2.0.20313</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.Core.WinForms</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.Core.WinForms.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.Grid.Grouping.Windows</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.Grid.Grouping.Windows.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.Grid.Windows</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.Grid.Windows.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.GridConverter.Windows</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.GridConverter.Windows.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.GridHelperClasses.Windows</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.GridHelperClasses.Windows.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.Grouping.Base</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.Grouping.Base.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.SfInput.WinForms</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.SfInput.WinForms.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.SfInput.Wpf</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.SfInput.Wpf.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.Shared.Base</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.Shared.Base.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.Shared.Wpf</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.Shared.Wpf.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.Tools.Windows</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.Tools.Windows.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>Syncfusion.XlsIO.Base</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>28.2462.3.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\Syncfusion.XlsIO.Base.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4770.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.ComponentModel.Composition</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Configuration</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4190.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Core</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4762.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Data</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4690.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>Amd64</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Data.SQLite</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>1.0.119.0</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\System.Data.SQLite.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>Amd64</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Design</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0 built by: NET48REL1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Drawing</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4390.0 built by: NET48REL1LAST_C)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Drawing.Design</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4200.0 built by: NET48REL1LAST_C)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.EnterpriseServices</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0 built by: NET48REL1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>Amd64</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Management</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4435.0 built by: NET48REL1LAST_C)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Memory</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.1.1 (4.6.27617.02)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\System.Memory.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Numerics</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0 built by: NET48REL1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Runtime</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Runtime.CompilerServices.Unsafe</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.4.1 (4.6.26919.02)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>C:\Program Files\Bruker\HyStar\System.Runtime.CompilerServices.Unsafe.dll</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Runtime.Serialization.Formatters.Soap</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0 built by: NET48REL1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Transactions</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0 built by: NET48REL1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>Amd64</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Windows.Controls.Ribbon</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4762.0)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Windows.Forms</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4739.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Xaml</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4762.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Xml</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0 built by: NET48REL1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>System.Xml.Linq</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.3761.0 built by: NET48REL1)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>UIAutomationProvider</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4762.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>UIAutomationTypes</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4762.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>WindowsBase</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4762.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>WindowsFormsIntegration</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Value>4.0.0.0 (4.8.4614.0 built by: NET48REL1LAST_B)</Value>
+          </Cell>
+          <Cell ColIndex="2">
+            <Value>GAC</Value>
+          </Cell>
+          <Cell ColIndex="3">
+            <Value>MSIL</Value>
+          </Cell>
+        </Row>
+      </Table>
+    </ParameterGroup>
+  </Application>
+  <Application ID="HyStar" Name="HyStar">
+    <ParameterGroup ID="Plug-inInterface" Name="Plug-in Interface" Source="Acquisition">
+      <Table ID="CommandCalls" Name="Command calls">
+        <Col ColIndex="0" Name="Command" />
+        <Col ColIndex="1" Name="Time to call" Unit="s" />
+        <Col ColIndex="2" Name="Time to complete" Unit="s" />
+        <Row>
+          <Cell ColIndex="0">
+            <Value>LoadSampleData</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Double>0.0039375999999999994</Double>
+          </Cell>
+          <Cell ColIndex="2">
+            <Double>0.4041996</Double>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>StartSystem</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Double>0.0054116999999999993</Double>
+          </Cell>
+          <Cell ColIndex="2">
+            <Double>0.1049079</Double>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>StartInjection</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Double>0.0038406</Double>
+          </Cell>
+          <Cell ColIndex="2">
+            <Double>935.5360495</Double>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>StopSystem</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Double>0.0035933</Double>
+          </Cell>
+          <Cell ColIndex="2">
+            <Double>2.1105852</Double>
+          </Cell>
+        </Row>
+        <Row>
+          <Cell ColIndex="0">
+            <Value>IdleMode</Value>
+          </Cell>
+          <Cell ColIndex="1">
+            <Double>0.0025681</Double>
+          </Cell>
+          <Cell ColIndex="2">
+            <Double>0.0041757</Double>
+          </Cell>
+        </Row>
+      </Table>
+    </ParameterGroup>
+  </Application>
+  <Sample>
+    <SampleTable xmlns="">
+      <SampleTableHeader Version="3" CreationDate="" CreationTime="" Creator="" CreationComputer="" UpdateDate="03/05/2026" UpdateTime="02:01" UpdateUser="" UpdateComputer="" Author="" Company="" Laboratory="" Phone="" Fax="" EMail="" Description="" NumOfSamples="1" HyStarVersion="6.4.1.9" SampleTablePath="20260303_onwards" BatchID="91429ec1-99b3-4d4e-865f-11c0503c4cb0" />
+      <Sample analysisID="0f23988c-cb2f-460f-81d0-2a5e77a0c372" Line="21" CheckToRun="0" Status="1" Injections="1" Volume="1" Amount="0" Dilution="0" Weight="0" Position="A6" InternalStandard="1" PreRunTime="0" SampleID="2026-03-04_CF_2470_T_new" DataPath="D:\Data\2026-03-04_CF_2470_T_new_A6_1_8003.d" Operator="" SampleType="Sample" ReferenceSampleNum="" NumOnGel="" ResultDatafile="" NumberInSequence="" CalibAction="-" CalibLevel="" AcquisitionID="" SaltConc="" LastLineInGroup="" InstrumentCalibration="" RunDAScript="" MBToolsStateDoIt="" MBToolsStateRef="" MBToolsStateDone="" MBToolsLineID="" MBToolsRefLineID="" MBToolsRefInjectionNo="" MBToolsPredicted="" MBToolsIonization="" MBToolsRefLineID2="" MBToolsDiffNo="" MBToolsDiffPath="" Description="" StationName="TIMS-SCP-00072" Submitter_Language="" Submitter_Login="demo" Submitter_Name="Demo User" Submitter_Supervisor="" Method="D:\Methods\LC_Methods\contact_closure_65min.m?HyStar_LC" MS_Method="D:\Methods\MS_methods\CF_Ultra\shanshan_bulk_50windows_2MS1_ICCoff_0p75-1p3.m?OtofImpacTEMControl" MSProcessingMethod="" AutosamplerMethod="" MS_Method_Defined="1" />
+      <AnalysisHeader CreationDateTime="2026-03-05T02:01:10-05:00" FileName="D:\Data\2026-03-04_CF_2470_T_new_A6_1_8003.d" SampleID="2026-03-04_CF_2470_T_new" Method="" />
+      <SampleTableProperties>
+        <Property PropertyNumber="0" Name="SampleSubType" Value="" />
+        <Property PropertyNumber="1" Name="AutoSamplerVolumeUnit" Value="µl" />
+        <Property PropertyNumber="2" Name="HyStar_LC_Method_Name" Value="contact_closure_65min.m" />
+        <Property PropertyNumber="3" Name="HyStar_MS_Method_Name" Value="shanshan_bulk_50windows_2MS1_ICCoff_0p75-1p3.m" />
+        <Property PropertyNumber="4" Name="UnidPeakFactor" Value="0" />
+        <Property PropertyNumber="5" Name="Multiplier" Value="1" />
+        <Property PropertyNumber="6" Name="Divisor" Value="1" />
+        <Property PropertyNumber="7" Name="NewCalibBlock" Value="False" />
+      </SampleTableProperties>
+    </SampleTable>
+  </Sample>
+</Metadata>

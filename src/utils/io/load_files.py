@@ -23,6 +23,18 @@ import pickle
 from src.logger import logger
 import peppy_sage as ps
 
+# Peak-array dtypes for Spectrum. m/z stays float64 — ppm-level matching needs the
+# mantissa. Intensity and mobility are float32: a timsTOF .d run can hold >1e9 peak
+# entries after IM-band denormalization, where each float64 array costs ~9 GB, and
+# neither quantity needs more than float32's ~1e-7 relative precision (1/K0 spans
+# ~0.7-1.3 against IM tolerances of ~1e-2; intensities are used relatively).
+# Sum intensities with ``dtype=np.float64`` to keep float32 accumulation error out
+# of TIC-style reductions.
+PEAK_MZ_DTYPE = np.float64
+PEAK_INT_DTYPE = np.float32
+PEAK_MOB_DTYPE = np.float32
+
+
 # NB this may not work for all mzml files!!!
 class Spectrum:
 
@@ -53,8 +65,11 @@ class Spectrum:
         self.injection_time = 1.0
         if "ion injection time" in scan["scanList"]["scan"][0]:
             self.injection_time = scan["scanList"]["scan"][0]["ion injection time"]/1000 # assume milliseconds
-        self.mz = scan["m/z array"]
-        self.intens = scan["intensity array"]#/self.injection_time # Normalize by injection time
+        # Normalized to the peak dtypes at ingest, as the .d reader already does,
+        # so every path hands downstream the same types and no consumer has to
+        # re-cast (which for a large run means a second copy of every peak).
+        self.mz = np.ascontiguousarray(scan["m/z array"], dtype=PEAK_MZ_DTYPE)
+        self.intens = np.ascontiguousarray(scan["intensity array"], dtype=PEAK_INT_DTYPE)#/self.injection_time # Normalize by injection time
         self.scanwindow = [scan["scanList"]["scan"][0]["scanWindowList"]["scanWindow"][0][i] for i in ["scan window lower limit","scan window upper limit"]]
         if self.level==2:
             if "collision energy" in scan["precursorList"]["precursor"][0]["activation"]:
@@ -96,18 +111,18 @@ class Spectrum:
         centroid_stream = raw_file.GetCentroidStream(scan_number, True) if is_ftms else None
 
         if centroid_stream is not None and centroid_stream.Length > 0:
-            self.mz = np.array(list(centroid_stream.Masses), dtype=np.float64)
-            self.intens = np.array(list(centroid_stream.Intensities), dtype=np.float64)
+            self.mz = np.array(list(centroid_stream.Masses), dtype=PEAK_MZ_DTYPE)
+            self.intens = np.array(list(centroid_stream.Intensities), dtype=PEAK_INT_DTYPE)
         else:
             scan = Scan.FromFile(raw_file, scan_number)
             # pwiz guard: degenerate scans get an empty spectrum, not an exception
             if scan.SegmentedScanAccess.Positions.Length == 0 or scan.ScanStatistics.BasePeakIntensity == 0:
-                self.mz = np.array([], dtype=np.float64)
-                self.intens = np.array([], dtype=np.float64)
+                self.mz = np.array([], dtype=PEAK_MZ_DTYPE)
+                self.intens = np.array([], dtype=PEAK_INT_DTYPE)
             else:
                 centroided = Scan.ToCentroid(scan)
-                self.mz = np.array(list(centroided.SegmentedScanAccess.Positions), dtype=np.float64)
-                self.intens = np.array(list(centroided.SegmentedScanAccess.Intensities), dtype=np.float64)
+                self.mz = np.array(list(centroided.SegmentedScanAccess.Positions), dtype=PEAK_MZ_DTYPE)
+                self.intens = np.array(list(centroided.SegmentedScanAccess.Intensities), dtype=PEAK_INT_DTYPE)
 
         self.scanwindow = [scan_stats.LowMass, scan_stats.HighMass]
 
@@ -197,11 +212,65 @@ class SpectrumFile:
     def __init__(self, mzml_file=None, raw_file=None):
         self.filename = None
         self.ms2_to_ms1_map = None
+        self._ms2_flat = None
 
         if mzml_file:
             self.load_spectra(mzml_file)
         elif raw_file:
             self.load_spectra_raw(raw_file)
+
+    def flatten_ms2_peaks(self):
+        """Return the MS2 peaks as CSR-style flat arrays, built at most once.
+
+        Returns ``(peak_mz, peak_int, peak_mob, offsets)``, where scan ``i``'s peaks
+        are ``peak_mz[offsets[i]:offsets[i+1]]``. ``peak_mob`` is zero-length when the
+        data has no ion mobility (e.g. mzML); callers must gate on that before using
+        it. Consumers that need float64 should upcast the slice they actually touch.
+
+        This does not merely copy: as each scan is written into the flat buffer, that
+        scan's ``mz`` / ``intens`` / ``mobility`` are repointed at the corresponding
+        *views*, dropping the last reference to the standalone per-scan arrays. Peak
+        extra memory is therefore one scan, not a second copy of the run — which for a
+        timsTOF .d holding ~1e9 MS2 peak entries is the difference between ~19 GB and
+        an OOM kill. Values, dtypes and shapes are unchanged, so the repointing is
+        invisible to every other consumer of ``ms2scans``.
+
+        The result is cached on the instance; the first caller pays for it. Not
+        safe to call concurrently from multiple threads on the same instance.
+        """
+        if self._ms2_flat is not None:
+            return self._ms2_flat
+
+        scans = self.ms2scans
+        n = len(scans)
+        lengths = np.fromiter((len(s.mz) for s in scans), dtype=np.int64, count=n)
+        offsets = np.zeros(n + 1, dtype=np.int64)
+        if n:
+            np.cumsum(lengths, out=offsets[1:])
+        total = int(offsets[-1])
+
+        peak_mz = np.empty(total, dtype=PEAK_MZ_DTYPE)
+        peak_int = np.empty(total, dtype=PEAK_INT_DTYPE)
+        has_mob = n > 0 and getattr(scans[0], "mobility", None) is not None
+        peak_mob = np.empty(total if has_mob else 0, dtype=PEAK_MOB_DTYPE)
+
+        for i, s in enumerate(scans):
+            off = int(offsets[i])
+            ln = int(lengths[i])
+            end = off + ln
+            if ln:
+                peak_mz[off:end] = s.mz
+                peak_int[off:end] = s.intens
+                if has_mob and getattr(s, "mobility", None) is not None:
+                    peak_mob[off:end] = s.mobility
+            # Adopt views; the per-scan arrays are released here.
+            s.mz = peak_mz[off:end]
+            s.intens = peak_int[off:end]
+            if has_mob and getattr(s, "mobility", None) is not None:
+                s.mobility = peak_mob[off:end]
+
+        self._ms2_flat = (peak_mz, peak_int, peak_mob, offsets)
+        return self._ms2_flat
 
     def load_spectra(self,mzml_file):
         self.filename = mzml_file
@@ -293,74 +362,36 @@ class SpectrumFile:
             return self.ms2scans[level_idx]
 
     def build_ms2_to_ms1_map(self):
-        """Precompute nearest MS1 scan index for each MS2 scan.
+        """Precompute the nearest-RT MS1 scan index for each MS2 scan.
 
-        When IM data is present (im_lo is not None on MS1 scans), matching
-        is done per IM bin: each MS2 scan is paired with the nearest-RT MS1
-        scan that shares the same (im_lo, im_hi) bin.
+        MS1 is one spectrum per frame (peaks carry per-peak mobility), so the
+        pairing is purely nearest-RT; any IM-window restriction is applied later
+        at query time using the MS2 band's (im_lo, im_hi). Vectorized over all
+        MS2 scans at once (the old per-scan key-miss fallback was O(n_ms2*n_ms1)).
         """
-        has_im = len(self.ms1scans) > 0 and self.ms1scans[0].im_lo is not None
+        self._im_bin_to_ms1 = None
+        n_ms1 = len(self.ms1scans)
+        n_ms2 = len(self.ms2scans)
+        ms1_nums = np.array([s.scan_num for s in self.ms1scans])
 
-        if has_im:
-            # Build per-IM-bin lookup: (im_lo, im_hi) -> (sorted_rt_array, ms1_index_array)
-            from collections import defaultdict
-            bin_to_ms1 = defaultdict(lambda: ([], []))
-            for i, s in enumerate(self.ms1scans):
-                key = (s.im_lo, s.im_hi)
-                bin_to_ms1[key][0].append(s.RT)
-                bin_to_ms1[key][1].append(i)
-            # Convert to sorted numpy arrays
-            self._im_bin_to_ms1 = {}
-            for key, (rts, idxs) in bin_to_ms1.items():
-                rt_arr = np.array(rts)
-                idx_arr = np.array(idxs, dtype=int)
-                order = np.argsort(rt_arr)
-                self._im_bin_to_ms1[key] = (rt_arr[order], idx_arr[order])
+        if n_ms1 == 0 or n_ms2 == 0:
+            self.ms2_to_ms1_map = np.zeros(n_ms2, dtype=int)
+            self.ms2_to_ms1_scan_num = (
+                ms1_nums[self.ms2_to_ms1_map] if n_ms1 > 0
+                else np.zeros(n_ms2, dtype=int))
+            return
 
-            ms1_nums = np.array([s.scan_num for s in self.ms1scans])
-            ms2_to_ms1 = np.zeros(len(self.ms2scans), dtype=int)
-            for i, s2 in enumerate(self.ms2scans):
-                im_key = (s2.im_lo, s2.im_hi)
-                if im_key in self._im_bin_to_ms1:
-                    rt_arr, idx_arr = self._im_bin_to_ms1[im_key]
-                    pos = np.searchsorted(rt_arr, s2.RT)
-                    if pos == 0:
-                        ms2_to_ms1[i] = idx_arr[0]
-                    elif pos == len(rt_arr):
-                        ms2_to_ms1[i] = idx_arr[-1]
-                    else:
-                        before, after = rt_arr[pos - 1], rt_arr[pos]
-                        ms2_to_ms1[i] = idx_arr[pos - 1] if abs(s2.RT - before) < abs(s2.RT - after) else idx_arr[pos]
-                else:
-                    # Fallback: nearest RT across all MS1
-                    all_ms1_rts = np.array([s.RT for s in self.ms1scans])
-                    pos = np.searchsorted(all_ms1_rts, s2.RT)
-                    if pos == 0:
-                        ms2_to_ms1[i] = 0
-                    elif pos == len(all_ms1_rts):
-                        ms2_to_ms1[i] = len(all_ms1_rts) - 1
-                    else:
-                        before, after = all_ms1_rts[pos - 1], all_ms1_rts[pos]
-                        ms2_to_ms1[i] = pos - 1 if abs(s2.RT - before) < abs(s2.RT - after) else pos
+        ms1_rts = np.array([s.RT for s in self.ms1scans])  # sorted ascending
+        ms2_rts = np.array([s.RT for s in self.ms2scans])
+        if n_ms1 == 1:
+            nearest = np.zeros(n_ms2, dtype=int)
         else:
-            self._im_bin_to_ms1 = None
-            ms1_rts = np.array([s.RT for s in self.ms1scans])
-            ms1_nums = np.array([s.scan_num for s in self.ms1scans])
-            ms2_to_ms1 = np.zeros(len(self.ms2scans), dtype=int)
-            for i, rt in enumerate([s.RT for s in self.ms2scans]):
-                pos = np.searchsorted(ms1_rts, rt)
-                if pos == 0:
-                    closest_idx = 0
-                elif pos == len(ms1_rts):
-                    closest_idx = len(ms1_rts) - 1
-                else:
-                    before, after = ms1_rts[pos - 1], ms1_rts[pos]
-                    closest_idx = pos - 1 if abs(rt - before) < abs(rt - after) else pos
-                ms2_to_ms1[i] = closest_idx
-            ms1_nums = np.array([s.scan_num for s in self.ms1scans])
+            pos = np.clip(np.searchsorted(ms1_rts, ms2_rts), 1, n_ms1 - 1)
+            left_closer = np.abs(ms2_rts - ms1_rts[pos - 1]) <= np.abs(ms2_rts - ms1_rts[pos])
+            nearest = np.where(left_closer, pos - 1, pos).astype(int)
 
-        self.ms2_to_ms1_map = ms2_to_ms1
-        self.ms2_to_ms1_scan_num = ms1_nums[ms2_to_ms1]  # parallel array for convenience
+        self.ms2_to_ms1_map = nearest
+        self.ms2_to_ms1_scan_num = ms1_nums[nearest]  # parallel array for convenience
 
     def get_nearest_ms1_for_scan(self, scan_id_or_num):
         """Return the closest MS1 Spectrum to the given MS2 scan (by ID or number)."""
@@ -379,6 +410,88 @@ class SpectrumFile:
         ms2_idx = self.ms2_by_id[scan_num]
         ms1_idx = self.ms2_to_ms1_map[ms2_idx]
         return self.ms1scans[ms1_idx]
+
+    def reband_ms1_to_ms2_bands(self, im_tol):
+        """Re-band the full-range MS1 frames to mirror the MS2 watershed bands.
+
+        For each distinct MS2 band ``(im_lo, im_hi)`` (taken from ``ms2scans``),
+        draw peaks from that band's nearest-RT full-range MS1 frame that fall
+        within ``[im_lo - im_tol, im_hi + im_tol]`` and emit a paired MS1 band
+        spectrum carrying the *same* ``(im_lo, im_hi)`` key. Peaks are
+        denormalized: a peak within ``im_tol`` of two overlapping bands appears
+        in each band's MS1 spectrum. Downstream, ``im_bin_ms1`` keyed by
+        ``(im_lo, im_hi)`` then resolves each MS2 band to its matching MS1 band.
+
+        Must run after the preliminary search (so ``im_tol`` = ``config.opt_im_precision``
+        is known) and before the main search. No-op if MS1 lacks per-peak mobility.
+        """
+        if len(self.ms1scans) == 0 or len(self.ms2scans) == 0:
+            return
+        if self.ms1scans[0].mobility is None:
+            return  # non-IM data; nothing to band
+
+        # nearest full-range MS1 frame per MS2 scan (RT-based)
+        self.build_ms2_to_ms1_map()
+        source_ms1 = self.ms1scans
+
+        next_scan = max(max(self.ms1_by_id, default=0),
+                        max(self.ms2_by_id, default=0)) + 1
+
+        new_ms1 = []
+        new_ms1_by_id = {}
+        seen = {}  # (source_idx, im_lo, im_hi) -> None, dedup identical bands
+        for ms2_idx, m2 in enumerate(self.ms2scans):
+            im_lo = getattr(m2, "im_lo", None)
+            if im_lo is None:
+                continue
+            im_hi = m2.im_hi
+            src_idx = int(self.ms2_to_ms1_map[ms2_idx])
+            ckey = (src_idx, im_lo, im_hi)
+            if ckey in seen:
+                continue
+            seen[ckey] = None
+
+            base = source_ms1[src_idx]
+            if base.mobility is None or base.mz.size == 0:
+                continue
+            mask = (base.mobility >= im_lo - im_tol) & (base.mobility <= im_hi + im_tol)
+            if not mask.any():
+                continue  # no MS1 signal in this band; skip (rare)
+
+            b = Spectrum()
+            b.scan_num = next_scan
+            b.id = f"scan={next_scan}"
+            next_scan += 1
+            b.level = 1
+            b.RT = base.RT
+            b.mz = base.mz[mask]            # base.mz is m/z-sorted; mask preserves order
+            b.intens = base.intens[mask]
+            b.mobility = base.mobility[mask]
+            b.TIC = float(b.intens.sum(dtype=np.float64))
+            b.injection_time = getattr(base, "injection_time", 1.0)
+            b.collision_energy = None
+            b.isolation_window = None
+            b.im_lo = im_lo
+            b.im_hi = im_hi
+            b.scanwindow = [float(b.mz[0]), float(b.mz[-1])]
+
+            new_ms1_by_id[b.scan_num] = len(new_ms1)
+            new_ms1.append(b)
+
+        if not new_ms1:
+            return
+
+        # replace MS1 frames with the banded spectra; refresh maps
+        self.scan_pos = {k: v for k, v in self.scan_pos.items() if v[0] != 1}
+        self.ms1scans = new_ms1
+        self.ms1_by_id = new_ms1_by_id
+        for scan_num, idx in new_ms1_by_id.items():
+            self.scan_pos[scan_num] = [1, idx]
+        self.build_ms2_to_ms1_map()
+        logger.info(
+            f"Re-banded MS1: {len(new_ms1)} band spectra "
+            f"(im_tol={im_tol:.5f}) paired to MS2 watershed bands"
+        )
 
 
 

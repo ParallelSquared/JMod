@@ -348,7 +348,8 @@ def iso_library_multi(library, tag, n_iso):
     all_keys = list(library)
 
     logger.info("Generating isotopes for library:")
-    p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), 61))
+    p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), 61),
+                                                  initializer=config.limit_blas_threads)
 
     # Process results incrementally via imap to avoid holding all inputs
     # and outputs in memory simultaneously.

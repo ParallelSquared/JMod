@@ -12,8 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import tkinter as tk
-from tkinter import messagebox
 import logging
 import sys
 import importlib
@@ -63,11 +61,16 @@ def rename_results_folder(config):
         except Exception as rename_error:
             logging.getLogger("appLogger").warning(f"Could not rename results folder: {rename_error}")
 
-SETTINGS_DIR = Path("data")
+# Anchored to the repo root, not the CWD: run_jmod_from_GUI.py resolves this same
+# data/ folder as dirname(dirname(abspath(__file__))) for the app icon, so a
+# CWD-relative constant here meant the GUI and load_settings disagreed about where
+# settings.json lives whenever JMod was launched from anywhere but the repo root.
+SETTINGS_DIR = Path(__file__).resolve().parents[2] / "data"
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 
 DEFAULT_SETTINGS = {
     "rawfilereader_path": None,
+    "bruker_sdk_path": None,
 }
 
 def load_settings():
@@ -80,6 +83,8 @@ def load_settings():
     return DEFAULT_SETTINGS | settings
 
 def save_settings(settings):
+    # SETTINGS_DIR may not exist yet on a fresh checkout or install.
+    SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=2)
 

@@ -44,6 +44,50 @@ from src.logger import logger, set_log_filepath, log_exceptions
 import logging
 
 
+def _aligned_library_im(library):
+    """Library ion mobility mapped onto observed 1/K0 by the fitted alignment.
+
+    Returns an all-NaN array when the library has no IM column or the alignment
+    did not fit, so every IM gate keyed off this value is inert on such runs.
+    """
+    lib_im = np.asarray(library.ion_mob, dtype=np.float64)
+    aligned = np.full(lib_im.shape, np.nan, dtype=np.float64)
+    ok = np.isfinite(lib_im)
+    if config.im_spl is not None and ok.any():
+        aligned[ok] = config.im_spl(lib_im[ok])
+        logger.info(f"Aligned library IM for {int(ok.sum())} of {ok.size} entries "
+                    f"(range {np.nanmin(aligned):.4f}-{np.nanmax(aligned):.4f})")
+    elif config.library_has_im:
+        # The library has IM but there is no calibration to map it with; the
+        # admission gate would be comparing un-aligned values against observed
+        # ones, so it stays off rather than silently mis-gating.
+        logger.info("Library has IM but no alignment was fitted; "
+                    "IM candidate admission disabled")
+    return aligned
+
+
+def _resolve_bruker_setting(cli_value):
+    """Resolve the Bruker SDK path, persisting a CLI value once it validates.
+
+    A CLI arg wins and is stored; otherwise the stored setting is used. Both are
+    validated. Returns the resolved library file, or None when nothing was set.
+    """
+    settings = load_settings()
+
+    from_cli = cli_value is not None
+    raw_sdk_path = cli_value if from_cli else settings.get("bruker_sdk_path")
+
+    resolved = file_reader.resolve_bruker_sdk_path(raw_sdk_path)
+
+    if from_cli:
+        # Resolves first, so a bad path cannot poison settings.json. Storing None
+        # for an empty --bruker_sdk_path gives it the meaning "forget my SDK".
+        settings["bruker_sdk_path"] = resolved
+        save_settings(settings)
+
+    return resolved
+
+
 @log_exceptions
 def main(GUI_config_json=None, GUI_result_queue=None):
     """Main function to run JMod analysis."""
@@ -221,11 +265,17 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
         file_reader.load_rawfilereader(reader_path)
 
-    
+    # Bruker SDK, resolved the same way: a CLI arg wins and is persisted,
+    # otherwise fall back to the stored setting. Only used for a .d with no
+    # peaks.parquet yet, where it supplies the calibration for centroiding.
+    bruker_sdk_path = None
+    if config.args.mzml.rstrip("/").lower().endswith(".d"):
+        bruker_sdk_path = _resolve_bruker_setting(config.args.bruker_sdk_path)
+
     ######################################################
     #### Load the data
     spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
-    DIAspectra=file_reader.loadSpectra(mzml_file)
+    DIAspectra=file_reader.loadSpectra(mzml_file, bruker_sdk_path=bruker_sdk_path)
 
     if config.args.test_mode:
         logger.info(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
@@ -368,6 +418,10 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 plex_lib[key+(idx,)] = spectrumLibrary[key]
             rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
         rt_mz = np.concatenate(rt_mz)
+        # Column 2 as in the standard path.  This path replicates the library once
+        # per plex, so the aligned IM has to be tiled to match row-for-row.
+        _plex_im = _aligned_library_im(spectrumLibrary)
+        rt_mz = np.column_stack([rt_mz, np.tile(_plex_im, len(rt_spls))])
         
         from src.models.spec_lib.library_store import SpectrumLibraryStore
         spectrumLibrary = SpectrumLibraryStore.from_dict(plex_lib)
@@ -409,15 +463,48 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # Build rt_mz for ALL entries (target + decoy)
         rt_mz = np.array([[rt_spl(spectrumLibrary.iRT[i]), mz_func(spectrumLibrary.prec_mz[i], spectrumLibrary.iRT[i])]
                           for i in range(len(spectrumLibrary))])
+        # Column 2: the library's IM mapped onto observed 1/K0 by the alignment.
+        # Left all-NaN when the library carries no IM or the alignment did not
+        # fit, which leaves every downstream IM gate inert.  Decoys keep their
+        # parent's IM unchanged -- unlike m/z there is no decoy offset, since
+        # shifting it would reject decoys systematically and break FDR.
+        rt_mz = np.column_stack([rt_mz, _aligned_library_im(spectrumLibrary)])
         # Apply decoy m/z offset to decoy entries
         rt_mz[spectrumLibrary.n_targets:, 1] -= config.decoy_mz_offset
 
     del target_view
 
+    ## Re-band MS2 on the fitted IM precision.  The bands built at load time use
+    ## a hardcoded width, chosen before anything about this run's mobility
+    ## resolution was known; the preliminary search has now fitted the precision,
+    ## so redraw them to match.  Width is 4 x precision -- the band spans
+    ## +/-2*precision, deliberately wider than the match gate so a precursor's
+    ## mobility profile stays inside one spectrum rather than being split across
+    ## bands; the tight gating happens later, within the band.  No-op on non-IM
+    ## data (reband_ms2 self-guards on the retained un-banded peaks, which only
+    ## the .d path stores).
+    _ms2_has_im = (len(DIAspectra.ms2scans) > 0
+                   and getattr(DIAspectra.ms2scans[0], "mobility", None) is not None)
+    if _ms2_has_im:
+        # Release the pre-reband alias to the old band list.  reband_ms2 clears
+        # DIAspectra.ms2scans, but this name (bound way back before the initial
+        # search, and unused since) would otherwise keep every old band spectrum
+        # alive while the new, larger set is being allocated -- on a large .d that
+        # is an extra ~18 GB held for no reason.  Rebound from the new bands below.
+        spectra_to_fit = None
+        file_reader.reband_ms2(DIAspectra, 4.0 * config.opt_im_precision)
+
     ## Merge peaks in spectra (MS2 only; MS1 peaks are summed within
-    ## tolerance during matrix construction in fit_channel_isotopes_numba)
-    for spec in DIAspectra.ms2scans:
-        merge_spectrum_peaks(spec, (config.args.ppm * 1e-6))
+    ## tolerance during matrix construction in fit_channel_isotopes_numba).
+    ## Skipped for timsTOF/IM data (MS2 peaks carry per-peak mobility) while the
+    ## IM-watershed ID-loss investigation is ongoing; still applied to mzML.
+    _is_timstof = (len(DIAspectra.ms2scans) > 0
+                   and DIAspectra.ms2scans[0].mobility is not None)
+    if not _is_timstof:
+        for spec in DIAspectra.ms2scans:
+            merge_spectrum_peaks(spec, (config.args.ppm * 1e-6))
+    else:
+        logger.info("Skipping MS2 peak merge for timsTOF/IM data")
 
     spectra_to_fit = DIAspectra.ms2scans
 
@@ -509,6 +596,26 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     _pa_schema = pl.DataFrame(schema=_pl_schema).to_arrow().schema
     _BUFFER_SIZE = 1000  # results to buffer before flushing to disk
 
+    # Spectra submitted per chunk.  Bounds how many results are held at once.
+    _CHUNK = 100
+
+    # Constant across every spectrum and every batch, so build the kwargs once.
+    _fit_kwargs = dict(library=spectrumLibrary,
+                       rt_mz=rt_mz,
+                       all_keys=all_keys,
+                       dino_features=None,
+                       rt_filter=True,
+                       rt_tol=config.opt_rt_tol,
+                       ms1_tol=config.opt_ms1_tol,
+                       mz_tol=(config.args.ppm * 1e-6),
+                       ms1_spectra=DIAspectra.ms1scans,
+                       return_frags=False,
+                       decoy=True,
+                       output_folder=results_folder_path,
+                       frag_index=frag_index,
+                       ms1_rt=_ms1_rt,
+                       im_bin_ms1=_im_bin_ms1)
+
     # Measure CPU utilization across the search to assess GIL contention
     import psutil as _psutil
     _search_proc = _psutil.Process(os.getpid())
@@ -530,35 +637,29 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # stays "Resource busy" until the next mount cycle.
         with pq.ParquetWriter(batch_parquet_path, _pa_schema) as writer:
             buffer = []
-            with ThreadPoolExecutor(max_workers=n_threads) as pool:
-                futures = {pool.submit(fit_to_lib2, dia_spec,
-                                       library=spectrumLibrary,
-                                       rt_mz=rt_mz,
-                                       all_keys=all_keys,
-                                       dino_features=None,
-                                       rt_filter=True,
-                                       rt_tol=config.opt_rt_tol,
-                                       ms1_tol=config.opt_ms1_tol,
-                                       mz_tol=(config.args.ppm * 1e-6),
-                                       ms1_spectra=DIAspectra.ms1scans,
-                                       return_frags=False,
-                                       decoy=True,
-                                       output_folder=results_folder_path,
-                                       frag_index=frag_index,
-                                       ms1_rt=_ms1_rt,
-                                       im_bin_ms1=_im_bin_ms1): i
-                          for i, dia_spec in enumerate(batch_spectra)}
-
-                for f in tqdm.tqdm(as_completed(futures), total=len(futures)):
-                    result = f.result()
-                    if result:
-                        buffer.extend(result)
-                        n_results += len(result)
-                        if len(buffer) >= _BUFFER_SIZE:
-                            _col_data = {col: [row[i] for row in buffer]
-                                         for i, col in enumerate(_pl_schema)}
-                            writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
-                            buffer.clear()
+            # Submit in chunks and drain each before submitting the next.
+            # Holding every future for the whole batch (the previous dict, keyed
+            # by an index nothing read) kept each completed future -- and so its
+            # result rows -- alive until the batch ended, so flushing ``buffer``
+            # freed nothing and peak memory grew with the task count.  ~190k
+            # tasks was enough to exhaust the machine.
+            with ThreadPoolExecutor(max_workers=n_threads) as pool, \
+                    tqdm.tqdm(total=len(batch_spectra)) as bar:
+                for _start in range(0, len(batch_spectra), _CHUNK):
+                    futures = [pool.submit(fit_to_lib2, dia_spec, **_fit_kwargs)
+                               for dia_spec in batch_spectra[_start:_start + _CHUNK]]
+                    for f in as_completed(futures):
+                        result = f.result()
+                        bar.update(1)
+                        if result:
+                            buffer.extend(result)
+                            n_results += len(result)
+                            if len(buffer) >= _BUFFER_SIZE:
+                                _col_data = {col: [row[i] for row in buffer]
+                                             for i, col in enumerate(_pl_schema)}
+                                writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+                                buffer.clear()
+                    futures.clear()
 
             # Flush remaining buffered results
             if buffer:

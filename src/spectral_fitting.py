@@ -389,7 +389,7 @@ def _single_match_lookup_jit(coo_rows, coo_cols, n_rows):
 
 
 @njit(nogil=True)
-def _dia_prep_jit(mz, intens, mz_tol):
+def _dia_prep_jit(mz, intens, mobility, mz_tol):
     """Merge nearby DIA peaks and compute centroid breaks + bin centers.
 
     NOTE: This merging step may be redundant if the input spectra are already
@@ -397,11 +397,16 @@ def _dia_prep_jit(mz, intens, mz_tol):
     which could collapse peaks that are close in m/z. If inputs are already
     properly centroided, this step could be skipped.
 
+    ``mobility`` is the per-peak ion mobility (1/K0), parallel to ``mz``; each
+    merged bin gets the intensity-weighted mean mobility of the raw peaks in it
+    (``merged_mob``). Pass zeros for non-IM data — the caller ignores the output.
+
     Returns:
         merged_mz: merged peak m/z values
         merged_int: merged peak intensities
         centroid_breaks: sorted lower/upper tolerance bounds (2*n_merged)
         bin_centers: midpoints of each (lower, upper) break pair (n_merged)
+        merged_mob: intensity-weighted mean mobility per merged bin (n_merged)
     """
     n = len(mz)
 
@@ -434,6 +439,7 @@ def _dia_prep_jit(mz, intens, mz_tol):
     # Build merged arrays
     merged_mz = np.empty(n_merged, dtype=np.float64)
     merged_int = np.zeros(n_merged, dtype=np.float64)
+    merged_mob = np.zeros(n_merged, dtype=np.float64)  # intensity-weighted sum, then /int
     g = -1
     prev_idx = -1
     for i in range(n):
@@ -442,6 +448,10 @@ def _dia_prep_jit(mz, intens, mz_tol):
             merged_mz[g] = mz[merge_idx[i]]
             prev_idx = merge_idx[i]
         merged_int[g] += intens[i]
+        merged_mob[g] += intens[i] * mobility[i]
+    for i in range(n_merged):
+        if merged_int[i] > 0.0:
+            merged_mob[i] /= merged_int[i]
 
     # ── Step 2: Compute centroid breaks and bin centers ──
     breaks = np.empty(2 * n_merged, dtype=np.float64)
@@ -463,7 +473,140 @@ def _dia_prep_jit(mz, intens, mz_tol):
     for i in range(n_merged):
         bin_centers[i] = (breaks[2 * i] + breaks[2 * i + 1]) * 0.5
 
-    return merged_mz, merged_int, breaks, bin_centers
+    return merged_mz, merged_int, breaks, bin_centers, merged_mob
+
+
+@njit(nogil=True)
+def _dia_prep_2d_jit(mz, intens, mobility, mz_tol, im_tol):
+    """Bin DIA peaks by BOTH m/z (within ``mz_tol``) and ion mobility (within
+    ``im_tol``), summing intensity within each 2D bin.
+
+    Same-m/z peaks that are IM-separated land in DISTINCT bins, so the summed
+    observation for a bin reflects only one IM population (no cross-IM
+    contamination), while same-m/z + same-IM peaks share a bin (deconvolved by
+    NNLS downstream, exactly like the 1D merge).
+
+    Returns ``(bin_mz, bin_int, bin_mob)``, all sorted ascending by ``bin_mz``.
+    ``bin_mz``/``bin_mob`` are intensity-weighted means within the bin.
+    """
+    n = mz.shape[0]
+    if n == 0:
+        z = np.empty(0, dtype=np.float64)
+        return z, z.copy(), z.copy()
+
+    order = np.argsort(mz)
+    smz = mz[order]
+    sin = intens[order]
+    smo = mobility[order]
+
+    bin_mz = np.empty(n, dtype=np.float64)
+    bin_int = np.empty(n, dtype=np.float64)
+    bin_mob = np.empty(n, dtype=np.float64)
+    nb = 0
+
+    i = 0
+    while i < n:
+        # m/z group: peaks within mz_tol of the group anchor
+        anchor_mz = smz[i]
+        mz_lim = anchor_mz + mz_tol * anchor_mz
+        jmz = i
+        while jmz < n and smz[jmz] <= mz_lim:
+            jmz += 1
+
+        # within the group, sub-group by mobility within im_tol
+        g = jmz - i
+        gmz = smz[i:jmz].copy()
+        gin = sin[i:jmz].copy()
+        gmo = smo[i:jmz].copy()
+        mo_order = np.argsort(gmo)
+        gmz = gmz[mo_order]
+        gin = gin[mo_order]
+        gmo = gmo[mo_order]
+
+        p = 0
+        while p < g:
+            anchor_mob = gmo[p]
+            mob_lim = anchor_mob + im_tol
+            wsum = 0.0
+            mzw = 0.0
+            mow = 0.0
+            q = p
+            while q < g and gmo[q] <= mob_lim:
+                w = gin[q]
+                wsum += w
+                mzw += w * gmz[q]
+                mow += w * gmo[q]
+                q += 1
+            bin_int[nb] = wsum
+            if wsum > 0.0:
+                bin_mz[nb] = mzw / wsum
+                bin_mob[nb] = mow / wsum
+            else:
+                bin_mz[nb] = gmz[p]
+                bin_mob[nb] = gmo[p]
+            nb += 1
+            p = q
+        i = jmz
+
+    bmz = bin_mz[:nb]
+    bint = bin_int[:nb]
+    bmob = bin_mob[:nb]
+    # sort bins ascending by m/z so the matchers can binary-search
+    bo = np.argsort(bmz)
+    return bmz[bo], bint[bo], bmob[bo]
+
+
+@njit(nogil=True)
+def _match_mz_only(bin_mz, bin_int, q, mz_tol):
+    """Index of the MOST INTENSE bin within ``mz_tol`` of ``q``, or -1."""
+    n = bin_mz.shape[0]
+    if n == 0:
+        return -1
+    tol = q * mz_tol
+    pos = np.searchsorted(bin_mz, q)
+    best = -1
+    best_int = -1.0
+    i = pos - 1
+    while i >= 0 and (q - bin_mz[i]) <= tol:
+        if bin_int[i] > best_int:
+            best_int = bin_int[i]
+            best = i
+        i -= 1
+    i = pos
+    while i < n and (bin_mz[i] - q) <= tol:
+        if bin_int[i] > best_int:
+            best_int = bin_int[i]
+            best = i
+        i += 1
+    return best
+
+
+@njit(nogil=True)
+def _match_mz_im(bin_mz, bin_mob, q, prec_im, mz_tol, im_tol):
+    """Index of the bin within ``mz_tol`` of ``q`` AND ``im_tol`` of ``prec_im``
+    (nearest mobility), or -1."""
+    n = bin_mz.shape[0]
+    if n == 0:
+        return -1
+    tol = q * mz_tol
+    pos = np.searchsorted(bin_mz, q)
+    best = -1
+    best_d = 1e18
+    i = pos - 1
+    while i >= 0 and (q - bin_mz[i]) <= tol:
+        d = abs(bin_mob[i] - prec_im)
+        if d <= im_tol and d < best_d:
+            best_d = d
+            best = i
+        i -= 1
+    i = pos
+    while i < n and (bin_mz[i] - q) <= tol:
+        d = abs(bin_mob[i] - prec_im)
+        if d <= im_tol and d < best_d:
+            best_d = d
+            best = i
+        i += 1
+    return best
 
 
 @njit(nogil=True)
@@ -666,11 +809,11 @@ def _assemble_features_jit(
     scribe_scores, max_unmatched_residuals, max_matched_residuals,
     gof_stats, manhattan_distances, fitted_spectral_contrasts,
     frac_int_matched_pred, lc_frac, lc_cosine,
-    prec_mz, tic):
-    """Assemble the 27-column feature matrix in one nogil pass.
+    prec_mz, tic, im_error):
+    """Assemble the 28-column feature matrix in one nogil pass.
 
     Replaces np.ones_like * scalar broadcasts (5 allocations) + np.stack of
-    27 arrays (~1500 GIL-holding samples). Fills a pre-allocated (n, 27)
+    28 arrays (~1500 GIL-holding samples). Fills a pre-allocated (n, 28)
     array directly — no intermediate arrays, no GIL.
 
     Per-candidate arrays (length n) are copied directly into their column.
@@ -678,7 +821,7 @@ def _assemble_features_jit(
     lc_frac, lc_cosine, tic) are broadcast by filling the column with the value.
     """
     n = len(num_lib_peaks_matched)
-    out = np.empty((n, 27), dtype=np.float64)
+    out = np.empty((n, 28), dtype=np.float64)
     for i in range(n):
         out[i, 0] = num_lib_peaks_matched[i]
         out[i, 1] = frac_lib_intensity[i]
@@ -707,6 +850,7 @@ def _assemble_features_jit(
         out[i, 24] = lc_cosine              # scalar broadcast
         out[i, 25] = prec_mz[i]
         out[i, 26] = tic                    # scalar broadcast
+        out[i, 27] = im_error[i]
     return out
 
 
@@ -988,8 +1132,9 @@ def _create_entries_direct_jit(
     spec_data_mz, spec_data_int, spec_offsets, spec_lengths,
     topn_data, topn_offsets, topn_lengths,
     cand_indices,
-    prec_mzs, ms1_mz, ms1_tol,
-    frac_lib_threshold, atleast_m, match_ms1):
+    prec_mzs, ms1_mz, ms1_mob, ms1_tol,
+    frac_lib_threshold, atleast_m, match_ms1,
+    bin_mz, bin_int, bin_mob, mz_tol, im_tol, has_im):
     """Like _create_entries_core_jit but reads directly from library backing arrays.
 
     Instead of pre-flattened fragment arrays, this takes the library's contiguous
@@ -1032,9 +1177,18 @@ def _create_entries_direct_jit(
     for i in range(n_cands):
         frag_offsets[i + 1] = frag_offsets[i] + int(spec_lengths[cand_indices[i]])
 
-    # Step 1: Searchsorted — gather from library + bin each fragment
+    # Step 1: bin each fragment. all_coords uses the parity convention that the
+    # rest of this function + _assemble_coo_jit rely on: odd => matched, with DIA
+    # bin index = coord // 2; even => unmatched.
     all_coords = np.empty(total_frags, dtype=np.int64)
     all_frag_int = np.empty(total_frags, dtype=np.float64)
+
+    # Per-candidate precursor IM (median of matched fragment mobilities). NaN for
+    # the non-IM path or candidates with no m/z match; carried out so downstream
+    # stages (e.g. fragment correlations) reuse it instead of re-deriving it.
+    prec_im_out = np.full(n_cands, np.nan)
+
+    # library fragment intensities are needed regardless of the matching path
     for i in range(n_cands):
         lib_idx = cand_indices[i]
         src_off = int(spec_offsets[lib_idx])
@@ -1042,7 +1196,46 @@ def _create_entries_direct_jit(
         dst_off = int(frag_offsets[i])
         for k in range(src_len):
             all_frag_int[dst_off + k] = spec_data_int[src_off + k]
-            all_coords[dst_off + k] = np.searchsorted(centroid_breaks, spec_data_mz[src_off + k])
+
+    if has_im and im_tol > 0.0:
+        # 2D (m/z, IM) matching. Pass 1: most-intense m/z bin per fragment ->
+        # prec_IM = median of matched bins' mobilities. Pass 2: match by m/z AND
+        # |bin_mob - prec_IM| <= im_tol; encode bin index as 2*bin+1 (matched).
+        mob_buf = np.empty(total_frags, dtype=np.float64)
+        for i in range(n_cands):
+            lib_idx = cand_indices[i]
+            src_off = int(spec_offsets[lib_idx])
+            src_len = int(spec_lengths[lib_idx])
+            dst_off = int(frag_offsets[i])
+            cnt = 0
+            for k in range(src_len):
+                b1 = _match_mz_only(bin_mz, bin_int, spec_data_mz[src_off + k], mz_tol)
+                if b1 >= 0:
+                    mob_buf[cnt] = bin_mob[b1]
+                    cnt += 1
+            if cnt == 0:
+                for k in range(src_len):
+                    all_coords[dst_off + k] = 0  # even => unmatched
+                continue
+            prec_im = np.median(mob_buf[:cnt])
+            prec_im_out[i] = prec_im
+            for k in range(src_len):
+                b2 = _match_mz_im(bin_mz, bin_mob, spec_data_mz[src_off + k],
+                                  prec_im, mz_tol, im_tol)
+                if b2 >= 0:
+                    all_coords[dst_off + k] = 2 * b2 + 1  # odd => matched, bin=b2
+                else:
+                    all_coords[dst_off + k] = 0           # even => unmatched
+    else:
+        # 1D m/z-only path (mzML / non-IM): searchsorted into centroid_breaks.
+        for i in range(n_cands):
+            lib_idx = cand_indices[i]
+            src_off = int(spec_offsets[lib_idx])
+            src_len = int(spec_lengths[lib_idx])
+            dst_off = int(frag_offsets[i])
+            for k in range(src_len):
+                all_coords[dst_off + k] = np.searchsorted(
+                    centroid_breaks, spec_data_mz[src_off + k])
 
     # Step 2: Top-N match counting per candidate
     top_n_matched = np.zeros(n_cands, dtype=np.int32)
@@ -1071,23 +1264,44 @@ def _create_entries_direct_jit(
             if all_coords[k] % 2 == 1:
                 frac_matched_arr[i] += all_norm_int[k]
 
-    # Step 4: MS1 closest-peak error
+    # Step 4: MS1 closest-peak error.
+    #
+    # IM gate first, m/z as the selector.  Taking the nearest peak by m/z alone
+    # regularly lands on a co-isolated ion at unrelated mobility, because MS1
+    # frames are not IM-banded -- they carry per-peak mobility across the whole
+    # acquisition range.  So scan every MS1 peak within ms1_tol and keep the
+    # m/z-closest one that also sits within im_tol of this candidate's
+    # fragment-derived IM.  Falls back to pure m/z when there is no mobility to
+    # gate on: non-IM data, or a candidate whose fragments yielded no prec_im.
     n_ms1 = len(ms1_mz)
     ms1_error = np.full(n_cands, np.nan)
+    ms1_has_mob = len(ms1_mob) == n_ms1
     if n_ms1 > 0:
         for i in range(n_cands):
             q = prec_mzs[i]
+            p_im = prec_im_out[i]
+            gate_im = ms1_has_mob and im_tol > 0.0 and p_im == p_im
+            tol_da = ms1_tol * q
+            best = np.nan
+            best_abs = ms1_tol
             idx = np.searchsorted(ms1_mz, q)
-            left = max(0, idx - 1)
-            right = min(idx, n_ms1 - 1)
-            left_diff = (ms1_mz[left] - q) / q
-            right_diff = (ms1_mz[right] - q) / q
-            if abs(left_diff) <= abs(right_diff):
-                closest = left_diff
-            else:
-                closest = right_diff
-            if abs(closest) <= ms1_tol:
-                ms1_error[i] = closest
+            j = idx
+            while j < n_ms1 and (ms1_mz[j] - q) <= tol_da:
+                if (not gate_im) or abs(ms1_mob[j] - p_im) <= im_tol:
+                    d = (ms1_mz[j] - q) / q
+                    if abs(d) <= best_abs:
+                        best_abs = abs(d)
+                        best = d
+                j += 1
+            j = idx - 1
+            while j >= 0 and (q - ms1_mz[j]) <= tol_da:
+                if (not gate_im) or abs(ms1_mob[j] - p_im) <= im_tol:
+                    d = (ms1_mz[j] - q) / q
+                    if abs(d) <= best_abs:
+                        best_abs = abs(d)
+                        best = d
+                j -= 1
+            ms1_error[i] = best
 
     # Candidate filtering
     n_passing = 0
@@ -1135,7 +1349,7 @@ def _create_entries_direct_jit(
     for j in range(n_passing):
         ms1_error_out[j] = ms1_error[passing[j]]
 
-    return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets
+    return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets, prec_im_out
 
 
 def create_entries_direct(centroid_breaks,
@@ -1147,7 +1361,13 @@ def create_entries_direct(centroid_breaks,
                           atleast_m,
                           prec_mzs,
                           ms1_spec,
-                          ms1_tol):
+                          ms1_tol,
+                          bin_mz=None,
+                          bin_int=None,
+                          bin_mob=None,
+                          mz_tol=0.0,
+                          im_tol=0.0,
+                          has_im=False):
     """Like create_entries but reads directly from library backing arrays.
 
     Eliminates Python-level flattening of candidate_peaks and top_n_idxs
@@ -1166,7 +1386,7 @@ def create_entries_direct(centroid_breaks,
         mass_window_candidates: list — candidate keys (for output reconstruction)
         atleast_m: int — minimum top-N fragments matched
         prec_mzs: float64[] — precursor m/z per candidate
-        ms1_spec: MS1 spectrum object with .mz attribute
+        ms1_spec: MS1 spectrum object with .mz (and .mobility when the data carries IM)
         ms1_tol: float64 — relative MS1 tolerance
 
     Returns:
@@ -1179,12 +1399,12 @@ def create_entries_direct(centroid_breaks,
                 np.zeros(1, np.int32), [], [],
                 np.array([], dtype=np.float64),
                 np.empty(0, np.int64), np.empty(0, np.float64),
-                np.zeros(1, np.int32), np.empty(0, np.int32))
+                np.zeros(1, np.int32), np.empty(0, np.int32), [])
 
     cand_idx_arr = np.asarray(candidate_indices, dtype=np.int64)
 
     passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, \
-        all_coords, all_norm_int, frag_offsets = \
+        all_coords, all_norm_int, frag_offsets, prec_im_out = \
         _create_entries_direct_jit(
             np.ascontiguousarray(centroid_breaks, dtype=np.float64),
             spec_data_mz, spec_data_int,
@@ -1193,9 +1413,19 @@ def create_entries_direct(centroid_breaks,
             cand_idx_arr,
             np.ascontiguousarray(prec_mzs, dtype=np.float64),
             np.ascontiguousarray(ms1_spec.mz, dtype=np.float64),
+            np.ascontiguousarray(ms1_spec.mobility, dtype=np.float64)
+            if getattr(ms1_spec, "mobility", None) is not None
+            else np.empty(0, dtype=np.float64),
             float(ms1_tol),
             float(config.args.lib_frac), int(atleast_m),
-            bool(config.args.no_ms1_req))
+            bool(config.args.no_ms1_req),
+            np.ascontiguousarray(
+                bin_mz if bin_mz is not None else np.zeros(0), dtype=np.float64),
+            np.ascontiguousarray(
+                bin_int if bin_int is not None else np.zeros(0), dtype=np.float64),
+            np.ascontiguousarray(
+                bin_mob if bin_mob is not None else np.zeros(0), dtype=np.float64),
+            float(mz_tol), float(im_tol), bool(has_im))
 
     # Reconstruct Python lists from JIT output — only for passing candidates
     peaks_in_dia = passing.tolist()
@@ -1210,13 +1440,15 @@ def create_entries_direct(centroid_breaks,
     pep_cand = [mass_window_candidates[i] for i in peaks_in_dia]
     norm_intensities = [all_norm_int[frag_offsets[i]:frag_offsets[i + 1]] for i in peaks_in_dia]
     lib_peaks_matched = [pep_cand_loc[j] % 2 == 1 for j in range(len(peaks_in_dia))]
+    # Precursor IM per passing candidate, aligned with pep_cand.
+    prec_im_passing = [float(prec_im_out[i]) for i in peaks_in_dia]
 
     return (peaks_in_dia,
             pep_cand,
             pep_cand_loc,
             pep_cand_list,
             flat_rows, flat_cols, flat_vals, flat_offsets, norm_intensities, lib_peaks_matched, ms1_error_out,
-            all_coords, all_norm_int, frag_offsets, passing)
+            all_coords, all_norm_int, frag_offsets, passing, prec_im_passing)
 
 
 def _flatten_splits(row_idx_split, col_idx_split, val_split):
@@ -1832,6 +2064,7 @@ def hyperscore2(frag_intensities, frag_codes):
 #@profile
 def get_features(
     rt_mz,
+    prec_im,
     ref_rows, ref_vals, ref_cols, ref_offsets,
     dec_rows, dec_vals, dec_cols, dec_offsets,
     ref_peaks_in_dia,
@@ -1924,6 +2157,11 @@ def get_features(
     # mz tol
     rel_error = np.where(~np.isnan(ms1_error), np.abs(ms1_error), -1.0)
     rt_error = prec_rt-rt_mz[:,0]
+    # Observed IM minus the library's aligned prediction -- the IM analogue of
+    # rt_error, signed for the same reason.  rt_mz column 2 is the aligned
+    # library IM; both sides are NaN on non-IM runs, exactly as prec_im already
+    # is, so the feature is NaN there and finite whenever IM is in play.
+    im_error = np.asarray(prec_im, dtype=np.float64).ravel() - rt_mz[:, 2]
 
     frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
 
@@ -2026,7 +2264,8 @@ def get_features(
         _lc_frac,                       # 23: large-coeff predicted/observed intensity ratio (scalar → broadcast)
         _lc_cosine,                     # 24: large-coeff subset cosine similarity (scalar → broadcast)
         _prec_mz,                       # 25: calibrated precursor m/z
-        tic                              # 26: total ion current (scalar → broadcast)
+        tic,                             # 26: total ion current (scalar → broadcast)
+        im_error                         # 27: observed IM - aligned library IM
     )
     return features
 
@@ -2067,6 +2306,8 @@ def _batch_closest_peak_diff(query_mzs, ref_mzs, max_diff):
     return closest_diff
 
 
+# TODO: remove dead code — `create_entries` (and its `_create_entries_jit`) is
+# superseded by `create_entries_direct` and has no callers.
 def create_entries(centroid_breaks,
                    candidate_peaks,
                    mass_window_candidates,
@@ -2176,18 +2417,47 @@ def fit_to_lib2(dia_spec,
             ms1_spec = get_closest_ms1(prec_rt, ms1_spectra, ms1_rt=ms1_rt)
     lib_coefficients = []
 
-    merged_mz, merged_int, centroid_breaks, bin_centers = _dia_prep_jit(
-        dia_spectrum[:, 0].copy(), dia_spectrum[:, 1].copy(), mz_tol)
-    dia_spectrum = np.stack([merged_mz, merged_int], axis=1)
+    # Per-peak ion mobility (timsTOF); zeros for non-IM data (merged_mob unused).
+    _has_im = getattr(spec, "mobility", None) is not None
+    _im_tol = config.opt_im_precision if _has_im else 0.0
+    if _has_im and _im_tol > 0.0:
+        # timsTOF: bin DIA peaks by (m/z, IM) so same-m/z peaks at different
+        # mobility stay separate; the summed bin intensity is the NNLS observation.
+        _dia_mob = np.ascontiguousarray(spec.mobility, dtype=np.float64)
+        _bin_mz, _bin_int, _bin_mob = _dia_prep_2d_jit(
+            dia_spectrum[:, 0].copy(), dia_spectrum[:, 1].copy(), _dia_mob,
+            mz_tol, _im_tol)
+        dia_spectrum = np.stack([_bin_mz, _bin_int], axis=1)
+        # centroid_breaks unused on the IM path (2D matcher uses bin_mz directly)
+        centroid_breaks = np.zeros(0, dtype=np.float64)
+        bin_centers = _bin_mz
+    else:
+        _dia_mob = np.zeros(dia_spectrum.shape[0], dtype=np.float64)
+        merged_mz, merged_int, centroid_breaks, bin_centers, _merged_mob = _dia_prep_jit(
+            dia_spectrum[:, 0].copy(), dia_spectrum[:, 1].copy(), _dia_mob, mz_tol)
+        dia_spectrum = np.stack([merged_mz, merged_int], axis=1)
+        _bin_mz = _bin_int = _bin_mob = None
 
     # Get candidates via fragment index or fallback to m/z + RT window
     # Single query returns both target and decoy candidates from unified index
+    # IM admission window: a library precursor is only a candidate for this
+    # spectrum if its aligned IM is compatible with the spectrum's mobility band,
+    # widened by the library-IM accuracy.  Inert (-inf, +inf) whenever the
+    # spectrum has no band, the library has no IM, or no alignment was fitted --
+    # in which case rt_mz has no IM column and every value is NaN anyway.
+    _im_gate_lo, _im_gate_hi = -np.inf, np.inf
+    if (rt_mz.shape[1] > 2 and getattr(spec, "im_lo", None) is not None
+            and config.im_spl is not None):
+        _im_gate_lo = spec.im_lo - config.opt_im_accuracy
+        _im_gate_hi = spec.im_hi + config.opt_im_accuracy
+
     if frag_index is not None and not ms1_mz:
         win_lo = prec_mz - windowWidth / 2
         win_hi = prec_mz + windowWidth / 2
         all_window_idxs = frag_index.query(
             dia_spectrum[:, 0], win_lo, win_hi,
-            prec_rt, rt_tol, atleast_m
+            prec_rt, rt_tol, atleast_m,
+            im_gate_lo=_im_gate_lo, im_gate_hi=_im_gate_hi
         )
     else:
         if ms1_mz:
@@ -2197,6 +2467,14 @@ def fit_to_lib2(dia_spec,
                 _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
             else:
                 _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
+        if np.isfinite(_im_gate_lo):
+            # Mirror the index gate. NaN IM (library without mobility) is not a
+            # rejection, so it is explicitly admitted rather than compared.
+            _im = rt_mz[:, 2]
+            _bool = np.logical_and(
+                _bool,
+                np.isnan(_im) | ((_im >= _im_gate_lo) & (_im <= _im_gate_hi)),
+            )
         all_window_idxs = np.where(_bool)[0]
 
     # Split into target and decoy candidates
@@ -2222,7 +2500,7 @@ def fit_to_lib2(dia_spec,
         norm_intensities, \
         lib_peaks_matched, \
         ref_ms1_error, \
-        ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_passing = create_entries_direct(
+        ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_passing, ref_prec_im = create_entries_direct(
                                         centroid_breaks=centroid_breaks,
                                         spec_data_mz=library.spectrum_mz,
                                         spec_data_int=library.spectrum_int,
@@ -2236,7 +2514,13 @@ def fit_to_lib2(dia_spec,
                                         atleast_m=atleast_m,
                                         prec_mzs=rt_mz[:,1][window_idxs],
                                         ms1_spec=ms1_spec,
-                                        ms1_tol=ms1_tol)
+                                        ms1_tol=ms1_tol,
+                                        bin_mz=_bin_mz,
+                                        bin_int=_bin_int,
+                                        bin_mob=_bin_mob,
+                                        mz_tol=mz_tol,
+                                        im_tol=_im_tol,
+                                        has_im=_has_im)
     # Reconstruct split views where needed downstream
     ref_spec_row_indices_split = _split_flat(ref_flat_rows, ref_flat_offsets)
     ref_spec_col_indices_split = _split_flat(ref_flat_cols, ref_flat_offsets)
@@ -2265,7 +2549,7 @@ def fit_to_lib2(dia_spec,
                         norm_decoy_intensities, \
                             decoy_lib_peaks_matched, \
                                 decoy_ms1_error, \
-                                    dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_passing = create_entries_direct(
+                                    dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_passing, dec_prec_im = create_entries_direct(
                                                                     centroid_breaks=centroid_breaks,
                                                                     spec_data_mz=library.spectrum_mz,
                                                                     spec_data_int=library.spectrum_int,
@@ -2279,7 +2563,13 @@ def fit_to_lib2(dia_spec,
                                                                     atleast_m=atleast_m,
                                                                     prec_mzs=decoy_mz,
                                                                     ms1_spec=ms1_spec,
-                                                                    ms1_tol=ms1_tol)
+                                                                    ms1_tol=ms1_tol,
+                                                                    bin_mz=_bin_mz,
+                                                                    bin_int=_bin_int,
+                                                                    bin_mob=_bin_mob,
+                                                                    mz_tol=mz_tol,
+                                                                    im_tol=_im_tol,
+                                                                    has_im=_has_im)
         # Reconstruct split views where needed downstream
         decoy_spec_row_indices_split = _split_flat(decoy_flat_rows, decoy_flat_offsets)
         decoy_spec_col_indices_split = _split_flat(decoy_flat_cols, decoy_flat_offsets)
@@ -2396,6 +2686,7 @@ def fit_to_lib2(dia_spec,
         _dec_cols = decoy_flat_cols if (decoy and len(decoy_flat_cols) > 0) else np.empty(0, np.int32)
         _dec_offsets = decoy_flat_offsets if (decoy and len(decoy_flat_offsets) > 1) else np.zeros(1, np.int32)
         features = get_features(rt_mz[window_idxs[ref_peaks_in_dia]],
+                                np.asarray(ref_prec_im, dtype=np.float64),
                                 ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
                                 _dec_rows, _dec_vals, _dec_cols, _dec_offsets,
                                 ref_peaks_in_dia,
@@ -2425,7 +2716,13 @@ def fit_to_lib2(dia_spec,
 
         ####################################
         if decoy:
-            decoy_features = get_features(np.stack([rt_mz[decoy_window_idxs[decoy_peaks_in_dia],0],decoy_mz[decoy_peaks_in_dia]],1),
+            # Column 2 (aligned library IM) has to be carried through here too --
+            # this array is rebuilt rather than sliced, so it would otherwise be
+            # 2 columns wide and the IM error feature would fail on decoys.
+            decoy_features = get_features(np.stack([rt_mz[decoy_window_idxs[decoy_peaks_in_dia],0],
+                                                    decoy_mz[decoy_peaks_in_dia],
+                                                    rt_mz[decoy_window_idxs[decoy_peaks_in_dia],2]],1),
+                                            np.asarray(dec_prec_im, dtype=np.float64),
                                             decoy_flat_rows, decoy_flat_vals, decoy_flat_cols, decoy_flat_offsets,
                                             ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
                                             decoy_peaks_in_dia,
@@ -2464,11 +2761,16 @@ def fit_to_lib2(dia_spec,
 
     if len(non_zero_coeffs)>0:
         target_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
+        # Precursor IM per hit, filtered by the same non-zero-coeff mask and in the
+        # same target-then-decoy order as all_spec_ids.
+        target_prec_im = [ref_prec_im[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
         if decoy:
             updated_decoy_offset = decoy_col_offset
             decoy_spec_ids = [decoy_pep_cand[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
+            decoy_prec_im = [dec_prec_im[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
 
             all_spec_ids = target_spec_ids+decoy_spec_ids
+            all_prec_im = target_prec_im+decoy_prec_im
             n_target_hits = len(target_spec_ids)
             all_features = np.concatenate((features,decoy_features))
             # Store raw arrays instead of stringified — parquet handles list columns
@@ -2483,6 +2785,7 @@ def fit_to_lib2(dia_spec,
 
         else:
             all_spec_ids = target_spec_ids
+            all_prec_im = target_prec_im
             n_target_hits = len(target_spec_ids)
             all_features = features
             all_ms2_frags = [list(i) for i in zip(frag_name_codes,
@@ -2515,6 +2818,7 @@ def fit_to_lib2(dia_spec,
                        all_spec_ids[i][2],
                        prec_mz,
                        prec_rt,
+                       all_prec_im[i],
                        *all_features[j],
                        *all_ms2_frags[j],
                        config.args.mzml,
@@ -2531,6 +2835,7 @@ def fit_to_lib2(dia_spec,
                        all_spec_ids[i][1],
                        prec_mz,
                        prec_rt,
+                       all_prec_im[i],
                        *all_features[j],
                        *all_ms2_frags[j],
                        config.args.mzml,

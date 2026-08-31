@@ -29,6 +29,39 @@ from src.utils.io.load_files import Spectrum
 
 
 
+def _dtype_is_null(dt) -> bool:
+    """True for Null, and for List(...) nested down to a Null inner type."""
+    if dt == pl.Null:
+        return True
+    inner = getattr(dt, "inner", None)
+    return _dtype_is_null(inner) if inner is not None else False
+
+
+def _reconcile_chunk_schemas(frames: list) -> list:
+    """Cast Null-typed columns so a list of per-chunk frames can be concatenated.
+
+    Polars infers a column's type per frame, so a chunk with no data for a column
+    gets Null / List(Null) while another gets Int32 / List(Float32). Concat then
+    refuses to vstack them. For each column, adopt the first non-Null dtype any
+    chunk produced and cast the Null-typed chunks to it. Columns that are Null
+    everywhere are left alone -- there is no evidence of what they should be, and
+    concat handles the all-Null case fine.
+    """
+    if len(frames) < 2:
+        return frames
+    target = {}
+    for f in frames:
+        for name, dt in f.schema.items():
+            if name not in target and not _dtype_is_null(dt):
+                target[name] = dt
+    out = []
+    for f in frames:
+        fixes = {n: target[n] for n, dt in f.schema.items()
+                 if _dtype_is_null(dt) and n in target}
+        out.append(f.cast(fixes) if fixes else f)
+    return out
+
+
 def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=10):
     # Get tag plex
     if mass_tag is not None:
@@ -114,39 +147,38 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     )
 
 
-    # Convert spectra into a Rust-friendly format
-    logger.info("Converting spectra")
-    rust_specs = []
-    # TODO this should probably be done in chunks if it becomes a bottleneck
-    for spec in tqdm(dia_spectra.ms2scans):
-        rust_specs += [spec.to_rust_spectrum()]
-
-
-
-    # Process spectra in chunks of 1000
+    # Convert and search spectra in chunks of 1000.
     # Smaller chunks increases the amount of time spent passing things back and forth between Python and Rust
     # Multi-threading happens spectrum-by-spectrum at the Rust level
     #   (not sure how Rust does concurrency, processing in groups of spectra should reduce overhead incurred in spinning
     #   up new threads)
-    logger.info("Searching spectra in chunks")
+    #
+    # Conversion is fused into the search loop, and each chunk's hits are turned into
+    # Polars immediately, so three whole-run copies never pile up at once. Converting
+    # every spectrum up front held a second copy of every MS2 peak on the Rust side for
+    # the whole search (the `del rust_specs` below the loop was commented out, so it was
+    # still live at `to_polars`), and accumulating one Rust hits object meant that object
+    # and the full DataFrame built from it coexisted at peak. On a large timsTOF .d
+    # (~9e5 MS2 band spectra) either one is enough to get the process OOM-killed.
+    logger.info("Converting and searching spectra in chunks")
     chunk_size = 1000
-    hits = None # Rust object holding arrays of hits
-    for i in tqdm(range(0, len(rust_specs), chunk_size)):
-        chunk = rust_specs[i:i + chunk_size]
+    ms2scans = dia_spectra.ms2scans
+    hit_frames = []
+    for i in tqdm(range(0, len(ms2scans), chunk_size)):
+        chunk = [spec.to_rust_spectrum() for spec in ms2scans[i:i + chunk_size]]
         batch_hits = scorer.score_many(db, chunk)
-        if hits is None:
-            hits = batch_hits
-        else:
-            hits.extend(batch_hits)
+        # to_polars() per chunk: the Rust hits for this chunk are released here rather
+        # than at the end of the whole search.
+        hit_frames.append(batch_hits.to_polars())
+        del batch_hits, chunk
 
-    # Once spectra are searched, delete rust verison to free up memory
-    # Realistically these should be zero copy in the first place
-    #del rust_specs
+    # Reconcile per-chunk dtypes before concatenating
+    hit_frames = _reconcile_chunk_schemas(hit_frames)
 
-
-    # Make Polars dataframe directly from Rust
-    df = hits.to_polars()
-    del hits
+    # rechunk=False keeps this a cheap multi-chunk view over the per-chunk buffers
+    # instead of allocating a second full copy of the concatenated result.
+    df = pl.concat(hit_frames, rechunk=False)
+    del hit_frames
 
 
 
@@ -169,6 +201,13 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # Since the data was iterated in order, we can just horizontally stack (hstack)
     df = df.hstack(ms1_df)
 
+    # Per-fragment ion mobility: join each matched fragment's experimental m/z
+    # back to its MS2 band spectrum to read the observed peak's 1/K0.
+    logger.info("Looking up per-fragment ion mobilities")
+    df = df.with_columns(
+        pl.Series("frag_ion_mobility", lookup_fragment_mobilities(df, dia_spectra))
+    )
+
     # 4. Vectorized Error Calculations (Polars Expressions)
     df = df.with_columns([
         # Calculate difference
@@ -188,10 +227,12 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
     # Get RTs for alignment
     lib_rts = {v['mod_seq'] : v['iRT'] for v in library_spectra.values()}
+    # Library ion mobilities, for the IM alignment (NaN when the library has no IM column)
+    lib_ims = {v['mod_seq'] : v['IonMob'] for v in library_spectra.values()}
 
     # Adapt the dataframe to the format expected downstream
     logger.info("Adapting output dataframe")
-    df = adapt_output_df(df, lib_rts, rev_map)
+    df = adapt_output_df(df, lib_rts, rev_map, lib_ims=lib_ims)
 
     # Calculate spectral angle
     logger.info("Creating fragment library map")
@@ -617,7 +658,47 @@ def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
     return ms1_data
 
 
-def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFrame:
+def lookup_fragment_mobilities(df: pl.DataFrame, dia_spectra):
+    """Attach the observed ion mobility (1/K0) of each matched fragment.
+
+    For every hit, each matched fragment's experimental m/z is joined back to
+    its searched MS2 band spectrum (same spec_id) to read the parallel per-peak
+    mobility. Fragments with no observed peak (experimental m/z <= 0) get None.
+    A matched fragment whose experimental m/z has no corresponding peak in the
+    spectrum is a genuine error and raises.
+    """
+    spec_ids = df['spec_id'].to_list()
+    frag_exp_mzs = df['frag_mz_experimental'].to_list()
+
+    out = []
+    for spec_id, exp_mzs in zip(spec_ids, frag_exp_mzs):
+        scan_num = spec_id if isinstance(spec_id, int) else Spectrum.extract_scannum(spec_id)
+        spec = dia_spectra.get_by_idx(scan_num)
+        mz = spec.mz
+        mob = spec.mobility
+        if mob is None:
+            # Non-IM data (e.g. mzML): no per-fragment mobility exists.
+            out.append([None] * len(exp_mzs))
+            continue
+        row = []
+        for fmz in exp_mzs:
+            if fmz is None or fmz <= 0.0:
+                row.append(None)  # library fragment with no observed peak
+                continue
+            idx = int(np.searchsorted(mz, fmz))
+            j = min((i for i in (idx - 1, idx) if 0 <= i < len(mz)),
+                    key=lambda i: abs(mz[i] - fmz))
+            if abs(mz[j] - fmz) > 1e-4:
+                raise ValueError(
+                    f"Spectrum {spec_id}: matched fragment m/z {fmz} has no peak "
+                    f"(closest {mz[j]}, |diff|={abs(mz[j] - fmz):.6f})")
+            row.append(float(mob[j]))
+        out.append(row)
+    return out
+
+
+def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict,
+                    lib_ims: dict = None) -> pl.DataFrame:
     """
     Performs column normalization and peptide sequence reconstruction using Polars.
     """
@@ -668,6 +749,16 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict) -> pl.DataFr
           .map_elements(map_rt_wrapper, return_dtype=pl.Float64)
           .alias("lib_rt")
     )
+
+    # Grab library ion mobilities based on seq.  Mirrors lib_rt above; stays all-NaN
+    # when the library carries no IM column, which the alignment gate treats as
+    # "no library IM" rather than an error.
+    if lib_ims is not None:
+        df = df.with_columns(
+            pl.col("seq")
+              .map_elements(lambda s: lib_ims.get(s, np.nan), return_dtype=pl.Float64)
+              .alias("lib_im")
+        )
 
     return df
 

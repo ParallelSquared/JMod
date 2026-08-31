@@ -28,6 +28,8 @@ _SCALAR_FLOAT_FIELDS = frozenset({
     'prec_mz', 'prec_z', 'iRT', 'IonMob',
 })
 _ALL_SCALAR_FIELDS = _SCALAR_STR_FIELDS | _SCALAR_FLOAT_FIELDS
+
+_STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
 _ALL_KNOWN_FIELDS = _ALL_SCALAR_FIELDS | frozenset({
     'spectrum', 'ordered_frags', 'ordered_frag_codes', 'frag_intensities',
     'frags', 'top_n', 'parent_idx', 'spec_frags',
@@ -1634,8 +1636,8 @@ class SpectrumLibraryStore:
                 mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence").strip("_")
                 charge = float(get_field(row, "PrecursorCharge", "Precursor.Charge"))
                 invalid_precursors.add((mod_pep, charge))
-                continue #skip this peptide 
-            
+                continue #skip this peptide
+
             # Resolve ModifiedPeptide
             mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence")
             if mod_pep is None:
@@ -1665,10 +1667,20 @@ class SpectrumLibraryStore:
                 raise ValueError("SpecLib Charge Cannot be Converted to Float")
             unique_id = (mod_pep, charge)
 
+            if unique_id in invalid_precursors:
+                continue
+
             if unique_id not in precursor_data:
+                seq = get_field(row, "StrippedPeptide", "PeptideSequence", "Stripped.Sequence")
+
+                # Skip precursors carrying residues with no defined mass rather than
+                # letting them reach decoy generation, where fast_mass raises.
+                if seq and set(seq) - _STANDARD_RESIDUES:
+                    invalid_precursors.add(unique_id)
+                    continue
+
                 precursor_order.append(unique_id)
 
-                seq = get_field(row, "StrippedPeptide", "PeptideSequence", "Stripped.Sequence")
                 rt = get_field(row, "Tr_recalibrated", "RT", "iRT")
 
                 if rt is None:
@@ -1730,6 +1742,11 @@ class SpectrumLibraryStore:
 
         if len(decoy_precursors) > 0:
             logger.info(f"{len(decoy_precursors)} decoy precursors removed from input library")
+
+        if len(invalid_precursors) > 0:
+            example = sorted(invalid_precursors)[0][0]
+            logger.info(f"{len(invalid_precursors)} precursors with non-standard residues "
+                        f"removed from input library (e.g. {example})")
 
         # Second pass: convert to columnar arrays
         n = len(precursor_order)
