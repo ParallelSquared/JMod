@@ -12,15 +12,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import sys
 import numpy as np
 import peppy_sage as ps
-import pandas as pd
 import polars as pl
 import re
 from functools import partial
 from tqdm.auto import tqdm
-import ast
 from numpy import linalg as la
 
 from src.config import diann_mods
@@ -257,7 +254,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
             'frag_kinds',
             'frag_fragment_ordinals',
             'frag_intensities',
-            'ms2_intensity',
             'seq',
             'z'
         ])
@@ -268,22 +264,24 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         .alias('spectral_contrast_angle')
     )
 
-    logger.info("Computing Scribe score")
-    df = df.with_columns(
-        pl.struct([
-            'frag_charges',
-            'frag_kinds',
-            'frag_fragment_ordinals',
-            'frag_intensities',
-            'seq',
-            'z',
-        ])
-        .map_elements(
-            partial(scribe_score_polars_udf, fragment_library_map=fragment_library_map),
-            return_dtype=pl.Float64
+    for _udf, _name in ((hellinger_score_polars_udf, 'hellinger_score'),
+                        (scribe_score_polars_udf, 'scribe_score')):
+        logger.info(f"Computing {_name}")
+        df = df.with_columns(
+            pl.struct([
+                'frag_charges',
+                'frag_kinds',
+                'frag_fragment_ordinals',
+                'frag_intensities',
+                'seq',
+                'z',
+            ])
+            .map_elements(
+                partial(_udf, fragment_library_map=fragment_library_map),
+                return_dtype=pl.Float64
+            )
+            .alias(_name)
         )
-        .alias('scribe_score')
-    )
 
     logger.info("Computing matched library intensity percentage")
     df = df.with_columns(
@@ -351,6 +349,13 @@ def create_fragment_library_map(library_spectra):
             intensity = mz_int_list[1]  # Relative Intensity is the second element
 
             # Key for alignment: (IonType, Ordinal, Charge)
+            # TODO(bug): the key drops the loss annotation (see the regex above),
+            # so "Y7-H2O" and "Y7" collide and this assignment lets whichever
+            # comes last in ``library_frags`` silently overwrite the other. The
+            # surviving intensity is then dict-order-dependent, not a sum and not
+            # a skip. Only bites for libraries that carry loss ions -- decide
+            # whether to sum them into the backbone ion or exclude them, then
+            # make it explicit.
             key = (frag_type, frag_ordinal, frag_z)
             peptide_map[key] = intensity
 
@@ -367,54 +372,21 @@ def spectral_angle_polars_udf(r: dict, fragment_library_map) -> float:
 
     OPTIMIZED: Receives native Polars List types (which are Python lists)
     """
-    # The lookup key must be the tuple (modified_sequence, charge)
-    seq = r['seq']  # Modified sequence string
-    z = r['z']  # Charge (renamed from 'charge')
-    ms2_intensity = r['ms2_intensity']
-
-    if seq is None or ms2_intensity is None or ms2_intensity == 0.0:
+    aligned = _align_to_library(r, fragment_library_map, "Spectral angle")
+    if aligned is None:
         return 0.0
+    observed_vec, library_vec = aligned
 
-    # 1. Get the library fragment vector for the peptide (using TUPLE KEY)
-    library_key = (seq, z)
-    library_vec = fragment_library_map.get(library_key)
-    if not library_vec:
-        return 0.0
-
-    # 2. Access observed fragment data directly (no string parsing needed!)
-    charges = r['frag_charges']  # List(Int64) -> list[int]
-    kinds_raw = r['frag_kinds']  # List(String) -> list[str]
-    ordinals = r['frag_fragment_ordinals']  # List(Int64) -> list[int]
-    intensities = r['frag_intensities']  # List(Float64) -> list[float]
-
-    # 3. Check for consistent array lengths
-    if not (len(charges) == len(kinds_raw) == len(ordinals) == len(intensities)):
-        logger.error(
-            f"Fragment array length mismatch for seq {seq}. Lengths: {len(charges)}, {len(kinds_raw)}, {len(ordinals)}, {len(intensities)}")
-        return 0.0
-
-    # 4. Create raw observed vector (A_raw)
-    observed_vec = {}
-
-    # Iterate over lists to build observed_vec dictionary
-    for c, k, o, i in zip(charges, kinds_raw, ordinals, intensities):
-        # Alignment key: (ion_kind, ordinal, charge)
-        key = (k.upper(), o, c)
-        # Normalize intensity by total MS2 intensity
-        observed_vec[key] = i / ms2_intensity
-
-    # 5. Align vectors and create raw intensity vectors (NumPy conversion happens here)
-    all_keys = set(observed_vec.keys()) | set(library_vec.keys())
-
-    # Cast to NumPy arrays for fast dot product calculation
+    # Union, not library-only: an observed ion absent from the library adds to
+    # ||A|| but nothing to the dot product, so extra ions are penalized.
+    all_keys = set(observed_vec) | set(library_vec)
     A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
     B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
 
-    # 6. Apply Power Transformation (P=0.5)
+    # Power transformation (P=0.5)
     A_pow = np.sqrt(A_raw)
     B_pow = np.sqrt(B_raw)
 
-    # 7. Spectral Contrast Angle Calculation
     dot_product = np.dot(A_pow, B_pow)
     norm_A = la.norm(A_pow)
     norm_B = la.norm(B_pow)
@@ -422,84 +394,99 @@ def spectral_angle_polars_udf(r: dict, fragment_library_map) -> float:
     if norm_A == 0.0 or norm_B == 0.0:
         return 0.0
 
-    return dot_product / (norm_A * norm_B)
+    cosine = float(np.clip(dot_product / (norm_A * norm_B), -1.0, 1.0))
+
+    return 1.0 - 2.0 * np.arccos(cosine) / np.pi
+
+
+def _align_to_library(r: dict, fragment_library_map: dict, label: str):
+    """
+    Parse a PSM row's matched fragments and fetch its library vector.
+
+    Returns (observed_vec, library_vec) keyed on (ion_kind, ordinal, charge), or None
+    when the row cannot be scored. Shared by the two spectral-difference scores below.
+    """
+    seq, z = r['seq'], r['z']
+    if seq is None or z is None:
+        logger.debug(f"{label} error: Missing data - seq={seq}, z={z}")
+        return None
+
+    library_vec = fragment_library_map.get((seq, z))
+    if not library_vec:
+        logger.debug(f"{label} error: Library key not found - {(seq, z)}")
+        return None
+
+    charges, kinds = r['frag_charges'], r['frag_kinds']
+    ordinals, intensities = r['frag_fragment_ordinals'], r['frag_intensities']
+    if not (len(charges) == len(kinds) == len(ordinals) == len(intensities)):
+        logger.error(f"Fragment array length mismatch for seq {seq}. Lengths: "
+                     f"{len(charges)}, {len(kinds)}, {len(ordinals)}, {len(intensities)}")
+        return None
+
+    observed_vec = {(k.upper(), o, c): i
+                    for c, k, o, i in zip(charges, kinds, ordinals, intensities)}
+    return observed_vec, library_vec
+
+
+def _neg_log_sse(A: np.ndarray, B: np.ndarray) -> float:
+    """-ln of the sum of squared differences, capped where the match is exact."""
+    sse = float(np.sum((A - B) ** 2))
+    return 25.0 if sse <= 1e-12 else -np.log(sse)
+
+
+def hellinger_score_polars_udf(r: dict, fragment_library_map: dict) -> float:
+    """
+    Squared Hellinger distance over the FULL library support, normalizing each vector
+    to sum to 1 BEFORE the square root. Rooting second leaves unit L2 norm, which is
+    what makes this Hellinger and not the Scribe score. Library ions with no observed
+    peak contribute (0 - sqrt(L))^2, so this penalizes missing ions.
+    """
+    aligned = _align_to_library(r, fragment_library_map, "Hellinger score")
+    if aligned is None:
+        return -999.0
+    observed_vec, library_vec = aligned
+
+    keys = list(library_vec)
+    A = np.array([observed_vec.get(k, 0.0) for k in keys], dtype=np.float64)
+    B = np.array([library_vec[k] for k in keys], dtype=np.float64)
+    if A.sum() == 0.0 or B.sum() == 0.0:
+        return -999.0
+
+    return _neg_log_sse(np.sqrt(A / A.sum()), np.sqrt(B / B.sum()))
 
 
 def scribe_score_polars_udf(r: dict, fragment_library_map: dict) -> float:
     """
-    Polars UDF to calculate the primary Scribe Score:
-    Score = -ln(sum((A_sqrt - L_sqrt)^2)), where A and L are normalized to sum to 1.
+    Scribe score as published (Searle, Shannon & Wilburn, JPR 2023, PMID 36695531):
+
+        Equation 1:  Scribe Score = -ln(sum_i (A_i - L_i)^2)
+
+    The Methods specify square roots BEFORE scoring, normalization to sum 1 AFTER, and
+    a sum over MATCHED ions -- all three differ from hellinger_score above, which
+    normalizes first and sums over the full library. Both are computed; both feed the
+    PCA in src/quality_pca.py.
+
+    Restricting to matched ions means missing library ions cost nothing, so a sparse
+    but clean match scores at the cap. That is deliberate: coverage is separately
+    available as matched_lib_pct and matched_peaks.
     """
-    seq = r['seq']  # Modified sequence string
-    z = r['z']  # Charge
+    aligned = _align_to_library(r, fragment_library_map, "Scribe")
+    if aligned is None:
+        return -999.0
+    observed_vec, library_vec = aligned
 
-    if seq is None or z is None:
-        # Return a definite low score if key data is missing
-        logger.debug(f"Scribe error: Missing data - seq={seq}, z={z}")
+    keys = list(set(observed_vec) & set(library_vec))
+    if not keys:
         return -999.0
 
-    # 1. Get the library fragment vector for the peptide (using TUPLE KEY)
-    library_key = (seq, z)
-    library_vec = fragment_library_map.get(library_key)
-    if not library_vec:
-        logger.debug(f"Scribe error: Library key not found - {library_key}")
+    # Clipped because rooting before normalizing lets a negative intensity produce NaN,
+    # which would pass silently through the percentile filter in empirical_fit.
+    A = np.sqrt(np.clip([observed_vec[k] for k in keys], 0.0, None))
+    B = np.sqrt(np.clip([library_vec[k] for k in keys], 0.0, None))
+    if A.sum() == 0.0 or B.sum() == 0.0:
         return -999.0
 
-    # 2. Access observed fragment data directly (no string parsing needed!)
-    charges = r['frag_charges']  # List(Int64) -> list[int]
-    kinds_raw = r['frag_kinds']  # List(String) -> list[str]
-    ordinals = r['frag_fragment_ordinals']  # List(Int64) -> list[int]
-    intensities = r['frag_intensities']  # List(Float64) -> list[float]
-
-    # 3. Check for consistent array lengths
-    if not (len(charges) == len(kinds_raw) == len(ordinals) == len(intensities)):
-        logger.error(
-            f"Fragment array length mismatch for seq {seq}. Lengths: {len(charges)}, {len(kinds_raw)}, {len(ordinals)}, {len(intensities)}")
-        return -999.0
-
-    # 4. Create raw observed vector (A_raw)
-    observed_vec = {}
-
-    # Iterate over lists to build observed_vec dictionary
-    for c, k, o, i in zip(charges, kinds_raw, ordinals, intensities):
-        # Alignment key: (ion_kind, ordinal, charge)
-        key = (k.upper(), o, c)
-        # Note: The initial intensity normalization by ms2_intensity is NOT used here,
-        # as the Scribe formula requires normalization AFTER alignment.
-        observed_vec[key] = i
-
-    # 5. Align vectors and create raw intensity vectors (NumPy conversion happens here)
-    # KEY CHANGE: Only include ions that are present in the library.
-    all_keys = set(library_vec.keys())
-
-    # Cast to NumPy arrays for fast calculation
-    # A_raw will be 0.0 if the ion was observed but is NOT in the library keys.
-    A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float64)
-    B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float64)
-
-    # Check for zero vectors AFTER alignment
-    sum_A_raw = np.sum(A_raw)
-    sum_B_raw = np.sum(B_raw)
-
-    if sum_A_raw == 0.0 or sum_B_raw == 0.0:
-        return -999.0
-
-    # 6. Normalization (to sum to 1) and Square Root Transformation
-    A_norm = A_raw / sum_A_raw
-    B_norm = B_raw / sum_B_raw
-
-    A_sqrt = np.sqrt(A_norm)
-    B_sqrt = np.sqrt(B_norm)
-
-    # 7. Sum of Squared Errors
-    sq_error_sum = np.sum((A_sqrt - B_sqrt) ** 2)
-
-    # Guard against zero error (perfect match) to avoid log(0)
-    if sq_error_sum <= 1e-12:
-        return 25.0  # Return a large, stable score
-
-    # 8. Final Negative Log Transformation
-    return -np.log(sq_error_sum)
+    return _neg_log_sse(A / A.sum(), B / B.sum())
 
 
 def matched_lib_intensity_pct_udf(r: dict, fragment_library_map: dict) -> float:
@@ -508,35 +495,13 @@ def matched_lib_intensity_pct_udf(r: dict, fragment_library_map: dict) -> float:
 
     Returns: (sum of library intensities for matched fragments) / (sum of all library intensities) * 100
     """
-    seq = r['seq']
-    z = r['z']
-
-    if seq is None or z is None:
+    aligned = _align_to_library(r, fragment_library_map, "Matched lib pct")
+    if aligned is None:
         return -999.0
+    observed_vec, library_vec = aligned
 
-    library_key = (seq, z)
-    library_vec = fragment_library_map.get(library_key)
-    if not library_vec:
-        return -999.0
-
-    # Get observed fragments
-    charges = r['frag_charges']
-    kinds_raw = r['frag_kinds']
-    ordinals = r['frag_fragment_ordinals']
-    intensities = r['frag_intensities']
-
-    if not (len(charges) == len(kinds_raw) == len(ordinals) == len(intensities)):
-        return -999.0
-
-    # Build observed fragment keys (only those with non-zero intensity)
-    observed_keys = set()
-    for c, k, o, i in zip(charges, kinds_raw, ordinals, intensities):
-        if i > 0:
-            key = (k.upper(), o, c)
-            observed_keys.add(key)
-
-    # Calculate matched library intensity
-    matched_lib_intensity = sum(library_vec[k] for k in library_vec.keys() if k in observed_keys)
+    observed_keys = {k for k, i in observed_vec.items() if i > 0}
+    matched_lib_intensity = sum(v for k, v in library_vec.items() if k in observed_keys)
     total_lib_intensity = sum(library_vec.values())
 
     if total_lib_intensity <= 0:
@@ -544,65 +509,6 @@ def matched_lib_intensity_pct_udf(r: dict, fragment_library_map: dict) -> float:
 
     return (matched_lib_intensity / total_lib_intensity) * 100
 
-
-def calculate_spectral_contrast_angle(row, fragment_library_map):
-    """
-    Pandas UDF to calculate the Normalized Spectral Contrast Angle (P=0.5)
-    between observed and library fragments, using (Type, Ordinal, Charge) as key.
-
-    This is mathematically equivalent to Cosine Similarity on square-rooted intensities.
-    """
-
-    if pd.isna(row['seq']) or pd.isna(row['fragments']):
-        return 0.0
-
-    # 1. Parse observed fragment data
-    try:
-        observed_data = ast.literal_eval(row['fragments'])
-    except:
-        return 0.0
-
-    # 2. Get the library fragment vector for the peptide
-    library_vec = fragment_library_map.get(row['seq'])
-    if not library_vec:
-        return 0.0
-
-    # 3. Create raw observed vector (A_raw)
-    observed_vec = {}
-    ms2_intensity = row['ms2_intensity']
-
-    # Iterate over charges, kinds, ordinals, and intensities simultaneously
-    for c, k, o, i in zip(
-            observed_data['charges'],
-            observed_data['kinds'],
-            observed_data['fragment_ordinals'],
-            observed_data['intensities']
-    ):
-        # Alignment key: (ion_kind, ordinal, charge)
-        key = (k.upper(), o, c)
-        # Normalize intensity by total MS2 intensity
-        observed_vec[key] = i / ms2_intensity if ms2_intensity > 0 else 0.0
-
-    # 4. Limit ions to just those in the library
-    all_keys = set(library_vec.keys())
-
-    A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float64)
-    B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float64)
-
-    # 5. Apply Power Transformation (P=0.5)
-    A_pow = np.sqrt(A_raw)
-    B_pow = np.sqrt(B_raw)
-
-    # 6. Spectral Contrast Angle Calculation: (A_pow . B_pow) / (||A_pow|| * ||B_pow||)
-    dot_product = np.dot(A_pow, B_pow)
-    norm_A = la.norm(A_pow)
-    norm_B = la.norm(B_pow)
-
-    # Return 0.0 if either vector has zero magnitude
-    if norm_A == 0.0 or norm_B == 0.0:
-        return 0.0
-
-    return dot_product / (norm_A * norm_B)
 
 
 def calculate_theo_mz_udf(row):

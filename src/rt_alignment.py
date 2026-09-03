@@ -603,16 +603,14 @@ def empirical_fit(output_df, results_folder=None):
     logger.info("")
     logger.info("Filtering IDs from initial search")
 
+    # Rank on PC1 over every quality feature the first search computed
+    import src.quality_pca as quality_pca
+    pc1 = quality_pca.first_search_pc1(output_df)
+
     for feature_percentile in range(20, 100, 5):
 
-        cor_filter = np.logical_and.reduce(
-            [output_df[feat] > np.percentile(output_df[feat], feature_percentile)
-             for feat in [
-                "scribe_score",
-             ]
-             ]
-        )
-        
+        cor_filter = pc1 > np.percentile(pc1, feature_percentile)
+
         ## Only fit when fewer than this many peaks
         if sum(cor_filter)>config.max_num_prelim_search:
             continue
@@ -1583,9 +1581,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         vote_sigma = 1.0
         logger.info("vote sigma: 1.0 cycles (fallback — fewer than 2 MS1 scans)")
 
-    # Collapse to most intense MS1 per peptide ion
-    output_df = output_df.sort("closest_peak_intensity_ms1", descending=True).unique(subset=["seq", "z"], keep="first")
     import polars as pl
+    import src.quality_pca as quality_pca
+
+    # Collapse to one scan per peptide ion, ranked by how apex-like each scan is
+    # within its own precursor. Runs after calculate_elution_width, so FWHM /
+    # elution_sd / vote_sigma are already fixed and unaffected by the choice.
+    output_df = output_df.with_columns(
+        pl.Series("apex_pc1", quality_pca.first_search_apex_pc1(output_df)))
+    output_df = output_df.sort("apex_pc1", descending=True).unique(subset=["seq", "z"], keep="first")
     output_df = output_df.filter(pl.col("cluster_size") >= 1)
 
     # Convert to pandas for downstream processing

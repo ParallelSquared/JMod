@@ -17,6 +17,7 @@ Tests for functions in mass_tags.py
 #  limitations under the License.
 
 import pytest
+from src.quality_pca import FIRST_SEARCH_FEATURES
 import numpy as np
 import pandas as pd
 from scipy.interpolate import UnivariateSpline
@@ -303,10 +304,11 @@ class TestEmpiricalFit:
         np.random.seed(42)
         N = 100
         cls.output_df = pd.DataFrame({
-            "hyperscore": np.random.rand(N),
+            # empirical_fit ranks on PC1 over quality_pca.FIRST_SEARCH_FEATURES,
+            # so the frame has to carry all of them.
+            **{c: np.random.rand(N) + 1.0 for c, _ in FIRST_SEARCH_FEATURES},
             "frag_cosines_p": np.random.rand(N),
             "manhattan_distances": np.random.rand(N),
-            "scribe_score": np.random.rand(N),
             "gof_stats": np.random.rand(N),
             "max_matched_residuals": np.random.rand(N),
             "med_frag_error": np.random.rand(N),
