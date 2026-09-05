@@ -34,7 +34,7 @@ Kevin McDonnell, Nathan Wamsley, Jason Derks, Sarah Sipe, Maddy Yeh, Harrison Sp
 
 JMod has a `.bat` executable that is only compatible with Windows computers. Follow the instructions below to launch the JMod GUI via the `.bat`.
 
-1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
+1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v2.0.0)
 
 2. Navigate to the JMod directory. Inside that directory is a `launch.bat` file. Double-click on the file to open the JMod GUI.
     - If this is the first time the computer is setting up a UV environment, it might take a few minutes to download all dependencies and packages.
@@ -51,7 +51,7 @@ If you would like to set up the UV environment with the command line, please fol
 <summary><strong> Setup Steps </strong>
 </summary>
 
-1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
+1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v2.0.0)
 
 
 2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, run the following command:
