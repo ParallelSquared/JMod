@@ -27,7 +27,7 @@ from src.quality_pca import (
     first_search_apex_pc1,
     first_search_pc1,
     fit_within_group_pc1,
-    main_apex_group_id,
+
     main_apex_pc1_expr,
 )
 
@@ -214,32 +214,31 @@ class TestMainSearchApex:
 
         df = self._frame()
         pdf = pl.from_pandas(df.drop(columns=["is_apex"]))
-        gid = main_apex_group_id(df, ["seq", "z"])
-        _, v = fit_within_group_pc1(df, MAIN_APEX_FEATURES, gid, "coeff", "main")
+        _, v = fit_within_group_pc1(df, MAIN_APEX_FEATURES, ["seq", "z"], "coeff", "main")
 
         expr = pdf.with_columns(main_apex_pc1_expr(v, ["seq", "z"]).alias("s"))["s"].to_numpy()
-        Z, _ = _within_group_zscore(df, MAIN_APEX_FEATURES, gid, "main")
+        Z, _ = _within_group_zscore(df, MAIN_APEX_FEATURES, ["seq", "z"], "main")
 
         assert np.allclose(expr, Z @ v, atol=1e-9)
 
     def test_picks_the_planted_apex(self):
         df = self._frame()
-        gid = main_apex_group_id(df, ["seq", "z"])
-        Z, v = fit_within_group_pc1(df, MAIN_APEX_FEATURES, gid, "coeff", "main")
+        Z, v = fit_within_group_pc1(df, MAIN_APEX_FEATURES, ["seq", "z"], "coeff", "main")
         df["score"] = Z @ v
         picked = df.loc[df.groupby(["seq", "z"])["score"].idxmax()]
         assert picked["is_apex"].mean() > 0.9
 
     def test_sampled_fit_tracks_full_fit(self):
-        # The pipeline fits on ~6% of precursors. The eigenvector has to be stable
-        # enough under subsampling that the ranking does not move.
+        # The pipeline fits on a sample of precursors. The eigenvector has to be
+        # stable enough under subsampling that the ranking does not move.
         df = self._frame(n_prec=600)
-        gid = main_apex_group_id(df, ["seq", "z"])
-        Z, v_full = fit_within_group_pc1(df, MAIN_APEX_FEATURES, gid, "coeff", "main")
+        Z, v_full = fit_within_group_pc1(df, MAIN_APEX_FEATURES, ["seq", "z"], "coeff", "main")
 
-        sub = df[gid % 5 == 0].reset_index(drop=True)
-        sub_gid = main_apex_group_id(sub, ["seq", "z"])
-        _, v_sub = fit_within_group_pc1(sub, MAIN_APEX_FEATURES, sub_gid, "coeff", "main")
+        # Whole precursors, never partial groups -- a split group would have the
+        # wrong within-group mean and std.
+        keep = {s for i, s in enumerate(sorted(df["seq"].unique())) if i % 5 == 0}
+        sub = df[df["seq"].isin(keep)].reset_index(drop=True)
+        _, v_sub = fit_within_group_pc1(sub, MAIN_APEX_FEATURES, ["seq", "z"], "coeff", "main")
 
         assert v_full @ v_sub > 0.99
         assert spearmanr(Z @ v_full, Z @ v_sub).statistic > 0.99

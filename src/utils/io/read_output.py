@@ -458,10 +458,10 @@ def get_large_prec(file,
     # The group key must match the unique() subset below, or the collapse would pick
     # an apex from a different partition than the one it keeps.
     apex_group_cols = ["seq", "z"] + (["time_channel"] if timeplex else [])
-    _loadings = quality_pca.fit_main_apex_pc1(decoy_coeffs_lf, apex_group_cols,
+    loadings = quality_pca.fit_main_apex_pc1(decoy_coeffs_lf, apex_group_cols,
                                               seed=config.RANDOM_SEED)
     decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
-        quality_pca.main_apex_pc1_expr(_loadings, apex_group_cols).alias("apex_pc1"))
+        quality_pca.main_apex_pc1_expr(loadings, apex_group_cols).alias("apex_pc1"))
 
     sorted_decoy_coeffs_lf = decoy_coeffs_lf.sort(by="apex_pc1")
 

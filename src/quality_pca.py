@@ -67,6 +67,28 @@ def _transform(x, how):
     raise ValueError(f"unknown transform {how!r}")
 
 
+def _feature_matrix(df, features, label):
+    """Transformed feature matrix, validated. Raises on missing values.
+
+    Note the -999 test runs on transformed values, so it only catches a sentinel
+    that survives its transform. Today that is every case: no feature carries a
+    sentinel on either search's real data.
+    """
+    cols = [c for c, _ in features]
+    X = np.column_stack([
+        _transform(df[c].to_numpy().astype(np.float64), t) for c, t in features
+    ])
+
+    bad = ~np.isfinite(X) | (X == -999.0)
+    if bad.any():
+        counts = {c: int(n) for c, n in zip(cols, bad.sum(axis=0)) if n}
+        raise ValueError(
+            f"non-finite or sentinel values in {label} features: {counts}. Fix the "
+            f"producer -- dropping or imputing these rows here would move the "
+            f"loadings for every PSM.")
+    return X
+
+
 def first_search_pc1(df):
     """Score each row of a first-search frame by its projection onto PC1.
 
@@ -76,18 +98,7 @@ def first_search_pc1(df):
     from sklearn.decomposition import PCA
 
     cols = [c for c, _ in FIRST_SEARCH_FEATURES]
-    X = np.column_stack([
-        _transform(df[c].to_numpy().astype(np.float64), t)
-        for c, t in FIRST_SEARCH_FEATURES
-    ])
-
-    bad = ~np.isfinite(X) | (X == -999.0)
-    if bad.any():
-        counts = {c: int(n) for c, n in zip(cols, bad.sum(axis=0)) if n}
-        raise ValueError(
-            f"non-finite or sentinel values in PCA features: {counts}. Fix the "
-            f"producer -- dropping or imputing these rows here would move the "
-            f"loadings for every PSM.")
+    X = _feature_matrix(df, FIRST_SEARCH_FEATURES, "first-search PCA")
 
     Z = (X - X.mean(axis=0)) / X.std(axis=0)
 
@@ -123,36 +134,32 @@ APEX_FEATURES = [
 ]
 
 
-def _within_group_zscore(df, features, gid, label):
-    """Z-score each feature within its group. Returns (Z, group counts)."""
-    cols = [c for c, _ in features]
-    X = np.column_stack([
-        _transform(df[c].to_numpy().astype(np.float64), t) for c, t in features
-    ])
+def _within_group_zscore(df, features, group_cols, label):
+    """Z-score each feature within its group.
 
-    bad = ~np.isfinite(X) | (X == -999.0)
-    if bad.any():
-        counts_bad = {c: int(n) for c, n in zip(cols, bad.sum(axis=0)) if n}
-        raise ValueError(f"non-finite or sentinel values in {label} features: {counts_bad}")
+    Returns (Z, rows-per-group broadcast to each row).
+    """
+    import pandas as pd
 
-    n_groups = int(gid.max()) + 1 if len(gid) else 0
-    counts = np.bincount(gid, minlength=n_groups).astype(np.float64)
+    X = _feature_matrix(df, features, label)
 
-    mean = np.column_stack([
-        np.bincount(gid, weights=X[:, j], minlength=n_groups) / counts
-        for j in range(X.shape[1])
-    ])
-    sq = np.column_stack([
-        np.bincount(gid, weights=X[:, j] ** 2, minlength=n_groups) / counts
-        for j in range(X.shape[1])
-    ])
-    std = np.sqrt(np.clip(sq - mean ** 2, 0.0, None))
+    cols = list(range(X.shape[1]))
+    frame = pd.DataFrame(X)
+    for c in group_cols:
+        frame[c] = df[c].to_numpy()
+    grouped = frame.groupby(list(group_cols), sort=False)
 
-    varies = std[gid] > 0
-    return np.where(varies, (X - mean[gid]) / np.where(varies, std[gid], 1.0), 0.0), counts
+    mean = grouped[cols].transform("mean").to_numpy()
+    std = grouped[cols].transform("std", ddof=0).to_numpy()
+    counts = grouped[cols[0]].transform("size").to_numpy()
+
+    # Constant within a group carries no information there: z = 0, not a divide by
+    # zero. Same convention as the polars path in main_apex_pc1_expr.
+    varies = std > 0
+    return np.where(varies, (X - mean) / np.where(varies, std, 1.0), 0.0), counts
 
 
-def fit_within_group_pc1(df, features, gid, anchor, label):
+def fit_within_group_pc1(df, features, group_cols, anchor, label):
     """Fit PC1 on within-group z-scores and return its loadings.
 
     Split out from ``within_group_pc1`` because the main search fits on a sample of
@@ -161,17 +168,17 @@ def fit_within_group_pc1(df, features, gid, anchor, label):
     """
     from sklearn.decomposition import PCA
 
-    Z, counts = _within_group_zscore(df, features, gid, label)
+    Z, counts = _within_group_zscore(df, features, group_cols, label)
     # Single-member groups are all zeros and would drag the fit toward the origin.
-    pca = PCA(n_components=1).fit(Z[counts[gid] >= 2])
+    pca = PCA(n_components=1).fit(Z[counts >= 2])
     v = pca.components_[0]
     if v[[c for c, _ in features].index(anchor)] < 0:
         v = -v
     return Z, v
 
 
-def within_group_pc1(df, features, gid, anchor, label):
-    """Score every row for how apex-like it is within its own group (``gid``).
+def within_group_pc1(df, features, group_cols, anchor, label):
+    """Score every row for how apex-like it is within its own group.
 
     Port of JrMod's ``peak_features::compute_pca_apex``. Features are z-scored
     WITHIN group before the decomposition, so PC1 describes how one precursor's
@@ -179,11 +186,11 @@ def within_group_pc1(df, features, gid, anchor, label):
     another -- a globally-fitted PC1 is dominated by between-precursor abundance
     and says nothing about which scan is the apex.
 
-    Generic in features/gid/anchor: the main search is the same problem with
+    Generic in features/group_cols/anchor: the main search is the same problem with
     different columns. Single-member groups score 0.
     Returns one score per row, higher = more apex-like.
     """
-    Z, v = fit_within_group_pc1(df, features, gid, anchor, label)
+    Z, v = fit_within_group_pc1(df, features, group_cols, anchor, label)
     return Z @ v
 
 
@@ -192,16 +199,10 @@ def first_search_apex_pc1(df):
 
     Replaces picking the most intense MS1 scan, which uses one number and ignores
     every match feature the first search already computed. Anchored on that same
-    MS1 intensity, which unambiguously peaks at the apex. (The main search will
-    need a different anchor -- ``no_ms1_req`` lets MS1-less PSMs through there.)
+    MS1 intensity, which unambiguously peaks at the apex. The main search anchors on
+    ``coeff`` instead -- ``no_ms1_req`` lets MS1-less PSMs through there.
     """
-    import pandas as pd
-
-    # Charges are single digits, so folding z in at *64 cannot collide.
-    seq_code = pd.factorize(df["seq"].to_numpy())[0].astype(np.int64)
-    gid = pd.factorize(seq_code * 64 + df["z"].to_numpy().astype(np.int64))[0]
-
-    return within_group_pc1(df, APEX_FEATURES, gid,
+    return within_group_pc1(df, APEX_FEATURES, ["seq", "z"],
                             anchor="closest_peak_intensity_ms1",
                             label="First-search apex PC1")
 
@@ -224,40 +225,36 @@ MAIN_APEX_FEATURES = [
     ("max_matched_residuals", "abslog1p"),
 ]
 
-# Fraction of precursors, in parts per thousand, used to fit the eigenvector. The
-# loadings are stable well below this: refitting at 6% on three different seeds moved
-# each loading by <0.003 and gave eigenvectors 0.99999 similar.
-MAIN_APEX_FIT_PERMILLE = 60
-
-
-def main_apex_group_id(df, group_cols):
-    """Dense group id for a materialized main-search sample."""
-    import pandas as pd
-
-    gid = pd.factorize(df[group_cols[0]].to_numpy())[0].astype(np.int64)
-    for c in group_cols[1:]:
-        gid = pd.factorize(gid * 64 + df[c].to_numpy().astype(np.int64))[0].astype(np.int64)
-    return gid
+# Precursors sampled to fit the eigenvector, so fit cost does not grow with input
+# size. Measured against a full-data fit on a 9-plex run: at this count 0.13% of
+# apex picks differ, rising to 0.30% at 8k precursors and 0.86% at 800. There is no
+# plateau -- accuracy improves roughly as 1/sqrt(n) -- so this is a stopping point,
+# not an optimum, chosen because it is the size the loadings were validated at.
+FIT_SAMPLE_PRECURSORS = 50_000
 
 
 def fit_main_apex_pc1(lf, group_cols, seed):
-    """Fit main-search apex PC1 on a hash sample of precursors; return loadings.
+    """Fit main-search apex PC1 on a sample of precursors; return loadings.
 
-    ``lf`` is the un-collapsed main-search LazyFrame. The sample is taken as a
+    ``lf`` is the un-collapsed main-search LazyFrame. The sample is taken as a hash
     predicate so polars pushes it into the parquet scan and reads row groups in file
     order -- a row-index gather would scatter reads across a multi-GB file.
     """
     import polars as pl
 
     cols = [c for c, _ in MAIN_APEX_FEATURES]
+    keys = pl.struct(group_cols)
+
+    # Hash buckets, sized from the actual precursor count so the sample is a fixed
+    # number rather than a fixed fraction. Scans two columns; cheap next to the fit.
+    n_precursors = lf.select(group_cols).unique().select(pl.len()).collect().item()
+    keep = min(1000, max(1, -(-1000 * FIT_SAMPLE_PRECURSORS // max(n_precursors, 1))))
+
     sample = (lf
-              .filter(pl.struct(group_cols).hash(seed=seed).mod(1000)
-                      < MAIN_APEX_FIT_PERMILLE)
+              .filter(keys.hash(seed=seed).mod(1000) < keep)
               .select(cols + list(group_cols))
               .collect())
-
-    gid = main_apex_group_id(sample, group_cols)
-    _, v = fit_within_group_pc1(sample, MAIN_APEX_FEATURES, gid,
+    _, v = fit_within_group_pc1(sample, MAIN_APEX_FEATURES, group_cols,
                                 anchor="coeff", label="Main-search apex PC1")
     return v
 
