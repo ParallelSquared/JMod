@@ -703,6 +703,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             merge_writer.close()
     for bf in batch_files:
         os.remove(bf)
+    logger.info("Selecting apex scans and scoring")
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
                  library=spectrumLibrary,

@@ -18,6 +18,9 @@ import numpy as np
 from typing import List, Tuple, Optional
 import os
 
+import src.config as config
+import src.quality_pca as quality_pca
+
 
 names = ["coeff", "spec_id", "Ms1_spec_id",
          "seq", "z", "window_mz", "rt",
@@ -451,8 +454,16 @@ def get_large_prec(file,
         group_columns=None
     )
 
-    # Polars equivalent of .sort_values(by="coeff")
-    sorted_decoy_coeffs_lf = decoy_coeffs_lf.sort(by="coeff")
+    # Rank each precursor's scans by how apex-like they are, replacing max-coeff.
+    # The group key must match the unique() subset below, or the collapse would pick
+    # an apex from a different partition than the one it keeps.
+    apex_group_cols = ["seq", "z"] + (["time_channel"] if timeplex else [])
+    _loadings = quality_pca.fit_main_apex_pc1(decoy_coeffs_lf, apex_group_cols,
+                                              seed=config.RANDOM_SEED)
+    decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
+        quality_pca.main_apex_pc1_expr(_loadings, apex_group_cols).alias("apex_pc1"))
+
+    sorted_decoy_coeffs_lf = decoy_coeffs_lf.sort(by="apex_pc1")
 
     # Polars equivalent of drop_duplicates(..., keep='last')
     if timeplex:

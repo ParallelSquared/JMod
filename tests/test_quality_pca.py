@@ -18,7 +18,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.quality_pca import first_search_apex_pc1, first_search_pc1
+from scipy.stats import spearmanr
+
+from src.quality_pca import (
+    MAIN_APEX_FEATURES,
+    _transform,
+    _within_group_zscore,
+    first_search_apex_pc1,
+    first_search_pc1,
+    fit_within_group_pc1,
+    main_apex_group_id,
+    main_apex_pc1_expr,
+)
 
 
 def _frame(n=400, seed=0):
@@ -32,8 +43,10 @@ def _frame(n=400, seed=0):
     noise = lambda s=0.3: rng.normal(scale=s, size=n)
 
     return pd.DataFrame({
-        "scribe_score": 2.0 + q + noise(),
-        "hellinger_score": 2.0 + q + noise(),
+        # Floored just above -1: log1p's domain. Real scribe_score bottoms out near
+        # 0 and hellinger_score near -0.66, so this matches rather than constrains.
+        "scribe_score": np.clip(2.0 + q + noise(), 0.001, None),
+        "hellinger_score": np.clip(2.0 + q + noise(), -0.9, None),
         "spectral_contrast_angle": np.clip(0.6 + 0.1 * q + noise(0.05), 0.01, 0.99),
         "hyperscore": np.clip(30.0 + 8.0 * q + noise(3.0), 1.0, None),
         "matched_peaks": np.clip(12.0 + 3.0 * q + noise(1.0), 3.0, None),
@@ -148,3 +161,92 @@ class TestApexPC1:
         df = _apex_frame()
         scores = first_search_apex_pc1(df)
         assert np.corrcoef(scores, df["closest_peak_intensity_ms1"])[0, 1] > 0
+
+
+class TestTransforms:
+    def test_log1p_keeps_negatives(self):
+        # It used to clip at 0, flattening a feature's whole negative tail onto one
+        # value -- hellinger_score is negative for ~22% of real first-search PSMs.
+        x = np.array([-0.5, 0.0, 1.0])
+        assert np.allclose(_transform(x, "log1p"), np.log1p(x))
+
+    def test_log1p_out_of_domain_raises(self):
+        with pytest.raises(ValueError, match="log1p needs values > -1"):
+            _transform(np.array([-1.5, 0.0]), "log1p")
+
+    def test_abslog1p_handles_values_below_minus_one(self):
+        # gof_stats, manhattan_distances and max_matched_residuals all go below -1.
+        x = np.array([-5.6, -1.0, 2.0])
+        assert np.allclose(_transform(x, "abslog1p"), np.log1p(np.abs(x)))
+
+
+class TestMainSearchApex:
+    """The main-search path fits on a sample and projects in polars."""
+
+    @staticmethod
+    def _frame(n_prec=200, n_scans=6, seed=5):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for p in range(n_prec):
+            apex = rng.integers(0, n_scans)
+            for s in range(n_scans):
+                w = np.exp(-0.5 * ((s - apex) / 1.5) ** 2)
+                nz = lambda sd: rng.normal(scale=sd)
+                rows.append({
+                    "seq": f"PEPTIDE{p}", "z": 2.0, "is_apex": s == apex,
+                    "coeff": 1e4 * w + 10 + nz(20),
+                    "hyperscore": 10.0 + 25.0 * w + nz(1.0),
+                    "scribe_scores": np.clip(0.5 - 0.4 * w + nz(0.02), 1e-4, None),
+                    "gof_stats": 2.0 - 4.0 * w + nz(0.2),
+                    "manhattan_distances": -1.0 + 3.0 * w + nz(0.2),
+                    "frac_lib_int": np.clip(0.3 + 0.5 * w + nz(0.02), 0.01, 1.0),
+                    "b_counts": np.clip(2.0 + 3.0 * w + nz(0.3), 0, None),
+                    "y_counts": np.clip(3.0 + 5.0 * w + nz(0.3), 0, None),
+                    "num_lib": np.clip(10.0 + 5.0 * w + nz(0.3), 1, None),
+                    "max_matched_residuals": 3.0 - 5.0 * w + nz(0.2),
+                })
+        return pd.DataFrame(rows)
+
+    def test_polars_expression_matches_numpy(self):
+        # The offline feature work was all numpy; the pipeline projects in polars.
+        # Nothing else checks that those two agree.
+        import polars as pl
+
+        df = self._frame()
+        pdf = pl.from_pandas(df.drop(columns=["is_apex"]))
+        gid = main_apex_group_id(df, ["seq", "z"])
+        _, v = fit_within_group_pc1(df, MAIN_APEX_FEATURES, gid, "coeff", "main")
+
+        expr = pdf.with_columns(main_apex_pc1_expr(v, ["seq", "z"]).alias("s"))["s"].to_numpy()
+        Z, _ = _within_group_zscore(df, MAIN_APEX_FEATURES, gid, "main")
+
+        assert np.allclose(expr, Z @ v, atol=1e-9)
+
+    def test_picks_the_planted_apex(self):
+        df = self._frame()
+        gid = main_apex_group_id(df, ["seq", "z"])
+        Z, v = fit_within_group_pc1(df, MAIN_APEX_FEATURES, gid, "coeff", "main")
+        df["score"] = Z @ v
+        picked = df.loc[df.groupby(["seq", "z"])["score"].idxmax()]
+        assert picked["is_apex"].mean() > 0.9
+
+    def test_sampled_fit_tracks_full_fit(self):
+        # The pipeline fits on ~6% of precursors. The eigenvector has to be stable
+        # enough under subsampling that the ranking does not move.
+        df = self._frame(n_prec=600)
+        gid = main_apex_group_id(df, ["seq", "z"])
+        Z, v_full = fit_within_group_pc1(df, MAIN_APEX_FEATURES, gid, "coeff", "main")
+
+        sub = df[gid % 5 == 0].reset_index(drop=True)
+        sub_gid = main_apex_group_id(sub, ["seq", "z"])
+        _, v_sub = fit_within_group_pc1(sub, MAIN_APEX_FEATURES, sub_gid, "coeff", "main")
+
+        assert v_full @ v_sub > 0.99
+        assert spearmanr(Z @ v_full, Z @ v_sub).statistic > 0.99
+
+    def test_no_ms1_features(self):
+        # --no_ms1_req lets MS1-less PSMs through the main search, so an MS1 column
+        # would be meaningless for part of the population and bias every loading.
+        names = {c for c, _ in MAIN_APEX_FEATURES}
+        assert not (names & {"mz_error", "im_error", "prec_im",
+                             "closest_peak_intensity_ms1", "Ms1_spec_id"})
