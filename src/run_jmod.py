@@ -483,9 +483,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ## bands; the tight gating happens later, within the band.  No-op on non-IM
     ## data (reband_ms2 self-guards on the retained un-banded peaks, which only
     ## the .d path stores).
-    _ms2_has_im = (len(DIAspectra.ms2scans) > 0
-                   and getattr(DIAspectra.ms2scans[0], "mobility", None) is not None)
-    if _ms2_has_im:
+    if DIAspectra.has_ion_mobility:
         # Release the pre-reband alias to the old band list.  reband_ms2 clears
         # DIAspectra.ms2scans, but this name (bound way back before the initial
         # search, and unused since) would otherwise keep every old band spectrum
@@ -498,9 +496,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ## tolerance during matrix construction in fit_channel_isotopes_numba).
     ## Skipped for timsTOF/IM data (MS2 peaks carry per-peak mobility) while the
     ## IM-watershed ID-loss investigation is ongoing; still applied to mzML.
-    _is_timstof = (len(DIAspectra.ms2scans) > 0
-                   and DIAspectra.ms2scans[0].mobility is not None)
-    if not _is_timstof:
+    if not DIAspectra.has_ion_mobility:
         for spec in DIAspectra.ms2scans:
             merge_spectrum_peaks(spec, (config.args.ppm * 1e-6))
     else:

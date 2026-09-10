@@ -1081,6 +1081,11 @@ class JModGUI(ThemedTk):
                 tk.messagebox.showerror("Duplicate Channel Error", f"Duplicate Channel Error: Tab {i} has the same channel name as another channel")
                 self.second_window.focus()
                 return
+            # TODO: validate that channel_name is all digits. The search parses the
+            # channel back out of tagged sequences with f"{tag.name}-(\d+)" (see
+            # iso_functions.py:237/434, ms1_cor_channels.py:1187, fdr_analysis.py:1218),
+            # so a non-numeric name like "d0" saves fine here and then fails with an
+            # IndexError partway through isotope generation.
             compositions[channel_name] = {}
             for element in list(self.iso_pairs.keys()) + list(self.rev_iso_pairs.keys()):
                 compositions[channel_name][element] = int(self.frame_dict_entryvars[i][element].get())

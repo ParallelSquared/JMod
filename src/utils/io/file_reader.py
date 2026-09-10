@@ -801,6 +801,7 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
     # Build SpectrumFile from accumulated groups
     sf = SpectrumFile()
     sf.filename = filepath
+    sf.has_ion_mobility = True
     sf.scan_pos = {}
     sf.ms1scans = []
     sf.ms2scans = []

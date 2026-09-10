@@ -200,10 +200,11 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
     # Per-fragment ion mobility: join each matched fragment's experimental m/z
     # back to its MS2 band spectrum to read the observed peak's 1/K0.
-    logger.info("Looking up per-fragment ion mobilities")
-    df = df.with_columns(
-        pl.Series("frag_ion_mobility", lookup_fragment_mobilities(df, dia_spectra))
-    )
+    if dia_spectra.has_ion_mobility:
+        logger.info("Looking up per-fragment ion mobilities")
+        df = df.with_columns(
+            pl.Series("frag_ion_mobility", lookup_fragment_mobilities(df, dia_spectra))
+        )
 
     # 4. Vectorized Error Calculations (Polars Expressions)
     df = df.with_columns([
@@ -300,6 +301,17 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         .alias('matched_lib_pct')
     )
 
+    # Drop rows the score UDFs could not score. Those three return -999 when
+    # _align_to_library fails or the intensities sum to zero -- a sentinel meaning
+    # "no value", not "a bad value".
+    _sentinel_cols = ['hellinger_score', 'scribe_score', 'matched_lib_pct']
+    _n_before = df.height
+    df = df.filter(
+        pl.all_horizontal([pl.col(c) != -999.0 for c in _sentinel_cols])
+    )
+    if df.height < _n_before:
+        logger.info(f"Dropped {_n_before - df.height} unscorable PSMs "
+                    f"(no library alignment or zero matched intensity)")
 
     return df
 
@@ -582,10 +594,6 @@ def lookup_fragment_mobilities(df: pl.DataFrame, dia_spectra):
         spec = dia_spectra.get_by_idx(scan_num)
         mz = spec.mz
         mob = spec.mobility
-        if mob is None:
-            # Non-IM data (e.g. mzML): no per-fragment mobility exists.
-            out.append([None] * len(exp_mzs))
-            continue
         row = []
         for fmz in exp_mzs:
             if fmz is None or fmz <= 0.0:

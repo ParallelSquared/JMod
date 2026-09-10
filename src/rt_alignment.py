@@ -2027,9 +2027,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                                               resid_model=_rmodel)
                             with open(results_folder + "/first_search/im_spl", "wb") as dill_file:
                                 dill.dump(im_spl, dill_file)
-    else:
-        logger.info("No ion mobility columns; keeping default IM band tolerance: "
-                    f"{config.opt_im_precision}")
 
 
     ################################################################

@@ -213,6 +213,7 @@ class SpectrumFile:
         self.filename = None
         self.ms2_to_ms1_map = None
         self._ms2_flat = None
+        self.has_ion_mobility = False
 
         if mzml_file:
             self.load_spectra(mzml_file)
