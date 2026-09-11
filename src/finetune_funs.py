@@ -271,7 +271,7 @@ def fine_tune_rt(grouped_df,
     elif "mTRAQ" in tag.name:
         model_path = os.path.join(current_dir,"../rt_models","iRT_CNN_model_mTRAQ_09182024_")
         
-    elif "diethyl" in tag.name:
+    elif "diethyl" in tag.name or "dimethyl" in tag.name:
         model_path = os.path.join(current_dir,"../rt_models","iRT_CNN_model_DiEthyl_11052024_")
         
     elif "PSMtag" in tag.name:
