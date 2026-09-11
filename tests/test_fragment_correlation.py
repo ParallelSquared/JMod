@@ -165,13 +165,26 @@ class TestMatchAndFill:
         out = self._call([scan], [0], [q], ppm_tol=tol)
         assert out[0, 0] == 0.0
 
-    def test_multiple_candidates_picks_closest(self):
+    def test_multiple_candidates_are_summed(self):
         q = 200.0
-        # Two peaks both within tolerance; right one is closer.
+        # Two peaks both within tolerance; both contribute, so a fragment split
+        # across adjacent centroids keeps its full intensity.
         tol = 100e-6
         scan = _make_scan(
             [q - q * tol * 0.5, q + q * tol * 0.2],
             [10.0, 77.0],
+            1.0, 500, 5, 5,
+        )
+        out = self._call([scan], [0], [q], ppm_tol=tol)
+        assert out[0, 0] == 87.0
+
+    def test_candidate_outside_tolerance_is_excluded_from_sum(self):
+        q = 200.0
+        tol = 100e-6
+        # Only the in-tolerance peak counts; the far one must not be summed in.
+        scan = _make_scan(
+            [q + q * tol * 0.2, q + q * tol * 3.0],
+            [77.0, 1000.0],
             1.0, 500, 5, 5,
         )
         out = self._call([scan], [0], [q], ppm_tol=tol)

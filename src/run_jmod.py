@@ -28,7 +28,7 @@ import dill
 from src.utils.io import load_files, file_reader
 from src.utils.set_seeds import set_seeds
 from src.models.spec_lib import spec_lib
-from src.spectral_fitting import fit_to_lib2, merge_spectrum_peaks
+from src.spectral_fitting import fit_to_lib2
 from src.rt_alignment import MZRTfit, MZRTfit_timeplex
 from src.utils.misc_functions import write_to_csv
 import polars as pl
@@ -491,16 +491,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         # is an extra ~18 GB held for no reason.  Rebound from the new bands below.
         spectra_to_fit = None
         file_reader.reband_ms2(DIAspectra, 4.0 * config.opt_im_precision)
-
-    ## Merge peaks in spectra (MS2 only; MS1 peaks are summed within
-    ## tolerance during matrix construction in fit_channel_isotopes_numba).
-    ## Skipped for timsTOF/IM data (MS2 peaks carry per-peak mobility) while the
-    ## IM-watershed ID-loss investigation is ongoing; still applied to mzML.
-    if not DIAspectra.has_ion_mobility:
-        for spec in DIAspectra.ms2scans:
-            merge_spectrum_peaks(spec, (config.args.ppm * 1e-6))
-    else:
-        logger.info("Skipping MS2 peak merge for timsTOF/IM data")
 
     spectra_to_fit = DIAspectra.ms2scans
 

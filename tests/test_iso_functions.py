@@ -1156,8 +1156,49 @@ class Test_iso_library_multi():
 
 
 
+class Test_iso_layout():
+    """The flat spectrum arrays must stay compact after isotope generation.
+
+    _TargetView.__deepcopy__ and from_target_and_decoy_results both assume
+    spectrum_lengths.sum() == len(spectrum_mz), and iso_library preallocates
+    from frag_lengths * n_iso rather than measuring the output.
+    """
+
+    def build_library(self):
+        library = {}
+        for seq, charge in (("PEPTIDEK", 2.0), ("PEPTIDEKR", 2.0), ("ELVISK", 3.0)):
+            library[(seq, charge)] = {"frags": {
+                "y1_1": [mass.fast_mass(sequence=seq[-1:], ion_type='y'), 0.5],
+                "b2_1": [mass.fast_mass(sequence=seq[:2], ion_type='b'), 1.0],
+                "y2_1": [mass.fast_mass(sequence=seq[-2:], ion_type='y'), 0.6],
+            }}
+        return library
+
+    @pytest.mark.parametrize("iso_func", [iso_library, iso_library_multi])
+    @pytest.mark.parametrize("n_iso", [2, 3])
+    def test_layout_is_compact(self, iso_func, n_iso):
+        store = iso_func(SpectrumLibraryStore.from_dict(self.build_library()), None, n_iso)
+
+        assert store.spectrum_lengths.sum() == len(store.spectrum_mz)
+        assert len(store.spectrum_int) == len(store.spectrum_mz)
+        assert len(store.frag_names_data) == len(store.spectrum_mz)
+
+        lengths = store.spectrum_lengths.astype(np.int64)
+        assert np.array_equal(store.spectrum_offsets[1:], np.cumsum(lengths)[:-1])
+        assert store.spectrum_offsets[0] == 0
+
+    @pytest.mark.parametrize("iso_func", [iso_library, iso_library_multi])
+    @pytest.mark.parametrize("n_iso", [2, 3])
+    def test_peak_count_is_exact(self, iso_func, n_iso):
+        """Every fragment yields exactly n_iso peaks while the intensity cut is off."""
+        store = iso_func(SpectrumLibraryStore.from_dict(self.build_library()), None, n_iso)
+
+        for key in store:
+            assert len(store[key]["spectrum"]) == len(store[key]["frags"]) * n_iso
+
+
 def main():
-    
+
    pass
 
 

@@ -293,9 +293,14 @@ def _match_and_fill_numba(
     ppm_tol,
     out_matrix,
 ):
-    """Fill ``out_matrix[i, j]`` with the intensity of the peak in scan
-    ``scan_idx[i]`` closest to ``frag_mz[j]`` within a relative PPM tolerance,
-    or ``0.0`` if no peak is within tolerance.
+    """Fill ``out_matrix[i, j]`` with the summed intensity of every peak in scan
+    ``scan_idx[i]`` within a relative PPM tolerance of ``frag_mz[j]``, or ``0.0``
+    if no peak is within tolerance.
+
+    Summing rather than taking the single closest peak matches
+    ``_match_and_fill_im_numba`` and makes the result independent of how finely
+    the acquisition centroided: a fragment whose signal is split across adjacent
+    peaks inside the tolerance contributes its full intensity either way.
     """
     n_frags = frag_mz.shape[0]
     for i in range(n_scans_used):
@@ -309,25 +314,13 @@ def _match_and_fill_numba(
             continue
         for j in range(n_frags):
             q = frag_mz[j]
-            pos = np.searchsorted(scan_mz, q)
-            if pos == 0:
-                cand = 0
-            elif pos >= n_peaks:
-                cand = n_peaks - 1
-            else:
-                left_diff = q - scan_mz[pos - 1]
-                right_diff = scan_mz[pos] - q
-                if left_diff <= right_diff:
-                    cand = pos - 1
-                else:
-                    cand = pos
-            diff = scan_mz[cand] - q
-            if diff < 0.0:
-                diff = -diff
-            if diff <= q * ppm_tol:
-                out_matrix[i, j] = scan_in[cand]
-            else:
-                out_matrix[i, j] = 0.0
+            tol = q * ppm_tol
+            lo_pos = np.searchsorted(scan_mz, q - tol)
+            hi_pos = np.searchsorted(scan_mz, q + tol, side="right")
+            summed_int = 0.0
+            for p in range(lo_pos, hi_pos):
+                summed_int += scan_in[p]
+            out_matrix[i, j] = summed_int
 
 
 @nb.njit(cache=False, nogil=True)
@@ -429,15 +422,15 @@ def _match_and_fill_im_numba(
             tol = q * ppm_tol
             lo_pos = np.searchsorted(scan_mz, q - tol)
             hi_pos = np.searchsorted(scan_mz, q + tol, side="right")
-            acc = 0.0
+            summed_int = 0.0
             for p in range(lo_pos, hi_pos):
                 if gate:
                     mob = scan_mob[p]
                     if mob == mob and abs(mob - prec_im) <= im_tol:
-                        acc += scan_in[p]
+                        summed_int += scan_in[p]
                 else:
-                    acc += scan_in[p]
-            out_matrix[i, j] = acc
+                    summed_int += scan_in[p]
+            out_matrix[i, j] = summed_int
     return prec_im
 
 

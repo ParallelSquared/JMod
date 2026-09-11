@@ -262,6 +262,71 @@ def _gen_isotopes_encoded(args):
     return spectrum, encode_frag_names(ordered_frags)
 
 
+def _alloc_iso_buffers(library, all_keys, n_iso):
+    """Compute the exact output layout and preallocate the flat spectrum arrays.
+
+    ``gen_isotopes_dict`` emits exactly ``n_iso`` peaks per fragment (the
+    ``min_iso_intensity`` cut at the top of this module is disabled), so every
+    entry's peak count is known before any isotope math runs. That lets the
+    isotope pass write straight into preallocated arrays instead of building a
+    list of per-entry arrays and concatenating -- which on a multi-million entry
+    library costs several times the final payload in transient copies.
+
+    Parameters
+    ----------
+    library : SpectrumLibraryStore
+        Spectral library. Read-only here.
+    all_keys : list
+        ``list(library)``, in the order the caller will enumerate.
+    n_iso : int
+        Number of isotopes per fragment.
+
+    Returns
+    -------
+    tuple
+        ``(spec_offsets, spec_lengths, spectrum_mz, spectrum_int, frag_names_data)``
+    """
+    n = len(all_keys)
+
+    idxs = np.fromiter((library.key_to_idx[k] for k in all_keys), dtype=np.int64, count=n)
+    if n and not np.array_equal(idxs, np.arange(n, dtype=np.int64)):
+        raise RuntimeError(
+            "Library iteration order does not match store row order; "
+            "spectrum offsets would be written to the wrong entries."
+        )
+
+    lengths64 = library.frag_lengths[idxs].astype(np.int64) * n_iso
+    total = int(lengths64.sum())
+
+    spec_offsets = np.zeros(n, dtype=np.int64)
+    if n > 1:
+        np.cumsum(lengths64[:-1], out=spec_offsets[1:])
+    spec_lengths = lengths64.astype(np.int32)
+
+    return (spec_offsets,
+            spec_lengths,
+            np.empty(total, dtype=np.float64),
+            np.empty(total, dtype=np.float64),
+            np.empty(total, dtype=np.int32))
+
+
+def _store_iso_entry(i, spectrum, ordered_frags, spec_offsets, spec_lengths,
+                     spectrum_mz, spectrum_int, frag_names_data, key):
+    """Write one entry's isotope peaks into the preallocated arrays."""
+    length = int(spec_lengths[i])
+    if len(spectrum) != length:
+        raise RuntimeError(
+            f"Entry {i} {key!r} produced {len(spectrum)} peaks, expected {length}. "
+            "Preallocation requires the min_iso_intensity filter in "
+            "gen_isotopes_dict to stay disabled."
+        )
+    off = int(spec_offsets[i])
+    spec = np.asarray(spectrum, dtype=np.float64)
+    spectrum_mz[off:off + length] = spec[:, 0]
+    spectrum_int[off:off + length] = spec[:, 1]
+    frag_names_data[off:off + length] = ordered_frags
+
+
 def iso_library(library, tag, n_iso):
     """
     Generate isotopes for library fragments (single-threaded).
@@ -284,28 +349,22 @@ def iso_library(library, tag, n_iso):
     """
     from src.utils.frag_encoding import encode_frag_names
 
-    n = len(library)
     all_keys = list(library)
 
-    all_spec_peaks = []
-    all_frag_codes = []
-    spec_offsets = np.empty(n, dtype=np.int64)
-    spec_lengths = np.empty(n, dtype=np.int32)
-    cursor = 0
+    (spec_offsets, spec_lengths,
+     spectrum_mz, spectrum_int, frag_names_data) = _alloc_iso_buffers(library, all_keys, n_iso)
 
     logger.info("Generating isotopes for library:")
     for i, key in enumerate(tqdm.tqdm(all_keys)):
         frags = library[key]["frags"]
         spectrum, ordered_frags = gen_isotopes_dict(key[0], frags, tag, n_iso)
-        n_peaks = len(spectrum)
-        spec_offsets[i] = cursor
-        spec_lengths[i] = n_peaks
-        all_spec_peaks.append(np.asarray(spectrum, dtype=np.float64))
-        all_frag_codes.append(encode_frag_names(ordered_frags))
-        cursor += n_peaks
+        _store_iso_entry(i, spectrum, encode_frag_names(ordered_frags),
+                         spec_offsets, spec_lengths,
+                         spectrum_mz, spectrum_int, frag_names_data, key)
 
-    library.spectrum_data = np.concatenate(all_spec_peaks, axis=0) if all_spec_peaks else np.empty((0, 2), dtype=np.float64)
-    library.frag_names_data = np.concatenate(all_frag_codes) if all_frag_codes else np.empty(0, dtype=np.int32)
+    library.spectrum_mz = spectrum_mz
+    library.spectrum_int = spectrum_int
+    library.frag_names_data = frag_names_data
     library.spectrum_offsets = spec_offsets
     library.spectrum_lengths = spec_lengths
 
@@ -347,41 +406,28 @@ def iso_library_multi(library, tag, n_iso):
     n = len(library)
     all_keys = list(library)
 
+    (spec_offsets, spec_lengths,
+     spectrum_mz, spectrum_int, frag_names_data) = _alloc_iso_buffers(library, all_keys, n_iso)
+
     logger.info("Generating isotopes for library:")
     p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), 61),
                                                   initializer=config.limit_blas_threads)
 
-    # Process results incrementally via imap to avoid holding all inputs
-    # and outputs in memory simultaneously.
-    all_spec_peaks = []
-    all_frag_codes = []
-    spec_offsets = np.empty(n, dtype=np.int64)
-    spec_lengths = np.empty(n, dtype=np.int32)
-    cursor = 0
-
     chunksize = 1000
     arg_gen = _iso_arg_gen(library, all_keys, tag, n_iso)
-    for i, (spectrum, ordered_frags) in enumerate(
-        tqdm.tqdm(p.imap(_gen_isotopes_encoded, arg_gen, chunksize=chunksize), total=n)
-    ):
-        n_peaks = len(spectrum)
-        spec_offsets[i] = cursor
-        spec_lengths[i] = n_peaks
-        all_spec_peaks.append(np.asarray(spectrum, dtype=np.float64))
-        all_frag_codes.append(ordered_frags)
-        cursor += n_peaks
+    try:
+        for i, (spectrum, ordered_frags) in enumerate(
+            tqdm.tqdm(p.imap(_gen_isotopes_encoded, arg_gen, chunksize=chunksize), total=n)
+        ):
+            _store_iso_entry(i, spectrum, ordered_frags,
+                             spec_offsets, spec_lengths,
+                             spectrum_mz, spectrum_int, frag_names_data, all_keys[i])
+    finally:
+        p.terminate()
+        p.join()
 
-    p.close()
-    p.join()
-
-    spectrum_data = np.concatenate(all_spec_peaks, axis=0) if all_spec_peaks else np.empty((0, 2), dtype=np.float64)
-    del all_spec_peaks
-    frag_names_data = np.concatenate(all_frag_codes) if all_frag_codes else np.empty(0, dtype=np.int32)
-    del all_frag_codes
-
-    # Replace the spectrum arrays on the store.
-    # The old arrays are dereferenced and freed by GC.
-    library.spectrum_data = spectrum_data
+    library.spectrum_mz = spectrum_mz
+    library.spectrum_int = spectrum_int
     library.frag_names_data = frag_names_data
     library.spectrum_offsets = spec_offsets
     library.spectrum_lengths = spec_lengths
