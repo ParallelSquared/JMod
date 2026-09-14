@@ -18,6 +18,7 @@ import polars as pl
 import re
 from functools import partial
 from tqdm.auto import tqdm
+from time import perf_counter
 from numpy import linalg as la
 
 from src.config import diann_mods
@@ -161,13 +162,36 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     chunk_size = 1000
     ms2scans = dia_spectra.ms2scans
     hit_frames = []
+    # Split the per-chunk wall clock three ways so it is visible whether the
+    # bottleneck is the Python->Rust spectrum copy, the Rust search itself, or
+    # the Rust->Python hits copy. These are sequential within the loop, so they
+    # sum to the loop's wall time.
+    t_convert = t_search = t_topolars = 0.0
     for i in tqdm(range(0, len(ms2scans), chunk_size)):
+        _t = perf_counter()
         chunk = [spec.to_rust_spectrum() for spec in ms2scans[i:i + chunk_size]]
+        t_convert += perf_counter() - _t
+
+        _t = perf_counter()
         batch_hits = scorer.score_many(db, chunk)
+        t_search += perf_counter() - _t
+
         # to_polars() per chunk: the Rust hits for this chunk are released here rather
         # than at the end of the whole search.
+        _t = perf_counter()
         hit_frames.append(batch_hits.to_polars())
+        t_topolars += perf_counter() - _t
         del batch_hits, chunk
+
+    t_loop = t_convert + t_search + t_topolars
+    if t_loop > 0:
+        logger.info(
+            f"Preliminary search timing over {len(ms2scans)} MS2 spectra "
+            f"({t_loop:.1f}s total): "
+            f"to_rust_spectrum {t_convert:.1f}s ({100*t_convert/t_loop:.0f}%), "
+            f"score_many {t_search:.1f}s ({100*t_search/t_loop:.0f}%), "
+            f"to_polars {t_topolars:.1f}s ({100*t_topolars/t_loop:.0f}%)"
+        )
 
     # Reconcile per-chunk dtypes before concatenating
     hit_frames = _reconcile_chunk_schemas(hit_frames)
@@ -179,13 +203,12 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
 
 
-    # 2. Vectorized Calculation of Theoretical m/z (using Polars UDF)
-    # The UDF will run the Python function but is integrated into Polars' execution engine.
+    # 2. Theoretical m/z from calcmass, the neutral mass Sage already computed.
+    # m/z = (M + z*proton) / z, and the z cancels to M/z + proton.
     logger.info("Calculating theoretical m/z")
     df = df.with_columns(
-        pl.struct(['sequence', 'modifications', 'charge'])
-        .map_elements(calculate_theo_mz_udf, return_dtype=pl.Float64)
-        .alias("theoretical_mz")
+        (pl.col("calcmass").cast(pl.Float64) / pl.col("charge") + 1.00727647)
+        .alias("mz")
     )
 
     # 3. MS1 Lookup (The non-vectorized bottleneck, handled in a dedicated function)
@@ -209,10 +232,10 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # 4. Vectorized Error Calculations (Polars Expressions)
     df = df.with_columns([
         # Calculate difference
-        (pl.col("closest_peak_mz_ms1") - pl.col("theoretical_mz")).alias("mz_diff")
+        (pl.col("closest_peak_mz_ms1") - pl.col("mz")).alias("mz_diff")
     ]).with_columns([
         # Calculate relative error
-        (pl.col("mz_diff") / pl.col("theoretical_mz")).alias("relative_error_ms1")
+        (pl.col("mz_diff") / pl.col("mz")).alias("relative_error_ms1")
     ]).with_columns([
         # Calculate PPM error
         (pl.col("relative_error_ms1") * 1_000_000).alias("ppm_error_ms1")
@@ -523,14 +546,6 @@ def matched_lib_intensity_pct_udf(r: dict, fragment_library_map: dict) -> float:
 
 
 
-def calculate_theo_mz_udf(row):
-    """Polars UDF to calculate theoretical m/z."""
-    # The Polars struct will yield a dictionary-like object per row
-    return ps.Peptide.calculate_theoretical_mz(
-        row['sequence'], row['modifications'], row['charge']
-    )
-
-
 def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
     """
     Performs the non-vectorized MS1 scan lookup and closest peak finding
@@ -544,7 +559,7 @@ def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
     # We must extract the columns and iterate in Python because the underlying
     # dia_spectra methods are not vectorized.
     spec_ids = df['spec_id'].to_list()
-    theo_mzs = df['theoretical_mz'].to_list()
+    theo_mzs = df['mz'].to_list()
 
     for spec_id, theo_mz in tqdm(
             zip(spec_ids, theo_mzs),
@@ -637,7 +652,6 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict,
         'spec_id': 'spec_name',
         'charge': 'z',
         'sequence': 'stripped_seq',
-        'theoretical_mz': 'mz'
     })
 
     # Make matching spec_id column
