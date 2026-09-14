@@ -1590,9 +1590,15 @@ class JModGUI(ThemedTk):
             if os.path.exists(mzml_path) is False:
                 tk.messagebox.showerror("Data File Not Found", f"Data File not found: {mzml_path}")
                 return False
-            mass_spec_filetypes = [".mzml", ".raw"]
-            if os.path.splitext(mzml_path)[1].lower() not in mass_spec_filetypes:
-                tk.messagebox.showerror("Data File Type Error", f"Data File type ({os.path.splitext(mzml_path)[1].lower()}) not in supported: {mass_spec_filetypes}")
+            mass_spec_filetypes = [".mzml", ".d", ".raw"]
+            # .d is a directory, so match it the way FileReader._detect_format does
+            # rather than via splitext, which returns "" for a trailing separator.
+            if mzml_path.replace("\\", "/").rstrip("/").endswith(".d"):
+                mass_spec_filetype = ".d"
+            else:
+                mass_spec_filetype = os.path.splitext(mzml_path)[1].lower()
+            if mass_spec_filetype not in mass_spec_filetypes:
+                tk.messagebox.showerror("Data File Type Error", f"Data File type ({mass_spec_filetype}) not in supported: {mass_spec_filetypes}")
                 return False
         if os.path.exists(tsv_path) is False:
             tk.messagebox.showerror("Speclib Not Found", f"Speclib not found: {tsv_path}")
