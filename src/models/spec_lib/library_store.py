@@ -156,14 +156,6 @@ class _TargetView:
             parent_idx=s.parent_idx[:n].copy(),
         )
 
-def get_field(row, *names, default=None):
-            """Helper function for reading tabular data (spectral libraries) from various formats"""
-            for name in names:
-                if name in row:
-                    return row[name]
-            return default
-
-
 # Canonical column name -> priority-ordered tuple of accepted input spellings.
 # Canonical names match to_diann_df's output columns. Resolution is
 # select-with-alias, not rename: alias lists overlap (ProteinID feeds both
@@ -192,14 +184,6 @@ _LIBRARY_COLUMN_ALIASES = {
     "FragmentMz":           ("FragmentMz", "ProductMz", "Product.Mz"),
     "RelativeIntensity":    ("RelativeIntensity", "LibraryIntensity", "Relative.Intensity"),
 }
-
-
-def get_canonical_field(row, canonical, default=None):
-    """Resolve a canonical library column from a row via _LIBRARY_COLUMN_ALIASES."""
-    for name in _LIBRARY_COLUMN_ALIASES[canonical]:
-        if name in row:
-            return row[name]
-    return default
 
 
 def _scan_library_tsv(path):
@@ -1703,22 +1687,15 @@ class SpectrumLibraryStore:
         return cls._read_from_tsv_or_parquet(spec_lib_file, "parquet")
 
     @classmethod
-    def _iter_rows(cls, spec_lib_file, file_type):
-        if file_type == "tsv":
-            import csv
-            with open(spec_lib_file, newline="") as f:
-                yield from csv.DictReader(f, delimiter="\t")
-        elif file_type == "parquet":
-            import pyarrow.parquet as pq
-            yield from pq.read_table(spec_lib_file).to_pylist()
-
-    @classmethod
     def _read_from_tsv_or_parquet(cls, spec_lib_file, file_type):
         """Parse a DIA-NN / FragPipe TSV or Parquet directly into columnar form."""
         from src.logger import logger
         import polars as pl
+        import time
 
+        t_start = time.perf_counter()
         df, found = _load_library_frame(spec_lib_file, file_type)
+        logger.info(f"Parsing spectral library: {df.height:,} fragment rows")
 
         def _raise(message):
             from src.utils.gui_utils import send_raise_to_TK
@@ -1953,6 +1930,9 @@ class SpectrumLibraryStore:
         frag_names_data = frag_keys_data[perm]
         spec_offsets = frag_offsets_arr.copy()
         spec_lengths = frag_lengths_arr.copy()
+
+        logger.info(f"Parsed {n:,} precursors / {len(frag_keys_data):,} fragments "
+                    f"in {time.perf_counter() - t_start:.1f}s")
 
         return cls(
             key_to_idx=key_to_idx,

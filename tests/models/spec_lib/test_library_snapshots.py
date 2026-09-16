@@ -150,6 +150,43 @@ class TestParsingSemantics:
             parse_fixture("library_missing_rt", "tsv")
 
 
+class TestArrayDtypes:
+    """Guard against silent recasts: every store array must land in its
+    documented dtype, with no implicit up/down-casts introduced by the
+    columnar parsing path."""
+
+    EXPECTED_DTYPES = {
+        "mod_seq": np.object_, "seq": np.object_,
+        "protein_group": np.object_, "protein_name": np.object_,
+        "genes": np.object_, "uniprot_id": np.object_,
+        "prec_mz": np.float64, "prec_z": np.float64,
+        "iRT": np.float64, "ion_mob": np.float64,
+        "spectrum_mz": np.float64, "spectrum_int": np.float64,
+        "frag_data": np.float64,
+        "spectrum_offsets": np.int64, "frag_offsets": np.int64,
+        "top_n_offsets": np.int64, "parent_idx": np.int64,
+        "spectrum_lengths": np.int32, "frag_lengths": np.int32,
+        "top_n_lengths": np.int32,
+        "frag_names_data": np.int32, "frag_keys_data": np.int32,
+        "top_n_data": np.int32,
+        "is_decoy": np.bool_,
+    }
+
+    @pytest.mark.parametrize("fmt", FORMATS)
+    @pytest.mark.parametrize("name", FIXTURES)
+    def test_store_array_dtypes(self, name, fmt):
+        store = parse_fixture(name, fmt)
+        for field, expected in self.EXPECTED_DTYPES.items():
+            actual = np.asarray(getattr(store, field)).dtype
+            assert actual == np.dtype(expected), (
+                f"{name}.{fmt}: {field} is {actual}, expected {np.dtype(expected)}"
+            )
+        # key_to_idx keys must stay (str, float) — not numpy scalars
+        for mod_pep, charge in store.key_to_idx:
+            assert type(mod_pep) is str and type(charge) is float
+            break
+
+
 class TestCacheVersioning:
     def test_round_trip_current_version(self, tmp_path):
         store = parse_fixture("library_edgecases", "tsv")

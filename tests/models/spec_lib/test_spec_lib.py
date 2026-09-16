@@ -76,36 +76,6 @@ def test_library_spectrum_read_entry():
     assert frags["y5_1"] == [350.12, 15000.0]
 
 def test_load_tsv_speclib_minimal():
-    # Path to your small test file included in the repo
-    test_file = os.path.join("data", "filtered_library.tsv_pythonlib")
-
-    # Load only first ~5 rows by patching csv reader or reading partially
-    # Easiest: read full file but assert only minimal behavior
-    lib = load_tsv_speclib(test_file)
-
-    # Basic sanity checks
-    assert isinstance(lib, dict)
-    assert len(lib) > 0  # should parse at least one entry
-
-    # Grab any random entry
-    first_key = next(iter(lib.keys()))
-    entry = lib[first_key]
-
-    # Check minimal fields
-    assert "mod_seq" in entry
-    assert "seq" in entry
-    assert "prec_mz" in entry
-    assert "prec_z" in entry
-    assert "frags" in entry
-    assert isinstance(entry["frags"], dict)
-
-    # Check fragments structurally look right
-    for frag_type, frag_list in entry["frags"].items():
-        assert isinstance(frag_type, str)
-        assert isinstance(frag_list, list)
-        assert len(frag_list) == 2  # mz, intensity
-
-def test_load_tsv_speclib_minimal():
     # Create a temporary minimal DIA-NN style TSV file
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".tsv") as tmp:
         writer = csv.writer(tmp, delimiter="\t")
