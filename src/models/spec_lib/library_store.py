@@ -1692,10 +1692,17 @@ class SpectrumLibraryStore:
         from src.logger import logger
         import polars as pl
         import time
+        import tqdm
 
         t_start = time.perf_counter()
         df, found = _load_library_frame(spec_lib_file, file_type)
         logger.info(f"Parsing spectral library: {df.height:,} fragment rows")
+
+        progress = tqdm.tqdm(total=7, desc="Parsing library", unit="stage", leave=False)
+
+        def _stage(name):
+            progress.set_postfix_str(name)
+            progress.update(1)
 
         def _raise(message):
             from src.utils.gui_utils import send_raise_to_TK
@@ -1773,6 +1780,7 @@ class SpectrumLibraryStore:
                 df.filter(nonstd_mask).select(["_mod_pep", "_prec_z"]).unique().rows()
             )
             df = df.filter(~nonstd_mask)
+            _stage("filtered decoy/invalid rows")
 
         if df.height > 0:
             _require("RT", "Unknown retention time column")
@@ -1831,6 +1839,8 @@ class SpectrumLibraryStore:
                 pl.col("FragmentCharge").cast(pl.Int64).alias("_frag_z"),
             )
 
+            _stage("built typed columns")
+
             # RT and PrecursorMz are mandatory for every precursor (IM is optional)
             n_null_rt = df["_iRT"].null_count()
             if n_null_rt > 0:
@@ -1851,6 +1861,7 @@ class SpectrumLibraryStore:
                 pl.col("_uniprot_id").first(),
                 pl.col("_prec_mz").first(),
             )
+            _stage("grouped precursors")
             # Duplicate fragment keys (identical type+number+loss+charge):
             # dict-update semantics are first-appearance position, last-seen value
             frag_df = df.group_by(["_mod_pep", "_prec_z", "_frag_key"], maintain_order=True).agg(
@@ -1871,6 +1882,7 @@ class SpectrumLibraryStore:
                 on=["_mod_pep", "_prec_z"],
                 how="left",
             ).sort("_pidx", maintain_order=True)
+            _stage("deduplicated fragments")
 
         if len(decoy_precursors) > 0:
             logger.info(f"{len(decoy_precursors)} decoy precursors removed from input library")
@@ -1882,6 +1894,7 @@ class SpectrumLibraryStore:
 
         # Second pass: convert to columnar arrays
         if df.height == 0:
+            progress.close()
             return cls._empty()
 
         n = prec_df.height
@@ -1901,6 +1914,7 @@ class SpectrumLibraryStore:
         genes_arr = np.array(prec_df["_genes"].to_list(), dtype=object)
         uniprot_id_arr = np.array(prec_df["_uniprot_id"].to_list(), dtype=object)
         parent_idx_arr = np.full(n, -1, dtype=np.int64)
+        _stage("built precursor arrays")
 
         # Original frags: frag_df is already one contiguous block per precursor
         frag_lengths_arr = (
@@ -1919,6 +1933,7 @@ class SpectrumLibraryStore:
         frag_mz = frag_df["_frag_mz"].to_numpy().astype(np.float64, copy=False)
         frag_int = frag_df["_frag_int"].to_numpy().astype(np.float64, copy=False)
         frag_data = np.column_stack((frag_mz, frag_int))
+        _stage("encoded fragment codes")
 
         # Spectrum: one global stable sort by (precursor, m/z) replaces the
         # per-precursor frag_to_peak argsorts; equal-m/z ties keep
@@ -1930,6 +1945,8 @@ class SpectrumLibraryStore:
         frag_names_data = frag_keys_data[perm]
         spec_offsets = frag_offsets_arr.copy()
         spec_lengths = frag_lengths_arr.copy()
+        _stage("sorted spectra")
+        progress.close()
 
         logger.info(f"Parsed {n:,} precursors / {len(frag_keys_data):,} fragments "
                     f"in {time.perf_counter() - t_start:.1f}s")
