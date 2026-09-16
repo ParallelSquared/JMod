@@ -163,6 +163,44 @@ def get_field(row, *names, default=None):
                     return row[name]
             return default
 
+
+# Canonical column name -> priority-ordered tuple of accepted input spellings.
+# Canonical names match to_diann_df's output columns. Resolution is
+# select-with-alias, not rename: alias lists overlap (ProteinID feeds both
+# ProteinName and ProteinID when ProteinName is absent), so one source column
+# may legitimately populate more than one canonical field.
+#
+# Known input/output asymmetries, preserved deliberately:
+# - input prefers FragmentNumber, output emits FragmentSeriesNumber
+# - input prefers Tr_recalibrated, output emits RT
+_LIBRARY_COLUMN_ALIASES = {
+    "Decoy":                ("Decoy",),
+    "ModifiedPeptide":      ("ModifiedPeptide", "ModifiedSequence", "Modified.Sequence"),
+    "StrippedPeptide":      ("StrippedPeptide", "PeptideSequence", "Stripped.Sequence"),
+    "PrecursorCharge":      ("PrecursorCharge", "Precursor.Charge"),
+    "PrecursorMz":          ("PrecursorMz", "Precursor.Mz"),
+    "RT":                   ("Tr_recalibrated", "RT", "iRT"),
+    "IonMobility":          ("IonMobility", "IM"),
+    "ProteinGroup":         ("ProteinGroup", "Protein.Group"),
+    "ProteinName":          ("ProteinName", "Protein.Names", "ProteinID", "ProteinId"),
+    "ProteinID":            ("ProteinID", "UniprotID", "Protein.Ids"),
+    "Genes":                ("Genes", "GeneName"),
+    "FragmentType":         ("FragmentType", "Fragment.Type"),
+    "FragmentSeriesNumber": ("FragmentNumber", "FragmentSeriesNumber", "Fragment.Series.Number"),
+    "FragmentCharge":       ("FragmentCharge", "Fragment.Charge"),
+    "FragmentLossType":     ("FragmentLossType", "Fragment.Loss.Type"),
+    "FragmentMz":           ("FragmentMz", "ProductMz", "Product.Mz"),
+    "RelativeIntensity":    ("RelativeIntensity", "LibraryIntensity", "Relative.Intensity"),
+}
+
+
+def get_canonical_field(row, canonical, default=None):
+    """Resolve a canonical library column from a row via _LIBRARY_COLUMN_ALIASES."""
+    for name in _LIBRARY_COLUMN_ALIASES[canonical]:
+        if name in row:
+            return row[name]
+    return default
+
 class SpectrumLibraryStore:
     """Columnar store for spectral library data.
 
@@ -1641,23 +1679,23 @@ class SpectrumLibraryStore:
 
         for row in cls._iter_rows(spec_lib_file, file_type):
 
-            decoy_bool = get_field(row, "Decoy", default=0)
+            decoy_bool = get_canonical_field(row, "Decoy", default=0)
             if str(decoy_bool).strip() in ("1", "1.0", "True"):
-                mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence").strip("_")
-                charge = float(get_field(row, "PrecursorCharge", "Precursor.Charge"))
+                mod_pep = get_canonical_field(row, "ModifiedPeptide").strip("_")
+                charge = float(get_canonical_field(row, "PrecursorCharge"))
                 decoy_precursors.add((mod_pep, charge))
                 continue #skip this peptide if it is a decoy
 
             ## Check for non-valid AAs
-            peptide = get_field(row, "StrippedPeptide", "PeptideSequence", "Stripped.Sequence")
+            peptide = get_canonical_field(row, "StrippedPeptide")
             if "X" in peptide:
-                mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence").strip("_")
-                charge = float(get_field(row, "PrecursorCharge", "Precursor.Charge"))
+                mod_pep = get_canonical_field(row, "ModifiedPeptide").strip("_")
+                charge = float(get_canonical_field(row, "PrecursorCharge"))
                 invalid_precursors.add((mod_pep, charge))
                 continue #skip this peptide
 
             # Resolve ModifiedPeptide
-            mod_pep = get_field(row, "ModifiedPeptide", "ModifiedSequence", "Modified.Sequence")
+            mod_pep = get_canonical_field(row, "ModifiedPeptide")
             if mod_pep is None:
                 from src.utils.gui_utils import send_raise_to_TK
                 send_raise_to_TK("ValueError - Unknown ModifiedPeptide Column")
@@ -1676,7 +1714,7 @@ class SpectrumLibraryStore:
             # (tag)C(UniMod:4)SQAPVYGR → C(UniMod:4)(tag)SQAPVYGR
 
 
-            charge = get_field(row, "PrecursorCharge", "Precursor.Charge")
+            charge = get_canonical_field(row, "PrecursorCharge")
             try:
                 charge = float(charge)
             except:
@@ -1689,7 +1727,7 @@ class SpectrumLibraryStore:
                 continue
 
             if unique_id not in precursor_data:
-                seq = get_field(row, "StrippedPeptide", "PeptideSequence", "Stripped.Sequence")
+                seq = get_canonical_field(row, "StrippedPeptide")
 
                 # Skip precursors carrying residues with no defined mass rather than
                 # letting them reach decoy generation, where fast_mass raises.
@@ -1699,7 +1737,7 @@ class SpectrumLibraryStore:
 
                 precursor_order.append(unique_id)
 
-                rt = get_field(row, "Tr_recalibrated", "RT", "iRT")
+                rt = get_canonical_field(row, "RT")
 
                 if rt is None:
                     from src.utils.gui_utils import send_raise_to_TK
@@ -1708,20 +1746,20 @@ class SpectrumLibraryStore:
 
                 iRT = np.nan if rt == "" else float(rt)
 
-                ion_mob = get_field(row, "IonMobility", "IM", default=np.nan)
+                ion_mob = get_canonical_field(row, "IonMobility", default=np.nan)
                 if ion_mob == "" or ion_mob == "0.0" or ion_mob == 0:  #in DIANN IM = "0.0" (or 0.0 as a float in parquet) if experiment does not have IM
                     ion_mob = np.nan
                 else:
                     ion_mob = float(ion_mob)
 
-                protein_group = get_field(row, "ProteinGroup", "Protein.Group", default="")
-                protein_name = get_field(row, "ProteinName", "ProteinID", "ProteinId", "Protein.Names", default="")
-                genes_val = get_field(row, "Genes", "GeneName", default="")
+                protein_group = get_canonical_field(row, "ProteinGroup", default="")
+                protein_name = get_canonical_field(row, "ProteinName", default="")
+                genes_val = get_canonical_field(row, "Genes", default="")
                 if genes_val == "": ## standardize JMod and DIANN speclibs
                     genes_val = '""'
-                uniprot_id = get_field(row, "ProteinID", "UniprotID", "Protein.Ids", default="")
+                uniprot_id = get_canonical_field(row, "ProteinID", default="")
 
-                prec_mz = get_field(row, "PrecursorMz", "Precursor.Mz", default=np.nan)
+                prec_mz = get_canonical_field(row, "PrecursorMz", default=np.nan)
                 prec_mz = float(prec_mz)
                 
                 precursor_data[unique_id] = {
@@ -1739,21 +1777,21 @@ class SpectrumLibraryStore:
                 }
 
             # Build fragment key
-            loss = get_field(row, "FragmentLossType", "Fragment.Loss.Type", default="")
+            loss = get_canonical_field(row, "FragmentLossType", default="")
             loss = str(loss)
             if loss in ["unknown", "noloss", ""]:
                 loss = ""
             else:
                 loss = "-" + loss
 
-            frag_type = get_field(row, "FragmentType", "Fragment.Type")
-            frag_num = get_field(row, "FragmentNumber", "FragmentSeriesNumber", "Fragment.Series.Number")
-            frag_charge = get_field(row, "FragmentCharge", "Fragment.Charge")
+            frag_type = get_canonical_field(row, "FragmentType")
+            frag_num = get_canonical_field(row, "FragmentSeriesNumber")
+            frag_charge = get_canonical_field(row, "FragmentCharge")
             frag_type = str(frag_type) + str(frag_num) + loss + "_" + str(frag_charge)
 
-            frag_mz = get_field(row, "FragmentMz", "ProductMz", "Product.Mz")
+            frag_mz = get_canonical_field(row, "FragmentMz")
             frag_mz = float(frag_mz)
-            frag_int = get_field(row, "RelativeIntensity", "LibraryIntensity", "Relative.Intensity")
+            frag_int = get_canonical_field(row, "RelativeIntensity")
             frag_int = float(frag_int)
 
             precursor_data[unique_id]['frags'][frag_type] = [frag_mz, frag_int]
