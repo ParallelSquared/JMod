@@ -153,6 +153,58 @@ def decode_frag_name(code):
 
 # ---- Bulk encode/decode ----
 
+def encode_frag_columns(ion_types, indices, losses, charges, isos=None):
+    """Vectorized encode from separate component columns.
+
+    Produces exactly the same codes as running encode_frag_name over the
+    assembled name strings, without building strings or running the regex.
+
+    Parameters
+    ----------
+    ion_types : array-like of str
+        Ion series letters, e.g. 'b', 'y'. Unknown letters raise ValueError.
+    indices : array-like of int
+        Fragment ordinals.
+    losses : array-like of str
+        Neutral loss names ('' / 'H2O' / ...). Names not in the loss table
+        encode as 0 (no loss), matching encode_frag_name.
+    charges : array-like of int
+        1-based fragment charges.
+    isos : array-like of int, optional
+        Isotope indices; defaults to 0 (monoisotopic).
+
+    Returns
+    -------
+    np.ndarray[int32]
+        Packed codes.
+    """
+    indices = np.asarray(indices, dtype=np.int64)
+    n = len(indices)
+    if n == 0:
+        return np.empty(0, dtype=np.int32)
+
+    uniq_ions, ion_inv = np.unique(np.asarray(ion_types, dtype=object), return_inverse=True)
+    unknown_ions = [u for u in uniq_ions if u not in _ION_TYPE_TO_INT]
+    if unknown_ions:
+        raise ValueError(f"Cannot parse fragment ion type: {unknown_ions[0]!r}")
+    ion = np.array([_ION_TYPE_TO_INT[u] for u in uniq_ions], dtype=np.int64)[ion_inv]
+
+    uniq_losses, loss_inv = np.unique(np.asarray(losses, dtype=object), return_inverse=True)
+    loss = np.array([_LOSS_TO_INT.get(u, 0) for u in uniq_losses], dtype=np.int64)[loss_inv]
+
+    charge = np.asarray(charges, dtype=np.int64) - 1  # store 1-7 as 0-6
+    iso = np.zeros(n, dtype=np.int64) if isos is None else np.asarray(isos, dtype=np.int64)
+
+    codes = (
+        (ion << _ION_SHIFT)
+        | (indices << _IDX_SHIFT)
+        | (loss << _LOSS_SHIFT)
+        | (charge << _CHG_SHIFT)
+        | (iso << _ISO_SHIFT)
+    )
+    return codes.astype(np.int32)
+
+
 def encode_frag_names(names):
     """Encode an array/list of fragment name strings to int32 numpy array.
 

@@ -14,7 +14,7 @@
 
 import numpy as np
 import os
-from src.utils.frag_encoding import encode_frag_name, encode_frag_names, decode_frag_names
+from src.utils.frag_encoding import encode_frag_name, encode_frag_names, encode_frag_columns, decode_frag_names
 import re
 
 
@@ -1847,6 +1847,11 @@ class SpectrumLibraryStore:
                 frag_key.alias("_frag_key"),
                 pl.col("FragmentMz").cast(pl.Float64).alias("_frag_mz"),
                 pl.col("RelativeIntensity").cast(pl.Float64).alias("_frag_int"),
+                # Key components, kept for arithmetic fragment-code encoding
+                _utf8("FragmentType").alias("_frag_ion"),
+                pl.col("FragmentSeriesNumber").cast(pl.Int64).alias("_frag_idx"),
+                loss_base.alias("_frag_loss"),
+                pl.col("FragmentCharge").cast(pl.Int64).alias("_frag_z"),
             )
 
             # RT and PrecursorMz are mandatory for every precursor (IM is optional)
@@ -1874,6 +1879,11 @@ class SpectrumLibraryStore:
             frag_df = df.group_by(["_mod_pep", "_prec_z", "_frag_key"], maintain_order=True).agg(
                 pl.col("_frag_mz").last(),
                 pl.col("_frag_int").last(),
+                # equal keys imply equal components
+                pl.col("_frag_ion").first(),
+                pl.col("_frag_idx").first(),
+                pl.col("_frag_loss").first(),
+                pl.col("_frag_z").first(),
             )
 
             prec_df = prec_df.with_row_index("_pidx")
@@ -1923,7 +1933,12 @@ class SpectrumLibraryStore:
         frag_offsets_arr = np.zeros(n, dtype=np.int64)
         frag_offsets_arr[1:] = np.cumsum(frag_lengths_arr[:-1], dtype=np.int64)
 
-        frag_keys_data = encode_frag_names(frag_df["_frag_key"].to_list())
+        frag_keys_data = encode_frag_columns(
+            frag_df["_frag_ion"].to_list(),
+            frag_df["_frag_idx"].to_numpy(),
+            frag_df["_frag_loss"].to_list(),
+            frag_df["_frag_z"].to_numpy(),
+        )
         frag_mz = frag_df["_frag_mz"].to_numpy().astype(np.float64, copy=False)
         frag_int = frag_df["_frag_int"].to_numpy().astype(np.float64, copy=False)
         frag_data = np.column_stack((frag_mz, frag_int))
