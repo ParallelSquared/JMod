@@ -1,0 +1,3 @@
+Modified.Sequence	Stripped.Sequence	Precursor.Charge	Precursor.Mz	Tr_recalibrated	Protein.Group	Protein.Names	Protein.Ids	Genes	Fragment.Type	Fragment.Series.Number	Fragment.Charge	Fragment.Loss.Type	Product.Mz	Relative.Intensity
+ALIASPEPK	ALIASPEPK	2	478.77	22.0	PGA	ProtAlias	PA01	GENEA	y	4	1	noloss	470.27	0.9
+ALIASPEPK	ALIASPEPK	2	478.77	22.0	PGA	ProtAlias	PA01	GENEA	b	3	1	noloss	282.18	0.4

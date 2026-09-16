@@ -1,0 +1,2 @@
+ModifiedPeptide	StrippedPeptide	PrecursorCharge	PrecursorMz	ProteinName	FragmentType	FragmentNumber	FragmentCharge	FragmentLossType	FragmentMz	RelativeIntensity
+NORTPEPK	NORTPEPK	2	450.24	ProtN	y	3	1		360.20	0.5

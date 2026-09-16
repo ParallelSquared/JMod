@@ -619,7 +619,7 @@ def frag_to_peak(frag_dict: dict[str, list[float]],return_frags: bool=False): #-
     a dict of tuples and not lists. 
     """
     peaks = np.array(list(frag_dict.values()))
-    order = np.argsort(peaks[:,0])
+    order = np.argsort(peaks[:,0], kind="stable")
     if return_frags:
         ordered_frags = np.array(list(frag_dict.keys()))[order]
         return peaks[order],ordered_frags

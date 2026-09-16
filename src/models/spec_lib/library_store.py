@@ -30,6 +30,16 @@ _SCALAR_FLOAT_FIELDS = frozenset({
 _ALL_SCALAR_FIELDS = _SCALAR_STR_FIELDS | _SCALAR_FLOAT_FIELDS
 
 _STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
+
+# Version stamp for the .npz binary cache. Bump whenever parsing semantics
+# change so stale caches are re-parsed instead of silently loaded.
+STORE_VERSION = 1
+
+
+class StaleStoreCacheError(ValueError):
+    """Raised by :meth:`SpectrumLibraryStore.load` when the .npz cache was
+    written by a different (or unstamped) parser version."""
+
 _ALL_KNOWN_FIELDS = _ALL_SCALAR_FIELDS | frozenset({
     'spectrum', 'ordered_frags', 'ordered_frag_codes', 'frag_intensities',
     'frags', 'top_n', 'parent_idx', 'spec_frags',
@@ -758,6 +768,7 @@ class SpectrumLibraryStore:
             n_targets=np.array(self.n_targets),
             n_decoys=np.array(self.n_decoys),
             is_decoy=self.is_decoy,
+            store_version=np.array(STORE_VERSION),
         )
 
     @classmethod
@@ -770,6 +781,13 @@ class SpectrumLibraryStore:
         by re-encoding them as int32.
         """
         data = np.load(path, allow_pickle=True)
+
+        cached_version = int(data['store_version']) if 'store_version' in data else None
+        if cached_version != STORE_VERSION:
+            raise StaleStoreCacheError(
+                f"Cache {path} has store_version={cached_version}, "
+                f"expected {STORE_VERSION}; re-parse the library."
+            )
 
         # Handle older caches that lack separate frag arrays
         if 'frag_data' in data:

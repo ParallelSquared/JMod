@@ -326,24 +326,22 @@ def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
     return 0, False, None
 
 def loadSpecLib(lib_file):
-    from src.models.spec_lib.library_store import SpectrumLibraryStore
+    from src.models.spec_lib.library_store import SpectrumLibraryStore, StaleStoreCacheError
 
     lib_ext = lib_file.rsplit(".")[-1]
 
     logger.info("Loading Library...")
     store_file = lib_file + "_store.npz"
-    python_lib_file = lib_file + "_pythonlib"
 
+    spec_lib = None
     if os.path.exists(store_file):
-        logger.info("Loading Library... from binary cache")
-        spec_lib = SpectrumLibraryStore.load(store_file)
-    elif os.path.exists(python_lib_file):
-        logger.info("Loading Library... from pickle")
-        with open(python_lib_file, "rb") as read_file:
-            old_lib = pickle.load(read_file)
-        spec_lib = SpectrumLibraryStore.from_dict(old_lib)
-        spec_lib.save(store_file)
-    else:
+        try:
+            logger.info("Loading Library... from binary cache")
+            spec_lib = SpectrumLibraryStore.load(store_file)
+        except StaleStoreCacheError as e:
+            logger.info(f"Binary cache is stale, re-parsing library ({e})")
+
+    if spec_lib is None:
         logger.info("Loading Library... from file")
         if lib_ext == "blib":
             spec_lib = SpectrumLibraryStore.from_blib(lib_file)
