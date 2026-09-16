@@ -1715,7 +1715,6 @@ class SpectrumLibraryStore:
     @classmethod
     def _read_from_tsv_or_parquet(cls, spec_lib_file, file_type):
         """Parse a DIA-NN / FragPipe TSV or Parquet directly into columnar form."""
-        from src.utils.misc_functions import frag_to_peak
         from src.logger import logger
         import polars as pl
 
@@ -1737,8 +1736,6 @@ class SpectrumLibraryStore:
             expr = _utf8(canonical) if canonical in found else pl.lit("")
             return expr.fill_null("")
 
-        precursor_order = []
-        precursor_data = {}
         decoy_precursors = set()
         invalid_precursors = set()
 
@@ -1879,28 +1876,14 @@ class SpectrumLibraryStore:
                 pl.col("_frag_int").last(),
             )
 
-            for mod_pep, charge, seq, iRT, ion_mob, protein_group, protein_name, \
-                    genes_val, uniprot_id, prec_mz in prec_df.rows():
-                unique_id = (mod_pep, charge)
-                precursor_order.append(unique_id)
-                precursor_data[unique_id] = {
-                    'mod_seq': mod_pep,
-                    'seq': seq,
-                    'prec_mz': prec_mz,
-                    'prec_z': charge,
-                    'iRT': iRT,
-                    'ion_mob': np.nan if ion_mob is None else ion_mob,
-                    'protein_group': protein_group,
-                    'protein_name': protein_name,
-                    'genes': genes_val,
-                    'uniprot_id': uniprot_id,
-                    'frags': {},
-                }
-
-            # Interim scaffolding: the per-precursor second pass below still
-            # consumes frag dicts; the Phase 3 global sort removes this loop
-            for mod_pep, charge, frag_key_val, frag_mz, frag_int in frag_df.rows():
-                precursor_data[(mod_pep, charge)]['frags'][frag_key_val] = [frag_mz, frag_int]
+            prec_df = prec_df.with_row_index("_pidx")
+            # Contiguous per-precursor fragment blocks in precursor order; the
+            # sort is stable so within-precursor first-appearance order survives
+            frag_df = frag_df.join(
+                prec_df.select(["_mod_pep", "_prec_z", "_pidx"]),
+                on=["_mod_pep", "_prec_z"],
+                how="left",
+            ).sort("_pidx", maintain_order=True)
 
         if len(decoy_precursors) > 0:
             logger.info(f"{len(decoy_precursors)} decoy precursors removed from input library")
@@ -1911,80 +1894,50 @@ class SpectrumLibraryStore:
                         f"removed from input library (e.g. {example})")
 
         # Second pass: convert to columnar arrays
-        n = len(precursor_order)
-        mod_seq_arr = np.empty(n, dtype=object)
-        seq_arr = np.empty(n, dtype=object)
-        prec_mz_arr = np.empty(n, dtype=np.float64)
-        prec_z_arr = np.empty(n, dtype=np.float64)
-        iRT_arr = np.empty(n, dtype=np.float64)
-        ion_mob_arr = np.empty(n, dtype=np.float64)
-        protein_group_arr = np.empty(n, dtype=object)
-        protein_name_arr = np.empty(n, dtype=object)
-        genes_arr = np.empty(n, dtype=object)
-        uniprot_id_arr = np.empty(n, dtype=object)
+        if df.height == 0:
+            return cls._empty()
+
+        n = prec_df.height
+        mod_seq_list = prec_df["_mod_pep"].to_list()
+        prec_z_list = prec_df["_prec_z"].to_list()
+        key_to_idx = {uid: i for i, uid in enumerate(zip(mod_seq_list, prec_z_list))}
+
+        mod_seq_arr = np.array(mod_seq_list, dtype=object)
+        seq_arr = np.array(prec_df["_seq"].to_list(), dtype=object)
+        prec_mz_arr = prec_df["_prec_mz"].to_numpy().astype(np.float64, copy=False)
+        prec_z_arr = prec_df["_prec_z"].to_numpy().astype(np.float64, copy=False)
+        iRT_arr = prec_df["_iRT"].to_numpy().astype(np.float64, copy=False)
+        # nulls (no IM) become NaN
+        ion_mob_arr = prec_df["_ion_mob"].to_numpy().astype(np.float64, copy=False)
+        protein_group_arr = np.array(prec_df["_protein_group"].to_list(), dtype=object)
+        protein_name_arr = np.array(prec_df["_protein_name"].to_list(), dtype=object)
+        genes_arr = np.array(prec_df["_genes"].to_list(), dtype=object)
+        uniprot_id_arr = np.array(prec_df["_uniprot_id"].to_list(), dtype=object)
         parent_idx_arr = np.full(n, -1, dtype=np.int64)
 
-        all_spec_peaks = []
-        all_spec_frag_names = []
-        spec_offsets = np.empty(n, dtype=np.int64)
-        spec_lengths = np.empty(n, dtype=np.int32)
-        spec_cursor = 0
+        # Original frags: frag_df is already one contiguous block per precursor
+        frag_lengths_arr = (
+            frag_df.group_by("_pidx", maintain_order=True).len()["len"]
+            .to_numpy().astype(np.int32)
+        )
+        frag_offsets_arr = np.zeros(n, dtype=np.int64)
+        frag_offsets_arr[1:] = np.cumsum(frag_lengths_arr[:-1], dtype=np.int64)
 
-        all_frag_peaks = []
-        all_frag_keys = []
-        frag_offsets_arr = np.empty(n, dtype=np.int64)
-        frag_lengths_arr = np.empty(n, dtype=np.int32)
-        frag_cursor = 0
+        frag_keys_data = encode_frag_names(frag_df["_frag_key"].to_list())
+        frag_mz = frag_df["_frag_mz"].to_numpy().astype(np.float64, copy=False)
+        frag_int = frag_df["_frag_int"].to_numpy().astype(np.float64, copy=False)
+        frag_data = np.column_stack((frag_mz, frag_int))
 
-        key_to_idx = {}
-
-        for i, uid in enumerate(precursor_order):
-            pdata = precursor_data[uid]
-            key_to_idx[uid] = i
-
-            mod_seq_arr[i] = pdata['mod_seq']
-            seq_arr[i] = pdata['seq']
-            prec_mz_arr[i] = pdata['prec_mz']
-            prec_z_arr[i] = pdata['prec_z']
-            iRT_arr[i] = pdata['iRT']
-            ion_mob_arr[i] = pdata['ion_mob']
-            protein_group_arr[i] = pdata['protein_group']
-            protein_name_arr[i] = pdata['protein_name']
-            genes_arr[i] = pdata['genes']
-            uniprot_id_arr[i] = pdata['uniprot_id']
-            # parent_idx_arr already initialized to -1
-
-            # Original frags
-            frags = pdata['frags']
-            frag_offsets_arr[i] = frag_cursor
-            frag_keys_arr = encode_frag_names(list(frags.keys()))
-            frag_vals_arr = np.array(list(frags.values()), dtype=np.float64)
-            n_frags = len(frag_keys_arr)
-            frag_lengths_arr[i] = n_frags
-            if n_frags > 0:
-                all_frag_keys.append(frag_keys_arr)
-                all_frag_peaks.append(frag_vals_arr)
-            frag_cursor += n_frags
-
-            # Convert frags to spectrum
-            spec, ordered_frags = frag_to_peak(frags, return_frags=True)
-            n_peaks = len(spec)
-            spec_offsets[i] = spec_cursor
-            spec_lengths[i] = n_peaks
-            all_spec_peaks.append(spec)
-            all_spec_frag_names.append(encode_frag_names(ordered_frags))
-            spec_cursor += n_peaks
-
-        if all_spec_peaks:
-            _sd = np.concatenate(all_spec_peaks, axis=0)
-            spectrum_mz = np.ascontiguousarray(_sd[:, 0])
-            spectrum_int = np.ascontiguousarray(_sd[:, 1])
-        else:
-            spectrum_mz = np.empty(0, dtype=np.float64)
-            spectrum_int = np.empty(0, dtype=np.float64)
-        frag_names_data = np.concatenate(all_spec_frag_names) if all_spec_frag_names else np.empty(0, dtype=np.int32)
-        frag_data = np.concatenate(all_frag_peaks, axis=0) if all_frag_peaks else np.empty((0, 2), dtype=np.float64)
-        frag_keys_data = np.concatenate(all_frag_keys) if all_frag_keys else np.empty(0, dtype=np.int32)
+        # Spectrum: one global stable sort by (precursor, m/z) replaces the
+        # per-precursor frag_to_peak argsorts; equal-m/z ties keep
+        # first-appearance order, matching frag_to_peak's kind="stable"
+        pidx = frag_df["_pidx"].to_numpy()
+        perm = np.lexsort((frag_mz, pidx))
+        spectrum_mz = np.ascontiguousarray(frag_mz[perm])
+        spectrum_int = np.ascontiguousarray(frag_int[perm])
+        frag_names_data = frag_keys_data[perm]
+        spec_offsets = frag_offsets_arr.copy()
+        spec_lengths = frag_lengths_arr.copy()
 
         return cls(
             key_to_idx=key_to_idx,
