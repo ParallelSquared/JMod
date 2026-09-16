@@ -281,6 +281,37 @@ diann_rules = {
                  'D':'E'
                  }
 
+def decoy_permutation(tokens, rules: str) -> list:
+    """Index permutation that change_seq applies for 'rev', 'rev_nc', or
+    'shuffle'. Single source of truth for which decoy a peptide becomes:
+    both the string path (change_seq) and the columnar decoy builder use it.
+
+    tokens : tag-stripped peptide tokens (mods still attached), as produced
+             by parse_peptide.
+    """
+    n = len(tokens)
+    if rules == "rev":
+        return list(range(n - 2, -1, -1)) + [n - 1]
+    if rules == "rev_nc":
+        return [0] + list(range(n - 2, 0, -1)) + [n - 1]
+    if rules == "shuffle":
+        # Shuffle body (all but C-term), keeping mods attached to their AA.
+        # Seed on the tag-stripped sequence so all channels get the same shuffle.
+        seed_str = "decoy:" + "".join(tokens)
+        base_seed = int(hashlib.md5(seed_str.encode()).hexdigest(), 16)
+        if n > 2 and len(set(tokens[:-1])) > 1:
+            for attempt in range(3):
+                rng = random.Random(base_seed + attempt)
+                body = list(range(n - 1))
+                rng.shuffle(body)
+                perm = body + [n - 1]
+                if [tokens[i] for i in perm] != list(tokens):
+                    return perm
+        # Too few unique residues, or all 3 attempts matched original — reverse
+        return list(range(n - 2, -1, -1)) + [n - 1]
+    raise ValueError("Unavailable rules selected")
+
+
 def change_seq(seq: str, rules: str, tag=None) -> str:
     """Modifies a peptide sequence to create a complementary decoy sequence.
     Uses either the sequence reversal method, the DIA-NN rules for sequence
@@ -330,36 +361,9 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
     if rules=="diann":
         new_split_seq = [diann_rules[aa] for aa in seq]
         perm = list(range(len(seq)))
-    elif rules=="rev":
-        new_split_seq = seq[:-1][::-1]+seq[-1:]
-        perm = list(range(len(seq)-2, -1, -1)) + [len(seq)-1]
-    elif rules=="rev_nc":
-        new_split_seq = seq[:1] + seq[1:-1][::-1] + seq[-1:]
-        perm = [0] + list(range(len(seq)-2, 0, -1)) + [len(seq)-1]
-    elif rules=="shuffle":
-        # Shuffle body (all but C-term), keeping mods attached to their AA.
-        # Seed on the tag-stripped sequence so all channels get the same shuffle.
-        seed_str = "decoy:" + "".join(seq)
-        base_seed = int(hashlib.md5(seed_str.encode()).hexdigest(), 16)
-        if len(seq) > 2 and len(set(seq[:-1])) > 1:
-            for attempt in range(3):
-                rng = random.Random(base_seed + attempt)
-                # body = list(seq[:-1])
-                body = list(range(len(seq) - 1))
-                rng.shuffle(body)
-                perm = body + [len(seq) - 1]
-                new_split_seq = [seq[i] for i in perm]
-                # new_split_seq = body + [seq[-1]]
-                if new_split_seq != list(seq):
-                    break
-            else:
-                # All 3 attempts matched original — fall back to reversal
-                new_split_seq = seq[:-1][::-1] + seq[-1:]
-                perm = list(range(len(seq)-2, -1, -1)) + [len(seq)-1]
-        else:
-            # Not enough unique residues to shuffle — reverse instead
-            new_split_seq = seq[:-1][::-1] + seq[-1:]
-            perm = list(range(len(seq)-2, -1, -1)) + [len(seq)-1]
+    elif rules in ("rev", "rev_nc", "shuffle"):
+        perm = decoy_permutation(seq, rules)
+        new_split_seq = [seq[i] for i in perm]
     else:
         from src.utils.gui_utils import send_raise_to_TK
         send_raise_to_TK("ValueError - Unavailable Rules Selected")
