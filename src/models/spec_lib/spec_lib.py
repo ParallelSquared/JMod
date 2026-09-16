@@ -349,6 +349,8 @@ def loadSpecLib(lib_file):
             spec_lib = SpectrumLibraryStore.from_tsv(lib_file)
         elif lib_ext == "parquet":
             spec_lib = SpectrumLibraryStore.from_parquet(lib_file)
+        else:
+            raise ValueError(f"Unsupported spectral library format: .{lib_ext}")
         spec_lib.save(store_file)
 
     source_channel_mass, library_tag_bool, library_tag_name = has_mass_tag(spec_lib.mod_seq, spec_lib.prec_mz, spec_lib.prec_z)

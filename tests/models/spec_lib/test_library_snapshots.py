@@ -103,7 +103,7 @@ class TestParsingSemantics:
 
     def test_decoys_and_invalid_residues_removed(self, edgecases):
         assert sorted(edgecases.mod_seq) == [
-            "C(UniMod:4)(tag)SQAPVYGR", "LIONELK", "PEPTIDEK",
+            "C(UniMod:4)(tag)SQAPVYGR", "LIONELK", "PEPTIDEK", "SEVENPEPK",
         ]
 
     def test_underscores_stripped(self, edgecases):
@@ -113,6 +113,7 @@ class TestParsingSemantics:
         idx = edgecases.key_to_idx
         assert np.isnan(edgecases.ion_mob[idx[("C(UniMod:4)(tag)SQAPVYGR", 2.0)]])
         assert np.isnan(edgecases.ion_mob[idx[("LIONELK", 1.0)]])
+        assert np.isnan(edgecases.ion_mob[idx[("SEVENPEPK", 2.0)]])
         assert edgecases.ion_mob[idx[("PEPTIDEK", 2.0)]] == 0.95
 
     def test_empty_genes_becomes_quoted_empty(self, edgecases):

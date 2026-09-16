@@ -49,6 +49,8 @@ EDGECASE_ROWS = [
     ("(tag)C(UniMod:4)SQAPVYGR", "CSQAPVYGR", "2", "540.26", "18.2", "0.0", "PG5", "Prot5", "P005", "", "0", "y", "5", "2", "", "289.66", "1.0"),
     # P6: underscore-wrapped ModifiedPeptide, IonMobility "" (-> NaN).
     ("_LIONELK_", "LIONELK", "1", "830.51", "40.1", "", "PG6", "Prot6", "P006", "GENE6", "", "b", "2", "1", "NH3", "210.09", "0.6"),
+    # P7: IonMobility "0" (integer spelling) -> NaN, same as "0.0".
+    ("SEVENPEPK", "SEVENPEPK", "2", "520.77", "33.3", "0", "PG7", "Prot7", "P007", "GENE7", "", "y", "3", "1", "", "375.20", "0.4"),
 ]
 
 DIANN_COLUMNS = [

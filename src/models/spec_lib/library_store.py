@@ -201,6 +201,55 @@ def get_canonical_field(row, canonical, default=None):
             return row[name]
     return default
 
+
+def _scan_library_tsv(path):
+    import polars as pl
+    # infer_schema=False reads every column as Utf8 and
+    # missing_utf8_is_empty_string keeps empty cells as "" rather than null,
+    # together mirroring csv.DictReader
+    return pl.scan_csv(path, separator="\t", infer_schema=False,
+                       missing_utf8_is_empty_string=True)
+
+
+def _scan_library_parquet(path):
+    import polars as pl
+    return pl.scan_parquet(path)
+
+
+# Fragment-row formats: extension -> callable returning a polars LazyFrame.
+# A new format only supplies bytes-to-frame; alias resolution is shared.
+# (.blib carries spectra rather than fragment rows and keeps its own SQLite
+# path in SpectrumLibraryStore.from_blib.)
+_LIBRARY_READERS = {
+    "tsv": _scan_library_tsv,
+    "parquet": _scan_library_parquet,
+}
+
+
+def _load_library_frame(spec_lib_file, file_type):
+    """Read a library file into a DataFrame with canonical column names.
+
+    Only columns matching a known alias are read from disk. Returns
+    ``(df, found)`` where ``found`` maps canonical name -> the source column
+    it was resolved from. The same source column may back several canonical
+    columns (see _LIBRARY_COLUMN_ALIASES).
+    """
+    import polars as pl
+    reader = _LIBRARY_READERS.get(file_type)
+    if reader is None:
+        raise ValueError(f"Unsupported spectral library format: {file_type}")
+    spec_lib_lazy_frame = reader(spec_lib_file)
+    present = spec_lib_lazy_frame.collect_schema().names()
+    found = {}
+    exprs = []
+    for canonical, aliases in _LIBRARY_COLUMN_ALIASES.items():
+        for name in aliases:
+            if name in present:
+                found[canonical] = name
+                exprs.append(pl.col(name).alias(canonical))
+                break
+    return spec_lib_lazy_frame.select(exprs).collect(), found
+
 class SpectrumLibraryStore:
     """Columnar store for spectral library data.
 
@@ -1663,138 +1712,195 @@ class SpectrumLibraryStore:
             import pyarrow.parquet as pq
             yield from pq.read_table(spec_lib_file).to_pylist()
 
-    ##TODO optimize parquet reading
-
     @classmethod
     def _read_from_tsv_or_parquet(cls, spec_lib_file, file_type):
         """Parse a DIA-NN / FragPipe TSV or Parquet directly into columnar form."""
         from src.utils.misc_functions import frag_to_peak
         from src.logger import logger
+        import polars as pl
 
-        # First pass: accumulate into per-precursor lists
+        df, found = _load_library_frame(spec_lib_file, file_type)
+
+        def _raise(message):
+            from src.utils.gui_utils import send_raise_to_TK
+            send_raise_to_TK(f"ValueError - {message}")
+            raise ValueError(message)
+
+        def _require(canonical, message):
+            if canonical not in found and df.height > 0:
+                _raise(message)
+
+        def _utf8(canonical):
+            return pl.col(canonical).cast(pl.Utf8)
+
+        def _str_col(canonical):
+            expr = _utf8(canonical) if canonical in found else pl.lit("")
+            return expr.fill_null("")
+
         precursor_order = []
         precursor_data = {}
         decoy_precursors = set()
         invalid_precursors = set()
 
-        for row in cls._iter_rows(spec_lib_file, file_type):
+        if df.height > 0:
+            _require("ModifiedPeptide", "Unknown ModifiedPeptide column")
+            _require("StrippedPeptide", "Unknown StrippedPeptide column")
+            _require("PrecursorCharge", "SpecLib Charge Cannot be Converted to Float")
 
-            decoy_bool = get_canonical_field(row, "Decoy", default=0)
-            if str(decoy_bool).strip() in ("1", "1.0", "True"):
-                mod_pep = get_canonical_field(row, "ModifiedPeptide").strip("_")
-                charge = float(get_canonical_field(row, "PrecursorCharge"))
-                decoy_precursors.add((mod_pep, charge))
-                continue #skip this peptide if it is a decoy
+            # ModifiedPeptide with wrapping underscores stripped; decoy/invalid
+            # bookkeeping uses this pre-N-terminal-move form
+            df = df.with_columns(
+                _utf8("ModifiedPeptide").str.strip_chars("_").alias("_mod_pep_raw")
+            )
+            try:
+                df = df.with_columns(pl.col("PrecursorCharge").cast(pl.Float64).alias("_prec_z"))
+            except Exception:
+                _raise("SpecLib Charge Cannot be Converted to Float")
+
+            # Decoy rows: same accepted spellings as str(x).strip() in ("1","1.0","True")
+            if "Decoy" in found:
+                decoy_dtype = df.schema["Decoy"]
+                if decoy_dtype == pl.Boolean:
+                    decoy_mask = pl.col("Decoy")
+                elif decoy_dtype.is_numeric():
+                    decoy_mask = pl.col("Decoy").cast(pl.Float64) == 1.0
+                else:
+                    decoy_mask = _utf8("Decoy").str.strip_chars().is_in(["1", "1.0", "True"])
+                decoy_mask = decoy_mask.fill_null(False)
+            else:
+                decoy_mask = pl.lit(False)
+
+            decoy_precursors = set(
+                df.filter(decoy_mask).select(["_mod_pep_raw", "_prec_z"]).unique().rows()
+            )
+            df = df.filter(~decoy_mask)
 
             ## Check for non-valid AAs
-            peptide = get_canonical_field(row, "StrippedPeptide")
-            if "X" in peptide:
-                mod_pep = get_canonical_field(row, "ModifiedPeptide").strip("_")
-                charge = float(get_canonical_field(row, "PrecursorCharge"))
-                invalid_precursors.add((mod_pep, charge))
-                continue #skip this peptide
+            x_mask = _utf8("StrippedPeptide").str.contains("X", literal=True).fill_null(False)
+            invalid_precursors |= set(
+                df.filter(x_mask).select(["_mod_pep_raw", "_prec_z"]).unique().rows()
+            )
+            df = df.filter(~x_mask)
 
-            # Resolve ModifiedPeptide
-            mod_pep = get_canonical_field(row, "ModifiedPeptide")
-            if mod_pep is None:
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("ValueError - Unknown ModifiedPeptide Column")
-                raise ValueError("Unknown ModifiedPeptide column")
-            mod_pep = mod_pep.strip("_")
+            ## Move DIANN N-terminal tags/modifications behind the first AA:
+            ## (tag)C(UniMod:4)SQAPVYGR → C(UniMod:4)(tag)SQAPVYGR
+            df = df.with_columns(
+                pl.col("_mod_pep_raw").str.replace(
+                    r'^((?:\([^)]*\))+)([A-Z])((?:\([^)]*\))*)(.*)$', "${2}${3}${1}${4}"
+                ).alias("_mod_pep")
+            )
 
-            ## Regex for moving DIANN N-terminal tags.modifications to after the first AA
-            # match = re.match(r'^((?:\([^)]*\))+)([A-Z])(.*)$', mod_pep)
-            # if match:
-            #     mods, first_aa, rest = match.groups()
-            #     mod_pep = first_aa + mods + rest
-            match = re.match(r'^((?:\([^)]*\))+)([A-Z])((?:\([^)]*\))*)(.*)$', mod_pep)
-            if match:
-                leading_mods, first_aa, existing_mods, rest = match.groups()
-                mod_pep = first_aa + existing_mods + leading_mods + rest
-            # (tag)C(UniMod:4)SQAPVYGR → C(UniMod:4)(tag)SQAPVYGR
+            # Skip precursors carrying residues with no defined mass rather than
+            # letting them reach decoy generation, where fast_mass raises.
+            nonstd_mask = _utf8("StrippedPeptide").str.contains(
+                "[^" + "".join(sorted(_STANDARD_RESIDUES)) + "]"
+            ).fill_null(False)
+            invalid_precursors |= set(
+                df.filter(nonstd_mask).select(["_mod_pep", "_prec_z"]).unique().rows()
+            )
+            df = df.filter(~nonstd_mask)
 
+        if df.height > 0:
+            _require("RT", "Unknown retention time column")
+            _require("PrecursorMz", "Unknown PrecursorMz column")
+            for canonical in ("FragmentType", "FragmentSeriesNumber", "FragmentCharge",
+                              "FragmentMz", "RelativeIntensity"):
+                _require(canonical, f"Unknown {canonical} column")
 
-            charge = get_canonical_field(row, "PrecursorCharge")
-            try:
-                charge = float(charge)
-            except:
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("ValueError - SpecLib Charge Cannot be Converted to Float")
-                raise ValueError("SpecLib Charge Cannot be Converted to Float")
-            unique_id = (mod_pep, charge)
+            rt = pl.col("RT")
+            if df.schema["RT"] == pl.Utf8:
+                rt = pl.when(rt == "").then(None).otherwise(rt)
 
-            if unique_id in invalid_precursors:
-                continue
+            pmz = pl.col("PrecursorMz")
+            if df.schema["PrecursorMz"] == pl.Utf8:
+                pmz = pl.when(pmz == "").then(None).otherwise(pmz)
 
-            if unique_id not in precursor_data:
-                seq = get_canonical_field(row, "StrippedPeptide")
+            if "IonMobility" in found:
+                im = pl.col("IonMobility")
+                if df.schema["IonMobility"] == pl.Utf8:
+                    im = pl.when(im == "").then(None).otherwise(im)
+                im = im.cast(pl.Float64)
+                # in DIANN IM = 0.0 if experiment does not have IM
+                im = pl.when(im == 0.0).then(None).otherwise(im)
+            else:
+                im = pl.lit(None, dtype=pl.Float64)
 
-                # Skip precursors carrying residues with no defined mass rather than
-                # letting them reach decoy generation, where fast_mass raises.
-                if seq and set(seq) - _STANDARD_RESIDUES:
-                    invalid_precursors.add(unique_id)
-                    continue
+            genes_base = _utf8("Genes") if "Genes" in found else pl.lit("")
+            ## standardize JMod and DIANN speclibs: empty Genes -> '""'
+            genes = pl.when(genes_base == "").then(pl.lit('""')).otherwise(genes_base).fill_null("")
 
+            # Fragment key, e.g. "y4-H2O_1". Loss strings are not enumerated:
+            # anything other than unknown/noloss/"" is carried into the key
+            # verbatim, so fragments differing only in loss type stay distinct.
+            loss_base = _utf8("FragmentLossType").fill_null("") if "FragmentLossType" in found else pl.lit("")
+            loss = pl.when(loss_base.is_in(["unknown", "noloss", ""])) \
+                     .then(pl.lit("")).otherwise(pl.lit("-") + loss_base)
+            frag_key = (_utf8("FragmentType") + _utf8("FragmentSeriesNumber")
+                        + loss + pl.lit("_") + _utf8("FragmentCharge"))
+
+            df = df.with_columns(
+                _utf8("StrippedPeptide").alias("_seq"),
+                rt.cast(pl.Float64).alias("_iRT"),
+                pmz.cast(pl.Float64).alias("_prec_mz"),
+                im.alias("_ion_mob"),
+                _str_col("ProteinGroup").alias("_protein_group"),
+                _str_col("ProteinName").alias("_protein_name"),
+                genes.alias("_genes"),
+                _str_col("ProteinID").alias("_uniprot_id"),
+                frag_key.alias("_frag_key"),
+                pl.col("FragmentMz").cast(pl.Float64).alias("_frag_mz"),
+                pl.col("RelativeIntensity").cast(pl.Float64).alias("_frag_int"),
+            )
+
+            # RT and PrecursorMz are mandatory for every precursor (IM is optional)
+            n_null_rt = df["_iRT"].null_count()
+            if n_null_rt > 0:
+                _raise(f"Library retention time has {n_null_rt} missing values")
+            n_null_pmz = df["_prec_mz"].null_count()
+            if n_null_pmz > 0:
+                _raise(f"Library PrecursorMz has {n_null_pmz} missing values")
+
+            # Precursor-level fields come from each precursor's first row;
+            # maintain_order preserves first-appearance precursor ordering
+            prec_df = df.group_by(["_mod_pep", "_prec_z"], maintain_order=True).agg(
+                pl.col("_seq").first(),
+                pl.col("_iRT").first(),
+                pl.col("_ion_mob").first(),
+                pl.col("_protein_group").first(),
+                pl.col("_protein_name").first(),
+                pl.col("_genes").first(),
+                pl.col("_uniprot_id").first(),
+                pl.col("_prec_mz").first(),
+            )
+            # Duplicate fragment keys (identical type+number+loss+charge):
+            # dict-update semantics are first-appearance position, last-seen value
+            frag_df = df.group_by(["_mod_pep", "_prec_z", "_frag_key"], maintain_order=True).agg(
+                pl.col("_frag_mz").last(),
+                pl.col("_frag_int").last(),
+            )
+
+            for mod_pep, charge, seq, iRT, ion_mob, protein_group, protein_name, \
+                    genes_val, uniprot_id, prec_mz in prec_df.rows():
+                unique_id = (mod_pep, charge)
                 precursor_order.append(unique_id)
-
-                rt = get_canonical_field(row, "RT")
-
-                if rt is None:
-                    from src.utils.gui_utils import send_raise_to_TK
-                    send_raise_to_TK("ValueError - Unknown Retention Time Column")
-                    raise ValueError("Unknown retention time column")
-
-                iRT = np.nan if rt == "" else float(rt)
-
-                ion_mob = get_canonical_field(row, "IonMobility", default=np.nan)
-                if ion_mob == "" or ion_mob == "0.0" or ion_mob == 0:  #in DIANN IM = "0.0" (or 0.0 as a float in parquet) if experiment does not have IM
-                    ion_mob = np.nan
-                else:
-                    ion_mob = float(ion_mob)
-
-                protein_group = get_canonical_field(row, "ProteinGroup", default="")
-                protein_name = get_canonical_field(row, "ProteinName", default="")
-                genes_val = get_canonical_field(row, "Genes", default="")
-                if genes_val == "": ## standardize JMod and DIANN speclibs
-                    genes_val = '""'
-                uniprot_id = get_canonical_field(row, "ProteinID", default="")
-
-                prec_mz = get_canonical_field(row, "PrecursorMz", default=np.nan)
-                prec_mz = float(prec_mz)
-                
                 precursor_data[unique_id] = {
                     'mod_seq': mod_pep,
                     'seq': seq,
                     'prec_mz': prec_mz,
                     'prec_z': charge,
                     'iRT': iRT,
-                    'ion_mob': ion_mob,
-                    'protein_group': protein_group or "",
-                    'protein_name': protein_name or "",
-                    'genes': genes_val or "",
-                    'uniprot_id': uniprot_id or "",
+                    'ion_mob': np.nan if ion_mob is None else ion_mob,
+                    'protein_group': protein_group,
+                    'protein_name': protein_name,
+                    'genes': genes_val,
+                    'uniprot_id': uniprot_id,
                     'frags': {},
                 }
 
-            # Build fragment key
-            loss = get_canonical_field(row, "FragmentLossType", default="")
-            loss = str(loss)
-            if loss in ["unknown", "noloss", ""]:
-                loss = ""
-            else:
-                loss = "-" + loss
-
-            frag_type = get_canonical_field(row, "FragmentType")
-            frag_num = get_canonical_field(row, "FragmentSeriesNumber")
-            frag_charge = get_canonical_field(row, "FragmentCharge")
-            frag_type = str(frag_type) + str(frag_num) + loss + "_" + str(frag_charge)
-
-            frag_mz = get_canonical_field(row, "FragmentMz")
-            frag_mz = float(frag_mz)
-            frag_int = get_canonical_field(row, "RelativeIntensity")
-            frag_int = float(frag_int)
-
-            precursor_data[unique_id]['frags'][frag_type] = [frag_mz, frag_int]
+            # Interim scaffolding: the per-precursor second pass below still
+            # consumes frag dicts; the Phase 3 global sort removes this loop
+            for mod_pep, charge, frag_key_val, frag_mz, frag_int in frag_df.rows():
+                precursor_data[(mod_pep, charge)]['frags'][frag_key_val] = [frag_mz, frag_int]
 
         if len(decoy_precursors) > 0:
             logger.info(f"{len(decoy_precursors)} decoy precursors removed from input library")
