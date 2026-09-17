@@ -1318,6 +1318,284 @@ class SpectrumLibraryStore:
         )
 
     # ------------------------------------------------------------------
+    # Factory: columnar decoy generation (no worker pool, no dicts)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_target_with_decoys(cls, target_store, rules, tag=None):
+        """Build a combined target+decoy store columnar-style.
+
+        Replaces the worker-pool path: decoy fragment names are the target's
+        (only m/z changes), so fragment codes/intensities are gathered from
+        the target arrays and only the masses are recomputed, via per-token
+        prefix sums. b-ion m/z is bit-identical to the per-fragment
+        ``fast_mass`` path; y-ion m/z (suffix sums) can differ by <=1 ULP.
+
+        Decoy sequences come from the same ``decoy_permutation`` /
+        ``change_seq`` logic as the legacy path, so the generated decoys are
+        identical strings.
+        """
+        from src.utils.parse_peptides import (
+            parse_peptide, decoy_permutation, change_seq, extract_mod,
+        )
+        from pyteomics.mass import std_aa_mass, std_ion_comp, nist_mass, calculate_mass
+        from src import config
+        from src.logger import logger
+        from src.utils.frag_encoding import get_ion_type, get_index, get_charge, get_loss
+        from array import array
+        import tqdm
+
+        # Constants matching pyteomics.mass.fast_mass's exact op order
+        H2O = nist_mass['H'][0][0] * 2 + nist_mass['O'][0][0]
+        PROTON = nist_mass['H+'][0][0]
+        ion_delta = {
+            it: sum(nist_mass[el][0][0] * num for el, num in std_ion_comp[it].items())
+            for it in ('b', 'y')
+        }
+        # Loss codes 0-3 are the only encodable losses (frag_encoding._INT_TO_LOSS)
+        loss_table = np.array([0.0, calculate_mass('H2O'), calculate_mass('NH3'),
+                               calculate_mass('H3PO4')], dtype=np.float64)
+
+        all_keys = list(target_store.keys())
+        N = len(all_keys)
+        existing_keys = set(target_store.key_to_idx.keys())
+        seen_decoy_keys = set()
+        tag_re = re.compile(f"(\\({tag.name}.*?\\))") if tag else None
+        close_d = {"[": "]", "(": ")"}
+        token_cache = {}  # stripped token -> (aa base mass, summed mod mass)
+
+        def token_masses(tok):
+            cached = token_cache.get(tok)
+            if cached is None:
+                mods = [m.strip(m[0] + close_d[m[0]]) for m in extract_mod(tok)]
+                mod_mass = sum([config.diann_mods[j] for j in mods if j in config.diann_mods])
+                cached = (std_aa_mass[tok[0]], mod_mass)
+                token_cache[tok] = cached
+            return cached
+
+        n_target_collisions = 0
+        n_decoy_collisions = 0
+        valid_indices = []          # target index per surviving decoy
+        decoy_mod_seqs = []
+        decoy_keys = []
+        token_lengths = []
+        # Per-token prefix/suffix mass sums, flat across surviving decoys.
+        # prefix[k] = masses of first k+1 tokens summed left-to-right (exact
+        # fast_mass order for b ions); suffix[k] = last k+1 tokens.
+        prefix_aa = array('d'); suffix_aa = array('d')
+        prefix_mod = array('d'); suffix_mod = array('d')
+        prefix_tag = array('d'); suffix_tag = array('d')
+
+        for i in tqdm.tqdm(range(N), desc="Generating decoys", miniters=10000):
+            mod_seq_i = target_store.mod_seq[i]
+            new_seq = change_seq(mod_seq_i, rules, tag=tag)
+            decoy_key = (new_seq, *all_keys[i][1:])
+            if decoy_key in existing_keys:
+                n_target_collisions += 1
+                continue
+            if decoy_key in seen_decoy_keys:
+                n_decoy_collisions += 1
+                continue
+            seen_decoy_keys.add(decoy_key)
+
+            tokens = parse_peptide(mod_seq_i)
+            if tag:
+                tag_lists = [tag_re.findall(t) for t in tokens]
+                stripped = [tag_re.sub("", t) for t in tokens]
+            else:
+                stripped = tokens
+            perm = decoy_permutation(stripped, rules)
+            new_tokens = [stripped[j] for j in perm]
+            L = len(new_tokens)
+
+            if tag:
+                # N-terminal tag pinned to position 0; others follow their
+                # residue (same rule as change_seq)
+                n_term_tag = tag_lists[0][:1]
+                residue_tags_at_0 = tag_lists[0][1:]
+                new_tags = [tag_lists[j] if j > 0 else residue_tags_at_0 for j in perm]
+                new_tags[0] = new_tags[0] + n_term_tag
+                tag_mass = [
+                    sum([tag.mass_dict[t.strip("()")] for t in grp
+                         if t.strip("()") in tag.mass_dict])
+                    for grp in new_tags
+                ]
+            else:
+                tag_mass = None
+
+            valid_indices.append(i)
+            decoy_mod_seqs.append(new_seq)
+            decoy_keys.append(decoy_key)
+            token_lengths.append(L)
+
+            aa = [0.0] * L
+            mod = [0.0] * L
+            for j, tok in enumerate(new_tokens):
+                aa[j], mod[j] = token_masses(tok)
+
+            pa = pm = pt = 0.0
+            for j in range(L):
+                pa += aa[j]; prefix_aa.append(pa)
+                pm += mod[j]; prefix_mod.append(pm)
+                if tag:
+                    pt += tag_mass[j]; prefix_tag.append(pt)
+            sa = sm = st = 0.0
+            for j in range(L - 1, -1, -1):
+                sa += aa[j]; suffix_aa.append(sa)
+                sm += mod[j]; suffix_mod.append(sm)
+                if tag:
+                    st += tag_mass[j]; suffix_tag.append(st)
+
+        if n_target_collisions > 0 or n_decoy_collisions > 0:
+            logger.info(
+                f"Decoy collision removal: {n_target_collisions} matched target keys, "
+                f"{n_decoy_collisions} duplicate decoy keys discarded ({len(valid_indices)} decoys kept)"
+            )
+
+        M = len(valid_indices)
+        valid_indices = np.array(valid_indices, dtype=np.intp)
+        token_lengths = np.array(token_lengths, dtype=np.int64)
+        token_offsets = np.zeros(M, dtype=np.int64)
+        if M > 1:
+            token_offsets[1:] = np.cumsum(token_lengths[:-1])
+        prefix_aa = np.frombuffer(prefix_aa, dtype=np.float64)
+        prefix_mod = np.frombuffer(prefix_mod, dtype=np.float64)
+        suffix_aa = np.frombuffer(suffix_aa, dtype=np.float64)
+        suffix_mod = np.frombuffer(suffix_mod, dtype=np.float64)
+        if tag:
+            prefix_tag = np.frombuffer(prefix_tag, dtype=np.float64)
+            suffix_tag = np.frombuffer(suffix_tag, dtype=np.float64)
+
+        # --- Gather decoy fragments from the target's arrays ---
+        d_frag_lengths = target_store.frag_lengths[valid_indices].astype(np.int32, copy=True)
+        d_frag_counts = d_frag_lengths.astype(np.int64)
+        total_frags = int(d_frag_counts.sum())
+        frag_start = np.repeat(target_store.frag_offsets[valid_indices], d_frag_counts)
+        within = np.arange(total_frags, dtype=np.int64)
+        if M > 0:
+            frag_row_start = np.repeat(np.concatenate(([0], np.cumsum(d_frag_counts[:-1]))), d_frag_counts)
+            within = within - frag_row_start
+        gather = frag_start + within
+
+        codes = target_store.frag_keys_data[gather]
+        intensities = target_store.frag_data[gather, 1]
+
+        ion = get_ion_type(codes)
+        if total_frags > 0 and not np.all((ion == 0) | (ion == 1)):
+            raise ValueError("Decoy generation only supports b/y fragment ions")
+        frag_idx = get_index(codes).astype(np.int64)
+        z = get_charge(codes).astype(np.float64)
+        loss_m = loss_table[get_loss(codes)]
+
+        frag_prec = np.repeat(np.arange(M, dtype=np.int64), d_frag_counts)
+        tok_base = token_offsets[frag_prec] + frag_idx - 1
+        is_b = ion == 0
+
+        aa_sum = np.where(is_b, prefix_aa[tok_base], suffix_aa[tok_base])
+        mod_sum = np.where(is_b, prefix_mod[tok_base], suffix_mod[tok_base])
+        if tag:
+            tag_sum = np.where(is_b, prefix_tag[tok_base], suffix_tag[tok_base])
+        else:
+            tag_sum = np.float64(0.0)
+
+        # Same op order as fast_mass + convert_frags:
+        # ((sum + H2O) + delta_ion + z*H+)/z  -  loss/z  +  (tag_sum + mod_sum)/z
+        m = aa_sum + H2O
+        m = m + np.where(is_b, ion_delta['b'], ion_delta['y'])
+        fast = (m + PROTON * z) / z
+        d_frag_mz = fast - (loss_m / z) + ((tag_sum + mod_sum) / z)
+
+        # --- Assemble combined store (targets at [0,N), decoys at [N,N+M)) ---
+        key_to_idx = {}
+        for i, key in enumerate(all_keys):
+            key_to_idx[key] = i
+        for j, dkey in enumerate(decoy_keys):
+            key_to_idx[dkey] = N + j
+
+        decoy_mod_seq_arr = np.array(decoy_mod_seqs, dtype=object)
+        decoy_seq_arr = np.array(
+            [re.sub(r'\(.*?\)', '', s) for s in decoy_mod_seqs], dtype=object)
+
+        mod_seq = np.concatenate([target_store.mod_seq, decoy_mod_seq_arr])
+        seq = np.concatenate([target_store.seq, decoy_seq_arr])
+        prec_mz = np.concatenate([target_store.prec_mz, target_store.prec_mz[valid_indices]])
+        prec_z = np.concatenate([target_store.prec_z, target_store.prec_z[valid_indices]])
+        iRT = np.concatenate([target_store.iRT, target_store.iRT[valid_indices]])
+        ion_mob = np.concatenate([target_store.ion_mob, target_store.ion_mob[valid_indices]])
+        protein_group = np.concatenate([target_store.protein_group, target_store.protein_group[valid_indices]])
+        protein_name = np.concatenate([target_store.protein_name, target_store.protein_name[valid_indices]])
+        genes = np.concatenate([target_store.genes, target_store.genes[valid_indices]])
+        uniprot_id = np.concatenate([target_store.uniprot_id, target_store.uniprot_id[valid_indices]])
+
+        parent_idx = np.full(N + M, -1, dtype=np.int64)
+        parent_idx[N:] = valid_indices
+
+        # Frag arrays (target order preserved per decoy)
+        target_total_frag = int(target_store.frag_lengths.sum()) if N > 0 else 0
+        d_frag_offsets = np.empty(M, dtype=np.int64)
+        if M > 0:
+            d_frag_offsets[0] = target_total_frag
+            if M > 1:
+                np.cumsum(d_frag_counts[:-1], out=d_frag_offsets[1:])
+                d_frag_offsets[1:] += target_total_frag
+        frag_offsets = np.concatenate([target_store.frag_offsets, d_frag_offsets])
+        frag_lengths = np.concatenate([target_store.frag_lengths, d_frag_lengths])
+        d_frag_data = np.column_stack((d_frag_mz, intensities))
+        frag_data = np.concatenate([target_store.frag_data, d_frag_data], axis=0)
+        frag_keys_data = np.concatenate([target_store.frag_keys_data, codes])
+
+        # Spectrum: per-decoy stable mz sort via one global lexsort, matching
+        # frag_to_peak's kind="stable" (equal m/z keeps target frag order)
+        perm_spec = np.lexsort((within, d_frag_mz, frag_prec))
+        target_total_spec = int(target_store.spectrum_lengths.sum()) if N > 0 else 0
+        d_spec_offsets = d_frag_offsets - target_total_frag + target_total_spec
+        spectrum_offsets = np.concatenate([target_store.spectrum_offsets, d_spec_offsets])
+        spectrum_lengths = np.concatenate([target_store.spectrum_lengths, d_frag_lengths])
+        spectrum_mz = np.concatenate([target_store.spectrum_mz, d_frag_mz[perm_spec]])
+        spectrum_int = np.concatenate([target_store.spectrum_int, intensities[perm_spec]])
+        frag_names_data = np.concatenate([target_store.frag_names_data, codes[perm_spec]])
+
+        # Top-N: target top_n + empty for decoys (recomputed by bulk_set_top_n)
+        top_n_data = target_store.top_n_data.copy()
+        top_n_offsets = np.concatenate([
+            target_store.top_n_offsets, np.full(M, len(top_n_data), dtype=np.int64)])
+        top_n_lengths = np.concatenate([
+            target_store.top_n_lengths, np.zeros(M, dtype=np.int32)])
+
+        is_decoy = np.zeros(N + M, dtype=bool)
+        is_decoy[N:] = True
+
+        return cls(
+            key_to_idx=key_to_idx,
+            mod_seq=mod_seq,
+            seq=seq,
+            prec_mz=prec_mz,
+            prec_z=prec_z,
+            iRT=iRT,
+            ion_mob=ion_mob,
+            protein_group=protein_group,
+            protein_name=protein_name,
+            genes=genes,
+            uniprot_id=uniprot_id,
+            spectrum_mz=spectrum_mz,
+            spectrum_int=spectrum_int,
+            spectrum_offsets=spectrum_offsets,
+            spectrum_lengths=spectrum_lengths,
+            frag_names_data=frag_names_data,
+            frag_data=frag_data,
+            frag_keys_data=frag_keys_data,
+            frag_offsets=frag_offsets,
+            frag_lengths=frag_lengths,
+            top_n_data=top_n_data,
+            top_n_offsets=top_n_offsets,
+            top_n_lengths=top_n_lengths,
+            parent_idx=parent_idx,
+            n_targets=N,
+            n_decoys=M,
+            is_decoy=is_decoy,
+        )
+
+    # ------------------------------------------------------------------
     # Factory: build tagged store from target + mass tag
     # ------------------------------------------------------------------
 

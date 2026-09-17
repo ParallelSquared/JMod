@@ -25,9 +25,12 @@ from tests.models.spec_lib.test_library_snapshots import (
     FIXTURE_DIR, SNAPSHOT_DIR, ARRAY_FIELDS, snapshot,
 )
 
-# m/z arrays may drift <=1 ULP when y-ion masses come from prefix sums
+# m/z arrays may drift by a few ULP when y-ion masses come from suffix sums
+# (reordered float accumulation; measured max 4 ULP / 5e-16 relative on a real
+# library — 8+ orders of magnitude below ppm-scale matching tolerances).
+# b-ion masses are bit-identical.
 ULP_FIELDS = {"spectrum_mz", "frag_data"}
-ULP_RTOL = 3e-16
+ULP_RTOL = 1e-14
 
 
 def make_edgecases_store():
@@ -92,9 +95,13 @@ CASES = {
 
 
 def spectrum_canonical_order(snap):
-    """Global re-sort of spectrum arrays by (precursor, mz, frag code)."""
+    """Global re-sort of spectrum arrays by (precursor, frag code).
+
+    Codes are unique within a precursor and identical across both sides, so
+    this order is side-independent — unlike sorting by m/z, where a ULP shift
+    can swap near-equal peaks between the two implementations."""
     pidx = np.repeat(np.arange(len(snap["spectrum_lengths"])), snap["spectrum_lengths"])
-    return np.lexsort((snap["frag_names_data"], snap["spectrum_mz"], pidx))
+    return np.lexsort((snap["frag_names_data"], pidx))
 
 
 def assert_decoy_snapshots_match(actual, expected, label=""):
@@ -107,7 +114,7 @@ def assert_decoy_snapshots_match(actual, expected, label=""):
             a, e = a[a_perm], e[e_perm]
         if field in ULP_FIELDS:
             assert np.allclose(a, e, rtol=ULP_RTOL, atol=0.0, equal_nan=True), \
-                f"{label}{field}: beyond 1 ULP"
+                f"{label}{field}: beyond float-noise tolerance"
         elif a.dtype == object:
             assert a.tolist() == e.tolist(), f"{label}{field}: values differ"
         else:

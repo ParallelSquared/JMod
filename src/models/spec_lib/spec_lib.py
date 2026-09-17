@@ -408,29 +408,7 @@ def create_decoy_lib(library, rules, tag=None, n_iso=0):
     Returns a combined store with targets at [0, N) and decoys at [N, N+M).
     """
     from src.models.spec_lib.library_store import SpectrumLibraryStore
-    import gc
-
-    all_keys = list(library.keys())
-    n_total = len(all_keys)
-
-    p = multiprocessing.Pool(min(multiprocessing.cpu_count(), 61),
-                             initializer=config.limit_blas_threads)
-    results = []
-    chunksize = 1000
-    arg_gen = _decoy_arg_gen(library, all_keys, rules, tag, n_iso)
-    for result in tqdm.tqdm(p.imap(_decoy_worker, arg_gen, chunksize=chunksize), total=n_total):
-        results.append(result)
-    p.close()
-    p.join()
-
-    gc.collect()
-
-    store = SpectrumLibraryStore.from_target_and_decoy_results(library, all_keys, results)
-
-    del results
-    gc.collect()
-
-    return store
+    return SpectrumLibraryStore.from_target_with_decoys(library, rules, tag=tag)
             
             
 # spec_lib = loadSpecLib("/Volumes/Lab/KMD/SpectralLibraries/8ng_LF_24nce.tsv")
