@@ -22,7 +22,7 @@ from src.mass_tags import read_json_to_massTag
 from src.utils.parse_peptides import change_seq
 
 from tests.models.spec_lib.test_library_snapshots import (
-    FIXTURE_DIR, SNAPSHOT_DIR, ARRAY_FIELDS, snapshot,
+    FIXTURE_DIR, SNAPSHOT_DIR, FINALIZED_REF_DIR, ARRAY_FIELDS, snapshot,
 )
 
 # m/z is stored float32 (~1.2e-7 relative quantization); comparisons on these
@@ -103,12 +103,18 @@ def spectrum_canonical_order(snap):
 
 
 def assert_decoy_snapshots_match(actual, expected, label=""):
-    a_perm, e_perm = spectrum_canonical_order(actual), spectrum_canonical_order(expected)
+    finalized = actual.get("spectrum_perm") is None
+    if finalized:
+        a_perm, e_perm = spectrum_canonical_order(actual), spectrum_canonical_order(expected)
     for field in ARRAY_FIELDS:
-        a, e = np.asarray(actual[field]), np.asarray(expected[field])
+        av, ev = actual.get(field), expected.get(field)
+        if av is None or ev is None:
+            assert av is None and ev is None, f"{label}{field}: state mismatch"
+            continue
+        a, e = np.asarray(av), np.asarray(ev)
         assert a.shape == e.shape, f"{label}{field}: shape {a.shape} != {e.shape}"
         assert a.dtype == e.dtype, f"{label}{field}: dtype {a.dtype} != {e.dtype}"
-        if field in ("spectrum_mz", "spectrum_int", "frag_names_data"):
+        if finalized and field in ("spectrum_mz", "spectrum_int", "frag_names_data"):
             a, e = a[a_perm], e[e_perm]
         if field in ULP_FIELDS:
             assert np.allclose(a, e, rtol=ULP_RTOL, atol=0.0, equal_nan=True), \
@@ -167,6 +173,25 @@ class TestCombinedStoreDtypes:
             assert actual == np.dtype(expected), f"{field}: {actual} != {np.dtype(expected)}"
         for mod_pep, charge in combined.key_to_idx:
             assert type(mod_pep) is str and type(charge) is float
+
+
+class TestDecoyFinalizeBitIdentity:
+    """Finalizing a pre-finalize decoy store must reproduce the Phase-3
+    double-stored spectrum arrays bit-for-bit."""
+
+    @pytest.mark.parametrize("case", ["decoy_edgecases_rev", "decoy_edgecases_rev_nc",
+                                      "decoy_edgecases_shuffle"])
+    def test_finalize_matches_phase3(self, case):
+        make_store, rules, tag_factory = CASES[case]
+        combined = create_decoy_lib(make_store(), rules=rules, tag=None)
+        assert combined.spectrum_perm is not None
+        combined.finalize_spectra()
+        with open(os.path.join(FINALIZED_REF_DIR, f"{case}.snapshot.pkl"), "rb") as f:
+            ref = pickle.load(f)
+        for field in ("spectrum_mz", "spectrum_int", "frag_names_data",
+                      "spectrum_offsets", "spectrum_lengths"):
+            a, e = np.asarray(getattr(combined, field)), np.asarray(ref[field])
+            assert a.dtype == e.dtype and a.tobytes() == e.tobytes(), field
 
 
 class TestShuffleSeedContract:

@@ -26,11 +26,15 @@ ARRAY_FIELDS = [
     "mod_seq", "seq", "prec_mz", "prec_z", "iRT", "ion_mob",
     "protein_group", "protein_name", "genes", "uniprot_id",
     "spectrum_mz", "spectrum_int", "spectrum_offsets", "spectrum_lengths",
-    "frag_names_data", "frag_mz", "frag_int", "frag_keys_data",
+    "frag_names_data", "spectrum_perm", "frag_mz", "frag_int", "frag_keys_data",
     "frag_offsets", "frag_lengths",
     "top_n_data", "top_n_offsets", "top_n_lengths",
     "parent_idx", "is_decoy",
 ]
+
+# Directory of Phase-3 (pre-single-copy) finalized snapshots: the reference
+# that finalize_spectra() must reproduce bit-for-bit
+FINALIZED_REF_DIR = os.path.join(SNAPSHOT_DIR, "finalized_phase3")
 
 FIXTURES = [
     "library_edgecases",
@@ -57,7 +61,11 @@ def snapshot(store):
 
 def assert_snapshots_identical(actual, expected, label=""):
     for field in ARRAY_FIELDS:
-        a, e = np.asarray(actual[field]), np.asarray(expected[field])
+        av, ev = actual.get(field), expected.get(field)
+        if av is None or ev is None:
+            assert av is None and ev is None, f"{label}{field}: state mismatch"
+            continue
+        a, e = np.asarray(av), np.asarray(ev)
         assert a.shape == e.shape, f"{label}{field}: shape {a.shape} != {e.shape}"
         assert a.dtype == e.dtype, f"{label}{field}: dtype {a.dtype} != {e.dtype}"
         if a.dtype == object:
@@ -131,10 +139,8 @@ class TestParsingSemantics:
 
     def test_equal_mz_tie_is_stable(self, edgecases):
         i = edgecases.key_to_idx[("PEPTIDEK", 2.0)]
-        start = edgecases.spectrum_offsets[i]
-        length = edgecases.spectrum_lengths[i]
-        ints = edgecases.spectrum_int[start:start + length]
-        mzs = edgecases.spectrum_mz[start:start + length]
+        spec = edgecases.get_spectrum(i)  # perm-gathered pre-finalize
+        mzs, ints = spec[:, 0], spec[:, 1]
         tied = np.where(mzs == np.float32(227.10))[0]
         # b2_1 (0.3) was inserted before y2_1 (0.4); stable sort keeps that order
         assert list(ints[tied]) == [np.float32(0.3), np.float32(0.4)]
@@ -163,21 +169,33 @@ class TestArrayDtypes:
         "iRT": np.float64, "ion_mob": np.float64,
         # fragment-level values are float32 by design (~30 ppb quantization,
         # far below ppm tolerances); precursor-level scalars stay float64
-        "spectrum_mz": np.float32, "spectrum_int": np.float32,
         "frag_mz": np.float32, "frag_int": np.float32,
-        "spectrum_offsets": np.int64, "frag_offsets": np.int64,
+        "frag_offsets": np.int64,
         "top_n_offsets": np.int64, "parent_idx": np.int64,
-        "spectrum_lengths": np.int32, "frag_lengths": np.int32,
+        "frag_lengths": np.int32,
         "top_n_lengths": np.int32,
-        "frag_names_data": np.int32, "frag_keys_data": np.int32,
+        "frag_keys_data": np.int32,
         "top_n_data": np.int32,
         "is_decoy": np.bool_,
+        "spectrum_perm": np.uint16,
+    }
+    # Only present once finalized (parser output is pre-finalize)
+    FINALIZED_DTYPES = {
+        "spectrum_mz": np.float32, "spectrum_int": np.float32,
+        "spectrum_offsets": np.int64, "spectrum_lengths": np.int32,
+        "frag_names_data": np.int32,
     }
 
     @pytest.mark.parametrize("fmt", FORMATS)
     @pytest.mark.parametrize("name", FIXTURES)
     def test_store_array_dtypes(self, name, fmt):
         store = parse_fixture(name, fmt)
+        assert not store.is_finalized
+        finalized = parse_fixture(name, fmt).finalize_spectra()
+        for field, expected in self.FINALIZED_DTYPES.items():
+            actual = np.asarray(getattr(finalized, field)).dtype
+            assert actual == np.dtype(expected), (
+                f"{name}.{fmt}: {field} is {actual}, expected {np.dtype(expected)}")
         for field, expected in self.EXPECTED_DTYPES.items():
             actual = np.asarray(getattr(store, field)).dtype
             assert actual == np.dtype(expected), (
@@ -187,6 +205,28 @@ class TestArrayDtypes:
         for mod_pep, charge in store.key_to_idx:
             assert type(mod_pep) is str and type(charge) is float
             break
+
+
+class TestFinalizeBitIdentity:
+    """finalize_spectra() must reproduce the Phase-3 double-stored spectrum
+    arrays bit-for-bit from frag arrays + spectrum_perm."""
+
+    @pytest.mark.parametrize("fmt", FORMATS)
+    @pytest.mark.parametrize("name", FIXTURES)
+    def test_finalize_matches_phase3(self, name, fmt):
+        ref_path = os.path.join(FINALIZED_REF_DIR, f"{name}.{fmt}.snapshot.pkl")
+        with open(ref_path, "rb") as f:
+            ref = pickle.load(f)
+        store = parse_fixture(name, fmt)
+        assert store.spectrum_perm is not None
+        store.finalize_spectra()
+        assert store.spectrum_perm is None
+        for field in ("spectrum_mz", "spectrum_int", "frag_names_data",
+                      "spectrum_offsets", "spectrum_lengths"):
+            a, e = np.asarray(getattr(store, field)), np.asarray(ref[field])
+            assert a.dtype == e.dtype and a.tobytes() == e.tobytes(), field
+        # idempotent
+        store.finalize_spectra()
 
 
 class TestCacheVersioning:

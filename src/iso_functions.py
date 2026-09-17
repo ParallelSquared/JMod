@@ -359,6 +359,7 @@ def iso_library(library, tag, n_iso):
     library.spectrum_mz = None
     library.spectrum_int = None
     library.frag_names_data = None
+    library.spectrum_perm = None  # iso rebuilds spectra; acts as the finalizer
 
     logger.info("Generating isotopes for library:")
     for i, key in enumerate(tqdm.tqdm(all_keys)):
@@ -420,6 +421,7 @@ def iso_library_multi(library, tag, n_iso):
     library.spectrum_mz = None
     library.spectrum_int = None
     library.frag_names_data = None
+    library.spectrum_perm = None  # iso rebuilds spectra; acts as the finalizer
 
     logger.info("Generating isotopes for library:")
     p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), 61),

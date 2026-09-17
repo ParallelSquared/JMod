@@ -386,6 +386,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     target_view = spectrumLibrary.target_view()
 
     if config.args.timeplex:
+        # timeplex replicates the library via per-entry spectrum reads;
+        # materialize the sorted spectra once up front
+        spectrumLibrary.finalize_spectra()
         if config.args.use_features and os.path.exists(feature_path):
             logger.info("Loading Dinosaur features")
             dino_features = pd.read_csv(feature_path, delimiter="\t")
@@ -507,9 +510,13 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
 
     if config.args.iso:
+        # iso_library_multi rebuilds spectra from frags and discards the
+        # sort permutation -- it is the finalizer on iso runs
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
                                                   tag=config.tag,
                                                   n_iso=config.args.num_iso)
+    else:
+        spectrumLibrary.finalize_spectra()
 
     spectrumLibrary.bulk_set_top_n(config.top_n)
     logger.info("Finished Library Setup")
