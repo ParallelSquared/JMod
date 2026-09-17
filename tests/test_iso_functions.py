@@ -1159,7 +1159,7 @@ class Test_iso_library_multi():
 class Test_iso_layout():
     """The flat spectrum arrays must stay compact after isotope generation.
 
-    _TargetView.__deepcopy__ and from_target_and_decoy_results both assume
+    _TargetView.__deepcopy__ and from_target_with_decoys both assume
     spectrum_lengths.sum() == len(spectrum_mz), and iso_library preallocates
     from frag_lengths * n_iso rather than measuring the output.
     """

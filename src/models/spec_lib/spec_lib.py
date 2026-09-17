@@ -22,10 +22,8 @@ import zlib
 import pickle
 from src.utils.misc_functions import  frag_to_peak
 from src.utils.parse_peptides import change_seq, convert_frags
-import tqdm
 import copy
 import src.config as config
-from src.iso_functions import gen_isotopes_dict
 from src.logger import logger
 import re
 from pyteomics import mass
@@ -376,27 +374,6 @@ def loadSpecLib(lib_file):
 
     logger.info(f"Loaded {len(spec_lib)} library precursors")
     return spec_lib, library_tag_bool, source_channel_mass, library_tag_name
-
-
-# TODO add a test for this, make sure decoys are being generated correctly
-import multiprocessing
-
-def _decoy_worker(args):
-    """Worker function for parallel decoy generation."""
-    seq, frags, rules, tag, n_iso, use_iso = args
-    new_seq = change_seq(seq, rules, tag=tag)
-    new_frags = convert_frags(seq, frags, rules, tag=tag)
-    if use_iso:
-        spectrum, ordered_frags = gen_isotopes_dict(new_seq, new_frags, tag, n_iso)
-    else:
-        spectrum, ordered_frags = frag_to_peak(new_frags, return_frags=True)
-    return new_seq, new_frags, spectrum, ordered_frags
-
-
-def _decoy_arg_gen(library, all_keys, rules, tag, n_iso):
-    """Lazily yield decoy worker args to avoid materializing all frag dicts."""
-    for key in all_keys:
-        yield (key[0], library[key]["frags"], rules, tag, n_iso, False)
 
 
 def create_decoy_lib(library, rules, tag=None, n_iso=0):

@@ -149,6 +149,19 @@ class TestDecoyDifferential:
         assert combined.mod_seq[2] == "PPEETDIK"
 
 
+class TestCombinedStoreDtypes:
+    """Silent-recast audit on the combined target+decoy store."""
+
+    def test_dtypes(self):
+        from tests.models.spec_lib.test_library_snapshots import TestArrayDtypes
+        combined = create_decoy_lib(make_edgecases_store(), rules="shuffle", tag=None)
+        for field, expected in TestArrayDtypes.EXPECTED_DTYPES.items():
+            actual = np.asarray(getattr(combined, field)).dtype
+            assert actual == np.dtype(expected), f"{field}: {actual} != {np.dtype(expected)}"
+        for mod_pep, charge in combined.key_to_idx:
+            assert type(mod_pep) is str and type(charge) is float
+
+
 class TestShuffleSeedContract:
     """Literal pins: the md5-seeded shuffle must produce exactly these decoys.
     Any drift here silently changes every decoy library."""
