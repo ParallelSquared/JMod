@@ -1724,7 +1724,15 @@ class SpectrumLibraryStore:
         from src.logger import logger
         import tqdm
 
-        logger.info(f"Building tagged library (pre-allocated) with tag: {tag.name}")
+        logger.info(f"Tagging library with {tag.name} "
+                    f"({tag.n_channels} channels, 4 stages)")
+        import time as _time
+        _t_stage = _time.perf_counter()
+
+        def _stage(name):
+            nonlocal _t_stage
+            logger.info(f"Tagging: {name} ({_time.perf_counter() - _t_stage:.1f}s)")
+            _t_stage = _time.perf_counter()
 
         # Tagged spectra are rebuilt from the frag arrays below; the input's
         # spectrum arrays are never read, so release them before the
@@ -1756,9 +1764,7 @@ class SpectrumLibraryStore:
         else:
             all_frag_charges = np.empty(0, dtype=np.float64)
 
-        if source_channel is None:
-            logger.info("Computing tag positions")
-        for i in tqdm.tqdm(range(N)):
+        for i in tqdm.tqdm(range(N), desc="Tagging 1/4: tag positions"):
             mod_seq_str = target_store.mod_seq[i]
             peptide = (
                 mod_seq_str
@@ -1810,6 +1816,8 @@ class SpectrumLibraryStore:
                     ].astype(np.float64)
                 frag_n_tags[foff:foff + flen] = local
 
+        _stage("computed tag positions (1/4)")
+
         # --- Phase 2: Pre-compute keys and filter collisions ---
         # Peptides with zero tag sites produce identical keys across channels.
         # Deduplicate so key_to_idx and arrays stay in sync.
@@ -1840,6 +1848,8 @@ class SpectrumLibraryStore:
                 f"Tag collision removal: {n_collisions} duplicate tagged keys "
                 f"discarded ({V} entries kept)"
             )
+
+        _stage("built channel keys, filtered collisions (2/4)")
 
         # --- Phase 3: Pre-allocate output arrays ---
         # Compute total frag length for valid entries only
@@ -1898,10 +1908,11 @@ class SpectrumLibraryStore:
                 out_parent_idx[out_idx] = source_channel_to_out_idx.get((old_parent, c), -1)
 
 
+        _stage("allocated output, filled precursor scalars (3/4)")
+
         # --- Phase 4: Fill variable-length arrays ---
-        logger.info("Tagging library")
         cursor = 0
-        for out_idx, (i, c, _, _) in enumerate(tqdm.tqdm(valid)):
+        for out_idx, (i, c, _, _) in enumerate(tqdm.tqdm(valid, desc="Tagging 4/4: fragment arrays")):
             foff = int(target_store.frag_offsets[i])
             flen = int(target_store.frag_lengths[i])
 
@@ -1940,6 +1951,7 @@ class SpectrumLibraryStore:
         target_store.frag_mz = None
         target_store.frag_int = None
         target_store.frag_keys_data = None
+        _stage("filled fragment arrays (4/4)")
 
         # Top-N: empty (recomputed downstream when needed)
         out_top_n_data = np.empty(0, dtype=np.int32)
