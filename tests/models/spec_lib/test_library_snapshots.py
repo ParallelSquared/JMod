@@ -26,7 +26,7 @@ ARRAY_FIELDS = [
     "mod_seq", "seq", "prec_mz", "prec_z", "iRT", "ion_mob",
     "protein_group", "protein_name", "genes", "uniprot_id",
     "spectrum_mz", "spectrum_int", "spectrum_offsets", "spectrum_lengths",
-    "frag_names_data", "frag_data", "frag_keys_data",
+    "frag_names_data", "frag_mz", "frag_int", "frag_keys_data",
     "frag_offsets", "frag_lengths",
     "top_n_data", "top_n_offsets", "top_n_lengths",
     "parent_idx", "is_decoy",
@@ -124,10 +124,10 @@ class TestParsingSemantics:
         i = edgecases.key_to_idx[("PEPTIDEK", 2.0)]
         start = edgecases.frag_offsets[i]
         length = edgecases.frag_lengths[i]
-        frag_mzs = edgecases.frag_data[start:start + length, 0]
+        frag_mzs = edgecases.frag_mz[start:start + length]
         # y4_1 appears twice in the fixture (502.29 then 502.30); five unique keys survive
         assert length == 5
-        assert 502.30 in frag_mzs and 502.29 not in frag_mzs
+        assert np.float32(502.30) in frag_mzs and np.float32(502.29) not in frag_mzs
 
     def test_equal_mz_tie_is_stable(self, edgecases):
         i = edgecases.key_to_idx[("PEPTIDEK", 2.0)]
@@ -135,9 +135,9 @@ class TestParsingSemantics:
         length = edgecases.spectrum_lengths[i]
         ints = edgecases.spectrum_int[start:start + length]
         mzs = edgecases.spectrum_mz[start:start + length]
-        tied = np.where(mzs == 227.10)[0]
+        tied = np.where(mzs == np.float32(227.10))[0]
         # b2_1 (0.3) was inserted before y2_1 (0.4); stable sort keeps that order
-        assert list(ints[tied]) == [0.3, 0.4]
+        assert list(ints[tied]) == [np.float32(0.3), np.float32(0.4)]
 
     @pytest.mark.parametrize("fmt", FORMATS)
     def test_proteinid_fills_name_and_uniprot(self, fmt):
@@ -161,8 +161,10 @@ class TestArrayDtypes:
         "genes": np.object_, "uniprot_id": np.object_,
         "prec_mz": np.float64, "prec_z": np.float64,
         "iRT": np.float64, "ion_mob": np.float64,
-        "spectrum_mz": np.float64, "spectrum_int": np.float64,
-        "frag_data": np.float64,
+        # fragment-level values are float32 by design (~30 ppb quantization,
+        # far below ppm tolerances); precursor-level scalars stay float64
+        "spectrum_mz": np.float32, "spectrum_int": np.float32,
+        "frag_mz": np.float32, "frag_int": np.float32,
         "spectrum_offsets": np.int64, "frag_offsets": np.int64,
         "top_n_offsets": np.int64, "parent_idx": np.int64,
         "spectrum_lengths": np.int32, "frag_lengths": np.int32,

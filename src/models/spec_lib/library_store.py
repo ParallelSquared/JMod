@@ -33,7 +33,7 @@ _STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
 
 # Version stamp for the .npz binary cache. Bump whenever parsing semantics
 # change so stale caches are re-parsed instead of silently loaded.
-STORE_VERSION = 2
+STORE_VERSION = 3
 
 
 class StaleStoreCacheError(ValueError):
@@ -254,7 +254,8 @@ class _TargetView:
             spectrum_offsets=s.spectrum_offsets[:n].copy(),
             spectrum_lengths=s.spectrum_lengths[:n].copy(),
             frag_names_data=s.frag_names_data[:target_spec_total].copy(),
-            frag_data=s.frag_data[:target_frag_total].copy(),
+            frag_mz=s.frag_mz[:target_frag_total].copy(),
+            frag_int=s.frag_int[:target_frag_total].copy(),
             frag_keys_data=s.frag_keys_data[:target_frag_total].copy(),
             frag_offsets=s.frag_offsets[:n].copy(),
             frag_lengths=s.frag_lengths[:n].copy(),
@@ -485,7 +486,7 @@ class SpectrumLibraryStore:
         'spectrum_mz', 'spectrum_int', 'spectrum_offsets', 'spectrum_lengths',
         'frag_names_data',
         # concatenated variable-length original frags data (independent of spectrum)
-        'frag_data', 'frag_keys_data', 'frag_offsets', 'frag_lengths',
+        'frag_mz', 'frag_int', 'frag_keys_data', 'frag_offsets', 'frag_lengths',
         # concatenated variable-length top_n data
         'top_n_data', 'top_n_offsets', 'top_n_lengths',
         # parent_idx (int64 array, -1 for targets, parent's index for decoys)
@@ -501,7 +502,7 @@ class SpectrumLibraryStore:
         protein_group, protein_name, genes, uniprot_id,
         spectrum_mz, spectrum_int, spectrum_offsets, spectrum_lengths,
         frag_names_data,
-        frag_data, frag_keys_data, frag_offsets, frag_lengths,
+        frag_mz, frag_int, frag_keys_data, frag_offsets, frag_lengths,
         top_n_data, top_n_offsets, top_n_lengths,
         parent_idx,
         n_targets=None, n_decoys=None, is_decoy=None,
@@ -522,7 +523,8 @@ class SpectrumLibraryStore:
         self.spectrum_offsets = spectrum_offsets
         self.spectrum_lengths = spectrum_lengths
         self.frag_names_data = frag_names_data
-        self.frag_data = frag_data
+        self.frag_mz = frag_mz
+        self.frag_int = frag_int
         self.frag_keys_data = frag_keys_data
         self.frag_offsets = frag_offsets
         self.frag_lengths = frag_lengths
@@ -612,10 +614,11 @@ class SpectrumLibraryStore:
         length = self.frag_lengths[idx]
         if length == 0:
             return {}
-        peaks = self.frag_data[off:off + length]
+        mzs = self.frag_mz[off:off + length]
+        ints = self.frag_int[off:off + length]
         codes = self.frag_keys_data[off:off + length]
         names = decode_frag_names(codes)
-        return {str(names[i]): [float(peaks[i, 0]), float(peaks[i, 1])] for i in range(length)}
+        return {str(names[i]): [float(mzs[i]), float(ints[i])] for i in range(length)}
 
     def get_top_n(self, idx):
         """Return 1-D int32 array of top-N indices for entry *idx*."""
@@ -629,7 +632,7 @@ class SpectrumLibraryStore:
         ``ordered_frags`` can be int32 codes or string names (auto-encoded).
         Does NOT modify the original frags — use ``set_frags`` for that.
         """
-        spectrum_array = np.asarray(spectrum_array, dtype=np.float64)
+        spectrum_array = np.asarray(spectrum_array, dtype=np.float32)
         old_len = self.spectrum_lengths[idx]
         new_len = len(spectrum_array)
         if new_len == old_len:
@@ -698,14 +701,14 @@ class SpectrumLibraryStore:
     def _set_frag_arrays(self, idx, frags_dict):
         """Update the original frag storage arrays."""
         keys = list(frags_dict.keys())
-        vals = np.array(list(frags_dict.values()), dtype=np.float64)
+        vals = np.array(list(frags_dict.values()), dtype=np.float32)
         codes = encode_frag_names(keys)
         n_frags = len(keys)
 
-        new_off = len(self.frag_data)
-        self.frag_data = np.concatenate(
-            [self.frag_data, vals], axis=0
-        ) if n_frags > 0 else self.frag_data
+        new_off = len(self.frag_mz)
+        if n_frags > 0:
+            self.frag_mz = np.concatenate([self.frag_mz, np.ascontiguousarray(vals[:, 0])])
+            self.frag_int = np.concatenate([self.frag_int, np.ascontiguousarray(vals[:, 1])])
         self.frag_keys_data = np.concatenate(
             [self.frag_keys_data, codes]
         ) if n_frags > 0 else self.frag_keys_data
@@ -900,7 +903,7 @@ class SpectrumLibraryStore:
         self.spectrum_lengths = np.append(self.spectrum_lengths, np.int32(0))
 
         # frag offsets / lengths
-        self.frag_offsets = np.append(self.frag_offsets, len(self.frag_data))
+        self.frag_offsets = np.append(self.frag_offsets, len(self.frag_mz))
         self.frag_lengths = np.append(self.frag_lengths, np.int32(0))
 
         # top_n offsets / lengths
@@ -982,7 +985,8 @@ class SpectrumLibraryStore:
             spectrum_offsets=self.spectrum_offsets.copy(),
             spectrum_lengths=self.spectrum_lengths.copy(),
             frag_names_data=self.frag_names_data.copy(),
-            frag_data=self.frag_data.copy(),
+            frag_mz=self.frag_mz.copy(),
+            frag_int=self.frag_int.copy(),
             frag_keys_data=self.frag_keys_data.copy(),
             frag_offsets=self.frag_offsets.copy(),
             frag_lengths=self.frag_lengths.copy(),
@@ -1024,7 +1028,8 @@ class SpectrumLibraryStore:
             spectrum_offsets=self.spectrum_offsets.copy(),
             spectrum_lengths=self.spectrum_lengths.copy(),
             frag_names_data=self.frag_names_data,
-            frag_data=self.frag_data,
+            frag_mz=self.frag_mz,
+            frag_int=self.frag_int,
             frag_keys_data=self.frag_keys_data,
             frag_offsets=self.frag_offsets.copy(),
             frag_lengths=self.frag_lengths.copy(),
@@ -1064,7 +1069,8 @@ class SpectrumLibraryStore:
             spectrum_offsets=self.spectrum_offsets,
             spectrum_lengths=self.spectrum_lengths,
             frag_names_data=self.frag_names_data,
-            frag_data=self.frag_data,
+            frag_mz=self.frag_mz,
+            frag_int=self.frag_int,
             frag_keys_data=self.frag_keys_data,
             frag_offsets=self.frag_offsets,
             frag_lengths=self.frag_lengths,
@@ -1096,42 +1102,12 @@ class SpectrumLibraryStore:
                 f"expected {STORE_VERSION}; re-parse the library."
             )
 
-        # Handle older caches that lack separate frag arrays
-        if 'frag_data' in data:
-            frag_data = data['frag_data']
-            frag_keys_data = data['frag_keys_data']
-            frag_offsets = data['frag_offsets']
-            frag_lengths = data['frag_lengths']
-        else:
-            # Fall back: use spectrum data as frag data (pre-isotope state)
-            if 'spectrum_data' in data:
-                frag_data = data['spectrum_data']
-            else:
-                frag_data = np.stack([data['spectrum_mz'], data['spectrum_int']], axis=1)
-            frag_keys_data = data['frag_names_data']
-            frag_offsets = data['spectrum_offsets']
-            frag_lengths = data['spectrum_lengths']
-
-        # Load spectrum_mz / spectrum_int (new format) or fall back to spectrum_data (old format)
-        if 'spectrum_mz' in data:
-            spectrum_mz = data['spectrum_mz']
-            spectrum_int = data['spectrum_int']
-        else:
-            sd = data['spectrum_data']
-            spectrum_mz = np.ascontiguousarray(sd[:, 0]) if len(sd) > 0 else np.empty(0, dtype=np.float64)
-            spectrum_int = np.ascontiguousarray(sd[:, 1]) if len(sd) > 0 else np.empty(0, dtype=np.float64)
-
-        # Re-encode old object-dtype caches to int32
+        frag_keys_data = data['frag_keys_data']
+        frag_offsets = data['frag_offsets']
+        frag_lengths = data['frag_lengths']
+        spectrum_mz = data['spectrum_mz']
+        spectrum_int = data['spectrum_int']
         frag_names_data = data['frag_names_data']
-        if frag_names_data.dtype == object and len(frag_names_data) > 0:
-            frag_names_data = encode_frag_names(frag_names_data)
-        elif frag_names_data.dtype != np.int32:
-            frag_names_data = frag_names_data.astype(np.int32)
-
-        if frag_keys_data.dtype == object and len(frag_keys_data) > 0:
-            frag_keys_data = encode_frag_names(frag_keys_data)
-        elif frag_keys_data.dtype != np.int32:
-            frag_keys_data = frag_keys_data.astype(np.int32)
 
         # Handle target/decoy fields (may be absent in old caches)
         n_total = len(data['mod_seq'])
@@ -1165,7 +1141,8 @@ class SpectrumLibraryStore:
             spectrum_offsets=data['spectrum_offsets'],
             spectrum_lengths=data['spectrum_lengths'],
             frag_names_data=frag_names_data,
-            frag_data=frag_data,
+            frag_mz=data['frag_mz'],
+            frag_int=data['frag_int'],
             frag_keys_data=frag_keys_data,
             frag_offsets=frag_offsets,
             frag_lengths=frag_lengths,
@@ -1305,13 +1282,19 @@ class SpectrumLibraryStore:
         # Build numpy arrays
         if all_spec_peaks:
             _sd = np.concatenate(all_spec_peaks, axis=0)
-            spectrum_mz = np.ascontiguousarray(_sd[:, 0])
-            spectrum_int = np.ascontiguousarray(_sd[:, 1])
+            spectrum_mz = np.ascontiguousarray(_sd[:, 0]).astype(np.float32)
+            spectrum_int = np.ascontiguousarray(_sd[:, 1]).astype(np.float32)
         else:
-            spectrum_mz = np.empty(0, dtype=np.float64)
-            spectrum_int = np.empty(0, dtype=np.float64)
+            spectrum_mz = np.empty(0, dtype=np.float32)
+            spectrum_int = np.empty(0, dtype=np.float32)
         frag_names_data = np.concatenate(all_spec_frag_names) if all_spec_frag_names else np.empty(0, dtype=np.int32)
-        frag_data = np.concatenate(all_frag_peaks, axis=0) if all_frag_peaks else np.empty((0, 2), dtype=np.float64)
+        if all_frag_peaks:
+            _fd = np.concatenate(all_frag_peaks, axis=0).astype(np.float32)
+            frag_mz_arr = np.ascontiguousarray(_fd[:, 0])
+            frag_int_arr = np.ascontiguousarray(_fd[:, 1])
+        else:
+            frag_mz_arr = np.empty(0, dtype=np.float32)
+            frag_int_arr = np.empty(0, dtype=np.float32)
         frag_keys_data = np.concatenate(all_frag_keys) if all_frag_keys else np.empty(0, dtype=np.int32)
         top_n_data = np.concatenate(top_n_all) if top_n_all else np.empty(0, dtype=np.int32)
 
@@ -1337,7 +1320,8 @@ class SpectrumLibraryStore:
             spectrum_offsets=np.array(spec_offsets, dtype=np.int64),
             spectrum_lengths=np.array(spec_lengths, dtype=np.int32),
             frag_names_data=frag_names_data,
-            frag_data=frag_data,
+            frag_mz=frag_mz_arr,
+            frag_int=frag_int_arr,
             frag_keys_data=frag_keys_data,
             frag_offsets=np.array(frag_offsets, dtype=np.int64),
             frag_lengths=np.array(frag_lengths, dtype=np.int32),
@@ -1514,7 +1498,7 @@ class SpectrumLibraryStore:
             gather += np.repeat(target_store.frag_offsets[decoys.valid_indices], d_frag_counts)
 
         codes = target_store.frag_keys_data[gather]
-        intensities = target_store.frag_data[gather, 1]
+        intensities = target_store.frag_int[gather]
         del gather
 
         ion = get_ion_type(codes)
@@ -1629,16 +1613,23 @@ class SpectrumLibraryStore:
         frag_lengths = np.concatenate([target_store.frag_lengths, d_frag_lengths])
         frag_keys_data = np.concatenate([target_store.frag_keys_data, codes])
         target_store.frag_keys_data = None
-        frag_data = np.empty((target_total_frag + total_frags, 2), dtype=np.float64)
-        frag_data[:target_total_frag] = target_store.frag_data
-        frag_data[target_total_frag:, 0] = d_frag_mz
-        frag_data[target_total_frag:, 1] = intensities
-        target_store.frag_data = None
+        # m/z computed in f64, stored f32; the spectrum sort below runs on the
+        # stored f32 values so stored order is always self-consistent
+        d_frag_mz32 = d_frag_mz.astype(np.float32)
+        del d_frag_mz
+        frag_mz = np.empty(target_total_frag + total_frags, dtype=np.float32)
+        frag_mz[:target_total_frag] = target_store.frag_mz
+        frag_mz[target_total_frag:] = d_frag_mz32
+        target_store.frag_mz = None
+        frag_int = np.empty(target_total_frag + total_frags, dtype=np.float32)
+        frag_int[:target_total_frag] = target_store.frag_int
+        frag_int[target_total_frag:] = intensities
+        target_store.frag_int = None
         _stage("assembled arrays")
 
         # Spectrum: per-decoy stable mz sort, matching frag_to_peak's
         # kind="stable" (equal m/z keeps target frag order)
-        perm_spec = _stable_sort_permutation(frag_prec, d_frag_mz)
+        perm_spec = _stable_sort_permutation(frag_prec, d_frag_mz32)
         del frag_prec
         target_total_spec = int(target_store.spectrum_lengths.sum()) if N > 0 else 0
         d_spec_offsets = d_frag_offsets - target_total_frag + target_total_spec
@@ -1646,12 +1637,12 @@ class SpectrumLibraryStore:
         spectrum_lengths = np.concatenate([target_store.spectrum_lengths, d_frag_lengths])
 
         total_spec = target_total_spec + total_frags
-        spectrum_mz = np.empty(total_spec, dtype=np.float64)
+        spectrum_mz = np.empty(total_spec, dtype=np.float32)
         spectrum_mz[:target_total_spec] = target_store.spectrum_mz
-        np.take(d_frag_mz, perm_spec, out=spectrum_mz[target_total_spec:])
+        np.take(d_frag_mz32, perm_spec, out=spectrum_mz[target_total_spec:])
         target_store.spectrum_mz = None
-        del d_frag_mz
-        spectrum_int = np.empty(total_spec, dtype=np.float64)
+        del d_frag_mz32
+        spectrum_int = np.empty(total_spec, dtype=np.float32)
         spectrum_int[:target_total_spec] = target_store.spectrum_int
         np.take(intensities, perm_spec, out=spectrum_int[target_total_spec:])
         target_store.spectrum_int = None
@@ -1690,7 +1681,8 @@ class SpectrumLibraryStore:
             spectrum_offsets=spectrum_offsets,
             spectrum_lengths=spectrum_lengths,
             frag_names_data=frag_names_data,
-            frag_data=frag_data,
+            frag_mz=frag_mz,
+            frag_int=frag_int,
             frag_keys_data=frag_keys_data,
             frag_offsets=frag_offsets,
             frag_lengths=frag_lengths,
@@ -1734,7 +1726,7 @@ class SpectrumLibraryStore:
 
         logger.info(f"Building tagged library (pre-allocated) with tag: {tag.name}")
 
-        # Tagged spectra are rebuilt from frag_data below; the input's
+        # Tagged spectra are rebuilt from the frag arrays below; the input's
         # spectrum arrays are never read, so release them before the
         # M-channel output is allocated
         target_store.spectrum_mz = None
@@ -1751,7 +1743,7 @@ class SpectrumLibraryStore:
         M = tag.n_channels
 
         # --- Phase 1: Pre-compute per-entry tag info ---
-        total_target_frag = len(target_store.frag_data)
+        total_target_frag = len(target_store.frag_mz)
         frag_n_tags = np.empty(total_target_frag, dtype=np.float64)
         n_tag_sites = np.empty(N, dtype=np.float64)
         tagged_templates = np.empty(N, dtype=object)
@@ -1871,10 +1863,11 @@ class SpectrumLibraryStore:
         source_channel_to_out_idx = {}
 
         # Variable-length arrays
-        out_spectrum_mz = np.empty(total_out_frag, dtype=np.float64)
-        out_spectrum_int = np.empty(total_out_frag, dtype=np.float64)
+        out_spectrum_mz = np.empty(total_out_frag, dtype=np.float32)
+        out_spectrum_int = np.empty(total_out_frag, dtype=np.float32)
         out_frag_names_data = np.empty(total_out_frag, dtype=np.int32)
-        out_frag_data = np.empty((total_out_frag, 2), dtype=np.float64)
+        out_frag_mz = np.empty(total_out_frag, dtype=np.float32)
+        out_frag_int = np.empty(total_out_frag, dtype=np.float32)
         out_frag_keys_data = np.empty(total_out_frag, dtype=np.int32)
         out_spec_offsets = np.empty(V, dtype=np.int64)
         out_spec_lengths = np.empty(V, dtype=np.int32)
@@ -1918,18 +1911,22 @@ class SpectrumLibraryStore:
             out_frag_lengths[out_idx] = flen
 
             if flen > 0:
-                src_mz = target_store.frag_data[foff:foff + flen, 0]
-                src_int = target_store.frag_data[foff:foff + flen, 1]
+                src_mz = target_store.frag_mz[foff:foff + flen]
+                src_int = target_store.frag_int[foff:foff + flen]
                 src_keys = target_store.frag_keys_data[foff:foff + flen]
                 local_n_tags = frag_n_tags[foff:foff + flen]
                 local_charges = all_frag_charges[foff:foff + flen]
 
                 tag_mass = tag.channel_masses[c]
-                new_mz = src_mz + ((tag_mass - source_channel_mass) * local_n_tags / local_charges)
+                # compute in f64, store f32; sort on the stored f32 values so
+                # stored order is self-consistent
+                new_mz = (src_mz.astype(np.float64)
+                          + ((tag_mass - source_channel_mass) * local_n_tags / local_charges)
+                          ).astype(np.float32)
 
                 # Frag data (original ordering)
-                out_frag_data[cursor:cursor + flen, 0] = new_mz
-                out_frag_data[cursor:cursor + flen, 1] = src_int
+                out_frag_mz[cursor:cursor + flen] = new_mz
+                out_frag_int[cursor:cursor + flen] = src_int
                 out_frag_keys_data[cursor:cursor + flen] = src_keys
 
                 # Spectrum data (sorted by m/z)
@@ -1940,7 +1937,8 @@ class SpectrumLibraryStore:
 
             cursor += flen
 
-        target_store.frag_data = None
+        target_store.frag_mz = None
+        target_store.frag_int = None
         target_store.frag_keys_data = None
 
         # Top-N: empty (recomputed downstream when needed)
@@ -1973,7 +1971,8 @@ class SpectrumLibraryStore:
             spectrum_offsets=out_spec_offsets,
             spectrum_lengths=out_spec_lengths,
             frag_names_data=out_frag_names_data,
-            frag_data=out_frag_data,
+            frag_mz=out_frag_mz,
+            frag_int=out_frag_int,
             frag_keys_data=out_frag_keys_data,
             frag_offsets=out_frag_offsets,
             frag_lengths=out_frag_lengths,
@@ -2019,8 +2018,8 @@ class SpectrumLibraryStore:
         gather_idx = offsets_expanded + within_group
 
         # -- Fragment-level columns from frag_data / frag_keys_data --
-        frag_mz = self.frag_data[gather_idx, 0]
-        frag_int = self.frag_data[gather_idx, 1]
+        frag_mz = self.frag_mz[gather_idx].astype(np.float64)
+        frag_int = self.frag_int[gather_idx].astype(np.float64)
         codes = self.frag_keys_data[gather_idx]
 
         # Decode packed int32 codes into separate fields
@@ -2329,9 +2328,8 @@ class SpectrumLibraryStore:
             frag_df["_frag_loss"].to_list(),
             frag_df["_frag_z"].to_numpy(),
         )
-        frag_mz = frag_df["_frag_mz"].to_numpy().astype(np.float64, copy=False)
-        frag_int = frag_df["_frag_int"].to_numpy().astype(np.float64, copy=False)
-        frag_data = np.column_stack((frag_mz, frag_int))
+        frag_mz = frag_df["_frag_mz"].to_numpy().astype(np.float32)
+        frag_int = frag_df["_frag_int"].to_numpy().astype(np.float32)
         _stage("encoded fragment codes")
 
         # Spectrum: one global stable sort by (precursor, m/z) replaces the
@@ -2367,7 +2365,8 @@ class SpectrumLibraryStore:
             spectrum_offsets=spec_offsets,
             spectrum_lengths=spec_lengths,
             frag_names_data=frag_names_data,
-            frag_data=frag_data,
+            frag_mz=frag_mz,
+            frag_int=frag_int,
             frag_keys_data=frag_keys_data,
             frag_offsets=frag_offsets_arr,
             frag_lengths=frag_lengths_arr,
@@ -2448,12 +2447,13 @@ class SpectrumLibraryStore:
             protein_name=np.empty(n, dtype=object),
             genes=np.empty(n, dtype=object),
             uniprot_id=np.empty(n, dtype=object),
-            spectrum_mz=np.empty(0, dtype=np.float64),
-            spectrum_int=np.empty(0, dtype=np.float64),
+            spectrum_mz=np.empty(0, dtype=np.float32),
+            spectrum_int=np.empty(0, dtype=np.float32),
             spectrum_offsets=np.empty(n, dtype=np.int64),
             spectrum_lengths=np.empty(n, dtype=np.int32),
             frag_names_data=np.empty(0, dtype=np.int32),
-            frag_data=np.empty((0, 2), dtype=np.float64),
+            frag_mz=np.empty(0, dtype=np.float32),
+            frag_int=np.empty(0, dtype=np.float32),
             frag_keys_data=np.empty(0, dtype=np.int32),
             frag_offsets=np.empty(n, dtype=np.int64),
             frag_lengths=np.empty(n, dtype=np.int32),

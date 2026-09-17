@@ -25,12 +25,10 @@ from tests.models.spec_lib.test_library_snapshots import (
     FIXTURE_DIR, SNAPSHOT_DIR, ARRAY_FIELDS, snapshot,
 )
 
-# m/z arrays may drift by a few ULP when y-ion masses come from suffix sums
-# (reordered float accumulation; measured max 4 ULP / 5e-16 relative on a real
-# library — 8+ orders of magnitude below ppm-scale matching tolerances).
-# b-ion masses are bit-identical.
-ULP_FIELDS = {"spectrum_mz", "frag_data"}
-ULP_RTOL = 1e-14
+# m/z is stored float32 (~1.2e-7 relative quantization); comparisons on these
+# fields use an f32-scale tolerance. Everything else is exact.
+ULP_FIELDS = {"spectrum_mz", "frag_mz"}
+ULP_RTOL = 3e-7
 
 
 def make_edgecases_store():
@@ -146,7 +144,7 @@ class TestDecoyDifferential:
         # during assembly so peak memory stays near the combined-store size
         store = make_collision_store()
         create_decoy_lib(store, rules="rev", tag=None)
-        for field in ("frag_keys_data", "frag_data", "spectrum_mz",
+        for field in ("frag_keys_data", "frag_mz", "frag_int", "spectrum_mz",
                       "spectrum_int", "frag_names_data"):
             assert getattr(store, field) is None, field
 

@@ -22,6 +22,15 @@ from pathlib import Path
 from pyteomics import mass
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 
+def assert_frags_approx(actual, expected, rtol=3e-7):
+    """Fragment dicts match keywise; m/z & intensity within f32 quantization."""
+    assert set(actual) == set(expected), (set(actual) ^ set(expected))
+    for k, (mz, inten) in expected.items():
+        amz, aint = actual[k]
+        assert amz == pytest.approx(mz, rel=rtol), (k, amz, mz)
+        assert aint == pytest.approx(inten, rel=rtol), (k, aint, inten)
+
+
 
 
 class Test_read_json_to_massTag():
@@ -210,11 +219,11 @@ class Test_tag_library():
         assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
         assert key['prec_z'] == 2
         assert key['iRT'] == 0.57
-        assert key['frags'] == {
+        assert_frags_approx(key['frags'], {
                     'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
                     'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85],
                     'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y')+tag.mass, 0.5]
-                }
+                })
         assert key['protein_group'] == 'P36578'
         assert key['protein_name'] == ''
         assert key['genes'] == ''
@@ -264,11 +273,11 @@ class Test_tag_library():
         assert key['prec_mz'] == 319.48702501677 + (1*tag.mass)/3
         assert key['prec_z'] == 3
         assert key['iRT'] == 0.57
-        assert key['frags'] == {
+        assert_frags_approx(key['frags'], {
                     'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
                     'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85],
                     'y3_1': [mass.fast_mass(sequence="DER", ion_type='y'), 0.5]
-                }
+                })
         assert key['protein_group'] == 'P36578'
         assert key['protein_name'] == ''
         assert key['genes'] == ''
@@ -319,11 +328,11 @@ class Test_tag_library():
         assert key['prec_mz'] == 319.48702501677 + phospho_mass + (1*tag.mass)/3
         assert key['prec_z'] == 3
         assert key['iRT'] == 0.57
-        assert key['frags'] == {
+        assert_frags_approx(key['frags'], {
                     'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
                     'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+phospho_mass+tag.mass, 0.85],
                     'y3_1': [mass.fast_mass(sequence="DER", ion_type='y'), 0.5]
-                }
+                })
         assert key['protein_group'] == 'P36578'
         assert key['protein_name'] == ''
         assert key['genes'] == ''
@@ -381,11 +390,11 @@ class Test_tag_library():
 
             assert key['iRT'] == 0.57
 
-            assert key['frags'] == {
+            assert_frags_approx(key['frags'], {
                         'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+(tag.mass+tag.delta[i]), 1],
                         'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+(tag.mass+tag.delta[i]), 0.85],
                         'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y')+(tag.mass+tag.delta[i]), 0.5]
-                    }
+                    })
             
             assert key['protein_group'] == 'P36578'
 
@@ -478,11 +487,11 @@ class Test_tag_library():
         assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
         assert key['prec_z'] == 2
         assert key['iRT'] == 0.57
-        assert key['frags'] == {
+        assert_frags_approx(key['frags'], {
                     'b3_1': [mass.fast_mass(sequence="PEP", ion_type='b')+tag.mass, 1],
                     'b4_1': [mass.fast_mass(sequence="PEPT", ion_type='b')+tag.mass, 0.85],
                     'y3_1': [mass.fast_mass(sequence="DEK", ion_type='y')+tag.mass, 0.5]
-                }
+                })
         assert key['protein_group'] == 'P36578'
         assert key['protein_name'] == ''
         assert key['genes'] == ''

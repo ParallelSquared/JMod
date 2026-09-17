@@ -18,6 +18,15 @@ import sys, os
 from pyteomics import mass
 from pyteomics.auxiliary.structures import PyteomicsError
 
+def assert_frags_approx(actual, expected, rtol=3e-7):
+    """Fragment dicts match keywise; m/z & intensity within f32 quantization."""
+    assert set(actual) == set(expected), (set(actual) ^ set(expected))
+    for k, (mz, inten) in expected.items():
+        amz, aint = actual[k]
+        assert amz == pytest.approx(mz, rel=rtol), (k, amz, mz)
+        assert aint == pytest.approx(inten, rel=rtol), (k, aint, inten)
+
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
@@ -277,7 +286,7 @@ class Test_fragment_seq():
 class Test_gen_isotopes_dict():
 
     def compare_outputs(self, output, expected):
-        assert output['frags'] == expected['frags']
+        assert_frags_approx(output['frags'], expected['frags'])
         assert np.allclose(output['spectrum'], expected['spectrum'])
         assert np.array_equal(output['ordered_frags'], expected['ordered_frags'])
 
@@ -533,7 +542,7 @@ class Test_gen_isotopes_dict():
 class Test_iso_library():
 
     def compare_outputs(self, output, expected):
-        assert output['frags'] == expected['frags']
+        assert_frags_approx(output['frags'], expected['frags'])
         assert np.allclose(output['spectrum'], expected['spectrum'])
         assert np.array_equal(output['ordered_frags'], expected['ordered_frags'])
 
@@ -844,7 +853,7 @@ class Test_iso_library():
 class Test_iso_library_multi():
 
     def compare_outputs(self, output, expected):
-        assert output['frags'] == expected['frags']
+        assert_frags_approx(output['frags'], expected['frags'])
         assert np.allclose(output['spectrum'], expected['spectrum'])
         assert np.array_equal(output['ordered_frags'], expected['ordered_frags'])
 

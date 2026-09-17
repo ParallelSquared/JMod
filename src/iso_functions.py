@@ -305,8 +305,8 @@ def _alloc_iso_buffers(library, all_keys, n_iso):
 
     return (spec_offsets,
             spec_lengths,
-            np.empty(total, dtype=np.float64),
-            np.empty(total, dtype=np.float64),
+            np.empty(total, dtype=np.float32),
+            np.empty(total, dtype=np.float32),
             np.empty(total, dtype=np.int32))
 
 
