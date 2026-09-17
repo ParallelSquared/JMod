@@ -210,6 +210,22 @@ _LIBRARY_READERS = {
 }
 
 
+def _stable_sort_permutation(primary, secondary):
+    """Permutation that stably sorts by (primary, then secondary).
+
+    Identical to ``np.lexsort((secondary, primary))`` — polars' sort with
+    maintain_order=True is stable, so equal keys keep original order — but
+    multithreaded (~60x faster on 100M+ rows).
+    """
+    import polars as pl
+    return (
+        pl.DataFrame({"p": primary, "s": secondary})
+        .with_row_index("i")
+        .sort(["p", "s"], maintain_order=True)["i"]
+        .to_numpy().astype(np.int64, copy=False)
+    )
+
+
 def _load_library_frame(spec_lib_file, file_type):
     """Read a library file into a DataFrame with canonical column names.
 
@@ -1326,7 +1342,9 @@ class SpectrumLibraryStore:
         one large array over the combined size instead of target + combined.
         The input store is unusable afterward; every caller rebinds.
         """
+        from src.logger import logger
         import tqdm
+        import time
 
         decoys = cls._decoy_sequences_and_token_masses(target_store, rules, tag)
         all_keys = decoys.all_keys
@@ -1335,10 +1353,14 @@ class SpectrumLibraryStore:
         M = len(valid_indices)
 
         progress = tqdm.tqdm(total=3, desc="Building decoy store", unit="stage", leave=False)
+        _t_stage = time.perf_counter()
 
         def _stage(name):
+            nonlocal _t_stage
             progress.set_postfix_str(name)
             progress.update(1)
+            logger.info(f"Decoy store: {name} ({time.perf_counter() - _t_stage:.1f}s)")
+            _t_stage = time.perf_counter()
 
         d_frag_counts, codes, intensities, d_frag_mz, frag_prec = \
             cls._decoy_fragment_mz(target_store, decoys, tag)
@@ -1392,10 +1414,9 @@ class SpectrumLibraryStore:
         target_store.frag_data = None
         _stage("assembled arrays")
 
-        # Spectrum: per-decoy stable mz sort via one global lexsort, matching
-        # frag_to_peak's kind="stable" (lexsort is stable, so equal m/z keeps
-        # target frag order)
-        perm_spec = np.lexsort((d_frag_mz, frag_prec))
+        # Spectrum: per-decoy stable mz sort, matching frag_to_peak's
+        # kind="stable" (equal m/z keeps target frag order)
+        perm_spec = _stable_sort_permutation(frag_prec, d_frag_mz)
         del frag_prec
         target_total_spec = int(target_store.spectrum_lengths.sum()) if N > 0 else 0
         d_spec_offsets = d_frag_offsets - target_total_frag + target_total_spec
@@ -2095,7 +2116,7 @@ class SpectrumLibraryStore:
         # per-precursor frag_to_peak argsorts; equal-m/z ties keep
         # first-appearance order, matching frag_to_peak's kind="stable"
         pidx = frag_df["_pidx"].to_numpy()
-        perm = np.lexsort((frag_mz, pidx))
+        perm = _stable_sort_permutation(pidx, frag_mz)
         spectrum_mz = np.ascontiguousarray(frag_mz[perm])
         spectrum_int = np.ascontiguousarray(frag_int[perm])
         frag_names_data = frag_keys_data[perm]
