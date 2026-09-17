@@ -229,6 +229,28 @@ class TestFinalizeBitIdentity:
         store.finalize_spectra()
 
 
+class TestMemmapFinalize:
+    """finalize_spectra(memmap_dir=...) must produce byte-identical arrays,
+    backed by read-only .npy maps."""
+
+    def test_memmap_matches_ram(self, tmp_path):
+        ram = parse_fixture("library_edgecases", "tsv").finalize_spectra()
+        mm = parse_fixture("library_edgecases", "tsv").finalize_spectra(
+            memmap_dir=str(tmp_path), memmap_threshold=0)
+        for field in ("spectrum_mz", "spectrum_int", "frag_names_data",
+                      "frag_mz", "frag_int", "frag_keys_data"):
+            a, e = np.asarray(getattr(mm, field)), np.asarray(getattr(ram, field))
+            assert a.dtype == e.dtype and a.tobytes() == e.tobytes(), field
+            assert isinstance(getattr(mm, field), np.memmap), field
+            assert not getattr(mm, field).flags.writeable, field
+        assert os.path.exists(os.path.join(str(tmp_path), "spectrum_mz.npy"))
+
+    def test_threshold_keeps_small_stores_in_ram(self, tmp_path):
+        store = parse_fixture("library_edgecases", "tsv").finalize_spectra(
+            memmap_dir=str(tmp_path))  # default threshold far above fixture size
+        assert not isinstance(store.spectrum_mz, np.memmap)
+
+
 class TestCacheVersioning:
     def test_round_trip_current_version(self, tmp_path):
         store = parse_fixture("library_edgecases", "tsv")

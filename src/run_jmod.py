@@ -516,7 +516,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                                   tag=config.tag,
                                                   n_iso=config.args.num_iso)
     else:
-        spectrumLibrary.finalize_spectra()
+        # Large libraries: back the six big fragment/spectrum arrays with
+        # read-only memory maps so cold pages evict to SSD instead of
+        # churning the memory compressor
+        spectrumLibrary.finalize_spectra(
+            memmap_dir=os.path.join(results_folder_path, "library_mmap"))
 
     spectrumLibrary.bulk_set_top_n(config.top_n)
     logger.info("Finished Library Setup")

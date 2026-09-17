@@ -648,19 +648,40 @@ class SpectrumLibraryStore:
         length = self.spectrum_lengths[idx]
         return self.frag_names_data[off:off + length]
 
-    def finalize_spectra(self):
+    def finalize_spectra(self, memmap_dir=None, memmap_threshold=100_000_000):
         """Materialize the mz-sorted spectrum arrays from frag arrays + perm.
 
         Idempotent: no-op when already finalized. Called once, at the point
         the search first consumes sorted spectra (iso_library is the
         finalizer on iso runs — it rebuilds spectra itself and discards the
-        perm)."""
+        perm).
+
+        When *memmap_dir* is given and the library has at least
+        *memmap_threshold* fragments, the six large fragment/spectrum arrays
+        are backed by read-only .npy memory maps instead of anonymous RAM:
+        cold pages are evicted for free and re-read from SSD, rather than
+        cycling through the memory compressor. The store becomes read-only
+        at the fragment level (set_spectrum etc. will fail on the maps)."""
         if self.spectrum_perm is None:
             return self
         total = len(self.frag_mz)
-        spectrum_mz = np.empty(total, dtype=np.float32)
-        spectrum_int = np.empty(total, dtype=np.float32)
-        frag_names_data = np.empty(total, dtype=np.int32)
+        use_mmap = memmap_dir is not None and total >= memmap_threshold
+        if use_mmap:
+            from numpy.lib.format import open_memmap
+            from src.logger import logger
+            os.makedirs(memmap_dir, exist_ok=True)
+            logger.info(f"Finalizing spectra into memory maps under {memmap_dir} "
+                        f"({total:,} fragments)")
+            def _mm(name, dtype):
+                return open_memmap(os.path.join(memmap_dir, name + ".npy"),
+                                   mode='w+', dtype=dtype, shape=(total,))
+            spectrum_mz = _mm("spectrum_mz", np.float32)
+            spectrum_int = _mm("spectrum_int", np.float32)
+            frag_names_data = _mm("frag_names_data", np.int32)
+        else:
+            spectrum_mz = np.empty(total, dtype=np.float32)
+            spectrum_int = np.empty(total, dtype=np.float32)
+            frag_names_data = np.empty(total, dtype=np.int32)
         # Chunk by entry blocks so the int64 gather index stays bounded
         # (a single global index would be ~8 B/fragment transient)
         n = len(self.frag_offsets)
@@ -674,6 +695,21 @@ class SpectrumLibraryStore:
             spectrum_mz[lo:hi] = self.frag_mz[g]
             spectrum_int[lo:hi] = self.frag_int[g]
             frag_names_data[lo:hi] = self.frag_keys_data[g]
+        if use_mmap:
+            # flush the filled maps, reopen read-only (clean file-backed
+            # pages), and move the frag-side arrays onto disk the same way
+            for name, arr in (("spectrum_mz", spectrum_mz),
+                              ("spectrum_int", spectrum_int),
+                              ("frag_names_data", frag_names_data)):
+                arr.flush()
+            del spectrum_mz, spectrum_int, frag_names_data
+            spectrum_mz = np.load(os.path.join(memmap_dir, "spectrum_mz.npy"), mmap_mode='r')
+            spectrum_int = np.load(os.path.join(memmap_dir, "spectrum_int.npy"), mmap_mode='r')
+            frag_names_data = np.load(os.path.join(memmap_dir, "frag_names_data.npy"), mmap_mode='r')
+            for name in ("frag_mz", "frag_int", "frag_keys_data"):
+                path = os.path.join(memmap_dir, name + ".npy")
+                np.save(path, getattr(self, name))
+                setattr(self, name, np.load(path, mmap_mode='r'))
         self.spectrum_mz = spectrum_mz
         self.spectrum_int = spectrum_int
         self.frag_names_data = frag_names_data
