@@ -55,6 +55,118 @@ def _ensure_frag_codes(value):
     return encode_frag_names(arr)
 
 
+class KeyIndex:
+    """Compact replacement for the (mod_seq, charge) -> row dict.
+
+    Stores an int64 hash per row plus its argsort; lookup is searchsorted on
+    the sorted hashes followed by a verify scan against the store's mod_seq /
+    prec_z arrays (collision handling). ~12 B/row instead of ~200 B/row of
+    dict + tuple objects. Never serialized — load() rebuilds it, so
+    per-process string-hash salting is fine.
+
+    Charge is canonicalized to float before hashing; int-charge lookups work
+    because hash(2) == hash(2.0) and verification compares numerically —
+    preserving the laxity some callers rely on. Read-only: the store's
+    mutating dict API is unavailable when backed by a KeyIndex.
+    """
+
+    __slots__ = ('_store', '_sorted', '_order')
+
+    def __init__(self, store):
+        mod_seq = store.mod_seq
+        prec_z = store.prec_z.tolist()
+        n = len(mod_seq)
+        hashes = np.fromiter(
+            (hash((mod_seq[i], prec_z[i])) for i in range(n)),
+            dtype=np.int64, count=n,
+        )
+        self._store = store
+        self._order = np.argsort(hashes, kind='stable')
+        self._sorted = hashes[self._order]
+
+    @staticmethod
+    def _canonical(key):
+        try:
+            return (key[0], float(key[1]))
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def _find(self, key):
+        k = self._canonical(key)
+        if k is None:
+            return -1
+        h = hash(k)
+        lo = int(np.searchsorted(self._sorted, h, side='left'))
+        hi = int(np.searchsorted(self._sorted, h, side='right'))
+        mod_seq, prec_z = self._store.mod_seq, self._store.prec_z
+        for j in range(lo, hi):
+            i = int(self._order[j])
+            if mod_seq[i] == k[0] and prec_z[i] == k[1]:
+                return i
+        return -1
+
+    def __getitem__(self, key):
+        i = self._find(key)
+        if i < 0:
+            raise KeyError(key)
+        return i
+
+    def get(self, key, default=None):
+        i = self._find(key)
+        return default if i < 0 else i
+
+    def __contains__(self, key):
+        return self._find(key) >= 0
+
+    def __len__(self):
+        return len(self._sorted)
+
+    def __iter__(self):
+        mod_seq, prec_z = self._store.mod_seq, self._store.prec_z
+        for i in range(len(self._sorted)):
+            yield (mod_seq[i], float(prec_z[i]))
+
+    def keys(self):
+        return iter(self)
+
+    def items(self):
+        mod_seq, prec_z = self._store.mod_seq, self._store.prec_z
+        for i in range(len(self._sorted)):
+            yield (mod_seq[i], float(prec_z[i])), i
+
+    def values(self):
+        return iter(range(len(self._sorted)))
+
+    def batch(self, keys):
+        """Vectorized multi-key lookup; raises KeyError on any miss."""
+        key_list = list(keys)
+        hashes = np.fromiter(
+            (hash((k[0], float(k[1]))) for k in key_list),
+            dtype=np.int64, count=len(key_list),
+        )
+        los = np.searchsorted(self._sorted, hashes, side='left')
+        his = np.searchsorted(self._sorted, hashes, side='right')
+        mod_seq, prec_z = self._store.mod_seq, self._store.prec_z
+        out = []
+        for k, lo, hi in zip(key_list, los, his):
+            for j in range(lo, hi):
+                i = int(self._order[j])
+                if mod_seq[i] == k[0] and prec_z[i] == float(k[1]):
+                    out.append(i)
+                    break
+            else:
+                raise KeyError(k)
+        return out
+
+    def __setitem__(self, key, value):
+        raise NotImplementedError(
+            "KeyIndex-backed stores are read-only; build via a factory instead")
+
+    def __delitem__(self, key):
+        raise NotImplementedError(
+            "KeyIndex-backed stores are read-only; build via a factory instead")
+
+
 class _TargetView:
     """Lightweight proxy that restricts iteration to target entries only.
 
@@ -66,24 +178,22 @@ class _TargetView:
     ``MZRTfit`` can safely mutate the copy without affecting the combined store.
     """
 
-    __slots__ = ('_store', '_target_keys')
+    __slots__ = ('_store',)
 
     def __init__(self, store):
         self._store = store
-        # Build ordered list of target keys (indices < n_targets)
-        self._target_keys = [
-            k for k, idx in store.key_to_idx.items()
-            if idx < store.n_targets
-        ]
 
     def __len__(self):
-        return len(self._target_keys)
+        return self._store.n_targets
 
     def __iter__(self):
-        return iter(self._target_keys)
+        s = self._store
+        for i in range(s.n_targets):
+            yield (s.mod_seq[i], float(s.prec_z[i]))
 
     def __contains__(self, key):
-        return key in self._store.key_to_idx and self._store.key_to_idx[key] < self._store.n_targets
+        idx = self._store.key_to_idx.get(key)
+        return idx is not None and idx < self._store.n_targets
 
     def __getitem__(self, key):
         return self._store[key]
@@ -92,16 +202,16 @@ class _TargetView:
         self._store[key] = value
 
     def keys(self):
-        return iter(self._target_keys)
+        return iter(self)
 
     def values(self):
         store = self._store
-        for key in self._target_keys:
+        for key in self:
             yield store[key]
 
     def items(self):
         store = self._store
-        for key in self._target_keys:
+        for key in self:
             yield key, store[key]
 
     def get(self, key, default=None):
@@ -120,17 +230,15 @@ class _TargetView:
 
     def __deepcopy__(self, memo):
         """Return a target-only SpectrumLibraryStore (independent copy)."""
-        import copy
         s = self._store
         n = s.n_targets
-        # Target-only key_to_idx
-        k2i = {k: idx for k, idx in s.key_to_idx.items() if idx < n}
-        # Slice spectrum data for target entries
+        # Slice spectrum data for target entries; key index is rebuilt from
+        # the sliced arrays (keys are always (mod_seq[i], float(prec_z[i])))
         target_spec_total = int(s.spectrum_lengths[:n].sum())
         target_frag_total = int(s.frag_lengths[:n].sum())
         target_topn_total = int(s.top_n_lengths[:n].sum())
         return SpectrumLibraryStore(
-            key_to_idx=copy.deepcopy(k2i, memo),
+            key_to_idx=None,
             mod_seq=s.mod_seq[:n].copy(),
             seq=s.seq[:n].copy(),
             prec_mz=s.prec_mz[:n].copy(),
@@ -399,7 +507,6 @@ class SpectrumLibraryStore:
         n_targets=None, n_decoys=None, is_decoy=None,
         parent_key=None,  # deprecated, ignored
     ):
-        self.key_to_idx = key_to_idx
         self.mod_seq = mod_seq
         self.seq = seq
         self.prec_mz = prec_mz
@@ -423,8 +530,11 @@ class SpectrumLibraryStore:
         self.top_n_offsets = top_n_offsets
         self.top_n_lengths = top_n_lengths
         self.parent_idx = parent_idx
+        # key_to_idx=None -> compact KeyIndex built from the arrays;
+        # a plain dict is still accepted (from_dict / timeplex paths)
+        self.key_to_idx = KeyIndex(self) if key_to_idx is None else key_to_idx
         # Target/decoy tracking — defaults to all-target
-        n = len(key_to_idx)
+        n = len(self.key_to_idx)
         self.n_targets = n_targets if n_targets is not None else n
         self.n_decoys = n_decoys if n_decoys is not None else 0
         self.is_decoy = is_decoy if is_decoy is not None else np.zeros(n, dtype=bool)
@@ -609,6 +719,8 @@ class SpectrumLibraryStore:
     def resolve_indices(self, keys):
         """Convert an iterable of keys to a list of internal integer indices."""
         k2i = self.key_to_idx
+        if isinstance(k2i, KeyIndex):
+            return k2i.batch(keys)
         return [k2i[k] for k in keys]
 
     def get_spectra_batch(self, indices):
@@ -888,11 +1000,9 @@ class SpectrumLibraryStore:
         return self.shallow_copy()
 
     def build_key_index(self):
-        """Rebuild ``key_to_idx`` from ``mod_seq`` and ``prec_z`` arrays."""
-        self.key_to_idx = {}
-        for i in range(len(self.mod_seq)):
-            key = (self.mod_seq[i], self.prec_z[i])
-            self.key_to_idx[key] = i
+        """(Re)build the compact key index from mod_seq/prec_z."""
+        self.key_to_idx = KeyIndex(self)
+
 
     def shallow_copy(self):
         """Return a new store sharing spectrum data but with independent
@@ -1035,7 +1145,7 @@ class SpectrumLibraryStore:
             is_decoy_arr = np.zeros(n_total, dtype=bool)
 
         store = cls(
-            key_to_idx={},
+            key_to_idx=None,
             mod_seq=data['mod_seq'],
             seq=data['seq'],
             prec_mz=data['prec_mz'],
@@ -1067,7 +1177,6 @@ class SpectrumLibraryStore:
             n_decoys=n_decoys,
             is_decoy=is_decoy_arr,
         )
-        store.build_key_index()
         return store
 
     # ------------------------------------------------------------------
@@ -1267,7 +1376,7 @@ class SpectrumLibraryStore:
 
         all_keys = list(target_store.keys())
         N = len(all_keys)
-        existing_keys = set(target_store.key_to_idx.keys())
+        existing_keys = target_store.key_to_idx  # containment probe (dict or KeyIndex)
         seen_decoy_keys = set()
         tag_re = re.compile(f"(\\({tag.name}.*?\\))") if tag else None
         close_d = {"[": "]", "(": ")"}
@@ -1482,12 +1591,7 @@ class SpectrumLibraryStore:
         total_frags = len(codes)
         _stage("computed decoy m/z")
 
-        # --- Assemble combined store ---
-        key_to_idx = {}
-        for i, key in enumerate(all_keys):
-            key_to_idx[key] = i
-        for j, dkey in enumerate(decoys.keys):
-            key_to_idx[dkey] = N + j
+        # --- Assemble combined store (key index rebuilt from the arrays) ---
 
         decoy_mod_seq_arr = np.array(decoys.mod_seqs, dtype=object)
         decoy_seq_arr = np.array(
@@ -1570,7 +1674,7 @@ class SpectrumLibraryStore:
         is_decoy[N:] = True
 
         return cls(
-            key_to_idx=key_to_idx,
+            key_to_idx=None,
             mod_seq=mod_seq,
             seq=seq,
             prec_mz=prec_mz,
@@ -1717,14 +1821,14 @@ class SpectrumLibraryStore:
         # --- Phase 2: Pre-compute keys and filter collisions ---
         # Peptides with zero tag sites produce identical keys across channels.
         # Deduplicate so key_to_idx and arrays stay in sync.
-        idx_to_key = {v: k for k, v in target_store.key_to_idx.items()}
+        prec_z_list = target_store.prec_z.tolist()
 
         # valid: list of (entry_idx, channel_idx, new_seq, orig_charge)
         valid = []
         seen_keys = set()
         n_collisions = 0
         for i in range(N):
-            orig_charge = idx_to_key[i][1]
+            orig_charge = prec_z_list[i]
             for c in range(M):
                 tag_n = tag.channel_names[c]
                 replacement = tag.name + "-" + str(tag_n)
@@ -1777,8 +1881,7 @@ class SpectrumLibraryStore:
         out_frag_offsets = np.empty(V, dtype=np.int64)
         out_frag_lengths = np.empty(V, dtype=np.int32)
 
-        # Fill scalar arrays and build key_to_idx
-        key_to_idx = {}
+        # Fill scalar arrays (key index is rebuilt from the arrays)
         for out_idx, (i, c, new_seq, orig_charge) in enumerate(valid):
             tag_mass = tag.channel_masses[c]
             out_mod_seq[out_idx] = new_seq
@@ -1794,7 +1897,6 @@ class SpectrumLibraryStore:
             out_protein_name.codes[out_idx] = target_store.protein_name.codes[i]
             out_genes.codes[out_idx] = target_store.genes.codes[i]
             out_uniprot_id.codes[out_idx] = target_store.uniprot_id.codes[i]
-            key_to_idx[(new_seq, orig_charge)] = out_idx
             source_channel_to_out_idx[(i, c)] = out_idx
 
             # Resolve parent_idx: find the parent target's output index in the same channel
@@ -1855,7 +1957,7 @@ class SpectrumLibraryStore:
         out_n_decoys = int(np.sum(out_is_decoy))
 
         return cls(
-            key_to_idx=key_to_idx,
+            key_to_idx=None,
             mod_seq=out_mod_seq,
             seq=out_seq,
             prec_mz=out_prec_mz,
@@ -2198,7 +2300,6 @@ class SpectrumLibraryStore:
         n = prec_df.height
         mod_seq_list = prec_df["_mod_pep"].to_list()
         prec_z_list = prec_df["_prec_z"].to_list()
-        key_to_idx = {uid: i for i, uid in enumerate(zip(mod_seq_list, prec_z_list))}
 
         mod_seq_arr = np.array(mod_seq_list, dtype=object)
         seq_arr = np.array(prec_df["_seq"].to_list(), dtype=object)
@@ -2250,7 +2351,7 @@ class SpectrumLibraryStore:
                     f"in {time.perf_counter() - t_start:.1f}s")
 
         return cls(
-            key_to_idx=key_to_idx,
+            key_to_idx=None,
             mod_seq=mod_seq_arr,
             seq=seq_arr,
             prec_mz=prec_mz_arr,
@@ -2336,7 +2437,7 @@ class SpectrumLibraryStore:
     def _empty(cls):
         n = 0
         return cls(
-            key_to_idx={},
+            key_to_idx=None,
             mod_seq=np.empty(n, dtype=object),
             seq=np.empty(n, dtype=object),
             prec_mz=np.empty(n, dtype=np.float64),
@@ -2377,12 +2478,8 @@ class SpectrumLibraryStore:
             if old_annotation in old_seq:
                 self.mod_seq[i] = old_seq.replace(old_annotation, new_annotation)
 
-        new_key_to_idx = {}
-        for (mod_seq_key, charge), idx in self.key_to_idx.items():
-            if old_annotation in mod_seq_key:
-                mod_seq_key = mod_seq_key.replace(old_annotation, new_annotation)
-            new_key_to_idx[(mod_seq_key, charge)] = idx
-        self.key_to_idx = new_key_to_idx
+        # Keys derive from mod_seq, so rebuilding the index resyncs them
+        self.build_key_index()
 
         return self
 
