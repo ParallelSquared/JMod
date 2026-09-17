@@ -1475,7 +1475,10 @@ class SpectrumLibraryStore:
         Parameters
         ----------
         target_store : SpectrumLibraryStore
-            The untagged library.
+            The untagged library. CONSUMED: its large arrays are released
+            as soon as they are no longer needed, so the M-channel output
+            does not coexist with a full copy of the input. Every caller
+            rebinds.
         tag : massTag
             Mass tag with ``channel_names``, ``channel_masses``,
             ``rules``, ``name``.
@@ -1487,6 +1490,13 @@ class SpectrumLibraryStore:
         import tqdm
 
         logger.info(f"Building tagged library (pre-allocated) with tag: {tag.name}")
+
+        # Tagged spectra are rebuilt from frag_data below; the input's
+        # spectrum arrays are never read, so release them before the
+        # M-channel output is allocated
+        target_store.spectrum_mz = None
+        target_store.spectrum_int = None
+        target_store.frag_names_data = None
 
         if source_channel:
             source_channel_mass = tag.mass_dict[source_channel]
@@ -1688,6 +1698,9 @@ class SpectrumLibraryStore:
                 out_frag_names_data[cursor:cursor + flen] = src_keys[order]
 
             cursor += flen
+
+        target_store.frag_data = None
+        target_store.frag_keys_data = None
 
         # Top-N: empty (recomputed downstream when needed)
         out_top_n_data = np.empty(0, dtype=np.int32)
