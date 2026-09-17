@@ -74,15 +74,28 @@ class KeyIndex:
 
     def __init__(self, store):
         mod_seq = store.mod_seq
-        prec_z = store.prec_z.tolist()
         n = len(mod_seq)
-        hashes = np.fromiter(
-            (hash((mod_seq[i], prec_z[i])) for i in range(n)),
-            dtype=np.int64, count=n,
-        )
+        if n > 2_000_000:
+            from src.logger import logger
+            logger.info(f"Building key index ({n:,} entries)")
+        import time
+        t0 = time.perf_counter()
+        hashes = np.empty(n, dtype=np.int64)
+        # chunked tolist keeps the Python-float transient bounded (~4M objects)
+        chunk = 4_000_000
+        for a in range(0, n, chunk):
+            b = min(a + chunk, n)
+            zs = store.prec_z[a:b].tolist()
+            hashes[a:b] = np.fromiter(
+                (hash((mod_seq[i], zs[i - a])) for i in range(a, b)),
+                dtype=np.int64, count=b - a,
+            )
         self._store = store
         self._order = np.argsort(hashes, kind='stable')
         self._sorted = hashes[self._order]
+        if n > 2_000_000:
+            from src.logger import logger
+            logger.info(f"Key index built ({time.perf_counter() - t0:.1f}s)")
 
     @staticmethod
     def _canonical(key):
