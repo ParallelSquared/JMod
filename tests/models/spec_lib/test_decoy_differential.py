@@ -141,6 +141,15 @@ class TestDecoyDifferential:
             expected = pickle.load(f)
         assert_decoy_snapshots_match(snap, expected, label=f"{case}: ")
 
+    def test_consumes_input_store(self):
+        # from_target_with_decoys consumes its input: large arrays released
+        # during assembly so peak memory stays near the combined-store size
+        store = make_collision_store()
+        create_decoy_lib(store, rules="rev", tag=None)
+        for field in ("frag_keys_data", "frag_data", "spectrum_mz",
+                      "spectrum_int", "frag_names_data"):
+            assert getattr(store, field) is None, field
+
     def test_collision_removed(self):
         combined = create_decoy_lib(make_collision_store(), rules="shuffle", tag=None)
         # AAK's decoy collides with the AAK target and is discarded

@@ -1116,40 +1116,24 @@ class SpectrumLibraryStore:
     # Factory: columnar decoy generation (no worker pool, no dicts)
     # ------------------------------------------------------------------
 
-    @classmethod
-    def from_target_with_decoys(cls, target_store, rules, tag=None):
-        """Build a combined target+decoy store columnar-style.
+    @staticmethod
+    def _decoy_sequences_and_token_masses(target_store, rules, tag):
+        """Per-precursor Python pass: decoy sequence strings, collision
+        removal, and flat per-token prefix/suffix mass sums.
 
-        Replaces the worker-pool path: decoy fragment names are the target's
-        (only m/z changes), so fragment codes/intensities are gathered from
-        the target arrays and only the masses are recomputed, via per-token
-        prefix sums. b-ion m/z is bit-identical to the per-fragment
-        ``fast_mass`` path; y-ion m/z (suffix sums) can differ by <=1 ULP.
-
-        Decoy sequences come from the same ``decoy_permutation`` /
-        ``change_seq`` logic as the legacy path, so the generated decoys are
-        identical strings.
+        prefix[k] = masses of first k+1 tokens summed left-to-right (the
+        exact fast_mass accumulation order, so b ions are bit-identical);
+        suffix[k] = last k+1 tokens (y ions, float-noise-level differences).
         """
         from src.utils.parse_peptides import (
             parse_peptide, decoy_permutation, change_seq, extract_mod,
         )
-        from pyteomics.mass import std_aa_mass, std_ion_comp, nist_mass, calculate_mass
+        from pyteomics.mass import std_aa_mass
         from src import config
         from src.logger import logger
-        from src.utils.frag_encoding import get_ion_type, get_index, get_charge, get_loss
         from array import array
+        from types import SimpleNamespace
         import tqdm
-
-        # Constants matching pyteomics.mass.fast_mass's exact op order
-        H2O = nist_mass['H'][0][0] * 2 + nist_mass['O'][0][0]
-        PROTON = nist_mass['H+'][0][0]
-        ion_delta = {
-            it: sum(nist_mass[el][0][0] * num for el, num in std_ion_comp[it].items())
-            for it in ('b', 'y')
-        }
-        # Loss codes 0-3 are the only encodable losses (frag_encoding._INT_TO_LOSS)
-        loss_table = np.array([0.0, calculate_mass('H2O'), calculate_mass('NH3'),
-                               calculate_mass('H3PO4')], dtype=np.float64)
 
         all_keys = list(target_store.keys())
         N = len(all_keys)
@@ -1174,9 +1158,6 @@ class SpectrumLibraryStore:
         decoy_mod_seqs = []
         decoy_keys = []
         token_lengths = []
-        # Per-token prefix/suffix mass sums, flat across surviving decoys.
-        # prefix[k] = masses of first k+1 tokens summed left-to-right (exact
-        # fast_mass order for b ions); suffix[k] = last k+1 tokens.
         prefix_aa = array('d'); suffix_aa = array('d')
         prefix_mod = array('d'); suffix_mod = array('d')
         prefix_tag = array('d'); suffix_tag = array('d')
@@ -1215,8 +1196,6 @@ class SpectrumLibraryStore:
                          if t.strip("()") in tag.mass_dict])
                     for grp in new_tags
                 ]
-            else:
-                tag_mass = None
 
             valid_indices.append(i)
             decoy_mod_seqs.append(new_seq)
@@ -1248,68 +1227,136 @@ class SpectrumLibraryStore:
             )
 
         M = len(valid_indices)
-        valid_indices = np.array(valid_indices, dtype=np.intp)
         token_lengths = np.array(token_lengths, dtype=np.int64)
         token_offsets = np.zeros(M, dtype=np.int64)
         if M > 1:
             token_offsets[1:] = np.cumsum(token_lengths[:-1])
-        prefix_aa = np.frombuffer(prefix_aa, dtype=np.float64)
-        prefix_mod = np.frombuffer(prefix_mod, dtype=np.float64)
-        suffix_aa = np.frombuffer(suffix_aa, dtype=np.float64)
-        suffix_mod = np.frombuffer(suffix_mod, dtype=np.float64)
-        if tag:
-            prefix_tag = np.frombuffer(prefix_tag, dtype=np.float64)
-            suffix_tag = np.frombuffer(suffix_tag, dtype=np.float64)
+        return SimpleNamespace(
+            all_keys=all_keys,
+            valid_indices=np.array(valid_indices, dtype=np.intp),
+            mod_seqs=decoy_mod_seqs,
+            keys=decoy_keys,
+            token_offsets=token_offsets,
+            prefix_aa=np.frombuffer(prefix_aa, dtype=np.float64),
+            suffix_aa=np.frombuffer(suffix_aa, dtype=np.float64),
+            prefix_mod=np.frombuffer(prefix_mod, dtype=np.float64),
+            suffix_mod=np.frombuffer(suffix_mod, dtype=np.float64),
+            prefix_tag=np.frombuffer(prefix_tag, dtype=np.float64) if tag else None,
+            suffix_tag=np.frombuffer(suffix_tag, dtype=np.float64) if tag else None,
+        )
 
-        # --- Gather decoy fragments from the target's arrays ---
-        d_frag_lengths = target_store.frag_lengths[valid_indices].astype(np.int32, copy=True)
-        d_frag_counts = d_frag_lengths.astype(np.int64)
+    @staticmethod
+    def _decoy_fragment_mz(target_store, decoys, tag):
+        """Vectorized decoy fragment m/z: gather codes/intensities from the
+        target's arrays (decoy fragment names are the target's) and recompute
+        masses in place, preserving fast_mass + convert_frags' exact op order:
+
+            ((sum + H2O) + delta_ion + z*H+)/z  -  loss/z  +  (tag_sum + mod_sum)/z
+        """
+        from pyteomics.mass import std_ion_comp, nist_mass, calculate_mass
+        from src.utils.frag_encoding import get_ion_type, get_index, get_charge, get_loss
+
+        H2O = nist_mass['H'][0][0] * 2 + nist_mass['O'][0][0]
+        PROTON = nist_mass['H+'][0][0]
+        ion_delta = {
+            it: sum(nist_mass[el][0][0] * num for el, num in std_ion_comp[it].items())
+            for it in ('b', 'y')
+        }
+        # Loss codes 0-3 are the only encodable losses (frag_encoding._INT_TO_LOSS)
+        loss_table = np.array([0.0, calculate_mass('H2O'), calculate_mass('NH3'),
+                               calculate_mass('H3PO4')], dtype=np.float64)
+
+        M = len(decoys.valid_indices)
+        d_frag_counts = target_store.frag_lengths[decoys.valid_indices].astype(np.int64)
         total_frags = int(d_frag_counts.sum())
-        frag_start = np.repeat(target_store.frag_offsets[valid_indices], d_frag_counts)
-        within = np.arange(total_frags, dtype=np.int64)
+        gather = np.arange(total_frags, dtype=np.int64)
         if M > 0:
-            frag_row_start = np.repeat(np.concatenate(([0], np.cumsum(d_frag_counts[:-1]))), d_frag_counts)
-            within = within - frag_row_start
-        gather = frag_start + within
+            gather -= np.repeat(np.concatenate(([0], np.cumsum(d_frag_counts[:-1]))), d_frag_counts)
+            gather += np.repeat(target_store.frag_offsets[decoys.valid_indices], d_frag_counts)
 
         codes = target_store.frag_keys_data[gather]
         intensities = target_store.frag_data[gather, 1]
+        del gather
 
         ion = get_ion_type(codes)
         if total_frags > 0 and not np.all((ion == 0) | (ion == 1)):
             raise ValueError("Decoy generation only supports b/y fragment ions")
-        frag_idx = get_index(codes).astype(np.int64)
-        z = get_charge(codes).astype(np.float64)
-        loss_m = loss_table[get_loss(codes)]
+        is_b = ion == 0
+        del ion
 
         frag_prec = np.repeat(np.arange(M, dtype=np.int64), d_frag_counts)
-        tok_base = token_offsets[frag_prec] + frag_idx - 1
-        is_b = ion == 0
+        # index into the [prefix | suffix] concatenations: prefix half for
+        # b ions, suffix half for y ions
+        tok_idx = decoys.token_offsets[frag_prec] + (get_index(codes).astype(np.int64) - 1)
+        tok_idx[~is_b] += len(decoys.prefix_aa)
 
-        aa_sum = np.where(is_b, prefix_aa[tok_base], suffix_aa[tok_base])
-        mod_sum = np.where(is_b, prefix_mod[tok_base], suffix_mod[tok_base])
+        z = get_charge(codes).astype(np.float64)
+        m = np.concatenate([decoys.prefix_aa, decoys.suffix_aa])[tok_idx]
+        m += H2O
+        m[is_b] += ion_delta['b']
+        m[~is_b] += ion_delta['y']
+        tmp = z * PROTON
+        m += tmp
+        m /= z
+        np.take(loss_table, get_loss(codes), out=tmp)
+        tmp /= z
+        m -= tmp
+        tmp = np.concatenate([decoys.prefix_mod, decoys.suffix_mod])[tok_idx]
         if tag:
-            tag_sum = np.where(is_b, prefix_tag[tok_base], suffix_tag[tok_base])
-        else:
-            tag_sum = np.float64(0.0)
+            tag_sum = np.concatenate([decoys.prefix_tag, decoys.suffix_tag])[tok_idx]
+            tag_sum += tmp
+            tmp = tag_sum
+        tmp /= z
+        m += tmp
+        return d_frag_counts, codes, intensities, m, frag_prec
 
-        # Same op order as fast_mass + convert_frags:
-        # ((sum + H2O) + delta_ion + z*H+)/z  -  loss/z  +  (tag_sum + mod_sum)/z
-        m = aa_sum + H2O
-        m = m + np.where(is_b, ion_delta['b'], ion_delta['y'])
-        fast = (m + PROTON * z) / z
-        d_frag_mz = fast - (loss_m / z) + ((tag_sum + mod_sum) / z)
+    @classmethod
+    def from_target_with_decoys(cls, target_store, rules, tag=None):
+        """Build a combined target+decoy store columnar-style.
 
-        # --- Assemble combined store (targets at [0,N), decoys at [N,N+M)) ---
+        Decoy sequences come from the same decoy_permutation / change_seq
+        logic as the legacy worker path, so the generated decoy strings and
+        collision removal are identical. Fragment codes and intensities are
+        gathered from the target's arrays; only m/z is recomputed (b ions
+        bit-identical, y ions within float noise). Targets occupy [0, N),
+        decoys [N, N+M).
+
+        CONSUMES target_store: each large target array is dropped right
+        after being copied into the combined store, so peak memory is roughly
+        one large array over the combined size instead of target + combined.
+        The input store is unusable afterward; every caller rebinds.
+        """
+        import tqdm
+
+        decoys = cls._decoy_sequences_and_token_masses(target_store, rules, tag)
+        all_keys = decoys.all_keys
+        valid_indices = decoys.valid_indices
+        N = len(all_keys)
+        M = len(valid_indices)
+
+        progress = tqdm.tqdm(total=3, desc="Building decoy store", unit="stage", leave=False)
+
+        def _stage(name):
+            progress.set_postfix_str(name)
+            progress.update(1)
+
+        d_frag_counts, codes, intensities, d_frag_mz, frag_prec = \
+            cls._decoy_fragment_mz(target_store, decoys, tag)
+        d_frag_lengths = d_frag_counts.astype(np.int32)
+        total_frags = len(codes)
+        _stage("computed decoy m/z")
+
+        # --- Assemble combined store ---
         key_to_idx = {}
         for i, key in enumerate(all_keys):
             key_to_idx[key] = i
-        for j, dkey in enumerate(decoy_keys):
+        for j, dkey in enumerate(decoys.keys):
             key_to_idx[dkey] = N + j
 
-        decoy_mod_seq_arr = np.array(decoy_mod_seqs, dtype=object)
+        decoy_mod_seq_arr = np.array(decoys.mod_seqs, dtype=object)
         decoy_seq_arr = np.array(
-            [re.sub(r'\(.*?\)', '', s) for s in decoy_mod_seqs], dtype=object)
+            [re.sub(r'\(.*?\)', '', s) if '(' in s else s for s in decoys.mod_seqs],
+            dtype=object)
 
         mod_seq = np.concatenate([target_store.mod_seq, decoy_mod_seq_arr])
         seq = np.concatenate([target_store.seq, decoy_seq_arr])
@@ -1325,7 +1372,8 @@ class SpectrumLibraryStore:
         parent_idx = np.full(N + M, -1, dtype=np.int64)
         parent_idx[N:] = valid_indices
 
-        # Frag arrays (target order preserved per decoy)
+        # Frag arrays (target order preserved per decoy); final arrays are
+        # allocated once and filled by slice to avoid intermediate copies
         target_total_frag = int(target_store.frag_lengths.sum()) if N > 0 else 0
         d_frag_offsets = np.empty(M, dtype=np.int64)
         if M > 0:
@@ -1335,20 +1383,42 @@ class SpectrumLibraryStore:
                 d_frag_offsets[1:] += target_total_frag
         frag_offsets = np.concatenate([target_store.frag_offsets, d_frag_offsets])
         frag_lengths = np.concatenate([target_store.frag_lengths, d_frag_lengths])
-        d_frag_data = np.column_stack((d_frag_mz, intensities))
-        frag_data = np.concatenate([target_store.frag_data, d_frag_data], axis=0)
         frag_keys_data = np.concatenate([target_store.frag_keys_data, codes])
+        target_store.frag_keys_data = None
+        frag_data = np.empty((target_total_frag + total_frags, 2), dtype=np.float64)
+        frag_data[:target_total_frag] = target_store.frag_data
+        frag_data[target_total_frag:, 0] = d_frag_mz
+        frag_data[target_total_frag:, 1] = intensities
+        target_store.frag_data = None
+        _stage("assembled arrays")
 
         # Spectrum: per-decoy stable mz sort via one global lexsort, matching
-        # frag_to_peak's kind="stable" (equal m/z keeps target frag order)
-        perm_spec = np.lexsort((within, d_frag_mz, frag_prec))
+        # frag_to_peak's kind="stable" (lexsort is stable, so equal m/z keeps
+        # target frag order)
+        perm_spec = np.lexsort((d_frag_mz, frag_prec))
+        del frag_prec
         target_total_spec = int(target_store.spectrum_lengths.sum()) if N > 0 else 0
         d_spec_offsets = d_frag_offsets - target_total_frag + target_total_spec
         spectrum_offsets = np.concatenate([target_store.spectrum_offsets, d_spec_offsets])
         spectrum_lengths = np.concatenate([target_store.spectrum_lengths, d_frag_lengths])
-        spectrum_mz = np.concatenate([target_store.spectrum_mz, d_frag_mz[perm_spec]])
-        spectrum_int = np.concatenate([target_store.spectrum_int, intensities[perm_spec]])
-        frag_names_data = np.concatenate([target_store.frag_names_data, codes[perm_spec]])
+
+        total_spec = target_total_spec + total_frags
+        spectrum_mz = np.empty(total_spec, dtype=np.float64)
+        spectrum_mz[:target_total_spec] = target_store.spectrum_mz
+        np.take(d_frag_mz, perm_spec, out=spectrum_mz[target_total_spec:])
+        target_store.spectrum_mz = None
+        del d_frag_mz
+        spectrum_int = np.empty(total_spec, dtype=np.float64)
+        spectrum_int[:target_total_spec] = target_store.spectrum_int
+        np.take(intensities, perm_spec, out=spectrum_int[target_total_spec:])
+        target_store.spectrum_int = None
+        del intensities
+        frag_names_data = np.empty(total_spec, dtype=np.int32)
+        frag_names_data[:target_total_spec] = target_store.frag_names_data
+        np.take(codes, perm_spec, out=frag_names_data[target_total_spec:])
+        target_store.frag_names_data = None
+        _stage("sorted decoy spectra")
+        progress.close()
 
         # Top-N: target top_n + empty for decoys (recomputed by bulk_set_top_n)
         top_n_data = target_store.top_n_data.copy()
