@@ -33,7 +33,7 @@ _STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
 
 # Version stamp for the .npz binary cache. Bump whenever parsing semantics
 # change so stale caches are re-parsed instead of silently loaded.
-STORE_VERSION = 1
+STORE_VERSION = 2
 
 
 class StaleStoreCacheError(ValueError):
@@ -210,6 +210,109 @@ _LIBRARY_READERS = {
 }
 
 
+class PooledStringColumn:
+    """Interned string column: uint32 codes into a shared pool of uniques.
+
+    Behaves like an object array for element reads/writes (``col[i]`` -> str,
+    ``col[i] = s`` interns) and for slicing/fancy indexing (returns a new
+    column sharing the pool), so per-entry consumers work unchanged while the
+    per-row storage cost is 4 bytes instead of a Python string reference.
+
+    ``np.asarray(col)`` decodes to a full object array — fine for tests and
+    small stores, a deliberate footgun at 100M rows; bulk paths should use
+    ``.codes`` / ``.pool`` directly.
+    """
+
+    __slots__ = ('codes', 'pool', '_rev')
+
+    def __init__(self, codes, pool):
+        self.codes = codes
+        self.pool = pool          # list[str], append-only, shared by reference
+        self._rev = None          # lazy {str: code} for intern-on-write
+
+    @classmethod
+    def from_strings(cls, values):
+        values = np.asarray(values, dtype=object)
+        if len(values) == 0:
+            return cls(np.empty(0, dtype=np.uint32), [])
+        uniques, inverse = np.unique(values, return_inverse=True)
+        return cls(inverse.astype(np.uint32), list(uniques))
+
+    def _reverse(self):
+        if self._rev is None or len(self._rev) != len(self.pool):
+            self._rev = {s: i for i, s in enumerate(self.pool)}
+        return self._rev
+
+    def intern(self, value):
+        rev = self._reverse()
+        code = rev.get(value)
+        if code is None:
+            code = len(self.pool)
+            self.pool.append(value)
+            rev[value] = code
+        return np.uint32(code)
+
+    def __getitem__(self, key):
+        if isinstance(key, (int, np.integer)):
+            return self.pool[self.codes[key]]
+        # slice or fancy index -> new column sharing the pool
+        return PooledStringColumn(self.codes[key], self.pool)
+
+    def __setitem__(self, key, value):
+        if isinstance(value, str):
+            self.codes[key] = self.intern(value)
+        else:
+            raise TypeError("PooledStringColumn only stores strings")
+
+    def __len__(self):
+        return len(self.codes)
+
+    def __iter__(self):
+        pool = self.pool
+        for c in self.codes:
+            yield pool[c]
+
+    def __array__(self, dtype=None, copy=None):
+        out = np.empty(len(self.codes), dtype=object)
+        pool = self.pool
+        for i, c in enumerate(self.codes):
+            out[i] = pool[c]
+        return out
+
+    def tolist(self):
+        pool = self.pool
+        return [pool[c] for c in self.codes]
+
+    def copy(self):
+        return PooledStringColumn(self.codes.copy(), self.pool)
+
+    def append(self, value):
+        """Grow by one element (rare path: store append)."""
+        self.codes = np.append(self.codes, self.intern(value)).astype(np.uint32)
+
+    @staticmethod
+    def concat(columns):
+        """Concatenate columns; fast path when all share one pool object."""
+        first_pool = columns[0].pool
+        if all(c.pool is first_pool for c in columns):
+            return PooledStringColumn(
+                np.concatenate([c.codes for c in columns]), first_pool)
+        merged = PooledStringColumn(np.empty(0, dtype=np.uint32), list(first_pool))
+        parts = []
+        for c in columns:
+            remap = np.array([merged.intern(s) for s in c.pool], dtype=np.uint32)
+            parts.append(remap[c.codes])
+        merged.codes = np.concatenate(parts) if parts else merged.codes
+        return merged
+
+
+def _as_pooled(values):
+    """Coerce an object array / list / column to PooledStringColumn."""
+    if isinstance(values, PooledStringColumn):
+        return values
+    return PooledStringColumn.from_strings(values)
+
+
 def _stable_sort_permutation(primary, secondary):
     """Permutation that stably sorts by (primary, then secondary).
 
@@ -303,10 +406,10 @@ class SpectrumLibraryStore:
         self.prec_z = prec_z
         self.iRT = iRT
         self.ion_mob = ion_mob
-        self.protein_group = protein_group
-        self.protein_name = protein_name
-        self.genes = genes
-        self.uniprot_id = uniprot_id
+        self.protein_group = _as_pooled(protein_group)
+        self.protein_name = _as_pooled(protein_name)
+        self.genes = _as_pooled(genes)
+        self.uniprot_id = _as_pooled(uniprot_id)
         self.spectrum_mz = spectrum_mz
         self.spectrum_int = spectrum_int
         self.spectrum_offsets = spectrum_offsets
@@ -658,6 +761,9 @@ class SpectrumLibraryStore:
         # Grow scalar arrays by 1
         for field in _SCALAR_STR_FIELDS:
             arr = self._str_array_for(field)
+            if isinstance(arr, PooledStringColumn):
+                arr.append(entry_dict.get(field, ''))
+                continue
             new_arr = np.empty(idx + 1, dtype=object)
             new_arr[:idx] = arr
             new_arr[idx] = entry_dict.get(field, '')
@@ -835,10 +941,14 @@ class SpectrumLibraryStore:
             prec_z=self.prec_z,
             iRT=self.iRT,
             ion_mob=self.ion_mob,
-            protein_group=self.protein_group,
-            protein_name=self.protein_name,
-            genes=self.genes,
-            uniprot_id=self.uniprot_id,
+            protein_group_codes=self.protein_group.codes,
+            protein_group_pool=np.array(self.protein_group.pool, dtype=object),
+            protein_name_codes=self.protein_name.codes,
+            protein_name_pool=np.array(self.protein_name.pool, dtype=object),
+            genes_codes=self.genes.codes,
+            genes_pool=np.array(self.genes.pool, dtype=object),
+            uniprot_id_codes=self.uniprot_id.codes,
+            uniprot_id_pool=np.array(self.uniprot_id.pool, dtype=object),
             spectrum_mz=self.spectrum_mz,
             spectrum_int=self.spectrum_int,
             spectrum_offsets=self.spectrum_offsets,
@@ -932,10 +1042,14 @@ class SpectrumLibraryStore:
             prec_z=data['prec_z'],
             iRT=data['iRT'],
             ion_mob=data['ion_mob'],
-            protein_group=data['protein_group'],
-            protein_name=data['protein_name'],
-            genes=data['genes'],
-            uniprot_id=data['uniprot_id'],
+            protein_group=PooledStringColumn(
+                data['protein_group_codes'], list(data['protein_group_pool'])),
+            protein_name=PooledStringColumn(
+                data['protein_name_codes'], list(data['protein_name_pool'])),
+            genes=PooledStringColumn(
+                data['genes_codes'], list(data['genes_pool'])),
+            uniprot_id=PooledStringColumn(
+                data['uniprot_id_codes'], list(data['uniprot_id_pool'])),
             spectrum_mz=spectrum_mz,
             spectrum_int=spectrum_int,
             spectrum_offsets=data['spectrum_offsets'],
@@ -1386,10 +1500,14 @@ class SpectrumLibraryStore:
         prec_z = np.concatenate([target_store.prec_z, target_store.prec_z[valid_indices]])
         iRT = np.concatenate([target_store.iRT, target_store.iRT[valid_indices]])
         ion_mob = np.concatenate([target_store.ion_mob, target_store.ion_mob[valid_indices]])
-        protein_group = np.concatenate([target_store.protein_group, target_store.protein_group[valid_indices]])
-        protein_name = np.concatenate([target_store.protein_name, target_store.protein_name[valid_indices]])
-        genes = np.concatenate([target_store.genes, target_store.genes[valid_indices]])
-        uniprot_id = np.concatenate([target_store.uniprot_id, target_store.uniprot_id[valid_indices]])
+        protein_group = PooledStringColumn.concat(
+            [target_store.protein_group, target_store.protein_group[valid_indices]])
+        protein_name = PooledStringColumn.concat(
+            [target_store.protein_name, target_store.protein_name[valid_indices]])
+        genes = PooledStringColumn.concat(
+            [target_store.genes, target_store.genes[valid_indices]])
+        uniprot_id = PooledStringColumn.concat(
+            [target_store.uniprot_id, target_store.uniprot_id[valid_indices]])
 
         parent_idx = np.full(N + M, -1, dtype=np.int64)
         parent_idx[N:] = valid_indices
@@ -1640,10 +1758,10 @@ class SpectrumLibraryStore:
         out_prec_z = np.empty(V, dtype=np.float64)
         out_iRT = np.empty(V, dtype=np.float64)
         out_ion_mob = np.empty(V, dtype=np.float64)
-        out_protein_group = np.empty(V, dtype=object)
-        out_protein_name = np.empty(V, dtype=object)
-        out_genes = np.empty(V, dtype=object)
-        out_uniprot_id = np.empty(V, dtype=object)
+        out_protein_group = PooledStringColumn(np.empty(V, dtype=np.uint32), target_store.protein_group.pool)
+        out_protein_name = PooledStringColumn(np.empty(V, dtype=np.uint32), target_store.protein_name.pool)
+        out_genes = PooledStringColumn(np.empty(V, dtype=np.uint32), target_store.genes.pool)
+        out_uniprot_id = PooledStringColumn(np.empty(V, dtype=np.uint32), target_store.uniprot_id.pool)
         out_parent_idx = np.full(V, -1, dtype=np.int64)
         # Map (source_index, channel) → output_index for resolving parent indices
         source_channel_to_out_idx = {}
@@ -1672,10 +1790,10 @@ class SpectrumLibraryStore:
             out_prec_z[out_idx] = target_store.prec_z[i]
             out_iRT[out_idx] = target_store.iRT[i]
             out_ion_mob[out_idx] = target_store.ion_mob[i]
-            out_protein_group[out_idx] = target_store.protein_group[i]
-            out_protein_name[out_idx] = target_store.protein_name[i]
-            out_genes[out_idx] = target_store.genes[i]
-            out_uniprot_id[out_idx] = target_store.uniprot_id[i]
+            out_protein_group.codes[out_idx] = target_store.protein_group.codes[i]
+            out_protein_name.codes[out_idx] = target_store.protein_name.codes[i]
+            out_genes.codes[out_idx] = target_store.genes.codes[i]
+            out_uniprot_id.codes[out_idx] = target_store.uniprot_id.codes[i]
             key_to_idx[(new_seq, orig_charge)] = out_idx
             source_channel_to_out_idx[(i, c)] = out_idx
 
@@ -1814,10 +1932,13 @@ class SpectrumLibraryStore:
         #    then expand via gather (all in Rust, no Python object arrays) --
         mod_seq = pl.Series("ModifiedPeptide", self.mod_seq[:N]).gather(entry_idx_pl)
         seq = pl.Series("StrippedPeptide", self.seq[:N]).gather(entry_idx_pl)
-        protein_group = pl.Series("ProteinGroup", self.protein_group[:N]).gather(entry_idx_pl)
-        protein_name = pl.Series("ProteinName", self.protein_name[:N]).gather(entry_idx_pl)
-        genes = pl.Series("Genes", self.genes[:N]).gather(entry_idx_pl)
-        uniprot_id = pl.Series("ProteinID", self.uniprot_id[:N]).gather(entry_idx_pl)
+        def _gather_pooled(name, col):
+            codes = pl.Series(col.codes[:N].astype(np.uint32)).gather(entry_idx_pl)
+            return pl.Series(name, col.pool, dtype=pl.Utf8).gather(codes)
+        protein_group = _gather_pooled("ProteinGroup", self.protein_group)
+        protein_name = _gather_pooled("ProteinName", self.protein_name)
+        genes = _gather_pooled("Genes", self.genes)
+        uniprot_id = _gather_pooled("ProteinID", self.uniprot_id)
 
         # -- Numeric precursor columns: numpy repeat is fast on contiguous arrays --
         prec_mz = self.prec_mz[:N][entry_idx]
