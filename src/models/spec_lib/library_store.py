@@ -644,10 +644,26 @@ class SpectrumLibraryStore:
         perm)."""
         if self.spectrum_perm is None:
             return self
-        g = np.repeat(self.frag_offsets, self.frag_lengths) + self.spectrum_perm
-        self.spectrum_mz = self.frag_mz[g]
-        self.spectrum_int = self.frag_int[g]
-        self.frag_names_data = self.frag_keys_data[g]
+        total = len(self.frag_mz)
+        spectrum_mz = np.empty(total, dtype=np.float32)
+        spectrum_int = np.empty(total, dtype=np.float32)
+        frag_names_data = np.empty(total, dtype=np.int32)
+        # Chunk by entry blocks so the int64 gather index stays bounded
+        # (a single global index would be ~8 B/fragment transient)
+        n = len(self.frag_offsets)
+        block = 4_000_000
+        for a in range(0, n, block):
+            b = min(a + block, n)
+            lo = int(self.frag_offsets[a])
+            hi = int(self.frag_offsets[b - 1] + self.frag_lengths[b - 1])
+            g = (np.repeat(self.frag_offsets[a:b], self.frag_lengths[a:b])
+                 + self.spectrum_perm[lo:hi])
+            spectrum_mz[lo:hi] = self.frag_mz[g]
+            spectrum_int[lo:hi] = self.frag_int[g]
+            frag_names_data[lo:hi] = self.frag_keys_data[g]
+        self.spectrum_mz = spectrum_mz
+        self.spectrum_int = spectrum_int
+        self.frag_names_data = frag_names_data
         self.spectrum_offsets = self.frag_offsets.copy()
         self.spectrum_lengths = self.frag_lengths.copy()
         self.spectrum_perm = None
