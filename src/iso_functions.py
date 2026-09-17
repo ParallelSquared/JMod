@@ -354,6 +354,12 @@ def iso_library(library, tag, n_iso):
     (spec_offsets, spec_lengths,
      spectrum_mz, spectrum_int, frag_names_data) = _alloc_iso_buffers(library, all_keys, n_iso)
 
+    # The old spectra are never read (isotopes are rebuilt from frags), so
+    # release them before filling the n_iso-times-larger replacements
+    library.spectrum_mz = None
+    library.spectrum_int = None
+    library.frag_names_data = None
+
     logger.info("Generating isotopes for library:")
     for i, key in enumerate(tqdm.tqdm(all_keys)):
         frags = library[key]["frags"]
@@ -408,6 +414,12 @@ def iso_library_multi(library, tag, n_iso):
 
     (spec_offsets, spec_lengths,
      spectrum_mz, spectrum_int, frag_names_data) = _alloc_iso_buffers(library, all_keys, n_iso)
+
+    # The old spectra are never read (isotopes are rebuilt from frags), so
+    # release them before filling the n_iso-times-larger replacements
+    library.spectrum_mz = None
+    library.spectrum_int = None
+    library.frag_names_data = None
 
     logger.info("Generating isotopes for library:")
     p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), 61),
