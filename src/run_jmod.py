@@ -684,6 +684,24 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 buffer.clear()
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         logger.info(f"Batch {batch_idx+1}: {n_results} results written")
+        from src import spectral_fitting as _sf
+        _tim = _sf.pop_search_timings()
+        if _tim.get('n_spectra'):
+            _ns = _tim['n_spectra']
+            _phases = ['dia_prep', 'find_candidates', 'resolve_keys',
+                       'build_target_entries', 'build_decoy_entries',
+                       'assemble_matrix', 'nnls_fit', 'postprocess']
+            _total = sum(_tim.get(k, 0.0) for k in _phases) or 1.0
+            logger.info(
+                "Batch phase breakdown (thread-seconds, % of compute): "
+                + " | ".join(f"{k} {_tim.get(k, 0.0):.0f}s ({100 * _tim.get(k, 0.0) / _total:.0f}%)"
+                             for k in _phases))
+            logger.info(
+                f"Batch per-spectrum averages: "
+                f"{_tim.get('n_target_cand', 0) / _ns:.0f} target + "
+                f"{_tim.get('n_decoy_cand', 0) / _ns:.0f} decoy candidates, "
+                f"{_tim.get('n_matrix_nnz', 0) / _ns:.0f} matrix nonzeros, "
+                f"{_tim.get('n_output_rows', 0) / _ns:.1f} results")
 
     # Report CPU utilization for GIL contention assessment
     _search_wall = time.time() - _search_wall_t0

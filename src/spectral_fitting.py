@@ -18,6 +18,27 @@ import numpy as np
 
 import warnings
 import ptinnls as sparse_nnls
+import time as _time
+import threading as _threading
+
+# ── Main-search phase timing (accumulated across worker threads) ──
+# Values are thread-seconds (sum over concurrent workers), not wall time.
+_SEARCH_TIMINGS_LOCK = _threading.Lock()
+_SEARCH_TIMINGS = {}
+
+
+def _record_search_timings(local):
+    with _SEARCH_TIMINGS_LOCK:
+        for k, v in local.items():
+            _SEARCH_TIMINGS[k] = _SEARCH_TIMINGS.get(k, 0.0) + v
+
+
+def pop_search_timings():
+    """Return and reset the accumulated per-phase search timings/counters."""
+    with _SEARCH_TIMINGS_LOCK:
+        out = dict(_SEARCH_TIMINGS)
+        _SEARCH_TIMINGS.clear()
+    return out
 from sklearn.linear_model import ElasticNet, Lasso
 from sklearn.linear_model._coordinate_descent import enet_path
 from scipy.sparse import csc_matrix
@@ -2391,6 +2412,15 @@ def fit_to_lib2(dia_spec,
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
+    _tm = {}
+    _tprev = _time.perf_counter()
+
+    def _tick(key):
+        nonlocal _tprev
+        now = _time.perf_counter()
+        _tm[key] = _tm.get(key, 0.0) + (now - _tprev)
+        _tprev = now
+
     top_n=config.top_n
     atleast_m=config.args.atleast_m
     spec = dia_spec
@@ -2438,6 +2468,7 @@ def fit_to_lib2(dia_spec,
         dia_spectrum = np.stack([merged_mz, merged_int], axis=1)
         _bin_mz = _bin_int = _bin_mob = None
 
+    _tick('dia_prep')
     # Get candidates via fragment index or fallback to m/z + RT window
     # Single query returns both target and decoy candidates from unified index
     # IM admission window: a library precursor is only a candidate for this
@@ -2477,6 +2508,7 @@ def fit_to_lib2(dia_spec,
             )
         all_window_idxs = np.where(_bool)[0]
 
+    _tick('find_candidates')
     # Split into target and decoy candidates
     # TODO: unify target/decoy processing paths to eliminate this split
     n_targets = library.n_targets
@@ -2486,6 +2518,7 @@ def fit_to_lib2(dia_spec,
 
     mass_window_candidates = [all_keys[i] for i in window_idxs]
     _ref_idxs = library.resolve_indices(mass_window_candidates)
+    _tick('resolve_keys')
 
     spec_frags = None
 
@@ -2525,6 +2558,7 @@ def fit_to_lib2(dia_spec,
     ref_spec_row_indices_split = _split_flat(ref_flat_rows, ref_flat_offsets)
     ref_spec_col_indices_split = _split_flat(ref_flat_cols, ref_flat_offsets)
     ref_spec_values_split = _split_flat(ref_flat_vals, ref_flat_offsets)
+    _tick('build_target_entries')
 
 
     ### Generate equivalent Decoy spectra
@@ -2576,6 +2610,7 @@ def fit_to_lib2(dia_spec,
         decoy_spec_values_split = _split_flat(decoy_flat_vals, decoy_flat_offsets)
 
 
+    _tick('build_decoy_entries')
     frag_errors = []
     lib_frag_mz = []
     decoy_col_offset = 0
@@ -2656,12 +2691,15 @@ def fit_to_lib2(dia_spec,
                 1e-10)
 
 
+        _tick('assemble_matrix')
+        _tm['n_matrix_nnz'] = _tm.get('n_matrix_nnz', 0) + len(sparse_values)
         # Fit lib spectra to observed spectra (Huber loss via IRLS)
         # Pass flat COO arrays directly — avoids constructing scipy sparse matrix
         _n_coo_rows = len(dia_spec_int)
         _n_coo_cols = int(sparse_col_indices.max()) + 1 if len(sparse_col_indices) > 0 else 0
         fit_results = huber_nnls_irls(sparse_values, sparse_row_indices, sparse_col_indices,
                                       _n_coo_rows, _n_coo_cols, dia_spec_int)
+        _tick('nnls_fit')
         lib_coefficients = fit_results['x']
 
         ####################################
@@ -2847,6 +2885,12 @@ def fit_to_lib2(dia_spec,
         # output = [[non_zero_coeffs[i],spec_idx,lib_spec_ids[i][0],lib_spec_ids[i][1],prec_mz,prec_rt,*features[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
     
 
+    _tick('postprocess')
+    _tm['n_spectra'] = _tm.get('n_spectra', 0) + 1
+    _tm['n_target_cand'] = _tm.get('n_target_cand', 0) + len(window_idxs)
+    _tm['n_decoy_cand'] = _tm.get('n_decoy_cand', 0) + len(decoy_window_idxs)
+    _tm['n_output_rows'] = _tm.get('n_output_rows', 0) + len(output)
+    _record_search_timings(_tm)
     if return_frags:
         return output, [frag_errors,lib_frag_mz]
     else:
