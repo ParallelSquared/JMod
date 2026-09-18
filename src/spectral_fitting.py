@@ -1405,41 +1405,34 @@ def _detag_sequence(seq, tag_name):
         seq = seq[:i0] + seq[i1 + 1:]
 
 
-def _cap_to_top_detagged(k, peaks_in_dia, pep_cand, pep_cand_loc, pep_cand_list,
-                         flat_rows, flat_cols, flat_vals, flat_offsets,
-                         norm_intensities, lib_peaks_matched, ms1_error,
-                         passing, prec_im):
-    """Keep only candidates belonging to the top-*k* detagged sequences.
-
-    Sequences are ranked by their best member's matched-ion count, ties
-    broken by matched library intensity. All channel copies of a kept
-    sequence survive together. Returns the same tuple shape, subset and
-    with candidate columns renumbered; or the inputs unchanged when no cap
-    applies.
-    """
-    n = len(pep_cand)
-    tag_name = config.tag.name if getattr(config, "tag", None) is not None else None
+def _detagged_group_stats(pep_cand, pep_cand_list, lib_peaks_matched, tag_name):
+    """Group candidates by detagged (sequence, charge); score each group by
+    its best member's matched-ion count, ties broken by matched library
+    intensity. Returns {gid: ((n_matched, matched_int), member_js)}."""
     groups = {}
-    stats = []
-    for j in range(n):
+    for j in range(len(pep_cand)):
         matched = lib_peaks_matched[j]
         n_matched = int(np.count_nonzero(matched))
         matched_int = float(pep_cand_list[j][:, 1][matched].sum())
-        stats.append((n_matched, matched_int))
         key = pep_cand[j]
         gid = (_detag_sequence(key[0], tag_name), key[1]) if tag_name else key
         best, members = groups.get(gid, ((-1, -1.0), []))
         members.append(j)
         groups[gid] = (max(best, (n_matched, matched_int)), members)
+    return groups
 
-    if len(groups) <= k:
+
+def _subset_candidates(keep, peaks_in_dia, pep_cand, pep_cand_loc, pep_cand_list,
+                       flat_rows, flat_cols, flat_vals, flat_offsets,
+                       norm_intensities, lib_peaks_matched, ms1_error,
+                       passing, prec_im):
+    """Subset the per-candidate structures to *keep* (sorted positions),
+    renumbering candidate columns consecutively."""
+    keep = np.asarray(keep, dtype=np.int64)
+    if len(keep) == len(pep_cand):
         return (peaks_in_dia, pep_cand, pep_cand_loc, pep_cand_list,
                 flat_rows, flat_cols, flat_vals, flat_offsets,
                 norm_intensities, lib_peaks_matched, ms1_error, passing, prec_im)
-
-    top = sorted(groups.values(), key=lambda g: g[0], reverse=True)[:k]
-    keep = np.array(sorted(j for _, members in top for j in members), dtype=np.int64)
-
     seg_lens = np.diff(flat_offsets)
     new_lens = seg_lens[keep]
     new_offsets = np.zeros(len(keep) + 1, dtype=flat_offsets.dtype)
@@ -1462,6 +1455,26 @@ def _cap_to_top_detagged(k, peaks_in_dia, pep_cand, pep_cand_loc, pep_cand_list,
             np.asarray(ms1_error)[keep],
             np.asarray(passing)[keep],
             [prec_im[j] for j in keep])
+
+
+def _combined_top_sequences(k, ref_groups, dec_groups):
+    """Class-blind selection: targets and decoys compete in ONE pool of *k*
+    detagged sequences. Returns (keep_ref, keep_dec) sorted member positions,
+    or None when no cap applies."""
+    total = len(ref_groups) + len(dec_groups)
+    if total <= k:
+        return None
+    scored = [(best, 0, gid) for gid, (best, _) in ref_groups.items()]
+    scored += [(best, 1, gid) for gid, (best, _) in dec_groups.items()]
+    # deterministic order: score desc, then side/gid as stable tie-breakers
+    scored.sort(key=lambda t: (-t[0][0], -t[0][1], t[1], t[2]))
+    keep_ref, keep_dec = [], []
+    for best, side, gid in scored[:k]:
+        if side == 0:
+            keep_ref.extend(ref_groups[gid][1])
+        else:
+            keep_dec.extend(dec_groups[gid][1])
+    return sorted(keep_ref), sorted(keep_dec)
 
 
 def create_entries_direct(centroid_breaks,
@@ -2645,16 +2658,6 @@ def fit_to_lib2(dia_spec,
                                         mz_tol=mz_tol,
                                         im_tol=_im_tol,
                                         has_im=_has_im)
-    _max_seqs = int(getattr(config.args, 'max_cand_seqs', 0) or 0)
-    if _max_seqs > 0:
-        (ref_peaks_in_dia, ref_pep_cand, ref_pep_cand_loc, ref_pep_cand_list,
-         ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets,
-         norm_intensities, lib_peaks_matched, ref_ms1_error, ref_passing,
-         ref_prec_im) = _cap_to_top_detagged(
-            _max_seqs, ref_peaks_in_dia, ref_pep_cand, ref_pep_cand_loc,
-            ref_pep_cand_list, ref_flat_rows, ref_flat_cols, ref_flat_vals,
-            ref_flat_offsets, norm_intensities, lib_peaks_matched,
-            ref_ms1_error, ref_passing, ref_prec_im)
     # Reconstruct split views where needed downstream
     ref_spec_row_indices_split = _split_flat(ref_flat_rows, ref_flat_offsets)
     ref_spec_col_indices_split = _split_flat(ref_flat_cols, ref_flat_offsets)
@@ -2705,17 +2708,6 @@ def fit_to_lib2(dia_spec,
                                                                     mz_tol=mz_tol,
                                                                     im_tol=_im_tol,
                                                                     has_im=_has_im)
-        if _max_seqs > 0:
-            (decoy_peaks_in_dia, decoy_pep_cand, decoy_pep_cand_loc,
-             decoy_pep_cand_list, decoy_flat_rows, decoy_flat_cols,
-             decoy_flat_vals, decoy_flat_offsets, norm_decoy_intensities,
-             decoy_lib_peaks_matched, decoy_ms1_error, dec_passing,
-             dec_prec_im) = _cap_to_top_detagged(
-                _max_seqs, decoy_peaks_in_dia, decoy_pep_cand,
-                decoy_pep_cand_loc, decoy_pep_cand_list, decoy_flat_rows,
-                decoy_flat_cols, decoy_flat_vals, decoy_flat_offsets,
-                norm_decoy_intensities, decoy_lib_peaks_matched,
-                decoy_ms1_error, dec_passing, dec_prec_im)
         # Reconstruct split views where needed downstream
         decoy_spec_row_indices_split = _split_flat(decoy_flat_rows, decoy_flat_offsets)
         decoy_spec_col_indices_split = _split_flat(decoy_flat_cols, decoy_flat_offsets)
@@ -2723,6 +2715,47 @@ def fit_to_lib2(dia_spec,
 
 
     _tick('build_decoy_entries')
+
+    # Cap to the top --max_cand_seqs detagged sequences per spectrum:
+    # targets and decoys compete in ONE class-blind pool, so decoys are
+    # admitted only when they outrank targets on the same metric
+    _max_seqs = int(getattr(config.args, 'max_cand_seqs', 0) or 0)
+    if _max_seqs > 0:
+        _tag_name = config.tag.name if getattr(config, "tag", None) is not None else None
+        _ref_groups = _detagged_group_stats(ref_pep_cand, ref_pep_cand_list,
+                                            lib_peaks_matched, _tag_name)
+        _dec_groups = (_detagged_group_stats(decoy_pep_cand, decoy_pep_cand_list,
+                                             decoy_lib_peaks_matched, _tag_name)
+                       if decoy else {})
+        _sel = _combined_top_sequences(_max_seqs, _ref_groups, _dec_groups)
+        if _sel is not None:
+            _keep_ref, _keep_dec = _sel
+            (ref_peaks_in_dia, ref_pep_cand, ref_pep_cand_loc, ref_pep_cand_list,
+             ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets,
+             norm_intensities, lib_peaks_matched, ref_ms1_error, ref_passing,
+             ref_prec_im) = _subset_candidates(
+                _keep_ref, ref_peaks_in_dia, ref_pep_cand, ref_pep_cand_loc,
+                ref_pep_cand_list, ref_flat_rows, ref_flat_cols, ref_flat_vals,
+                ref_flat_offsets, norm_intensities, lib_peaks_matched,
+                ref_ms1_error, ref_passing, ref_prec_im)
+            ref_spec_row_indices_split = _split_flat(ref_flat_rows, ref_flat_offsets)
+            ref_spec_col_indices_split = _split_flat(ref_flat_cols, ref_flat_offsets)
+            ref_spec_values_split = _split_flat(ref_flat_vals, ref_flat_offsets)
+            if decoy:
+                (decoy_peaks_in_dia, decoy_pep_cand, decoy_pep_cand_loc,
+                 decoy_pep_cand_list, decoy_flat_rows, decoy_flat_cols,
+                 decoy_flat_vals, decoy_flat_offsets, norm_decoy_intensities,
+                 decoy_lib_peaks_matched, decoy_ms1_error, dec_passing,
+                 dec_prec_im) = _subset_candidates(
+                    _keep_dec, decoy_peaks_in_dia, decoy_pep_cand,
+                    decoy_pep_cand_loc, decoy_pep_cand_list, decoy_flat_rows,
+                    decoy_flat_cols, decoy_flat_vals, decoy_flat_offsets,
+                    norm_decoy_intensities, decoy_lib_peaks_matched,
+                    decoy_ms1_error, dec_passing, dec_prec_im)
+                decoy_spec_row_indices_split = _split_flat(decoy_flat_rows, decoy_flat_offsets)
+                decoy_spec_col_indices_split = _split_flat(decoy_flat_cols, decoy_flat_offsets)
+                decoy_spec_values_split = _split_flat(decoy_flat_vals, decoy_flat_offsets)
+        _tick('candidate_cap')
     frag_errors = []
     lib_frag_mz = []
     decoy_col_offset = 0
