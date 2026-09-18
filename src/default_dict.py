@@ -285,6 +285,17 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    'max_cand_seqs': {
+        'flags': ('--max_cand_seqs',),
+        'default': 100,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': 'entry',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'lib_frac': {
         'flags': ('--lib_frac',),
         'default': 0.5,

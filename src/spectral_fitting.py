@@ -39,6 +39,26 @@ def pop_search_timings():
         out = dict(_SEARCH_TIMINGS)
         _SEARCH_TIMINGS.clear()
     return out
+
+
+# Per-spectrum profiling rows (scan-level view of where fitting time goes)
+_SPECTRUM_PROFILE = []
+
+SPECTRUM_PROFILE_COLUMNS = [
+    "scan_num", "rt", "prec_mz", "n_dia_peaks",
+    "n_target_cand", "n_decoy_cand", "n_matrix_nnz", "n_results",
+    "t_dia_prep", "t_find_candidates", "t_resolve_keys",
+    "t_build_target_entries", "t_build_decoy_entries",
+    "t_assemble_matrix", "t_nnls_fit", "t_postprocess",
+]
+
+
+def pop_spectrum_profile():
+    """Return and reset the per-spectrum profiling rows."""
+    with _SEARCH_TIMINGS_LOCK:
+        out = list(_SPECTRUM_PROFILE)
+        _SPECTRUM_PROFILE.clear()
+    return out
 from sklearn.linear_model import ElasticNet, Lasso
 from sklearn.linear_model._coordinate_descent import enet_path
 from scipy.sparse import csc_matrix
@@ -1373,6 +1393,77 @@ def _create_entries_direct_jit(
     return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets, prec_im_out
 
 
+def _detag_sequence(seq, tag_name):
+    """Strip channel annotations "(tagname-...)" so channel copies of one
+    peptide share an identity."""
+    marker = "(" + tag_name + "-"
+    while True:
+        i0 = seq.find(marker)
+        if i0 < 0:
+            return seq
+        i1 = seq.index(")", i0)
+        seq = seq[:i0] + seq[i1 + 1:]
+
+
+def _cap_to_top_detagged(k, peaks_in_dia, pep_cand, pep_cand_loc, pep_cand_list,
+                         flat_rows, flat_cols, flat_vals, flat_offsets,
+                         norm_intensities, lib_peaks_matched, ms1_error,
+                         passing, prec_im):
+    """Keep only candidates belonging to the top-*k* detagged sequences.
+
+    Sequences are ranked by their best member's matched-ion count, ties
+    broken by matched library intensity. All channel copies of a kept
+    sequence survive together. Returns the same tuple shape, subset and
+    with candidate columns renumbered; or the inputs unchanged when no cap
+    applies.
+    """
+    n = len(pep_cand)
+    tag_name = config.tag.name if getattr(config, "tag", None) is not None else None
+    groups = {}
+    stats = []
+    for j in range(n):
+        matched = lib_peaks_matched[j]
+        n_matched = int(np.count_nonzero(matched))
+        matched_int = float(pep_cand_list[j][:, 1][matched].sum())
+        stats.append((n_matched, matched_int))
+        key = pep_cand[j]
+        gid = (_detag_sequence(key[0], tag_name), key[1]) if tag_name else key
+        best, members = groups.get(gid, ((-1, -1.0), []))
+        members.append(j)
+        groups[gid] = (max(best, (n_matched, matched_int)), members)
+
+    if len(groups) <= k:
+        return (peaks_in_dia, pep_cand, pep_cand_loc, pep_cand_list,
+                flat_rows, flat_cols, flat_vals, flat_offsets,
+                norm_intensities, lib_peaks_matched, ms1_error, passing, prec_im)
+
+    top = sorted(groups.values(), key=lambda g: g[0], reverse=True)[:k]
+    keep = np.array(sorted(j for _, members in top for j in members), dtype=np.int64)
+
+    seg_lens = np.diff(flat_offsets)
+    new_lens = seg_lens[keep]
+    new_offsets = np.zeros(len(keep) + 1, dtype=flat_offsets.dtype)
+    np.cumsum(new_lens, out=new_offsets[1:])
+    total = int(new_offsets[-1])
+    idx = np.repeat(flat_offsets[keep].astype(np.int64), new_lens)
+    if total:
+        idx = idx + (np.arange(total, dtype=np.int64)
+                     - np.repeat(new_offsets[:-1].astype(np.int64), new_lens))
+    return ([peaks_in_dia[j] for j in keep],
+            [pep_cand[j] for j in keep],
+            [pep_cand_loc[j] for j in keep],
+            [pep_cand_list[j] for j in keep],
+            flat_rows[idx],
+            np.repeat(np.arange(len(keep), dtype=flat_cols.dtype), new_lens),
+            flat_vals[idx],
+            new_offsets,
+            [norm_intensities[j] for j in keep],
+            [lib_peaks_matched[j] for j in keep],
+            np.asarray(ms1_error)[keep],
+            np.asarray(passing)[keep],
+            [prec_im[j] for j in keep])
+
+
 def create_entries_direct(centroid_breaks,
                           spec_data_mz, spec_data_int,
                           spec_offsets, spec_lengths,
@@ -2554,6 +2645,16 @@ def fit_to_lib2(dia_spec,
                                         mz_tol=mz_tol,
                                         im_tol=_im_tol,
                                         has_im=_has_im)
+    _max_seqs = int(getattr(config.args, 'max_cand_seqs', 0) or 0)
+    if _max_seqs > 0:
+        (ref_peaks_in_dia, ref_pep_cand, ref_pep_cand_loc, ref_pep_cand_list,
+         ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets,
+         norm_intensities, lib_peaks_matched, ref_ms1_error, ref_passing,
+         ref_prec_im) = _cap_to_top_detagged(
+            _max_seqs, ref_peaks_in_dia, ref_pep_cand, ref_pep_cand_loc,
+            ref_pep_cand_list, ref_flat_rows, ref_flat_cols, ref_flat_vals,
+            ref_flat_offsets, norm_intensities, lib_peaks_matched,
+            ref_ms1_error, ref_passing, ref_prec_im)
     # Reconstruct split views where needed downstream
     ref_spec_row_indices_split = _split_flat(ref_flat_rows, ref_flat_offsets)
     ref_spec_col_indices_split = _split_flat(ref_flat_cols, ref_flat_offsets)
@@ -2604,6 +2705,17 @@ def fit_to_lib2(dia_spec,
                                                                     mz_tol=mz_tol,
                                                                     im_tol=_im_tol,
                                                                     has_im=_has_im)
+        if _max_seqs > 0:
+            (decoy_peaks_in_dia, decoy_pep_cand, decoy_pep_cand_loc,
+             decoy_pep_cand_list, decoy_flat_rows, decoy_flat_cols,
+             decoy_flat_vals, decoy_flat_offsets, norm_decoy_intensities,
+             decoy_lib_peaks_matched, decoy_ms1_error, dec_passing,
+             dec_prec_im) = _cap_to_top_detagged(
+                _max_seqs, decoy_peaks_in_dia, decoy_pep_cand,
+                decoy_pep_cand_loc, decoy_pep_cand_list, decoy_flat_rows,
+                decoy_flat_cols, decoy_flat_vals, decoy_flat_offsets,
+                norm_decoy_intensities, decoy_lib_peaks_matched,
+                decoy_ms1_error, dec_passing, dec_prec_im)
         # Reconstruct split views where needed downstream
         decoy_spec_row_indices_split = _split_flat(decoy_flat_rows, decoy_flat_offsets)
         decoy_spec_col_indices_split = _split_flat(decoy_flat_cols, decoy_flat_offsets)
@@ -2889,8 +3001,21 @@ def fit_to_lib2(dia_spec,
     _tm['n_spectra'] = _tm.get('n_spectra', 0) + 1
     _tm['n_target_cand'] = _tm.get('n_target_cand', 0) + len(window_idxs)
     _tm['n_decoy_cand'] = _tm.get('n_decoy_cand', 0) + len(decoy_window_idxs)
+    _tm['n_target_kept'] = _tm.get('n_target_kept', 0) + len(ref_pep_cand)
+    _tm['n_decoy_kept'] = _tm.get('n_decoy_kept', 0) + (len(decoy_pep_cand) if decoy else 0)
     _tm['n_output_rows'] = _tm.get('n_output_rows', 0) + len(output)
-    _record_search_timings(_tm)
+    _row = (int(spec_idx), float(prec_rt), float(prec_mz), int(dia_spectrum.shape[0]),
+            len(window_idxs), len(decoy_window_idxs),
+            int(_tm.get('n_matrix_nnz', 0)), len(output),
+            _tm.get('dia_prep', 0.0), _tm.get('find_candidates', 0.0),
+            _tm.get('resolve_keys', 0.0),
+            _tm.get('build_target_entries', 0.0), _tm.get('build_decoy_entries', 0.0),
+            _tm.get('assemble_matrix', 0.0), _tm.get('nnls_fit', 0.0),
+            _tm.get('postprocess', 0.0))
+    with _SEARCH_TIMINGS_LOCK:
+        for k, v in _tm.items():
+            _SEARCH_TIMINGS[k] = _SEARCH_TIMINGS.get(k, 0.0) + v
+        _SPECTRUM_PROFILE.append(_row)
     if return_frags:
         return output, [frag_errors,lib_frag_mz]
     else:
