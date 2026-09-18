@@ -648,6 +648,58 @@ class SpectrumLibraryStore:
         length = self.spectrum_lengths[idx]
         return self.frag_names_data[off:off + length]
 
+    def subset_entries(self, mask):
+        """Return a new store containing only entries where *mask* is True.
+
+        Pre-decoy use only (asserts no decoys): applied once, up front, to
+        drop precursors that no isolation window can ever select. Row order
+        is preserved; the key index is rebuilt from the kept arrays.
+        """
+        mask = np.asarray(mask, dtype=bool)
+        if mask.all():
+            return self
+        assert self.n_decoys == 0, "subset_entries is a pre-decoy operation"
+        kept = np.flatnonzero(mask)
+        frag_counts = self.frag_lengths[kept].astype(np.int64)
+        gather = np.repeat(self.frag_offsets[kept], frag_counts)
+        if len(gather):
+            row_start = np.concatenate(([0], np.cumsum(frag_counts[:-1])))
+            gather = gather + (np.arange(int(frag_counts.sum()), dtype=np.int64)
+                               - np.repeat(row_start, frag_counts))
+        new_frag_offsets = np.zeros(len(kept), dtype=np.int64)
+        if len(kept) > 1:
+            new_frag_offsets[1:] = np.cumsum(frag_counts[:-1])
+
+        pre = self.spectrum_perm is not None
+        return SpectrumLibraryStore(
+            key_to_idx=None,
+            mod_seq=self.mod_seq[kept],
+            seq=self.seq[kept],
+            prec_mz=self.prec_mz[kept],
+            prec_z=self.prec_z[kept],
+            iRT=self.iRT[kept],
+            ion_mob=self.ion_mob[kept],
+            protein_group=self.protein_group[kept],
+            protein_name=self.protein_name[kept],
+            genes=self.genes[kept],
+            uniprot_id=self.uniprot_id[kept],
+            spectrum_mz=None if pre else self.spectrum_mz[gather],
+            spectrum_int=None if pre else self.spectrum_int[gather],
+            spectrum_offsets=None if pre else new_frag_offsets.copy(),
+            spectrum_lengths=None if pre else frag_counts.astype(np.int32),
+            frag_names_data=None if pre else self.frag_names_data[gather],
+            spectrum_perm=self.spectrum_perm[gather] if pre else None,
+            frag_mz=self.frag_mz[gather],
+            frag_int=self.frag_int[gather],
+            frag_keys_data=self.frag_keys_data[gather],
+            frag_offsets=new_frag_offsets,
+            frag_lengths=frag_counts.astype(np.int32),
+            top_n_data=np.empty(0, dtype=np.int32),
+            top_n_offsets=np.zeros(len(kept), dtype=np.int64),
+            top_n_lengths=np.zeros(len(kept), dtype=np.int32),
+            parent_idx=np.full(len(kept), -1, dtype=np.int64),
+        )
+
     def finalize_spectra(self, memmap_dir=None, memmap_threshold=100_000_000):
         """Materialize the mz-sorted spectrum arrays from frag arrays + perm.
 

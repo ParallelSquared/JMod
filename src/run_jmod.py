@@ -358,6 +358,24 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         config.tag = None
 
     ######################################################
+    #### Window prefilter: drop precursors no isolation window can ever
+    #### select, in any tag channel. Decoys copy their target's prec_mz and
+    #### permutations preserve tag-site counts, so filtering targets here
+    #### filters their decoys implicitly.
+    _recoverable = spec_lib.window_recoverable_mask(
+        spectrumLibrary, DIAspectra.ms2scans,
+        tag=mass_tag,
+        source_channel=source_channel if library_tag_bool else None,
+    )
+    _n_dropped = int((~_recoverable).sum())
+    if _n_dropped:
+        logger.info(f"Window prefilter: {_n_dropped:,} of {len(_recoverable):,} "
+                    f"library precursors are outside every isolation window in "
+                    f"every channel; dropping them")
+        spectrumLibrary = spectrumLibrary.subset_entries(_recoverable)
+    del _recoverable
+
+    ######################################################
     #### Generate decoys (before tagging/isotopes so they apply to both)
     logger.info("Creating Decoy Library")
     # if "diann_tagged" in lib_file_name:
