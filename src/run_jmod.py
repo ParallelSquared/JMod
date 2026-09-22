@@ -699,9 +699,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             logger.info(
                 f"Batch per-spectrum averages: "
                 f"{_tim.get('n_target_cand', 0) / _ns:.0f} target + "
-                f"{_tim.get('n_decoy_cand', 0) / _ns:.0f} decoy candidates "
-                f"({_tim.get('n_target_kept', 0) / _ns:.0f}+"
-                f"{_tim.get('n_decoy_kept', 0) / _ns:.0f} after top-seq cap), "
+                f"{_tim.get('n_decoy_cand', 0) / _ns:.0f} decoy candidates, "
                 f"{_tim.get('n_matrix_nnz', 0) / _ns:.0f} matrix nonzeros, "
                 f"{_tim.get('n_output_rows', 0) / _ns:.1f} results")
 
