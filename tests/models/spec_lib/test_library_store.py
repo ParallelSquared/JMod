@@ -271,7 +271,7 @@ class TestSerialization:
 
 class TestFromTSV:
     def test_from_tsv_minimal(self):
-        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".tsv") as tmp:
+        with tempfile.NamedTemporaryFile("w", newline="", delete=False, suffix=".tsv") as tmp:
             writer = csv.writer(tmp, delimiter="\t")
             writer.writerow([
                 "ModifiedPeptide", "PrecursorCharge", "PrecursorMz",
@@ -297,6 +297,25 @@ class TestFromTSV:
             assert 'b3_1' in frags
         finally:
             os.unlink(filename)
+
+    def test_phospho_spectronaut(self):
+        with tempfile.NamedTemporaryFile("w", newline="", delete=False, suffix=".tsv") as tmp:
+            writer = csv.writer(tmp, delimiter="\t")
+            writer.writerow([
+                "ModifiedPeptide", "PrecursorCharge", "PrecursorMz",
+                "StrippedPeptide", "FragmentType", "FragmentNumber",
+                "FragmentCharge", "FragmentMz", "RelativeIntensity",
+                "RT"
+            ])
+            writer.writerow(["_AC[PHOSPHO (STY)]D_", 2, 450.2, "ACD", "y", 5, 1, 600.1, 0.8, 32.5])
+            writer.writerow(["_ACD_", 2, 450.2, "ACD", "b", 3, 1, 300.5, 0.2, 32.5])
+            filename = tmp.name
+
+        with pytest.raises(ValueError) as exc_info:
+            SpectrumLibraryStore.from_tsv(filename)
+        assert "Nested modification parentheses are not supported" in str(exc_info.value)
+        assert "_AC[PHOSPHO (STY)]D_" in str(exc_info.value)
+        os.unlink(filename)
 
 
 class TestDeepCopyStore:

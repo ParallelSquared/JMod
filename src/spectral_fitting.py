@@ -33,12 +33,6 @@ def _record_search_timings(local):
             _SEARCH_TIMINGS[k] = _SEARCH_TIMINGS.get(k, 0.0) + v
 
 
-def pop_search_timings():
-    """Return and reset the accumulated per-phase search timings/counters."""
-    with _SEARCH_TIMINGS_LOCK:
-        out = dict(_SEARCH_TIMINGS)
-        _SEARCH_TIMINGS.clear()
-    return out
 from sklearn.linear_model import ElasticNet, Lasso
 from sklearn.linear_model._coordinate_descent import enet_path
 from scipy.sparse import csc_matrix

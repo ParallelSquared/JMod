@@ -291,15 +291,15 @@ class _TargetView:
 # - input prefers Tr_recalibrated, output emits RT
 _LIBRARY_COLUMN_ALIASES = {
     "Decoy":                ("Decoy",),
-    "ModifiedPeptide":      ("ModifiedPeptide", "ModifiedSequence", "Modified.Sequence"),
+    "ModifiedPeptide":      ("ModifiedPeptide", "ModifiedSequence", "Modified.Sequence", "ModifiedPeptideSequence"),
     "StrippedPeptide":      ("StrippedPeptide", "PeptideSequence", "Stripped.Sequence"),
     "PrecursorCharge":      ("PrecursorCharge", "Precursor.Charge"),
     "PrecursorMz":          ("PrecursorMz", "Precursor.Mz"),
-    "RT":                   ("Tr_recalibrated", "RT", "iRT"),
-    "IonMobility":          ("IonMobility", "IM"),
-    "ProteinGroup":         ("ProteinGroup", "Protein.Group"),
+    "RT":                   ("Tr_recalibrated", "RT", "iRT", "AverageExperimentalRetentionTime", "NormalizedRetentionTime"),
+    "IonMobility":          ("IonMobility", "IM", "PrecursorIonMobility"),
+    "ProteinGroup":         ("ProteinGroup", "Protein.Group", "ProteinId"),
     "ProteinName":          ("ProteinName", "Protein.Names", "ProteinID", "ProteinId"),
-    "ProteinID":            ("ProteinID", "UniprotID", "Protein.Ids"),
+    "ProteinID":            ("ProteinID", "UniprotID", "Protein.Ids", "ProteinId"),
     "Genes":                ("Genes", "GeneName"),
     "FragmentType":         ("FragmentType", "Fragment.Type"),
     "FragmentSeriesNumber": ("FragmentNumber", "FragmentSeriesNumber", "Fragment.Series.Number"),
@@ -2354,12 +2354,16 @@ class SpectrumLibraryStore:
         if df.height > 0:
             _require("ModifiedPeptide", "Unknown ModifiedPeptide column")
             _require("StrippedPeptide", "Unknown StrippedPeptide column")
-            _require("PrecursorCharge", "SpecLib Charge Cannot be Converted to Float")
+            _require("PrecursorCharge", "Unknown PrecursorCharge column")
 
             # ModifiedPeptide with wrapping underscores stripped; decoy/invalid
             # bookkeeping uses this pre-N-terminal-move form
             df = df.with_columns(
-                _utf8("ModifiedPeptide").str.strip_chars("_").alias("_mod_pep_raw")
+                _utf8("ModifiedPeptide")
+                .str.strip_chars("_")
+                .str.replace_all("[", "(", literal=True)
+                .str.replace_all("]", ")", literal=True)
+                .alias("_mod_pep_raw")
             )
             try:
                 df = df.with_columns(pl.col("PrecursorCharge").cast(pl.Float64).alias("_prec_z"))
@@ -2390,6 +2394,12 @@ class SpectrumLibraryStore:
                 df.filter(x_mask).select(["_mod_pep_raw", "_prec_z"]).unique().rows()
             )
             df = df.filter(~x_mask)
+
+            nested = df.filter(pl.col("_mod_pep_raw").str.contains(r"\([^()]*\(").fill_null(False))
+            if nested.height > 0:
+                example = nested["ModifiedPeptide"][0]
+                _raise(f"Nested modification parentheses are not supported "
+                       f"({nested.height} rows, e.g. {example})")
 
             ## Move DIANN N-terminal tags/modifications behind the first AA:
             ## (tag)C(UniMod:4)SQAPVYGR → C(UniMod:4)(tag)SQAPVYGR
