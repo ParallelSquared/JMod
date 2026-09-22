@@ -690,8 +690,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             _ns = _tim['n_spectra']
             _phases = ['dia_prep', 'find_candidates', 'resolve_keys',
                        'build_target_entries', 'build_decoy_entries',
-                       'candidate_cap', 'assemble_matrix', 'nnls_fit',
-                       'postprocess']
+                       'assemble_matrix', 'nnls_fit', 'postprocess']
             _total = sum(_tim.get(k, 0.0) for k in _phases) or 1.0
             logger.info(
                 "Batch phase breakdown (thread-seconds, % of compute): "

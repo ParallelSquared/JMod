@@ -1,10 +1,7 @@
-"""Class-blind top-k detagged-sequence cap for the main search."""
+"""Top-k detagged candidate cap for the main search."""
 import numpy as np
 
-from src.spectral_fitting import (
-    _detag_sequence, _detagged_group_stats, _combined_top_sequences,
-    _subset_candidates,
-)
+from src.spectral_fitting import _detag_sequence, _cap_to_top_detagged
 
 
 def test_detag_sequence():
@@ -13,7 +10,7 @@ def test_detag_sequence():
     assert _detag_sequence("C(UniMod:4)K(PSMtag_9plex-3)", "PSMtag_9plex") == "C(UniMod:4)K"
 
 
-def _mk(keys, matched_counts, matched_ints):
+def _mk_inputs(keys, matched_counts, matched_ints):
     n = len(keys)
     pep_cand_list, lib_peaks_matched = [], []
     rows, cols, vals, offs = [], [], [], [0]
@@ -28,7 +25,7 @@ def _mk(keys, matched_counts, matched_ints):
         for r in range(nm):
             rows.append(r); cols.append(j); vals.append(1.0)
         offs.append(len(rows))
-    subset_args = dict(
+    return dict(
         peaks_in_dia=list(range(n)), pep_cand=keys,
         pep_cand_loc=[np.arange(2)] * n, pep_cand_list=pep_cand_list,
         flat_rows=np.array(rows, np.int32), flat_cols=np.array(cols, np.int32),
@@ -36,52 +33,36 @@ def _mk(keys, matched_counts, matched_ints):
         norm_intensities=[np.ones(2)] * n, lib_peaks_matched=lib_peaks_matched,
         ms1_error=np.arange(n, dtype=float), passing=np.arange(n),
         prec_im=[0.0] * n)
-    return pep_cand_list, lib_peaks_matched, subset_args
 
 
-def test_combined_pool_is_class_blind():
-    # targets: A (5 matches), B (2 matches); decoys: D1 (4 matches), D2 (1)
-    t_list, t_matched, _ = _mk([("A(T-0)K", 2.0), ("B(T-0)K", 2.0)], [5, 2], [9, 2])
-    d_list, d_matched, _ = _mk([("D1K", 2.0), ("D2K", 2.0)], [4, 1], [7, 1])
-    ref = _detagged_group_stats([("A(T-0)K", 2.0), ("B(T-0)K", 2.0)], t_list, t_matched, "T")
-    dec = _detagged_group_stats([("D1K", 2.0), ("D2K", 2.0)], d_list, d_matched, "T")
-    keep_ref, keep_dec = _combined_top_sequences(2, ref, dec)
-    # one pool of 2: A (5) and D1 (4) win; B and D2 lose regardless of class
-    assert keep_ref == [0]
-    assert keep_dec == [0]
+def test_cap_keeps_best_sequences_and_channels(monkeypatch):
+    import src.config as config
+    class FakeTag: name = "T"
+    monkeypatch.setattr(config, "tag", FakeTag, raising=False)
+
+    keys = [("A(T-0)K", 2.0), ("A(T-1)K", 2.0),   # seq A: best 5 matches
+            ("B(T-0)K", 2.0),                     # seq B: 3 matches
+            ("C(T-0)K", 2.0), ("C(T-1)K", 2.0)]   # seq C: 3 matches, higher int
+    out = _cap_to_top_detagged(2, **_mk_inputs(
+        keys, matched_counts=[5, 2, 3, 3, 1], matched_ints=[10, 1, 5, 8, 1]))
+    kept_keys = out[1]
+    # top-2 sequences: A (5 matches) and C (3 matches, int 8 > B's 5);
+    # ALL channel copies of kept sequences survive
+    assert kept_keys == [("A(T-0)K", 2.0), ("A(T-1)K", 2.0),
+                         ("C(T-0)K", 2.0), ("C(T-1)K", 2.0)]
+    # columns renumbered consecutively, offsets consistent
+    flat_cols, flat_offsets = out[5], out[7]
+    assert flat_cols.tolist() == [0]*5 + [1]*2 + [2]*3 + [3]*1
+    assert flat_offsets.tolist() == [0, 5, 7, 10, 11]
+    # passing subset preserves original candidate indices
+    assert out[12] == [0.0]*4
+    assert list(out[11]) == [0, 1, 3, 4]
 
 
-def test_channels_travel_together_and_ties_break_on_intensity():
-    keys = [("A(T-0)K", 2.0), ("A(T-1)K", 2.0),
-            ("B(T-0)K", 2.0),
-            ("C(T-0)K", 2.0), ("C(T-1)K", 2.0)]
-    plist, matched, _ = _mk(keys, [5, 2, 3, 3, 1], [10, 1, 5, 8, 1])
-    groups = _detagged_group_stats(keys, plist, matched, "T")
-    keep_ref, keep_dec = _combined_top_sequences(2, groups, {})
-    # A (5 matches) then C (3 matches, intensity 8 beats B's 5); all channels kept
-    assert keep_ref == [0, 1, 3, 4]
-    assert keep_dec == []
-
-
-def test_no_cap_when_under_k():
-    keys = [("AK", 2.0), ("BK", 2.0)]
-    plist, matched, _ = _mk(keys, [2, 1], [1, 1])
-    groups = _detagged_group_stats(keys, plist, matched, None)
-    assert _combined_top_sequences(5, groups, {}) is None
-
-
-def test_subset_rebuilds_flats():
-    keys = [("AK", 2.0), ("BK", 2.0), ("CK", 2.0)]
-    _, _, args = _mk(keys, [2, 3, 1], [1, 1, 1])
-    out = _subset_candidates([0, 2], **args)
-    assert out[1] == [("AK", 2.0), ("CK", 2.0)]
-    assert out[5].tolist() == [0, 0, 1]          # renumbered cols
-    assert out[7].tolist() == [0, 2, 3]          # offsets
-    assert list(out[11]) == [0, 2]               # passing keeps original ids
-
-
-def test_subset_identity():
-    keys = [("AK", 2.0)]
-    _, _, args = _mk(keys, [2], [1])
-    out = _subset_candidates([0], **args)
-    assert out[4] is args["flat_rows"]
+def test_cap_noop_when_under_k(monkeypatch):
+    import src.config as config
+    monkeypatch.setattr(config, "tag", None, raising=False)
+    inputs = _mk_inputs([("AK", 2.0), ("BK", 2.0)], [2, 1], [1.0, 1.0])
+    out = _cap_to_top_detagged(5, **inputs)
+    assert out[1] == [("AK", 2.0), ("BK", 2.0)]
+    assert out[4] is inputs["flat_rows"]
