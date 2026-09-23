@@ -441,7 +441,7 @@ def fit_errors(errors,limit=10,percentile=.999):
 ##################################################################################################################################
 
 
-def fit_with_features(dia_spectra, librarySpectra, dino_features):
+def fit_with_features(dia_spectra, librarySpectra, dino_features, file_name):
     # TODO just search all of them, make sure the output is appropriate and has like MS1 intensities, etc
     # biosaur gets used in
     #   1. finding apex
@@ -497,7 +497,8 @@ def fit_with_features(dia_spectra, librarySpectra, dino_features):
                                     frac_matched=.8, ## NB: this may be selcting for smaller peptides
                                     rt_tol = config.rt_tol,
                                     ms1_tol = config.ms1_tol,
-                                    mz_tol = (config.args.ppm * 1e-6)
+                                    mz_tol = (config.args.ppm * 1e-6),
+                                    file_name = file_name
                                     )
         fit_outputs.append(fit_output)
         
@@ -1664,7 +1665,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         fit_outputs = fit_without_features(dia_spectra, librarySpectra)
 
     else:
-        fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
+        fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features, runState.file_name)
         #fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra)
     """
     
@@ -2627,7 +2628,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
     #################################################################################
     
-    fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features)
+    fit_outputs, top_n_spectra, large_feature_indices, lf_mz = fit_with_features(dia_spectra, librarySpectra, dino_features, runState.file_name)
     
     output_df, all_output_df, id_keys, feature_mzs =  process_prelim_search(fit_outputs,
                                                                               librarySpectra,

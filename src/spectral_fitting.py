@@ -2405,11 +2405,13 @@ def fit_to_lib2(dia_spec,
                im_bin_ms1=None,
                *,
                im_tol,
-               im_accuracy):
+               im_accuracy,
+               file_name):
     # spec_idx,dia_spec,library = inputs
     # im_tol: fragment IM tolerance (the run's fitted precision).
     # im_accuracy: widening of the IM candidate gate (the run's fitted library-IM
     # accuracy), or None to leave the gate off when no IM alignment was fitted.
+    # file_name: the run's data file, written to each result row's file_name.
     
     spec_idx=dia_spec.scan_num
     _tm = {}
@@ -2859,7 +2861,7 @@ def fit_to_lib2(dia_spec,
                        all_prec_im[i],
                        *all_features[j],
                        *all_ms2_frags[j],
-                       config.args.mzml,
+                       file_name,
                        _prot_vals[i] if return_prot else "NA",
                        i >= n_target_hits]
                        for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
@@ -2876,7 +2878,7 @@ def fit_to_lib2(dia_spec,
                        all_prec_im[i],
                        *all_features[j],
                        *all_ms2_frags[j],
-                       config.args.mzml,
+                       file_name,
                        _prot_vals[i] if return_prot else "NA",
                        i >= n_target_hits]
                        for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
@@ -2907,7 +2909,9 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
                ms1_mz=None,
                ms1_spectra = None,
                return_frags = False,
-               frac_matched = 0.5):
+               frac_matched = 0.5,
+               *,
+               file_name):
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
@@ -3268,7 +3272,7 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
                    prec_rt,
                    *all_features[j],
                    *all_ms2_frags[j],
-                   config.args.mzml,
+                   file_name,
                    library[(re.sub("Decoy_","",all_spec_ids[i][0]),all_spec_ids[i][1])][config.protein_column] if return_prot else "NA" ]
                    for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
         

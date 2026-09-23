@@ -91,9 +91,27 @@ def _resolve_bruker_setting(cli_value):
     return resolved
 
 
+def _datestamped(path):
+    """*path* unchanged if nothing exists there yet, else with a datestamp appended."""
+    if not os.path.exists(path):
+        return path
+    datestamp = str(datetime.datetime.now())
+    datestamp = datestamp.split()
+    datestamp = datestamp[0].replace("-", "_") + "_" + datestamp[1].split(".")[0].replace(":", "_")
+    root, ext = os.path.splitext(path)
+    if os.path.isdir(path):
+        root, ext = path, ""
+    return root + "_" + datestamp + ext
+
+
 @log_exceptions
 def main(GUI_config_json=None, GUI_result_queue=None):
-    """Main function to run JMod analysis."""
+    """Run JMod on every data file in the configuration.
+
+    ``mzml`` is either one path or a list of paths; one path is a one-run
+    experiment.  The library is built once and shared, then each file is
+    searched, scored and quantified on its own, into its own results folder.
+    """
 
     # Check if a single argument is provided and it's a JSON file
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
@@ -118,45 +136,93 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
         # Run tests instead of normal operation
         import subprocess
-        
+
         # Remove the test argument and pass remaining args to test runner
         test_args = sys.argv[2:] if len(sys.argv) > 2 else []
         cmd = [sys.executable, "run_tests.py"] + test_args
-        
+
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
     # TODO: validate all config.args values against default_dict['values'] lists here
-    ####  Load Libraries   ######################
     set_seeds(config.RANDOM_SEED)
-    mzml_file = config.args.mzml.replace("\\","/")
     lib_file = config.args.speclib.replace("\\","/")
+    run_files = config.args.mzml if isinstance(config.args.mzml, list) else [config.args.mzml]
 
-    
-    
+    # Experiment-level files -- the log, and a memory-mapped library -- go in
+    # the output folder, or next to the first data file when there is none
+    if config.args.output_folder is not None:
+        experiment_dir = config.args.output_folder
+    else:
+        experiment_dir = os.path.dirname(run_files[0].replace("\\","/")) or "."
+    os.makedirs(experiment_dir, exist_ok=True)
+
+    logfile_path = _datestamped(os.path.join(experiment_dir, "JMod_log.log"))
+    set_log_filepath(logfile_path)
+
+    logger.debug(config.args)
+    ##add statements to log once the log file has been created
+    if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
+        logger.info(f"Using configuration file: {config.args.config_json}")
+    if config.args.config_json:
+        logger.info(f"Loading configuration from {config.args.config_json}")
+        if not config.load_config_from_json(config.args.config_json):
+            logger.warning("Failed to load JSON configuration. Using command-line arguments.")
+    if GUI_config_json:
+        config.args.config_json = GUI_config_json
+        logger.info(f"Loading configuration from GUI")
+    if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
+        logger.info("Running JMod in test mode...")
+
+    # Log the configuration that will be used
+    logger.info("Using configuration:")
+    logger.info(config.args)
+    logger.info("")
+    logger.info(f"{len(run_files)} file(s) to run; log writing to {os.path.abspath(logfile_path)}")
+
+    ######################################################
+    #### Build the library once.  It comes first, before any run's spectra are
+    #### resident, so its build transients never overlap them.
+    mass_tag, SILAC = resolve_tags()
+    spectrumLibrary = build_library(lib_file, experiment_dir, mass_tag, SILAC)
+
+    for run_idx, run_file in enumerate(run_files, start=1):
+        logger.info("")
+        logger.info(f"Run {run_idx} of {len(run_files)}: {run_file}")
+        process_run(run_file, spectrumLibrary, mass_tag, SILAC)
+        logger.info(f"Run {run_idx} of {len(run_files)} finished")
+
+    logger.info(f"{len(run_files)} files completed. Output at {os.path.abspath(experiment_dir)}")
+
+    del spectrumLibrary
+    gc.collect()
+
+
+def process_run(run_file, spectrumLibrary, mass_tag, SILAC):
+    """Search, score and quantify one data file against the shared library.
+
+    Everything made here belongs to this run and is released when it returns:
+    the spectra, the run's calibration (RunState, rt_mz, the window mask) and,
+    on timeplex, the per-channel copy of the library.  The shared library is
+    only read.
+    """
+    # Every run starts from the same seed, so its results do not depend on its
+    # position in the list
+    set_seeds(config.RANDOM_SEED)
+    runState = RunState()
+    runState.file_name = run_file
+    mzml_file = run_file.replace("\\","/")
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
-    lib_file_name = lib_file.split("/")[-1].rsplit(".",1)[0]
 
-
-    use_rt = "RT" if config.args.use_rt else ""
-    iso = f"iso{config.args.num_iso}" if config.args.iso else ""
-    lib_frac = f"iso{config.args.lib_frac}"
-    mTRAQ = "mTRAQ" if config.args.mTRAQ else ""
-    plexDIA = "plexDIA" if config.args.plexDIA else ""
-    tag = config.args.tag
-    is_timeplex = "timeplex" if config.args.timeplex else ""
     dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
-    use_feat = ""
     dino_features=None
     feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv" #TODO this breaks if you run from cd
     if config.args.use_features and os.path.exists(feature_path):
-        use_feat = "Dino"
         dino_features = pd.read_csv(feature_path,delimiter="\t")
 
     if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
         import subprocess
         subprocess.run(["biosaur2", mzml_file], check=True)
-        use_feat = "Dino"
         dino_features = pd.read_csv(feature_path,delimiter="\t")
 
     results_folder_name = spec_file_name + "_results" + "_" + dummy_val
@@ -168,11 +234,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     else:
         results_folder_path = os.path.join(os.path.dirname(mzml_file), results_folder_name)
 
-    if os.path.exists(results_folder_path):
-        datestamp = str(datetime.datetime.now())
-        datestamp = datestamp.split()
-        datestamp = datestamp[0].replace("-", "_") + "_" + datestamp[1].split(".")[0].replace(":", "_")
-        results_folder_path = results_folder_path + "_" + datestamp
+    results_folder_path = _datestamped(results_folder_path)
 
 
     if not os.path.exists(results_folder_path):
@@ -196,7 +258,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             send_raise_to_TK(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError: \n{str(e)}")
             raise e
 
-        
+
     if len(results_folder_path) >= 225:  ##if results path is long, check to make sure putting things in it wont break (i.e. windows with long paths enabled or different OS)
         try:
             test_path = os.path.join(results_folder_path, "a" * 250 + ".txt")
@@ -213,58 +275,32 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             send_raise_to_TK(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError:\n{str(e)}")
             raise e
 
-    
 
-    args_dict = vars(config.args)
+
+    # This run's record of the configuration, naming only its own data file
+    args_dict = dict(vars(config.args), mzml=run_file)
     json_path = os.path.join(results_folder_path, "outputs/config.json")
     with open(json_path, "w") as f:
         json.dump(args_dict, f, indent=4)
-    
-    logfile_path = os.path.join(results_folder_path, "Log.log")
-    set_log_filepath(logfile_path)
+
     config.results_folder_path = results_folder_path
-
-
-
-    logger.debug(config.args)
-    ##add statements to log once results folder has been created
-    if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
-        logger.info(f"Using configuration file: {config.args.config_json}")
-    if config.args.config_json:
-        logger.info(f"Loading configuration from {config.args.config_json}")
-        if not config.load_config_from_json(config.args.config_json):
-            logger.warning("Failed to load JSON configuration. Using command-line arguments.")
-    if GUI_config_json:
-        config.args.config_json = GUI_config_json
-        logger.info(f"Loading configuration from GUI")
-    if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
-        logger.info("Running JMod in test mode...")
-
-    # Log the configuration that will be used
-    logger.info("Using configuration:")
-    logger.info(config.args)
-    logger.info("")
-
 
     if config.args.use_features and os.path.exists(feature_path) and config.args.timeplex:
         logger.info("loading Dinosaur features")
     if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
         logger.info("Dinosaur feature file not found, running biosaur2")
 
-    
-    overall_start_time = time.time()
-    # python run_jmod.py -r -l /Users/nathanwamsley/Data/SPEC_LIBS/JD_LF_Feb2025/LF_HY_lib.tsv -i /Users/nathanwamsley/Data/mzML/mTRAQ_Feb2025/JD0324.mzML --iso --num_iso 5
     logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
 
-    if config.args.mzml.lower().endswith(".raw"):
+    if run_file.lower().endswith(".raw"):
         settings = load_settings()
-        
+
         if config.args.rawfilereader_path is not None:
             reader_path = config.args.rawfilereader_path
             settings["rawfilereader_path"] = reader_path
             save_settings(settings)
         else:
-            reader_path = settings["rawfilereader_path"]            
+            reader_path = settings["rawfilereader_path"]
 
         file_reader.load_rawfilereader(reader_path)
 
@@ -272,83 +308,56 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     # otherwise fall back to the stored setting. Only used for a .d with no
     # peaks.parquet yet, where it supplies the calibration for centroiding.
     bruker_sdk_path = None
-    if config.args.mzml.rstrip("/").lower().endswith(".d"):
+    if run_file.rstrip("/").lower().endswith(".d"):
         bruker_sdk_path = _resolve_bruker_setting(config.args.bruker_sdk_path)
-
-    ######################################################
-    #### Load the data.  The library is built first, before any run's spectra
-    #### are resident, so its build transients never overlap them.
-    spectrumLibrary, mass_tag, SILAC = build_library(lib_file, results_folder_path)
 
     DIAspectra=file_reader.loadSpectra(mzml_file, bruker_sdk_path=bruker_sdk_path)
 
     if config.args.test_mode:
         logger.info(f"Running in test mode with RT range: {config.args.test_rt_min}-{config.args.test_rt_max}, m/z range: {config.args.test_mz_min}-{config.args.test_mz_max}")
-        
+
         # Filter MS2 scans based on retention time and precursor m/z
         filtered_ms2_scans = []
         for scan in DIAspectra.ms2scans:
-            if (config.args.test_rt_min <= scan.RT <= config.args.test_rt_max and 
+            if (config.args.test_rt_min <= scan.RT <= config.args.test_rt_max and
                 config.args.test_mz_min <= scan.prec_mz <= config.args.test_mz_max):
                 filtered_ms2_scans.append(scan)
-        
+
         logger.info(f"Selected {len(filtered_ms2_scans)} out of {len(DIAspectra.ms2scans)} MS2 scans for test mode")
         DIAspectra.ms2scans = filtered_ms2_scans
         del filtered_ms2_scans
-
-    runState = RunState()
 
     funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma = first_search(
         DIAspectra, spectrumLibrary, mass_tag, SILAC,
         dino_features, feature_path, results_folder_path, runState)
     del dino_features
 
-    spectrumLibrary, rt_mz, in_window = calibrate_library(
+    # On timeplex this is a per-channel copy of the library; otherwise it is the
+    # shared library itself.  Either way the shared library stays untouched for
+    # the next run.
+    searchLibrary, rt_mz, in_window = calibrate_library(
         spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl,
         DIAspectra.ms2scans, runState)
     del funcs, target_iRT, rt_models_data, im_spl
 
-    decoylib_search_path = main_search(DIAspectra, spectrumLibrary, rt_mz, in_window,
+    decoylib_search_path = main_search(DIAspectra, searchLibrary, rt_mz, in_window,
                                        results_folder_path, runState)
     del rt_mz, in_window
     gc.collect()
 
-    score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
+    score_and_report(decoylib_search_path, DIAspectra, searchLibrary,
                      mass_tag, SILAC, elution_fwhm, vote_sigma, runState)
-    del spectrumLibrary
+    del searchLibrary, DIAspectra
     gc.collect()
 
 
-def build_library(lib_file, work_dir):
-    """Load the spectral library and build the target + decoy search library.
+def resolve_tags():
+    """Look up the mass tag and SILAC label named in the configuration.
 
-    Resolves the tag and SILAC objects, adds decoys, tags every entry, expands
-    isotopes (--iso) or finalizes the spectra, sets top_n, and freezes the
-    result.  Nothing here depends on a run, and nothing after it writes to the
-    library: per-run changes live in calibrate_library's return values.
-    Large non-iso libraries are memory-mapped under *work_dir*.
-
-    Returns (spectrumLibrary, mass_tag, SILAC).
+    Returns (mass_tag, SILAC); each is None when not in use.  Also sets
+    config.tag / config.SILAC, which other modules read.  Raises when a name is
+    given that is not an available tag.
     """
-    spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
-
-    if config.args.test_mode:
-        # Pre-filter the library to speed up processing
-        # Note: This is a rough filter that will be refined after RT alignment
-        filtered_library = {}
-        rt_tolerance = config.rt_tol * 2  # Use a wider tolerance initially
-        mz_tolerance = (config.args.ppm * 1e-6) * 2
-        
-        for key, entry in spectrumLibrary.items():
-            #if (config.args.test_rt_min - rt_tolerance <= entry["iRT"] <= config.args.test_rt_max + rt_tolerance and
-            #    config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
-            if (config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
-                filtered_library[key] = entry
-        
-        logger.info(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
-        spectrumLibrary = filtered_library
-
-    ### Finding tags moved to above decoy generation, library is still tagged afterwards
     ## TODO Running SILAC + a Tag without an untagged library is probably not currently functional
     if config.args.SILAC:
         # Find the tag object based on the tag name
@@ -374,17 +383,6 @@ def build_library(lib_file, work_dir):
             config.tag = available_tags[config.args.tag]
             logger.info(f"Using tag: {config.tag.name} - {config.tag.n_channels} channels")
             mass_tag = config.tag
-            if library_tag_bool:
-                diffs = np.abs(config.tag.channel_masses - source_channel_mass)
-                closest_idx = int(np.argmin(diffs))
-                closest_channel_name = config.tag.channel_names[closest_idx]
-                closest_channel_mass = config.tag.channel_masses[closest_idx]
-                mass_diff = closest_channel_mass - source_channel_mass
-                source_channel = config.tag.name + "-" + str(closest_channel_name)
-                logger.info(f"Tag found in library: {source_channel}. (mass difference: {mass_diff:.6f} Da)")
-                spectrumLibrary.relabel_tag(library_tag_name, source_channel)
-            else:
-                source_channel = None
         else:
             if config.args.tag != "None":
                 from src.utils.gui_utils import send_raise_to_TK
@@ -396,6 +394,50 @@ def build_library(lib_file, work_dir):
     else:
         mass_tag = None
         config.tag = None
+
+    return mass_tag, SILAC
+
+
+def build_library(lib_file, work_dir, mass_tag, SILAC):
+    """Load the spectral library and build the target + decoy search library.
+
+    Adds decoys, tags every entry with *mass_tag* and *SILAC* (from
+    resolve_tags), expands isotopes (--iso) or finalizes the spectra, sets
+    top_n, and freezes the result.  Nothing here depends on a run, and nothing
+    after it writes to the library: per-run changes live in
+    calibrate_library's return values.  Large non-iso libraries are
+    memory-mapped under *work_dir*.
+    """
+    spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
+
+    if config.args.test_mode:
+        # Pre-filter the library to speed up processing
+        # Note: This is a rough filter that will be refined after RT alignment
+        filtered_library = {}
+        rt_tolerance = config.rt_tol * 2  # Use a wider tolerance initially
+        mz_tolerance = (config.args.ppm * 1e-6) * 2
+        
+        for key, entry in spectrumLibrary.items():
+            #if (config.args.test_rt_min - rt_tolerance <= entry["iRT"] <= config.args.test_rt_max + rt_tolerance and
+            #    config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
+            if (config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
+                filtered_library[key] = entry
+        
+        logger.info(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
+        spectrumLibrary = filtered_library
+
+    # A pre-tagged library: its tag becomes the closest channel of mass_tag
+    if mass_tag and library_tag_bool:
+        diffs = np.abs(mass_tag.channel_masses - source_channel_mass)
+        closest_idx = int(np.argmin(diffs))
+        closest_channel_name = mass_tag.channel_names[closest_idx]
+        closest_channel_mass = mass_tag.channel_masses[closest_idx]
+        mass_diff = closest_channel_mass - source_channel_mass
+        source_channel = mass_tag.name + "-" + str(closest_channel_name)
+        logger.info(f"Tag found in library: {source_channel}. (mass difference: {mass_diff:.6f} Da)")
+        spectrumLibrary.relabel_tag(library_tag_name, source_channel)
+    else:
+        source_channel = None
 
     ######################################################
     #### Generate decoys (before tagging/isotopes so they apply to both)
@@ -412,10 +454,10 @@ def build_library(lib_file, work_dir):
     ######################################################
     #### Tagging #####
 
-    if config.tag:
-        spectrumLibrary = tag_library(spectrumLibrary, config.tag, source_channel=source_channel)
-    if config.SILAC:
-        spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
+    if mass_tag:
+        spectrumLibrary = tag_library(spectrumLibrary, mass_tag, source_channel=source_channel)
+    if SILAC:
+        spectrumLibrary = tag_library(spectrumLibrary, SILAC)
 
     ######################################################
     #### Isotopes (after tagging: the tag changes each fragment's composition)
@@ -425,7 +467,7 @@ def build_library(lib_file, work_dir):
         # monoisotopic, and first_search reads them back through
         # monoisotopic_targets()
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
-                                                  tag=config.tag,
+                                                  tag=mass_tag,
                                                   n_iso=config.args.num_iso)
     else:
         # Large libraries: back the six big fragment/spectrum arrays with
@@ -438,7 +480,7 @@ def build_library(lib_file, work_dir):
     spectrumLibrary.freeze()
     logger.info("Finished Library Setup")
 
-    return spectrumLibrary, mass_tag, SILAC
+    return spectrumLibrary
 
 
 def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC,
@@ -723,6 +765,7 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
                        ms1_tol=runState.opt_ms1_tol,
                        im_tol=runState.opt_im_precision,
                        im_accuracy=_im_accuracy,
+                       file_name=runState.file_name,
                        mz_tol=(config.args.ppm * 1e-6),
                        ms1_spectra=DIAspectra.ms1scans,
                        return_frags=False,
