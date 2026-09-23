@@ -214,7 +214,7 @@ def run_experiment(GUI_config_json=None):
     logger.info(config.args)
     logger.info("")
     logger.info(f"{len(run_files)} file(s) to run")
-    logger.info(f"log writing to {os.path.abspath(logfile_path)}")
+    logger.info(f"Log writing to {os.path.abspath(logfile_path)}")
 
     ######################################################
     #### Build the library once.  It comes first, before any run's spectra are
@@ -225,7 +225,8 @@ def run_experiment(GUI_config_json=None):
     failed_runs = []
     for run_idx, run_file in enumerate(run_files, start=1):
         logger.info("")
-        logger.info(f"Run {run_idx} of {len(run_files)}: {run_file}")
+        logger.info(f"Run {run_idx} of {len(run_files)}", extra={"highlight": True})
+        logger.info(run_file, extra={"highlight": True})
         runState = RunState()
         runState.file_name = run_file
         try:
@@ -241,7 +242,7 @@ def run_experiment(GUI_config_json=None):
 
     logger.info("")
     logger.info(f"{len(run_files) - len(failed_runs)} of {len(run_files)} files completed successfully. "
-                f"Output at {os.path.abspath(experiment_dir)}")
+                f"Output at {os.path.abspath(experiment_dir)}", extra={"highlight": True})
     if failed_runs:
         logger.error(f"{len(failed_runs)} run(s) failed, see above: {', '.join(failed_runs)}")
 

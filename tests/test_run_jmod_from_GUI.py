@@ -58,18 +58,16 @@ from src.run_jmod_from_GUI import run_main_process
 
 class Test_run_main_process():
     @pytest.fixture
-    def mock_queues(self):
-        return multiprocessing.Queue(), multiprocessing.Queue()
+    def log_queue(self):
+        return multiprocessing.Queue()
 
 
-    def test_run_main_process_success(self, tmp_path, mock_queues):
+    def test_run_main_process_success(self, tmp_path, log_queue):
         tmp_files = []
         for i in range(2):
             p = tmp_path / f"tmp_{i}.txt"
             p.write_text("test")
             tmp_files.append(str(p))
-
-        result_queue, log_queue = mock_queues
 
         fake_run_jmod = types.ModuleType("src.run_jmod")
         fake_run_jmod.main = MagicMock(return_value=None)
@@ -88,7 +86,7 @@ class Test_run_main_process():
             mock_logger = MagicMock()
             mock_get_logger.return_value = mock_logger
 
-            run_main_process(tmp_files, result_queue, log_queue)
+            run_main_process(tmp_files, log_queue)
 
             # main should be called once per file
             assert mock_main.call_count == 2

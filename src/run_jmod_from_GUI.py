@@ -38,7 +38,6 @@ import threading
 import tempfile
 import platform
 import multiprocessing
-import queue
 from logging.handlers import QueueHandler
 import atexit
 import sys
@@ -135,17 +134,20 @@ class JModGUI(ThemedTk):
                 if record.levelno == logging.DEBUG:
                     return
                 msg = self.format(record)
-                self.text_widget.after(0, self.append, msg)
+                # Lines logged with extra={"highlight": True} (a new experiment, a new
+                # run) show blue; errors show red.
+                highlight = getattr(record, "highlight", False)
+                self.text_widget.after(0, self.append, msg, record.levelno, highlight)
 
-            def append(self, msg):
+            def append(self, msg, levelno=logging.INFO, highlight=False):
                 self.text_widget.config(state="normal")
                 if "- INFO -" in msg and (msg.split("- INFO -")[1] == "" or msg.split("- INFO -")[1] == " "): #if log.info("") make an empty line in the GUI logger
                     self.text_widget.insert(tk.END, "\n")
                     self.text_widget.see(tk.END)
-                elif "Running JMod:" in msg:
+                elif highlight:
                     self.text_widget.insert(tk.END, msg + "\n", "blue")
                     self.text_widget.see(tk.END)
-                elif "runERROR:" in msg:
+                elif levelno >= logging.ERROR:
                     self.text_widget.insert(tk.END, msg + "\n", "red")
                     self.text_widget.see(tk.END)
                 else:
@@ -1471,16 +1473,10 @@ class JModGUI(ThemedTk):
 
     def check_process(self, p):
         """
-        While main is running as a process, every 1 second, check to see if an error has come in
-        If there is an error, show it.
+        While main is running as a process, check every 1 second whether it is still running.
+        Errors reach the log panel through the log queue.
         If the process is no longer running for any reason, make run button clickable
         """
-        try:
-            msg = self.result_queue.get_nowait()
-            # if msg.split("_", 1)[0] == "errorGUI":
-            #     tk.messagebox.showerror("Error", msg.split("_", 1)[1])
-        except queue.Empty:
-            pass 
         if p.is_alive():
             self.after(1_000, lambda: self.check_process(p))
         else:
@@ -1513,9 +1509,8 @@ class JModGUI(ThemedTk):
         self.tk_formatter.reset_start_time()
 
                 
-        self.result_queue = multiprocessing.Queue()
         self.disable_buttons()
-        self.proc = multiprocessing.Process(target=run_main_process, args=(tmp_filenames,self.result_queue, self.log_queue))
+        self.proc = multiprocessing.Process(target=run_main_process, args=(tmp_filenames, self.log_queue))
         self.proc.start()
         self.check_process(self.proc)
 
@@ -1545,7 +1540,7 @@ class JModGUI(ThemedTk):
         """
         if show_message is True:
             logging.getLogger("GUI").info("")
-            logging.getLogger("GUI").info("Process Manually Terminated.\n")
+            logging.getLogger("GUI").info("Process Manually Terminated.\n", extra={"highlight": True})
         if hasattr(self, 'proc') and self.proc.is_alive():
             self.proc.terminate()
             self.proc.join()
@@ -1899,7 +1894,7 @@ class JModGUI(ThemedTk):
 
 
 
-def run_main_process(tmp_filenames, result_queue, log_queue):
+def run_main_process(tmp_filenames, log_queue):
     """
     Run JMod in a separate process.
     This is a standalone function so it can be safely used with multiprocessing.
@@ -1919,7 +1914,8 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
     for i, tmp_filename in enumerate(tmp_filenames, start=1):
         if i > 1:
             logger.info("")
-        logger.info(f"Running JMod: Experiment {i} of {len(tmp_filenames)}\n")
+        logger.info(f"Running JMod: Experiment {i} of {len(tmp_filenames)}\n",
+                    extra={"highlight": True})
         # main logs its own errors to this panel and returns "failed"; this only
         # catches what escapes it, such as a failure importing the pipeline
         try:
