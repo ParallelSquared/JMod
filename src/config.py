@@ -105,18 +105,9 @@ n_most_intense_features = 10000
 
 rt_percentile = .95
 
-opt_rt_tol = rt_tol # set as default to start
-opt_ms1_tol = ms1_tol 
-opt_im_precision = im_precision   # refitted in MZRTfit
-opt_im_accuracy = im_accuracy
-
-# Library-IM -> observed-IM calibration fitted in MZRTfit, or None when the data
-# or the library carries no ion mobility.
-im_spl = None
-
-# True once the library is known to carry ion mobility. Set at library load; the
-# single flag every IM gate keys off, so the condition is decided in one place.
-library_has_im = False
+# The values fitted per run from these defaults (opt_rt_tol, opt_ms1_tol,
+# opt_im_precision, opt_im_accuracy) live on RunState (src/models/run_state.py), not
+# here, so one run's fit can never leak into the next.
 
 max_num_prelim_search = 1e5
 
@@ -174,8 +165,6 @@ score_model = "xg"
 tree_max_depth = 20
 
 fdr_threshold = 0.01
-
-target_decoy_ratio = 1 # added to get the tests working
 
 
 #############################################

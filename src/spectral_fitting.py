@@ -2402,8 +2402,14 @@ def fit_to_lib2(dia_spec,
                output_folder=None,
                frag_index=None,
                ms1_rt=None,
-               im_bin_ms1=None):
+               im_bin_ms1=None,
+               *,
+               im_tol,
+               im_accuracy):
     # spec_idx,dia_spec,library = inputs
+    # im_tol: fragment IM tolerance (the run's fitted precision).
+    # im_accuracy: widening of the IM candidate gate (the run's fitted library-IM
+    # accuracy), or None to leave the gate off when no IM alignment was fitted.
     
     spec_idx=dia_spec.scan_num
     _tm = {}
@@ -2443,7 +2449,7 @@ def fit_to_lib2(dia_spec,
 
     # Per-peak ion mobility (timsTOF); zeros for non-IM data (merged_mob unused).
     _has_im = getattr(spec, "mobility", None) is not None
-    _im_tol = config.opt_im_precision if _has_im else 0.0
+    _im_tol = im_tol if _has_im else 0.0
     if _has_im and _im_tol > 0.0:
         # timsTOF: bin DIA peaks by (m/z, IM) so same-m/z peaks at different
         # mobility stay separate; the summed bin intensity is the NNLS observation.
@@ -2472,9 +2478,9 @@ def fit_to_lib2(dia_spec,
     # in which case rt_mz has no IM column and every value is NaN anyway.
     _im_gate_lo, _im_gate_hi = -np.inf, np.inf
     if (rt_mz.shape[1] > 2 and getattr(spec, "im_lo", None) is not None
-            and config.im_spl is not None):
-        _im_gate_lo = spec.im_lo - config.opt_im_accuracy
-        _im_gate_hi = spec.im_hi + config.opt_im_accuracy
+            and im_accuracy is not None):
+        _im_gate_lo = spec.im_lo - im_accuracy
+        _im_gate_hi = spec.im_hi + im_accuracy
 
     if frag_index is not None and not ms1_mz:
         win_lo = prec_mz - windowWidth / 2

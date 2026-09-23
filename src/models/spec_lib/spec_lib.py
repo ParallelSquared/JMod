@@ -382,11 +382,11 @@ def loadSpecLib(lib_file):
     if library_tag_bool:
         logger.info("Spectral Library Contains Tagged Peptides")
 
-    # Ion mobility: decide once, here, whether the library carries IM.  Every
-    # downstream IM gate keys off config.library_has_im rather than re-deriving
-    # the condition.  A column that is entirely empty means the library simply
+    # Ion mobility: a column that is entirely empty means the library simply
     # has no IM, which is normal; a partially populated one is corrupt and would
-    # make the gates silently inconsistent between precursors, so it raises.
+    # make the IM gates silently inconsistent between precursors, so it raises.
+    # With that ruled out, library.has_ion_mobility answers the question for
+    # every downstream IM gate.
     _ion_mob = np.asarray(spec_lib.ion_mob, dtype=float)
     _finite = np.isfinite(_ion_mob)
     if _finite.any() and not _finite.all():
@@ -395,8 +395,7 @@ def loadSpecLib(lib_file):
             f"Library ion mobility is only partially populated: {n_missing} of "
             f"{_finite.size} precursors have no IM value. Expected either all or none."
         )
-    config.library_has_im = bool(_finite.size > 0 and _finite.all())
-    if config.library_has_im:
+    if spec_lib.has_ion_mobility:
         logger.info("Spectral library contains ion mobility")
 
     logger.info(f"Loaded {len(spec_lib)} library precursors")

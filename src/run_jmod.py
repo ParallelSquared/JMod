@@ -40,25 +40,27 @@ from src.mass_tags import tag_library, available_tags
 from src.fdr_analysis import process_data
 from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
+from src.models.run_state import RunState
 
 from src.logger import logger, set_log_filepath, log_exceptions
 import logging
 
 
-def _aligned_library_im(library):
+def _aligned_library_im(library, im_spl):
     """Library ion mobility mapped onto observed 1/K0 by the fitted alignment.
 
     Returns an all-NaN array when the library has no IM column or the alignment
-    did not fit, so every IM gate keyed off this value is inert on such runs.
+    (*im_spl*) did not fit, so every IM gate keyed off this value is inert on
+    such runs.
     """
     lib_im = np.asarray(library.ion_mob, dtype=np.float64)
     aligned = np.full(lib_im.shape, np.nan, dtype=np.float64)
     ok = np.isfinite(lib_im)
-    if config.im_spl is not None and ok.any():
-        aligned[ok] = config.im_spl(lib_im[ok])
+    if im_spl is not None and ok.any():
+        aligned[ok] = im_spl(lib_im[ok])
         logger.info(f"Aligned library IM for {int(ok.sum())} of {ok.size} entries "
                     f"(range {np.nanmin(aligned):.4f}-{np.nanmax(aligned):.4f})")
-    elif config.library_has_im:
+    elif library.has_ion_mobility:
         # The library has IM but there is no calibration to map it with; the
         # admission gate would be comparing un-aligned values against observed
         # ones, so it stays off rather than silently mis-gating.
@@ -294,22 +296,25 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         DIAspectra.ms2scans = filtered_ms2_scans
         del filtered_ms2_scans
 
-    funcs, target_iRT, rt_models_data, elution_fwhm, vote_sigma = first_search(
+    runState = RunState()
+
+    funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma = first_search(
         DIAspectra, spectrumLibrary, mass_tag, SILAC,
-        dino_features, feature_path, results_folder_path)
+        dino_features, feature_path, results_folder_path, runState)
     del dino_features
 
     spectrumLibrary, rt_mz, in_window = calibrate_library(
-        spectrumLibrary, funcs, target_iRT, rt_models_data, DIAspectra.ms2scans)
-    del funcs, target_iRT, rt_models_data
+        spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl,
+        DIAspectra.ms2scans, runState)
+    del funcs, target_iRT, rt_models_data, im_spl
 
     decoylib_search_path = main_search(DIAspectra, spectrumLibrary, rt_mz, in_window,
-                                       results_folder_path)
+                                       results_folder_path, runState)
     del rt_mz, in_window
     gc.collect()
 
     score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
-                     mass_tag, SILAC, elution_fwhm, vote_sigma)
+                     mass_tag, SILAC, elution_fwhm, vote_sigma, runState)
     del spectrumLibrary
     gc.collect()
 
@@ -437,19 +442,21 @@ def build_library(lib_file, work_dir):
 
 
 def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC,
-                 dino_features, feature_path, results_folder_path):
+                 dino_features, feature_path, results_folder_path, runState):
     """Fit this run's calibration.
 
     Searches the monoisotopic target spectra to fit the RT, precursor m/z and
     IM alignments and each target's aligned iRT, then re-bands the MS2 spectra
     on the fitted IM precision.  Reads the library but does not change it;
-    calibrate_library applies the result.
+    calibrate_library applies the result.  Sets the fitted tolerances on *runState*
+    (opt_rt_tol, opt_ms1_tol, opt_im_precision, opt_im_accuracy).
 
-    Returns (funcs, target_iRT, rt_models_data, elution_fwhm, vote_sigma).
+    Returns (funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma).
     ``funcs`` starts with the RT spline (one per time channel on timeplex) and
     the m/z function; ``target_iRT`` holds the aligned iRT of every target,
     indexed like the library; ``rt_models_data`` is None unless decoy RTs are
-    to be predicted.
+    to be predicted; ``im_spl`` maps library IM to observed 1/K0, or is None
+    when no IM alignment was fitted.
     """
     ######################################################
     #### RT/MZ Alignment (initial search uses monoisotopic target entries only) #####
@@ -461,21 +468,22 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC,
             logger.info("Loading Dinosaur features")
             dino_features = pd.read_csv(feature_path, delimiter="\t")
             funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align)
+                                            ms2=config.args.ms2_align, runState=runState)
         else:
             logger.info("Not using features")
             funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, None, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align)
+                                            ms2=config.args.ms2_align, runState=runState)
         # Timeplex path doesn't compute elution SD yet — use the historical default.
         vote_sigma = 1.0
         rt_models_data = None
+        im_spl = None
 
     else:
-        funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma = MZRTfit(
+        funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma, im_spl = MZRTfit(
             DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6),
             results_folder=results_folder_path,
             ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
-            return_rt_models=config.args.predict_decoys,
+            return_rt_models=config.args.predict_decoys, runState=runState,
         )
 
     del target_view
@@ -499,12 +507,12 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC,
     ## band spectrum alive while the new, larger set is allocated -- on a large .d
     ## that is an extra ~18 GB held for no reason.
     if DIAspectra.has_ion_mobility:
-        file_reader.reband_ms2(DIAspectra, 4.0 * config.opt_im_precision)
+        file_reader.reband_ms2(DIAspectra, 4.0 * runState.opt_im_precision)
 
-    return funcs, target_iRT, rt_models_data, elution_fwhm, vote_sigma
+    return funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma
 
 
-def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, ms2scans):
+def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl, ms2scans, runState):
     """Map the frozen library into this run's coordinates.
 
     Every per-run change to what the search sees of the library happens here,
@@ -512,11 +520,11 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, ms2sca
 
     - iRT: the aligned iRT of each target, copied to its decoys, or predicted
       for them with --predict_decoys.  Only used to build rt_mz.
-    - rt_mz: each entry's RT, precursor m/z and 1/K0 in this run's observed
-      coordinates.
+    - rt_mz: each entry's RT, precursor m/z and 1/K0 (via *im_spl*) in this
+      run's observed coordinates.
     - in_window: the entries some isolation window of this run can select;
       main_search leaves the rest out of the fragment index.
-    - config.target_decoy_ratio: targets over decoys among those entries.
+    - runState.target_decoy_ratio: targets over decoys among those entries.
 
     Timeplex searches the library once per time channel, so on that path the
     returned library is a new per-channel store, not the one passed in.
@@ -546,7 +554,7 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, ms2sca
         rt_mz = np.concatenate(rt_mz)
         # Column 2 as in the standard path.  This path replicates the library once
         # per plex, so the aligned IM has to be tiled to match row-for-row.
-        _plex_im = _aligned_library_im(spectrumLibrary)
+        _plex_im = _aligned_library_im(spectrumLibrary, im_spl)
         rt_mz = np.column_stack([rt_mz, np.tile(_plex_im, len(rt_spls))])
 
         from src.models.spec_lib.library_store import SpectrumLibraryStore
@@ -574,7 +582,7 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, ms2sca
         # fit, which leaves every downstream IM gate inert.  Decoys keep their
         # parent's IM unchanged -- unlike m/z there is no decoy offset, since
         # shifting it would reject decoys systematically and break FDR.
-        rt_mz = np.column_stack([rt_mz, _aligned_library_im(spectrumLibrary)])
+        rt_mz = np.column_stack([rt_mz, _aligned_library_im(spectrumLibrary, im_spl)])
         # Apply decoy m/z offset to decoy entries
         rt_mz[n_targets:, 1] -= config.decoy_mz_offset
         search_library = spectrumLibrary
@@ -607,14 +615,14 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, ms2sca
     _in = in_window[:n_entries]
     n_t = int(_in[:n_targets].sum())
     n_d = int(_in[n_targets:].sum())
-    config.target_decoy_ratio = n_t / n_d if n_d else float('inf')
+    runState.target_decoy_ratio = n_t / n_d if n_d else float('inf')
     logger.info(f"Searchable: {n_t} targets, {n_d} decoys "
-                f"(ratio={config.target_decoy_ratio:.4f})")
+                f"(ratio={runState.target_decoy_ratio:.4f})")
 
     return search_library, rt_mz, in_window
 
 
-def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_path):
+def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_path, runState):
     """Fit every MS2 spectrum against the calibrated library.
 
     Builds the fragment index, writes the search parameters, fits the spectra
@@ -648,6 +656,10 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
         for key,item in config.__dict__.items():
             if key[:2] != "__" and key not in config_exclude:
                 write_file.writelines(f"{key}: {item}\n")
+
+        write_file.writelines("\nRun\n")
+        for key,item in runState.as_dict().items():
+            write_file.writelines(f"{key}: {item}\n")
     
     # with open(results_folder_path+"/dlib","wb") as dill_file:
     #     dlib = dill.dump(decoy_lib,dill_file)   
@@ -697,14 +709,20 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     # Spectra submitted per chunk.  Bounds how many results are held at once.
     _CHUNK = 100
 
+    # The IM candidate gate needs an aligned library IM; without one the IM
+    # column of rt_mz is all NaN and the gate stays off
+    _im_accuracy = runState.opt_im_accuracy if np.isfinite(rt_mz[:, 2]).any() else None
+
     # Constant across every spectrum and every batch, so build the kwargs once.
     _fit_kwargs = dict(library=spectrumLibrary,
                        rt_mz=rt_mz,
                        all_keys=all_keys,
                        dino_features=None,
                        rt_filter=True,
-                       rt_tol=config.opt_rt_tol,
-                       ms1_tol=config.opt_ms1_tol,
+                       rt_tol=runState.opt_rt_tol,
+                       ms1_tol=runState.opt_ms1_tol,
+                       im_tol=runState.opt_im_precision,
+                       im_accuracy=_im_accuracy,
                        mz_tol=(config.args.ppm * 1e-6),
                        ms1_spectra=DIAspectra.ms1scans,
                        return_frags=False,
@@ -805,7 +823,7 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
 
 
 def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
-                     mass_tag, SILAC, elution_fwhm, vote_sigma):
+                     mass_tag, SILAC, elution_fwhm, vote_sigma, runState):
     """Select apex scans, score and FDR-filter, quantify, and write the reports."""
     logger.info("Selecting apex scans and scoring")
     process_data(file=decoylib_search_path,
@@ -815,4 +833,8 @@ def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
                  SILAC=SILAC,
                  timeplex=config.args.timeplex,
                  elution_fwhm=elution_fwhm,
-                 vote_sigma=vote_sigma)
+                 vote_sigma=vote_sigma,
+                 ms1_tol=runState.opt_ms1_tol,
+                 rt_tol=runState.opt_rt_tol,
+                 im_tol=runState.opt_im_precision,
+                 target_decoy_ratio=runState.target_decoy_ratio)

@@ -538,6 +538,16 @@ class SpectrumLibraryStore:
             return float('inf')
         return self.n_targets / self.n_decoys
 
+    @property
+    def has_ion_mobility(self):
+        """True when every precursor carries a library ion mobility.
+
+        loadSpecLib rejects a partially populated IM column, so a library has
+        IM either for all of its precursors or for none.
+        """
+        finite = np.isfinite(np.asarray(self.ion_mob, dtype=np.float64))
+        return bool(finite.size > 0 and finite.all())
+
     def target_view(self):
         """Return a lightweight proxy that only exposes target entries.
 

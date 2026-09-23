@@ -270,7 +270,7 @@ def walk_to_local_max(fitted, start_pos, apex_jitter=None):
 #     return fdc
 
 
-def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False,vote_sigma=1.0):
+def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False,vote_sigma=1.0,*,im_tol):
     # X = fdc.iloc[:,6:-5]
     fit_whole_MS1 = False
    
@@ -321,7 +321,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False,v
                                 vote_sigma = vote_sigma,
                                 # Gate MS1 peaks to those co-mobile with the
                                 # precursor; inert when the data has no IM.
-                                im_tol = config.opt_im_precision,
+                                im_tol = im_tol,
                                 fit_whole_MS1=fit_whole_MS1
                                 )
     
@@ -766,7 +766,7 @@ class score_model():
         return np.concatenate(self.predictions)[rev_order]
 
 
-def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
+def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None, *, target_decoy_ratio):
     """
     Parameters
     ----------
@@ -865,7 +865,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
         # Compute q-values for this iteration
         score_order = np.argsort(-pred, kind='stable')
         decoy_order = fdc["is_decoy"].values[score_order]
-        fdc_qvalues_ordered = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order) * config.target_decoy_ratio
+        fdc_qvalues_ordered = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order) * target_decoy_ratio
         fdc_qvalues_ordered = np.minimum.accumulate(fdc_qvalues_ordered[::-1])[::-1]
         fdc_qvalues = np.empty_like(fdc_qvalues_ordered)
         fdc_qvalues[score_order] = fdc_qvalues_ordered
@@ -883,7 +883,7 @@ def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None):
     score_order = np.argsort(-output, kind='stable')
     orig_order = np.argsort(score_order, kind='stable')
     decoy_order = fdc["is_decoy"][score_order]
-    frac_decoy = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order) * config.target_decoy_ratio
+    frac_decoy = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order) * target_decoy_ratio
     frac_decoy = np.minimum.accumulate(frac_decoy[::-1])[::-1]  # Monotonize: q-value = min of downstream q-values
     T = output[score_order[min(len(score_order)-1,np.searchsorted(frac_decoy,0.01))]]
     above_t = output>T
@@ -987,7 +987,7 @@ def log_df(df):
     for line in df_no_first.to_string(index=False).splitlines():
         logger.info(line)
 
-def compute_protein_FDR(df,results_folder=None):
+def compute_protein_FDR(df,results_folder=None, *, target_decoy_ratio):
     logger.info("")
     logger.info("Computing Protein FDR")
 
@@ -1001,7 +1001,7 @@ def compute_protein_FDR(df,results_folder=None):
     df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False).reset_index(drop=True)
     df_seqchargeqvals["prot_rank"] = df_seqchargeqvals.index + 1  # Equivalent to row_number()
     df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["is_decoy"].cumsum()
-    df_seqchargeqvals["Protein_Qvalue"] = (1 + df_seqchargeqvals["accum_decoys"]) / (~df_seqchargeqvals["is_decoy"]).cumsum() * config.target_decoy_ratio
+    df_seqchargeqvals["Protein_Qvalue"] = (1 + df_seqchargeqvals["accum_decoys"]) / (~df_seqchargeqvals["is_decoy"]).cumsum() * target_decoy_ratio
     df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["Protein_Qvalue"].iloc[::-1].cummin().iloc[::-1]  # Monotonize: q-value = min of downstream q-values
     
     # Filter for non-decoy proteins and select distinct protein values
@@ -1157,12 +1157,14 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     return result_df
 
 
-def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0):
+def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0,
+                 *, ms1_tol, rt_tol, im_tol, target_decoy_ratio):
+    # ms1_tol, rt_tol, im_tol: the run's fitted tolerances (RunState.opt_*);
+    # target_decoy_ratio: targets over decoys among the run's searchable entries
 
     # results_folder = os.path.dirname(file)
     results_folder = os.path.dirname(os.path.dirname(file))
-    mz_ppm = config.opt_ms1_tol
-    rt_tol = config.opt_rt_tol
+    mz_ppm = ms1_tol
 
     # After loading data and adding basic features
     _glp = get_large_prec(file, condense_output=False, timeplex=timeplex)
@@ -1255,7 +1257,7 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         fdc=fdc,
         fwhm=elution_fwhm,
         mz_tol=(config.args.ppm * 1e-6),
-        im_tol=config.opt_im_precision,
+        im_tol=im_tol,
         prec_im=(fdc["prec_im"].to_numpy() if "prec_im" in fdc.columns else None),
     )
     # One concat rather than a column-at-a-time insert: with the IM correlation
@@ -1264,7 +1266,8 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     corr_features.index = fdc.index
     fdc = pd.concat([fdc, corr_features], axis=1)
 
-    fdx = score_precursors(fdc.reset_index(drop=True), config.score_model, config.fdr_threshold, folder=results_folder)
+    fdx = score_precursors(fdc.reset_index(drop=True), config.score_model, config.fdr_threshold, folder=results_folder,
+                          target_decoy_ratio=target_decoy_ratio)
 
     fdx['PredVal'] = fdx['PredVal'].fillna(0)
     fdx['Qvalue'] = fdx['Qvalue'].fillna(1)
@@ -1282,14 +1285,16 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
 
     
-    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, timeplex, vote_sigma=vote_sigma)
+    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, timeplex, vote_sigma=vote_sigma,
+                          im_tol=im_tol)
 
     fdx_quant["last_aa"] = [i[-1] for i in fdx_quant["stripped_seq"]]
     fdx_quant["seq_len"] = [len(i) for i in fdx_quant["stripped_seq"]]
     
     # have possible reannotate woth fasta here
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
-    fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder)
+    fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder,
+                                    target_decoy_ratio=target_decoy_ratio)
 
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge

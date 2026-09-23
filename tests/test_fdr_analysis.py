@@ -60,7 +60,8 @@ def test_score_precursors_minimal_fixed(tmp_path):
         fdc,
         model_type="xg",
         fdr_t=0.01,
-        folder=str(tmp_path)  # ensures the plot-saving code runs
+        folder=str(tmp_path),  # ensures the plot-saving code runs
+        target_decoy_ratio=1.0,
     )
 
     assert isinstance(out, pd.DataFrame)
@@ -131,7 +132,7 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                         lambda *args, **kwargs: args[0])
 
     monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
-                        lambda df, results_folder=None: df.assign(
+                        lambda df, results_folder=None, **kwargs: df.assign(
                             Protein_Qvalue=1.0,
                             protein="P12345"
                         ))
@@ -141,7 +142,8 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
         lambda x: x if isinstance(x, list) else [1.0, 2.0]
     )
 
-    process_data(str(dummy_file), spectra, library)
+    process_data(str(dummy_file), spectra, library,
+                 ms1_tol=20e-6, rt_tol=1.0, im_tol=0.01, target_decoy_ratio=1.0)
 
     expected_files = [
         "outputs/all_IDs.csv",
@@ -167,7 +169,7 @@ def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
         "untag_prec": ["p1", "p2"],
     })
 
-    out = compute_protein_FDR(df, results_folder=None)
+    out = compute_protein_FDR(df, results_folder=None, target_decoy_ratio=1.0)
 
     assert isinstance(out, pd.DataFrame)
     assert "Protein_Qvalue" in out.columns  # main thing it produces

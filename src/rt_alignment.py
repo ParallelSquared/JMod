@@ -1397,6 +1397,8 @@ def alignment_plots(filtered_output,
                     f_rt_mz,
                     mz_spl,
                     rt_dist_params,
+                    rt_tol,
+                    ms1_tol,
                     results_folder=None):
         ##plot RT alignment
         plt.subplots()
@@ -1430,8 +1432,8 @@ def alignment_plots(filtered_output,
         min_rt = np.min(filtered_output.updated_lib_rt)
         max_rt = np.max(filtered_output.updated_lib_rt)
         plt.plot([min_rt,max_rt],[0,0],color="r",linestyle="--",alpha=.5)
-        plt.plot([min_rt,max_rt],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
-        plt.plot([min_rt,max_rt],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
+        plt.plot([min_rt,max_rt],[rt_tol,rt_tol],color="g",linestyle="--",alpha=.5)
+        plt.plot([min_rt,max_rt],[-rt_tol,-rt_tol],color="g",linestyle="--",alpha=.5)
         # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
         # plt.legend()
         lims = plt.ylim()
@@ -1448,10 +1450,10 @@ def alignment_plots(filtered_output,
         plt.subplots()
         vals,bins,_ = plt.hist((filtered_output.rt-orig_spl(filtered_output.lib_rt)),100,density=True,alpha=.5,label="Original RT")
         vals,bins,_ = plt.hist((filtered_output.rt-rt_spl(filtered_output.updated_lib_rt)),100,density=True,alpha=.5,label="Updated RT")
-        plt.plot(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100),gaussian(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100), *rt_dist_params),label="Updated RT fit")
-        plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
+        plt.plot(np.linspace(-rt_tol,rt_tol,100),gaussian(np.linspace(-rt_tol,rt_tol,100), *rt_dist_params),label="Updated RT fit")
+        plt.vlines([-rt_tol,rt_tol],0,max(vals),color="r")
         # plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
-        plt.text(config.opt_rt_tol,max(vals),np.round(config.opt_rt_tol,2))
+        plt.text(rt_tol,max(vals),np.round(rt_tol,2))
         plt.xlabel("RT difference")
         plt.ylabel("Frequency")
         plt.legend()
@@ -1494,9 +1496,9 @@ def alignment_plots(filtered_output,
         # plt.hist(((np.array(id_mzs)+np.array(filtered_output.mz_diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs,100,alpha=.5)
         # plt.hist(((np.array(id_mzs)+np.array(filtered_output.mz_diffs)*id_mzs)-mz_spl(id_mzs))/id_mzs,100,alpha=.5)
         vals,bins,_ = plt.hist((filtered_output.mz_diffs-mz_spl(filtered_output.mz)-f_rt_mz(filtered_output.updated_lib_rt)),100,alpha=.5,label="Updated m/z")
-        plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,max(vals)*.8,color="r")
+        plt.vlines([-ms1_tol,ms1_tol],0,max(vals)*.8,color="r")
         # plt.vlines([-4*mz_stddev,4*mz_stddev],0,50,color="g")
-        plt.text(config.opt_ms1_tol,max(vals)*.8,f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
+        plt.text(ms1_tol,max(vals)*.8,f"{np.round(1e6*ms1_tol,2)} ppm")
         plt.xlabel("m/z difference (relative)")
         plt.ylabel("Frequency")
         plt.legend()
@@ -1554,7 +1556,7 @@ def cdf_plots(emp_data,emp_p,percentile,boundary,pred_data=None,pred_p=None,resu
         
         plt.close("all")
 
-def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None, SILAC=None, return_rt_models=False):
+def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None, SILAC=None, return_rt_models=False, *, runState):
     """
     Perform a preliminary search of the specrta to align the library mz and RT values
 
@@ -1585,6 +1587,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         updatedLibrary: The library with its own iRT column (fine-tuned predictions
                         when fine-tuning wins); ``.iRT`` is row-aligned with it
+
+        im_spl: Library IM -> observed 1/K0 calibration, or None when not fitted
+
+    The fitted tolerances are set on *runState* (opt_rt_tol, opt_ms1_tol,
+    opt_im_precision, opt_im_accuracy).
         
 
     """
@@ -1904,7 +1911,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         logger.info("Using user specified RT tolerance")
         new_rt_tol = config.args.rt_tol
     logger.info(f"Optimized RT tolerance: {new_rt_tol}")
-    config.opt_rt_tol = np.abs(new_rt_tol)
+    runState.opt_rt_tol = np.abs(new_rt_tol)
 
 
     new_ms1_tol = np.abs(mz_boundary)
@@ -1920,12 +1927,17 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         logger.info(f"Setting new MS1 tolerance: {np.abs(config.min_ms1_tol)}")
         new_ms1_tol=np.abs(config.min_ms1_tol)
 
-    config.opt_ms1_tol  = new_ms1_tol
+    runState.opt_ms1_tol  = new_ms1_tol
 
 
     ################################################
     ########### Optimize IM tolerance       ########
     ################################################
+
+    # Defaults, replaced below when the run's data supports a fit
+    runState.opt_im_precision = config.im_precision
+    runState.opt_im_accuracy = config.im_accuracy
+    im_spl = None
 
     def _median_skipnull(vals):
         if vals is None:
@@ -1983,7 +1995,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
 
         if not has_frag and not has_prec:
             logger.info("No ion mobility data; keeping default IM band tolerance: "
-                        f"{config.opt_im_precision}")
+                        f"{runState.opt_im_precision}")
         elif has_frag != has_prec:
             raise ValueError(
                 "Inconsistent ion mobility data: one of frag_ion_mobility / "
@@ -1996,14 +2008,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             frag_dev = _frag_deviations(frag_lists)
             new_im_tol = fit_im_tolerance(frag_dev)
             if new_im_tol is not None:
-                config.opt_im_precision = np.abs(new_im_tol)
+                runState.opt_im_precision = np.abs(new_im_tol)
                 logger.info(
-                    f"Fitted IM fragment spread: {config.opt_im_precision} "
-                    f"(band width {4*config.opt_im_precision:.5f}) "
+                    f"Fitted IM fragment spread: {runState.opt_im_precision} "
+                    f"(band width {4*runState.opt_im_precision:.5f}) "
                     f"[{frag_dev.size} fragment deviations from {len(frag_lists)} PSMs]")
             else:
                 logger.info("IM fragment-spread fit failed; keeping default band tol: "
-                            f"{config.opt_im_precision}")
+                            f"{runState.opt_im_precision}")
 
             if results_folder is not None:
                 plot_im_error_mixture(frag_dev, results_folder=results_folder,
@@ -2015,7 +2027,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                         frag_lists,
                         output_df["frag_intensities"].to_numpy()[cor_filter],
                         results_folder=results_folder,
-                        tol=config.opt_im_precision)
+                        tol=runState.opt_im_precision)
 
             ############################################
             ###### Align library IM to observed IM #####
@@ -2046,7 +2058,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                     obs_anchor = frag_median[cor_filter]
                     im_spl = fit_im_alignment(lib_anchor, obs_anchor)
                     if im_spl is not None:
-                        config.im_spl = im_spl
                         resid = obs_anchor - im_spl(lib_anchor)
                         resid = resid[np.isfinite(resid)]
                         n_anchor = int((np.isfinite(lib_anchor)
@@ -2062,15 +2073,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                         if _rmodel is None:
                             logger.info(f"IM alignment fitted on {n_anchor} anchors "
                                         f"(residual mixture fit failed; keeping default "
-                                        f"IM accuracy {config.opt_im_accuracy})")
+                                        f"IM accuracy {runState.opt_im_accuracy})")
                         else:
-                            config.opt_im_accuracy = float(np.abs(_rmodel["tolerance"]))
+                            runState.opt_im_accuracy = float(np.abs(_rmodel["tolerance"]))
                             logger.info(
                                 f"IM alignment fitted on {n_anchor} anchors; "
                                 f"residual core SD {_rmodel['b'] * np.sqrt(2.0):.5f} 1/K0, "
                                 f"{_rmodel['weight']:.0%} of anchors in core; "
-                                f"library IM accuracy {config.opt_im_accuracy:.5f} "
-                                f"(vs fragment spread {config.opt_im_precision:.5f})")
+                                f"library IM accuracy {runState.opt_im_accuracy:.5f} "
+                                f"(vs fragment spread {runState.opt_im_precision:.5f})")
                         if results_folder is not None:
                             plot_im_alignment(lib_anchor, obs_anchor, im_spl,
                                               results_folder=results_folder,
@@ -2109,6 +2120,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
                             f_rt_mz,
                             mz_spl,
                             rt_dist_params=(rt_amplitude,rt_mean,rt_stddev),
+                            rt_tol=runState.opt_rt_tol,
+                            ms1_tol=runState.opt_ms1_tol,
                             results_folder=results_folder)
         
         cdf_plots(emp_data,emp_p,percentile,boundary,pred_data,pred_p,results_folder=results_folder)
@@ -2143,8 +2156,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         min_rt = np.min([updatedLibrary[k]["iRT"] for k in id_keys])
         max_rt = np.max([updatedLibrary[k]["iRT"] for k in id_keys])
         plt.plot([min_rt,max_rt],[0,0],color="r",linestyle="--",alpha=.5)
-        plt.plot([min_rt,max_rt],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
-        plt.plot([min_rt,max_rt],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
+        plt.plot([min_rt,max_rt],[runState.opt_rt_tol,runState.opt_rt_tol],color="g",linestyle="--",alpha=.5)
+        plt.plot([min_rt,max_rt],[-runState.opt_rt_tol,-runState.opt_rt_tol],color="g",linestyle="--",alpha=.5)
         # plt.scatter(output_rts,rt_spl(output_rts),label="Predicted_RT",s=1)
         # plt.legend()
         lims = plt.ylim()
@@ -2159,10 +2172,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         plt.subplots()
         vals,bins,_ = plt.hist((output_df.rt-emp_rt_spl(output_df.lib_rt))[cor_filter],100,density=True,alpha=.5,label="Original RT")
         vals,bins,_ = plt.hist((output_df.rt-rt_spl([updatedLibrary[k]["iRT"] for k in id_keys]))[cor_filter],100,density=True,alpha=.5,label="Updated RT")
-        plt.plot(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100),gaussian(np.linspace(-config.opt_rt_tol,config.opt_rt_tol,100), rt_amplitude, rt_mean, rt_stddev),label="Updated RT fit")
-        plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
+        plt.plot(np.linspace(-runState.opt_rt_tol,runState.opt_rt_tol,100),gaussian(np.linspace(-runState.opt_rt_tol,runState.opt_rt_tol,100), rt_amplitude, rt_mean, rt_stddev),label="Updated RT fit")
+        plt.vlines([-runState.opt_rt_tol,runState.opt_rt_tol],0,max(vals),color="r")
         # plt.vlines([-4*rt_stddev,4*rt_stddev],0,max(vals),color="g")
-        plt.text(config.opt_rt_tol,max(vals),np.round(config.opt_rt_tol,2))
+        plt.text(runState.opt_rt_tol,max(vals),np.round(runState.opt_rt_tol,2))
         plt.xlabel("RT difference")
         plt.ylabel("Frequency")
         plt.legend()
@@ -2241,9 +2254,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_rts))/id_mzs,100,alpha=.5)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_spl(id_mzs))/id_mzs,100,alpha=.5)
         vals,bins,_ = plt.hist((diffs-mz_spl(output_df.mz)-f_rt_mz(new_lib_rt))[cor_filter],100,alpha=.5)
-        plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,max(vals)*.8,color="r")
+        plt.vlines([-runState.opt_ms1_tol,runState.opt_ms1_tol],0,max(vals)*.8,color="r")
         # plt.vlines([-4*mz_stddev,4*mz_stddev],0,50,color="g")
-        plt.text(config.opt_ms1_tol,max(vals)*.8,f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
+        plt.text(runState.opt_ms1_tol,max(vals)*.8,f"{np.round(1e6*runState.opt_ms1_tol,2)} ppm")
         plt.xlabel("m/z difference (relative)")
         plt.ylabel("Frequency")
         # plt.show()
@@ -2256,8 +2269,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     #     return (rt_spl, mz_func, ms2_func), updatedLibrary
     # else:
     if return_rt_models and not config.args.use_emp_rt:
-        return (rt_spl, mz_func), updatedLibrary, (models, convertor), fwhm, vote_sigma
-    return (rt_spl, mz_func), updatedLibrary, None, fwhm, vote_sigma
+        return (rt_spl, mz_func), updatedLibrary, (models, convertor), fwhm, vote_sigma, im_spl
+    return (rt_spl, mz_func), updatedLibrary, None, fwhm, vote_sigma, im_spl
 
 ###################################################################################################
 ###################################################################################################
@@ -2552,7 +2565,7 @@ def timeplex_algnment_plots(n_timeplex, t_vals, results_folder = None):
         plt.savefig(results_folder+"/MZdiff.png",dpi=600,bbox_inches="tight")
 """
 
-def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False):
+def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, *, runState):
     """
     Perform a preliminary search of the timeplex spectra to align the library mz and RT values
 
@@ -3001,7 +3014,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     
 
     
-    config.opt_rt_tol = new_rt_tol
+    runState.opt_rt_tol = new_rt_tol
     
     
     
@@ -3018,7 +3031,11 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
     logger.info("")
     
-    config.opt_ms1_tol  = new_ms1_tol
+    runState.opt_ms1_tol  = new_ms1_tol
+
+    # Timeplex does not fit ion mobility; keep the defaults
+    runState.opt_im_precision = config.im_precision
+    runState.opt_im_accuracy = config.im_accuracy
     
     # if ms2:
     #     new_ms2_tol = 4*ms2_stddev
@@ -3063,8 +3080,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         for idx in range(n_timeplex):
             plt.scatter(np.array([updatedLibrary[key]["iRT"] for key in keys])[filter_bool],np.array([i[0] for i in t_vals[idx]])[filter_bool],s=1,label=f"T{str(idx)}",alpha=.2)
             # plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]),s=1,label=f"T{str(idx)}",c=colours[idx])
-            plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
-            plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])-config.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
+            plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+runState.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
+            plt.scatter([updatedLibrary[key]["iRT"] for key in keys],rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])-runState.opt_rt_tol,s=.1,c=colours[idx],alpha=.1)
             # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])+config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
             # plt.scatter(t_vals[idx][:,1],rt_spls[idx](t_vals[idx][:,1])-config.rt_tol_spl(t_vals[idx][:,1]),s=.1,c=colours[idx],alpha=.1)
         plt.legend(markerscale=10)
@@ -3078,8 +3095,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
             vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[filter_bool],100,alpha=.5,label=f"T{str(idx)}")
             # rt_stddev = gaussian_fits[idx][-1]
         x_scale = np.diff(plt.xlim())[0]
-        plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
-        plt.text(config.opt_rt_tol+x_scale/100,max(vals)*.8,np.round(config.opt_rt_tol,2))
+        plt.vlines([-runState.opt_rt_tol,runState.opt_rt_tol],0,max(vals),color="r")
+        plt.text(runState.opt_rt_tol+x_scale/100,max(vals)*.8,np.round(runState.opt_rt_tol,2))
         plt.legend()  
         plt.xlabel("RT difference")
         plt.ylabel("Frequency") 
@@ -3096,10 +3113,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
                 offset = 0
             vals,bins,_ =plt.hist(np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys])+offset)[filter_bool],100,alpha=.5,label=f"T{str(idx)}")
             # rt_stddev = gaussian_fits[idx][-1]
-            plt.vlines([-config.opt_rt_tol+np.median(offset),config.opt_rt_tol+np.median(offset)],0,max(vals),color="r")
+            plt.vlines([-runState.opt_rt_tol+np.median(offset),runState.opt_rt_tol+np.median(offset)],0,max(vals),color="r")
         x_scale = np.diff(plt.xlim())[0]
         # plt.vlines([-config.opt_rt_tol,config.opt_rt_tol],0,max(vals),color="r")
-        plt.text(config.opt_rt_tol+x_scale/100,max(vals)*.8,np.round(config.opt_rt_tol,2))
+        plt.text(runState.opt_rt_tol+x_scale/100,max(vals)*.8,np.round(runState.opt_rt_tol,2))
         plt.legend()  
         plt.xlabel("RT difference")
         plt.ylabel("Frequency") 
@@ -3121,8 +3138,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         for idx,row in enumerate(ax):
             row.scatter(np.array(t_vals[idx][:,1])[filter_bool],np.array(t_vals[idx][:,0]-rt_spls[idx]([updatedLibrary[key]["iRT"] for key in keys]))[filter_bool],label="Original_RT",s=.1)
             row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[0,0],color="r",linestyle="--",alpha=.5)
-            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[config.opt_rt_tol,config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
-            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[-config.opt_rt_tol,-config.opt_rt_tol],color="g",linestyle="--",alpha=.5)
+            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[runState.opt_rt_tol,runState.opt_rt_tol],color="g",linestyle="--",alpha=.5)
+            row.plot([min(t_vals[idx][:,1]),max(t_vals[idx][:,1])],[-runState.opt_rt_tol,-runState.opt_rt_tol],color="g",linestyle="--",alpha=.5)
             row.set_ylabel(f"RT Residuals (T{idx})")
             row.set_ylim(-5,5)
         # plt.scatter(output_df.lib_rt,rt_spl(output_df.lib_rt),label="Predicted_RT",s=1)
@@ -3199,9 +3216,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_func(id_mzs, output_df.lib_rt))/id_mzs,100,alpha=.5)
         # plt.hist(((np.array(id_mzs)+np.array(diffs)*id_mzs)-mz_spl(id_mzs))/id_mzs,100,alpha=.5)
         vals,bins,_ = plt.hist((diffs-mz_spl(output_df.mz)-f_rt_mz(rts))[rt_mz_filter_bool],100,alpha=.5)
-        plt.vlines([-config.opt_ms1_tol,config.opt_ms1_tol],0,max(vals)*.8,color="r")
+        plt.vlines([-runState.opt_ms1_tol,runState.opt_ms1_tol],0,max(vals)*.8,color="r")
         # plt.vlines([-4*mz_stddev,4*mz_stddev],0,50,color="g")
-        plt.text(config.opt_ms1_tol,max(vals)*.8,f"{np.round(1e6*config.opt_ms1_tol,2)} ppm")
+        plt.text(runState.opt_ms1_tol,max(vals)*.8,f"{np.round(1e6*runState.opt_ms1_tol,2)} ppm")
         plt.xlabel("m/z difference (relative)")
         plt.ylabel("Frequency")
         # plt.show()

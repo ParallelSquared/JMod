@@ -229,6 +229,8 @@ class TestAlignmentPlots:
             f_rt_mz=f_rt_mz,
             mz_spl=mz_spl,
             rt_dist_params=(1,1,1),  # dummy parameters
+            rt_tol=1.0,
+            ms1_tol=20e-6,
             results_folder=str(tmp_path)  # convert Path to string
         )
 
