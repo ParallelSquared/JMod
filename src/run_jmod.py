@@ -480,11 +480,9 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC,
 
     del target_view
 
-    # MZRTfit hands back a whole copy of the target library; keep only the
-    # aligned iRT column of it, indexed like the library
-    target_iRT = spectrumLibrary.iRT[:spectrumLibrary.n_targets].copy()
-    for key in updated_targets:
-        target_iRT[spectrumLibrary.key_to_idx[key]] = updated_targets[key]["iRT"]
+    # The aligned iRT of every target; the first search ran on the targets in
+    # library order, so its iRT column lines up with the library's targets
+    target_iRT = updated_targets.iRT
     del updated_targets
 
     ## Re-band MS2 on the fitted IM precision.  The bands built at load time use

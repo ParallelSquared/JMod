@@ -53,6 +53,59 @@ from src.utils.io.read_output import names, dtypes
 
 from src.logger import logger
 
+
+class _OwnIRT:
+    """A library with an iRT column of its own.
+
+    MZRTfit replaces library iRTs with fine-tuned predictions.  Rather than
+    copying the whole library to hold them, entries read everything from the
+    library except iRT, which lives in ``.iRT`` -- a private copy of the
+    column, row-aligned with the library.  Only iRT can be written.
+    """
+
+    __slots__ = ('_library', 'iRT')
+
+    def __init__(self, library):
+        self._library = library
+        self.iRT = np.array(library.iRT[:len(library)], dtype=np.float64)
+
+    def __len__(self):
+        return len(self._library)
+
+    def __iter__(self):
+        return iter(self._library)
+
+    def __contains__(self, key):
+        return key in self._library
+
+    def keys(self):
+        return iter(self._library)
+
+    def __getitem__(self, key):
+        return _OwnIRTEntry(self, key)
+
+
+class _OwnIRTEntry:
+    __slots__ = ('_owner', '_key')
+
+    def __init__(self, owner, key):
+        self._owner = owner
+        self._key = key
+
+    def _row(self):
+        return self._owner._library.key_to_idx[self._key]
+
+    def __getitem__(self, field):
+        if field == 'iRT':
+            value = self._owner.iRT[self._row()]
+            return None if np.isnan(value) else float(value)
+        return self._owner._library[self._key][field]
+
+    def __setitem__(self, field, value):
+        if field != 'iRT':
+            raise TypeError(f"only iRT can be written, not {field!r}")
+        self._owner.iRT[self._row()] = value
+
 colours = ["tab:blue","tab:orange","tab:green","tab:red",
 'tab:purple',
 'tab:brown',
@@ -1530,7 +1583,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         
         mz_func: Function that aligns library precuror m/z to observed values
         
-        updatedLibrary: Copy of the library with updated Retention time if fine-tuning
+        updatedLibrary: The library with its own iRT column (fine-tuned predictions
+                        when fine-tuning wins); ``.iRT`` is row-aligned with it
         
 
     """
@@ -1685,10 +1739,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
         emp_data, emp_p, emp_cdf_auc = cdf_data(all_emp_diffs,limit=limit)
         pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs,limit=limit)
 
-        # TODO: deepcopy is expensive — we only need to compare predicted vs
-        # empirical iRTs, then write the winner's values. No need to duplicate
-        # the entire library; just compute both iRT arrays and pick one.
-        updatedLibrary = copy.deepcopy(librarySpectra)
+        updatedLibrary = _OwnIRT(librarySpectra)
         all_lib_keys = list(librarySpectra)
 
 
@@ -1753,8 +1804,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     else:
 
         logger.info("Using Empirical w/o Fine Tuning")
-        # TODO: no iRT mutation in this branch — deepcopy is unnecessary here
-        updatedLibrary = copy.deepcopy(librarySpectra)
+        updatedLibrary = _OwnIRT(librarySpectra)
         all_lib_keys = list(librarySpectra)
         rt_spl = emp_rt_spl
 
@@ -2531,7 +2581,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         
         mz_func: Function that aligns library precuror m/z to observed values
         
-        updatedLibrary: Copy of the library with duplicates of each precursor for each timePlex and each with their own specific retention time
+        updatedLibrary: The library with its own iRT column (fine-tuned predictions
+                        when fine-tuning runs); ``.iRT`` is row-aligned with it
                         
         
 
@@ -2755,11 +2806,11 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
         emp_data, emp_p, emp_cdf_auc = cdf_data(all_emp_diffs,limit=limit)
         pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs,limit=limit)
         
-    
-        updatedLibrary = copy.deepcopy(librarySpectra)
+
+        updatedLibrary = _OwnIRT(librarySpectra)
         all_lib_keys = list(librarySpectra)
-        
-        
+
+
         
         ### compare original empirical RTs to fintuned RTs
         
@@ -2793,9 +2844,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,r
     else:
     # """
         logger.info("Using Empirical w/o Fine Tuning")
-        updatedLibrary = copy.deepcopy(librarySpectra)
+        updatedLibrary = _OwnIRT(librarySpectra)
         all_lib_keys = list(librarySpectra)
-        
+
         keys = [(i,float(j)) for i,j in t_seqs[0]]
         boundary = fit_errors(all_emp_diffs,limit,percentile)
         rt_spls = emp_rt_spls
