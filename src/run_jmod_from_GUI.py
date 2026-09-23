@@ -1554,26 +1554,24 @@ class JModGUI(ThemedTk):
 
     def prepare_to_run(self):
         """
-        For each mzML file added, use make_config_dict to generate a config JSON file and add it to a list of jsons to run
+        Use make_config_dict to generate one config JSON for the whole experiment -- every
+        selected data file with the current settings -- and return it in a list ([] on error)
         """
-        tmp_filenames = []
         mzml_files = self.file_dropdown.files
-        for i, mzml_path in enumerate(mzml_files, start=1):
-            config_args_dict = self.make_config_dict(mzml_path=mzml_path, run=True)
-            if config_args_dict is None:
-                return []
-            try:
-                with tempfile.NamedTemporaryFile(mode='w', suffix="_JMod_json.json", delete=False) as tmp_file:
-                    json.dump(config_args_dict, tmp_file)
-                    tmp_filename = tmp_file.name
+        config_args_dict = self.make_config_dict(mzml_paths=mzml_files, run=True)
+        if config_args_dict is None:
+            return []
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix="_JMod_json.json", delete=False) as tmp_file:
+                json.dump(config_args_dict, tmp_file)
+                tmp_filename = tmp_file.name
 
-            except Exception as e:
-                tk.messagebox.showerror("JSON Error", f"Failed to write JSON file: {e}")
-                return []
+        except Exception as e:
+            tk.messagebox.showerror("JSON Error", f"Failed to write JSON file: {e}")
+            return []
 
-            tmp_filenames.append(tmp_filename)
-            self.tmp_files_created.append(tmp_filename)
-        return tmp_filenames
+        self.tmp_files_created.append(tmp_filename)
+        return [tmp_filename]
 
     def mzml_and_lib_error_check(self):
         """Ensure mzml, speclib, and output folder exist and are the right file types"""
@@ -1617,7 +1615,7 @@ class JModGUI(ThemedTk):
     
 
         
-    def make_config_dict(self, mzml_path=None, run=True):
+    def make_config_dict(self, mzml_paths=None, run=True):
         """
         From the GUI, make the config_dict that will be used to create the config JSON
 
@@ -1637,14 +1635,15 @@ class JModGUI(ThemedTk):
             return None
         config_args_dict = {}
         for key, data in default_dict.items():
-            if key == 'mzml':  #hardcoded mzml
+            if key == 'mzml':  #hardcoded mzml: every data file in the experiment
                 if run is True:
-                    config_args_dict[key] = str(mzml_path)
+                    config_args_dict[key] = [str(mzml_path) for mzml_path in mzml_paths]
                 else:
                     config_args_dict[key] = None
-            elif key == 'diaPASEF':  ##Hardcoded diaPASEF because it relies on mzml_path
-                if mzml_path:
-                    config_args_dict[key] = True if os.path.splitext(mzml_path)[1].lower() == ".d" else False
+            elif key == 'diaPASEF':  ##Hardcoded diaPASEF because it relies on the data files
+                if mzml_paths:
+                    config_args_dict[key] = any(os.path.splitext(mzml_path)[1].lower() == ".d"
+                                                for mzml_path in mzml_paths)
                 else:
                     config_args_dict[key] = False
             elif key in ('rawfilereader_path', 'bruker_sdk_path'):
@@ -1787,13 +1786,15 @@ class JModGUI(ThemedTk):
 
     def add_items_to_queue(self, tmp_filenames, run_queue_number):
         """
-        For each mzml associated JSON from current GUI params, add to the queue index of the added queue (run_queue_number)
+        For each experiment JSON from current GUI params, add to the queue index of the added queue (run_queue_number)
         """
         for idx, tmp_filename in enumerate(tmp_filenames):
             with open(tmp_filename, 'r') as f:
                 cfg = json.load(f)
-            mzml_path = cfg["mzml"]
-            mzml_display_name = os.path.basename(mzml_path) + "   " + (cfg.get("dummy_value") or "")
+            mzml_paths = cfg["mzml"]
+            first_file = os.path.basename(mzml_paths[0])
+            files_label = first_file if len(mzml_paths) == 1 else f"{first_file} + {len(mzml_paths) - 1} more"
+            mzml_display_name = files_label + "   " + (cfg.get("dummy_value") or "")
             if cfg.get("dummy_value") is None and self.has_shown_no_dummy_val is False:
                 self.has_shown_no_dummy_val = True
                 tk.messagebox.showinfo("Queue Information", "Tip: You can use '-z your_text_here' in the additional commands frame to add a suffix to a foldername")
@@ -1825,10 +1826,10 @@ class JModGUI(ThemedTk):
             if 0 <= index < len(self.queue_data):
                 display_name, tmp_filename = self.queue_data[index]
                 
-                # Read the mzml path from the config
+                # Read the experiment's data files from the config
                 with open(tmp_filename, 'r') as f:
                     cfg = json.load(f)
-                full_path = cfg["mzml"]
+                full_path = "\n".join(cfg["mzml"])
                 
                 # Create or update tooltip
                 if self.current_tooltip is None or self.current_tooltip.winfo_exists() == 0:
@@ -1918,7 +1919,7 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
     for i, tmp_filename in enumerate(tmp_filenames, start=1):
         if i > 1:
             logger.info("")
-        logger.info(f"Running JMod: File {i} of {len(tmp_filenames)}\n")
+        logger.info(f"Running JMod: Experiment {i} of {len(tmp_filenames)}\n")
         # main logs its own errors to this panel and returns "failed"; this only
         # catches what escapes it, such as a failure importing the pipeline
         try:

@@ -36,6 +36,7 @@ default_dict = {
         'flags': ('-i', '--mzml'),  ## mzml is treated a bit specially in GUI due to running multiple files in a row so check if you change anything here
         'default': None,
         'takes_value': True,
+        'multiple': True,  ## repeatable on the command line (-i a.mzML -i b.mzML) and a list in the config JSON
         'in_GUI': True,
         'type': 'str',
         'widget': 'entry',

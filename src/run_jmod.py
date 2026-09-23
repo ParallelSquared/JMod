@@ -156,10 +156,9 @@ def run_experiment(GUI_config_json=None):
         config.ran_from_GUI = True
         config.args.config_json = GUI_config_json
 
-    # Load JSON configuration if specified
+    # Load the JSON configuration, once.  A file that cannot be read raises.
     if config.args.config_json:
-        if not config.load_config_from_json(config.args.config_json):
-            pass
+        config.load_config_from_json(config.args.config_json)
 
     if config.args.tag != "None":
         config.args.plexDIA = True
@@ -178,7 +177,14 @@ def run_experiment(GUI_config_json=None):
 
     # TODO: validate all config.args values against default_dict['values'] lists here
     set_seeds(config.RANDOM_SEED)
+    if not config.args.speclib:
+        raise JModError("No spectral library given: set speclib in the config JSON "
+                        "or pass -l / --speclib")
+    if not config.args.mzml:
+        raise JModError("No data files given: set mzml in the config JSON (one path or a "
+                        "list of paths) or pass -i once per file")
     lib_file = config.args.speclib.replace("\\","/")
+    # One path (a JSON string) or several (a JSON list, or -i given repeatedly)
     run_files = config.args.mzml if isinstance(config.args.mzml, list) else [config.args.mzml]
 
     # Experiment-level files -- the log, and a memory-mapped library -- go in
@@ -196,13 +202,10 @@ def run_experiment(GUI_config_json=None):
     ##add statements to log once the log file has been created
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
         logger.info(f"Using configuration file: {config.args.config_json}")
-    if config.args.config_json:
-        logger.info(f"Loading configuration from {config.args.config_json}")
-        if not config.load_config_from_json(config.args.config_json):
-            logger.warning("Failed to load JSON configuration. Using command-line arguments.")
     if GUI_config_json:
-        config.args.config_json = GUI_config_json
-        logger.info(f"Loading configuration from GUI")
+        logger.info(f"Loaded configuration from GUI")
+    elif config.args.config_json:
+        logger.info(f"Loaded configuration from {config.args.config_json}")
     if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
         logger.info("Running JMod in test mode...")
 
@@ -210,7 +213,8 @@ def run_experiment(GUI_config_json=None):
     logger.info("Using configuration:")
     logger.info(config.args)
     logger.info("")
-    logger.info(f"{len(run_files)} file(s) to run; log writing to {os.path.abspath(logfile_path)}")
+    logger.info(f"{len(run_files)} file(s) to run")
+    logger.info(f"log writing to {os.path.abspath(logfile_path)}")
 
     ######################################################
     #### Build the library once.  It comes first, before any run's spectra are

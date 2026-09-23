@@ -18,6 +18,7 @@ from src.default_dict import default_dict
 import sys
 
 from src.logger import logger
+from src.utils.errors import JModError
 
 parser = argparse.ArgumentParser(
                     prog='Jmod',
@@ -27,6 +28,9 @@ parser = argparse.ArgumentParser(
 for key, value in default_dict.items():
     if value['takes_value'] is False:
         parser.add_argument(*value['flags'], action='store_true' if value['default'] is False else 'store_false')
+    elif value.get('multiple', False):
+        # Repeatable flag: each use appends, giving a list (None if never given)
+        parser.add_argument(*value['flags'], action='append', default=value['default'], type=str)
     else:
         parser.add_argument(*value['flags'], default=value['default'], type=int if value['type'] == 'int' else float if value['type'] == 'float' else str)
 
@@ -275,26 +279,34 @@ def limit_blas_threads():
 
 # Function to load configuration from JSON
 def load_config_from_json(json_path):
-    """Load configuration parameters from a JSON file."""
+    """Load configuration parameters from a JSON file.
+
+    Raises JModError when the file cannot be opened or parsed, so a bad config
+    stops the run instead of silently leaving the defaults in place.
+    """
     try:
         with open(json_path, 'r') as f:
             config_data = json.load(f)
-        
-        # Update args with values from JSON. Downstream code reads
-        # ``config.args.X`` directly, so there is no module-level alias to
-        # re-sync — mutating the Namespace is enough.
-        for key, value in config_data.items():
-            if hasattr(args, key):
-                setattr(args, key, value)
+    except json.JSONDecodeError as e:
+        hint = ""
+        if "escape" in str(e):
+            hint = ("\nA backslash in a JSON string starts an escape sequence: write Windows "
+                    "paths with forward slashes (C:/Users/...) or doubled backslashes "
+                    "(C:\\\\Users\\\\...).")
+        raise JModError(f"Could not read config JSON {json_path}: {e}{hint}") from e
+    except OSError as e:
+        raise JModError(f"Could not open config JSON {json_path}: {e}") from e
 
-        # Set additional config variables if present
-        if 'additional_config' in config_data:
-            for key, value in config_data['additional_config'].items():
-                if key in globals() and not key.startswith('__'):
-                    globals()[key] = value
-                
-        return True
-    except Exception as e:
-        logger.warning(f"Error loading JSON configuration: {e}")
-        return False
+    # Update args with values from JSON. Downstream code reads
+    # ``config.args.X`` directly, so there is no module-level alias to
+    # re-sync — mutating the Namespace is enough.
+    for key, value in config_data.items():
+        if hasattr(args, key):
+            setattr(args, key, value)
+
+    # Set additional config variables if present
+    if 'additional_config' in config_data:
+        for key, value in config_data['additional_config'].items():
+            if key in globals() and not key.startswith('__'):
+                globals()[key] = value
         

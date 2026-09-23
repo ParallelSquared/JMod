@@ -69,6 +69,16 @@ class TestErrorHandling:
         assert any("Run 1 of 2 failed (a.mzML): bad file" in r.getMessage()
                    for r in _errors(app_log))
 
+    def test_no_spectral_library_is_a_user_error(self, experiment, monkeypatch):
+        monkeypatch.setattr(config.args, "speclib", None)
+        with pytest.raises(JModError, match="No spectral library given"):
+            experiment.run_experiment()
+
+    def test_no_data_files_is_a_user_error(self, experiment, monkeypatch):
+        monkeypatch.setattr(config.args, "mzml", None)
+        with pytest.raises(JModError, match="No data files given"):
+            experiment.run_experiment()
+
     def test_missing_data_file_is_a_user_error(self, tmp_path):
         runState = run_jmod.RunState()
         runState.file_name = str(tmp_path / "missing.mzML")
