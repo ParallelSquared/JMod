@@ -4,8 +4,9 @@ import pandas as pd
 import os
 import tempfile
 import csv
+import types
 
-from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib, has_mass_tag
+from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib, has_mass_tag, in_windows
 
 
 def test_create_python_lib_basic():
@@ -170,4 +171,32 @@ class Test_has_mass_tag():
         assert found is True
         assert np.isclose(source_channel_mass, 150)
         assert name == "PSMtag-0"
+
+
+def _scans(*windows):
+    """Stand-in MS2 scans carrying only their isolation window."""
+    return [types.SimpleNamespace(ms1window=np.array(w, dtype=float)) for w in windows]
+
+
+class Test_in_windows():
+
+    def test_membership(self):
+        # windows covering only 464.75 and 520.77
+        mz = np.array([464.75, 520.77, 830.51, 540.26])
+        mask = in_windows(mz, _scans([460, 470], [515, 525]))
+        assert mask.tolist() == [True, True, False, False]
+
+    def test_margin(self):
+        # 464.75 sits ~32 ppm above 464.735; the default 50 ppm margin recovers it
+        mz = np.array([464.75])
+        assert in_windows(mz, _scans([460.0, 464.735]))[0]
+        assert not in_windows(mz, _scans([460.0, 464.735]), margin_ppm=1.0)[0]
+
+    def test_overlapping_windows_merge(self):
+        mz = np.array([465.0, 472.0, 480.0])
+        mask = in_windows(mz, _scans([460, 470], [468, 475]))
+        assert mask.tolist() == [True, True, False]
+
+    def test_nan_is_outside(self):
+        assert not in_windows(np.array([np.nan]), _scans([460, 470]))[0]
 

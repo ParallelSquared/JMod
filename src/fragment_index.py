@@ -218,7 +218,7 @@ class FragmentIndex:
 
     @classmethod
     def build(cls, library, all_keys, rt_mz, mz_tol_ppm,
-              max_frags_per_partition=312_000):
+              max_frags_per_partition=312_000, include=None):
         """Build a FragmentIndex from a spectrum library.
 
         Args:
@@ -231,22 +231,26 @@ class FragmentIndex:
                    pre-applied; IM must NOT be offset for decoys.
             mz_tol_ppm: float — fragment m/z tolerance in ppm.
             max_frags_per_partition: int — max fragments per partition (~312K for L3 cache fit).
+            include: optional bool array over all_keys — precursors set False are left out of
+                     the index and so can never be candidates. Returned indices stay global.
         """
         idx = cls(mz_tol_ppm)
 
-        n = len(all_keys)
+        # Sort by calibrated RT
+        rt_order = np.argsort(rt_mz[:, 0])
+        if include is not None:
+            rt_order = rt_order[include[rt_order]]
+
+        n = len(rt_order)
         if n == 0:
             idx._finalize()
             return idx
 
-        # Count fragments per precursor (top_n only)
-        frag_counts = np.array([len(library[all_keys[i]]['top_n']) for i in range(n)], dtype=np.int32)
-
-        # Sort by calibrated RT
-        rt_order = np.argsort(rt_mz[:, 0])
+        # Count fragments per precursor (top_n only), in RT order
+        frag_counts = np.array([len(library[all_keys[i]]['top_n']) for i in rt_order], dtype=np.int32)
 
         # Determine partition boundaries based on cumulative fragment count
-        cumulative = np.cumsum(frag_counts[rt_order])
+        cumulative = np.cumsum(frag_counts)
         partition_starts = [0]
         last_cut = 0
         for i in range(n):

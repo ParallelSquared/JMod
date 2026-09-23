@@ -323,22 +323,13 @@ def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
 
     return 0, False, None
 
-def window_recoverable_mask(library, ms2scans, tag=None, source_channel=None,
-                            margin_ppm=50.0):
-    """Boolean mask of library precursors that at least one isolation window
-    can ever select — in at least one tag channel when *tag* is given.
+def in_windows(mz, ms2scans, margin_ppm=50.0):
+    """Boolean mask of the m/z values that at least one isolation window of
+    *ms2scans* covers.
 
-    Precursors outside every window in every channel are unrecoverable by
-    the acquisition scheme and are dead weight through decoy generation,
-    tagging, and the search.
+    The windows are merged into disjoint intervals, each widened by a ppm
+    margin for m/z alignment drift.
     """
-    import numpy as np
-    import tqdm
-    from src.utils.parse_peptides import parse_peptide
-    from src.mass_tags import get_tag_pos
-
-    # Union of isolation windows, merged into disjoint intervals with a
-    # ppm margin for m/z alignment drift
     windows = sorted({(float(sc.ms1window[0]), float(sc.ms1window[1]))
                       for sc in ms2scans})
     merged = []
@@ -352,37 +343,11 @@ def window_recoverable_mask(library, ms2scans, tag=None, source_channel=None,
     lows = np.array([m[0] for m in merged])
     highs = np.array([m[1] for m in merged])
 
-    def inside(mz):
-        idx = np.searchsorted(lows, mz, side="right") - 1
-        ok = idx >= 0
-        ok[ok] = mz[ok] <= highs[idx[ok]]
-        return ok
-
-    prec_mz = np.asarray(library.prec_mz, dtype=np.float64)
-    prec_z = np.asarray(library.prec_z, dtype=np.float64)
-    mask = inside(prec_mz)
-
-    if tag is not None:
-        n = len(prec_mz)
-        n_sites = np.empty(n, dtype=np.float64)
-        if source_channel is not None:
-            # pre-tagged library: sites = existing tag annotations
-            marker = "(" + tag.name
-            for i in range(n):
-                n_sites[i] = library.mod_seq[i].count(marker)
-            source_mass = tag.mass_dict[source_channel]
-        else:
-            for i in tqdm.tqdm(range(n), desc="Window prefilter: tag sites",
-                               miniters=100000):
-                pos, _ = get_tag_pos(parse_peptide(library.mod_seq[i]), tag.rules)
-                n_sites[i] = len(pos)
-            source_mass = 0.0
-        for channel_mass in np.asarray(tag.channel_masses, dtype=np.float64):
-            shifted = prec_mz + (channel_mass - source_mass) * n_sites / prec_z
-            mask |= inside(shifted)
-            if mask.all():
-                break
-    return mask
+    mz = np.asarray(mz, dtype=np.float64)
+    idx = np.searchsorted(lows, mz, side="right") - 1
+    ok = idx >= 0
+    ok[ok] = mz[ok] <= highs[idx[ok]]
+    return ok
 
 
 def loadSpecLib(lib_file):

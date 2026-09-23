@@ -243,42 +243,7 @@ class _TargetView:
 
     def __deepcopy__(self, memo):
         """Return a target-only SpectrumLibraryStore (independent copy)."""
-        s = self._store
-        n = s.n_targets
-        # Slice spectrum data for target entries; key index is rebuilt from
-        # the sliced arrays (keys are always (mod_seq[i], float(prec_z[i])))
-        pre = s.spectrum_perm is not None
-        target_frag_total = int(s.frag_lengths[:n].sum())
-        target_spec_total = target_frag_total if pre else int(s.spectrum_lengths[:n].sum())
-        target_topn_total = int(s.top_n_lengths[:n].sum())
-        return SpectrumLibraryStore(
-            key_to_idx=None,
-            mod_seq=s.mod_seq[:n].copy(),
-            seq=s.seq[:n].copy(),
-            prec_mz=s.prec_mz[:n].copy(),
-            prec_z=s.prec_z[:n].copy(),
-            iRT=s.iRT[:n].copy(),
-            ion_mob=s.ion_mob[:n].copy(),
-            protein_group=s.protein_group[:n].copy(),
-            protein_name=s.protein_name[:n].copy(),
-            genes=s.genes[:n].copy(),
-            uniprot_id=s.uniprot_id[:n].copy(),
-            spectrum_mz=None if pre else s.spectrum_mz[:target_spec_total].copy(),
-            spectrum_int=None if pre else s.spectrum_int[:target_spec_total].copy(),
-            spectrum_offsets=None if pre else s.spectrum_offsets[:n].copy(),
-            spectrum_lengths=None if pre else s.spectrum_lengths[:n].copy(),
-            frag_names_data=None if pre else s.frag_names_data[:target_spec_total].copy(),
-            spectrum_perm=s.spectrum_perm[:target_frag_total].copy() if pre else None,
-            frag_mz=s.frag_mz[:target_frag_total].copy(),
-            frag_int=s.frag_int[:target_frag_total].copy(),
-            frag_keys_data=s.frag_keys_data[:target_frag_total].copy(),
-            frag_offsets=s.frag_offsets[:n].copy(),
-            frag_lengths=s.frag_lengths[:n].copy(),
-            top_n_data=s.top_n_data[:target_topn_total].copy(),
-            top_n_offsets=s.top_n_offsets[:n].copy(),
-            top_n_lengths=s.top_n_lengths[:n].copy(),
-            parent_idx=s.parent_idx[:n].copy(),
-        )
+        return self._store._copy_targets()
 
 # Canonical column name -> priority-ordered tuple of accepted input spellings.
 # Canonical names match to_diann_df's output columns. Resolution is
@@ -580,6 +545,110 @@ class SpectrumLibraryStore:
         preliminary search to targets only.
         """
         return _TargetView(self)
+
+    def monoisotopic_targets(self):
+        """Target entries with their isotope peaks stripped, for the first search.
+
+        The first search is calibrated on monoisotopic spectra, but isotope
+        expansion runs once, before it, and leaves n_iso peaks per fragment in
+        the spectrum arrays.  Each fragment contributes exactly one iso-0 peak
+        with its original m/z and intensity, so masking on the frag codes'
+        isotope bits gives every entry back its monoisotopic spectrum, still
+        m/z-sorted and ``frag_lengths`` peaks long.  top_n is copied as-is and
+        so indexes the expanded spectra, not these; nothing in the first
+        search reads it (fit_to_lib ranks peaks itself).
+
+        Without expansion there is nothing to strip, and this is target_view().
+        Otherwise it is an independent target-only store holding a copy of the
+        monoisotopic target data.
+        """
+        n = self.n_targets
+        if (self.spectrum_perm is not None
+                or np.array_equal(self.spectrum_lengths[:n], self.frag_lengths[:n])):
+            return self.target_view()
+
+        from src.utils.frag_encoding import is_isotope
+        spec_total = int(self.spectrum_lengths[:n].sum())
+        keep = ~is_isotope(self.frag_names_data[:spec_total])
+        lengths = self.frag_lengths[:n].astype(self.spectrum_lengths.dtype)
+        if int(keep.sum()) != int(lengths.sum()):
+            raise RuntimeError(
+                f"Found {int(keep.sum())} monoisotopic peaks for "
+                f"{int(lengths.sum())} target fragments; expected one per fragment.")
+        offsets = np.zeros(n, dtype=self.spectrum_offsets.dtype)
+        if n > 1:
+            np.cumsum(lengths[:-1], out=offsets[1:])
+        return self._copy_targets(spectrum=(self.spectrum_mz[:spec_total][keep],
+                                            self.spectrum_int[:spec_total][keep],
+                                            offsets,
+                                            lengths,
+                                            self.frag_names_data[:spec_total][keep]))
+
+    def freeze(self):
+        """Make every column read-only.
+
+        Called once the library is built.  Anything run-specific belongs in a
+        per-run array, so a step that writes into the shared library raises
+        instead of silently changing it for every later run.  Copies (e.g.
+        ``copy.deepcopy``) come back writable.
+        """
+        for name in self.__slots__:
+            value = getattr(self, name, None)
+            if isinstance(value, PooledStringColumn):
+                value = value.codes
+            if isinstance(value, np.ndarray):
+                value.flags.writeable = False
+        return self
+
+    def _copy_targets(self, spectrum=None):
+        """Independent target-only copy of this store.
+
+        *spectrum*, when given, is ``(mz, int, offsets, lengths, frag_codes)``
+        for the targets and replaces the copied spectrum arrays.
+        """
+        n = self.n_targets
+        # Slice spectrum data for target entries; key index is rebuilt from
+        # the sliced arrays (keys are always (mod_seq[i], float(prec_z[i])))
+        pre = self.spectrum_perm is not None
+        target_frag_total = int(self.frag_lengths[:n].sum())
+        target_spec_total = target_frag_total if pre else int(self.spectrum_lengths[:n].sum())
+        target_topn_total = int(self.top_n_lengths[:n].sum())
+        if spectrum is None:
+            spectrum = (None, None, None, None, None) if pre else (
+                self.spectrum_mz[:target_spec_total].copy(),
+                self.spectrum_int[:target_spec_total].copy(),
+                self.spectrum_offsets[:n].copy(),
+                self.spectrum_lengths[:n].copy(),
+                self.frag_names_data[:target_spec_total].copy())
+        spectrum_mz, spectrum_int, spectrum_offsets, spectrum_lengths, frag_names_data = spectrum
+        return SpectrumLibraryStore(
+            key_to_idx=None,
+            mod_seq=self.mod_seq[:n].copy(),
+            seq=self.seq[:n].copy(),
+            prec_mz=self.prec_mz[:n].copy(),
+            prec_z=self.prec_z[:n].copy(),
+            iRT=self.iRT[:n].copy(),
+            ion_mob=self.ion_mob[:n].copy(),
+            protein_group=self.protein_group[:n].copy(),
+            protein_name=self.protein_name[:n].copy(),
+            genes=self.genes[:n].copy(),
+            uniprot_id=self.uniprot_id[:n].copy(),
+            spectrum_mz=spectrum_mz,
+            spectrum_int=spectrum_int,
+            spectrum_offsets=spectrum_offsets,
+            spectrum_lengths=spectrum_lengths,
+            frag_names_data=frag_names_data,
+            spectrum_perm=self.spectrum_perm[:target_frag_total].copy() if pre else None,
+            frag_mz=self.frag_mz[:target_frag_total].copy(),
+            frag_int=self.frag_int[:target_frag_total].copy(),
+            frag_keys_data=self.frag_keys_data[:target_frag_total].copy(),
+            frag_offsets=self.frag_offsets[:n].copy(),
+            frag_lengths=self.frag_lengths[:n].copy(),
+            top_n_data=self.top_n_data[:target_topn_total].copy(),
+            top_n_offsets=self.top_n_offsets[:n].copy(),
+            top_n_lengths=self.top_n_lengths[:n].copy(),
+            parent_idx=self.parent_idx[:n].copy(),
+        )
 
     @property
     def is_finalized(self):
@@ -1141,8 +1210,14 @@ class SpectrumLibraryStore:
     def __deepcopy__(self, memo):
         """Support ``copy.deepcopy(store)``."""
         import copy
+        # A KeyIndex is derived from mod_seq/prec_z and points back at its
+        # store, so deep-copying it recurses into this method before the new
+        # store exists.  Rebuild it from the copied arrays instead; only the
+        # plain dicts of the from_dict / timeplex paths are copied as-is.
+        key_to_idx = (None if isinstance(self.key_to_idx, KeyIndex)
+                      else copy.deepcopy(self.key_to_idx, memo))
         return SpectrumLibraryStore(
-            key_to_idx=copy.deepcopy(self.key_to_idx, memo),
+            key_to_idx=key_to_idx,
             mod_seq=self.mod_seq.copy(),
             seq=self.seq.copy(),
             prec_mz=self.prec_mz.copy(),

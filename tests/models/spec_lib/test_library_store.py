@@ -5,8 +5,12 @@ import csv
 import copy
 import os
 
-from src.models.spec_lib.library_store import SpectrumLibraryStore, _EntryView
+from src.models.spec_lib.library_store import SpectrumLibraryStore, _EntryView, _TargetView, KeyIndex
+from src.models.spec_lib import spec_lib
+from src.iso_functions import iso_library
 from src.mass_tags import massTag, tag_library
+
+from tests.models.spec_lib.test_library_snapshots import FIXTURE_DIR
 
 
 def _make_sample_dict():
@@ -338,3 +342,87 @@ class TestDeepCopyStore:
         # But underlying spectrum arrays are shared
         assert store.spectrum_mz is store2.spectrum_mz
         assert store.spectrum_int is store2.spectrum_int
+
+    def test_deepcopy_key_index_store(self):
+        # A KeyIndex points back at its store, so the copy needs its own index
+        # rather than a deep copy of the original's (which used to recurse)
+        store = _edgecases_store()
+        assert isinstance(store.key_to_idx, KeyIndex)
+        copied = copy.deepcopy(store)
+        assert list(copied.keys()) == list(store.keys())
+        assert copied.key_to_idx[("PEPTIDEK", 2.0)] == store.key_to_idx[("PEPTIDEK", 2.0)]
+        assert copied.key_to_idx._store is copied
+
+
+def _edgecases_store():
+    return SpectrumLibraryStore.from_tsv(os.path.join(FIXTURE_DIR, "library_edgecases.tsv"))
+
+
+class TestSubsetEntries:
+    def test_subset_matches_per_entry_data(self):
+        store = _edgecases_store()
+        keys = list(store.keys())
+        mask = np.array([k[0] != "LIONELK" for k in keys])
+        sub = store.subset_entries(mask)
+        kept = [k for k, m in zip(keys, mask) if m]
+        assert list(sub.keys()) == kept
+        for k in kept:
+            a = sub[k]
+            b = store[k]
+            assert a["frags"] == b["frags"]
+            assert np.array_equal(sub.get_spectrum(sub.key_to_idx[k]),
+                                  store.get_spectrum(store.key_to_idx[k]))
+            assert a["prec_mz"] == b["prec_mz"]
+            assert a["genes"] == b["genes"]
+
+    def test_all_true_is_identity(self):
+        store = _edgecases_store()
+        assert store.subset_entries(np.ones(len(store.mod_seq), dtype=bool)) is store
+
+    def test_finalize_after_subset(self):
+        store = _edgecases_store()
+        mask = np.ones(len(store.mod_seq), dtype=bool)
+        mask[0] = False
+        sub = store.subset_entries(mask)
+        sub.finalize_spectra()
+        i = sub.key_to_idx[("SEVENPEPK", 2.0)]
+        spec = sub.get_spectrum(i)
+        assert np.all(np.diff(spec[:, 0]) >= 0)
+
+
+def _with_decoys():
+    return spec_lib.create_decoy_lib(_edgecases_store(), rules="rev")
+
+
+class TestMonoisotopicTargets:
+    def test_without_isotopes_returns_target_view(self):
+        store = _with_decoys()
+        assert isinstance(store.monoisotopic_targets(), _TargetView)
+
+    def test_spectra_match_the_unexpanded_library(self):
+        reference = _with_decoys()
+        reference.finalize_spectra()
+        mono = iso_library(_with_decoys(), tag=None, n_iso=3).monoisotopic_targets()
+        for key in mono.keys():
+            np.testing.assert_array_equal(mono.get_spectrum(mono.key_to_idx[key]),
+                                          reference.get_spectrum(reference.key_to_idx[key]))
+
+    def test_contains_only_targets(self):
+        store = iso_library(_with_decoys(), tag=None, n_iso=3)
+        mono = store.monoisotopic_targets()
+        assert list(mono.keys()) == list(store.keys())[:store.n_targets]
+
+
+class TestFreeze:
+    def test_writes_to_a_frozen_store_raise(self):
+        store = _edgecases_store().freeze()
+        with pytest.raises(ValueError):
+            store.iRT[0] = 1.0
+        with pytest.raises(ValueError):
+            store.frag_mz[0] = 1.0
+
+    def test_deepcopy_of_a_frozen_store_is_writable(self):
+        store = _edgecases_store().freeze()
+        copied = copy.deepcopy(store)
+        copied.iRT[0] = 1.0
+        assert store.iRT[0] != 1.0

@@ -24,6 +24,7 @@ import pandas as pd
 import sys
 import json
 import dill
+import gc
 
 from src.utils.io import load_files, file_reader
 from src.utils.set_seeds import set_seeds
@@ -273,8 +274,10 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         bruker_sdk_path = _resolve_bruker_setting(config.args.bruker_sdk_path)
 
     ######################################################
-    #### Load the data
-    spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
+    #### Load the data.  The library is built first, before any run's spectra
+    #### are resident, so its build transients never overlap them.
+    spectrumLibrary, mass_tag, SILAC = build_library(lib_file, results_folder_path)
+
     DIAspectra=file_reader.loadSpectra(mzml_file, bruker_sdk_path=bruker_sdk_path)
 
     if config.args.test_mode:
@@ -289,8 +292,42 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         
         logger.info(f"Selected {len(filtered_ms2_scans)} out of {len(DIAspectra.ms2scans)} MS2 scans for test mode")
         DIAspectra.ms2scans = filtered_ms2_scans
-        spectra_to_fit = DIAspectra.ms2scans
-        
+        del filtered_ms2_scans
+
+    funcs, target_iRT, rt_models_data, elution_fwhm, vote_sigma = first_search(
+        DIAspectra, spectrumLibrary, mass_tag, SILAC,
+        dino_features, feature_path, results_folder_path)
+    del dino_features
+
+    spectrumLibrary, rt_mz, in_window = calibrate_library(
+        spectrumLibrary, funcs, target_iRT, rt_models_data, DIAspectra.ms2scans)
+    del funcs, target_iRT, rt_models_data
+
+    decoylib_search_path = main_search(DIAspectra, spectrumLibrary, rt_mz, in_window,
+                                       results_folder_path)
+    del rt_mz, in_window
+    gc.collect()
+
+    score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
+                     mass_tag, SILAC, elution_fwhm, vote_sigma)
+    del spectrumLibrary
+    gc.collect()
+
+
+def build_library(lib_file, work_dir):
+    """Load the spectral library and build the target + decoy search library.
+
+    Resolves the tag and SILAC objects, adds decoys, tags every entry, expands
+    isotopes (--iso) or finalizes the spectra, sets top_n, and freezes the
+    result.  Nothing here depends on a run, and nothing after it writes to the
+    library: per-run changes live in calibrate_library's return values.
+    Large non-iso libraries are memory-mapped under *work_dir*.
+
+    Returns (spectrumLibrary, mass_tag, SILAC).
+    """
+    spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
+
+    if config.args.test_mode:
         # Pre-filter the library to speed up processing
         # Note: This is a rough filter that will be refined after RT alignment
         filtered_library = {}
@@ -305,8 +342,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         
         logger.info(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
         spectrumLibrary = filtered_library
-    else:
-        spectra_to_fit = DIAspectra.ms2scans
 
     ### Finding tags moved to above decoy generation, library is still tagged afterwards
     ## TODO Running SILAC + a Tag without an untagged library is probably not currently functional
@@ -358,24 +393,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         config.tag = None
 
     ######################################################
-    #### Window prefilter: drop precursors no isolation window can ever
-    #### select, in any tag channel. Decoys copy their target's prec_mz and
-    #### permutations preserve tag-site counts, so filtering targets here
-    #### filters their decoys implicitly.
-    _recoverable = spec_lib.window_recoverable_mask(
-        spectrumLibrary, DIAspectra.ms2scans,
-        tag=mass_tag,
-        source_channel=source_channel if library_tag_bool else None,
-    )
-    _n_dropped = int((~_recoverable).sum())
-    if _n_dropped:
-        logger.info(f"Window prefilter: {_n_dropped:,} of {len(_recoverable):,} "
-                    f"library precursors are outside every isolation window in "
-                    f"every channel; dropping them")
-        spectrumLibrary = spectrumLibrary.subset_entries(_recoverable)
-    del _recoverable
-
-    ######################################################
     #### Generate decoys (before tagging/isotopes so they apply to both)
     logger.info("Creating Decoy Library")
     # if "diann_tagged" in lib_file_name:
@@ -384,11 +401,8 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     else:
         lib_gen_tag = None
     spectrumLibrary = spec_lib.create_decoy_lib(spectrumLibrary, rules=config.args.decoy, tag=lib_gen_tag)
-    config.target_decoy_ratio = spectrumLibrary.target_decoy_ratio
     logger.info(f"Combined library: {spectrumLibrary.n_targets} targets, "
-                f"{spectrumLibrary.n_decoys} decoys "
-                f"(ratio={config.target_decoy_ratio:.4f})")
-    # TODO: use target_decoy_ratio to correct FDR calculation
+                f"{spectrumLibrary.n_decoys} decoys")
 
     ######################################################
     #### Tagging #####
@@ -399,14 +413,50 @@ def main(GUI_config_json=None, GUI_result_queue=None):
         spectrumLibrary = tag_library(spectrumLibrary, config.SILAC)
 
     ######################################################
-    #### RT/MZ Alignment (initial search uses target entries only) #####
+    #### Isotopes (after tagging: the tag changes each fragment's composition)
+    if config.args.iso:
+        # iso_library_multi rebuilds spectra from frags and discards the
+        # sort permutation -- it is the finalizer on iso runs.  The frags stay
+        # monoisotopic, and first_search reads them back through
+        # monoisotopic_targets()
+        spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
+                                                  tag=config.tag,
+                                                  n_iso=config.args.num_iso)
+    else:
+        # Large libraries: back the six big fragment/spectrum arrays with
+        # read-only memory maps so cold pages evict to SSD instead of
+        # churning the memory compressor
+        spectrumLibrary.finalize_spectra(
+            memmap_dir=os.path.join(work_dir, "library_mmap"))
 
-    target_view = spectrumLibrary.target_view()
+    spectrumLibrary.bulk_set_top_n(config.top_n)
+    spectrumLibrary.freeze()
+    logger.info("Finished Library Setup")
+
+    return spectrumLibrary, mass_tag, SILAC
+
+
+def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC,
+                 dino_features, feature_path, results_folder_path):
+    """Fit this run's calibration.
+
+    Searches the monoisotopic target spectra to fit the RT, precursor m/z and
+    IM alignments and each target's aligned iRT, then re-bands the MS2 spectra
+    on the fitted IM precision.  Reads the library but does not change it;
+    calibrate_library applies the result.
+
+    Returns (funcs, target_iRT, rt_models_data, elution_fwhm, vote_sigma).
+    ``funcs`` starts with the RT spline (one per time channel on timeplex) and
+    the m/z function; ``target_iRT`` holds the aligned iRT of every target,
+    indexed like the library; ``rt_models_data`` is None unless decoy RTs are
+    to be predicted.
+    """
+    ######################################################
+    #### RT/MZ Alignment (initial search uses monoisotopic target entries only) #####
+
+    target_view = spectrumLibrary.monoisotopic_targets()
 
     if config.args.timeplex:
-        # timeplex replicates the library via per-entry spectrum reads;
-        # materialize the sorted spectra once up front
-        spectrumLibrary.finalize_spectra()
         if config.args.use_features and os.path.exists(feature_path):
             logger.info("Loading Dinosaur features")
             dino_features = pd.read_csv(feature_path, delimiter="\t")
@@ -418,35 +468,7 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                                             ms2=config.args.ms2_align)
         # Timeplex path doesn't compute elution SD yet — use the historical default.
         vote_sigma = 1.0
-
-        # Propagate updated iRT from aligned targets back to combined store
-        for key in updated_targets:
-            idx = spectrumLibrary.key_to_idx[key]
-            spectrumLibrary.iRT[idx] = updated_targets[key]["iRT"]
-        # Copy updated iRT to decoy entries from their parent targets
-        for i in range(spectrumLibrary.n_targets, len(spectrumLibrary)):
-            parent = spectrumLibrary.parent_idx[i]
-            if parent >= 0:
-                spectrumLibrary.iRT[i] = spectrumLibrary.iRT[parent]
-        del updated_targets
-
-        rt_spls,mz_func = funcs[:2]
-
-        plex_lib = {}
-        rt_mz = []
-        for idx in range(len(rt_spls)):
-            for key in spectrumLibrary:
-                plex_lib[key+(idx,)] = spectrumLibrary[key]
-            rt_mz.append([[rt_spls[idx](i["iRT"]), mz_func(i["prec_mz"],i["iRT"])] for i in spectrumLibrary.values()])
-        rt_mz = np.concatenate(rt_mz)
-        # Column 2 as in the standard path.  This path replicates the library once
-        # per plex, so the aligned IM has to be tiled to match row-for-row.
-        _plex_im = _aligned_library_im(spectrumLibrary)
-        rt_mz = np.column_stack([rt_mz, np.tile(_plex_im, len(rt_spls))])
-        
-        from src.models.spec_lib.library_store import SpectrumLibraryStore
-        spectrumLibrary = SpectrumLibraryStore.from_dict(plex_lib)
-        del plex_lib
+        rt_models_data = None
 
     else:
         funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma = MZRTfit(
@@ -456,44 +478,14 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             return_rt_models=config.args.predict_decoys,
         )
 
-        # Propagate updated iRT from aligned targets back to combined store
-        for key in updated_targets:
-            idx = spectrumLibrary.key_to_idx[key]
-            spectrumLibrary.iRT[idx] = updated_targets[key]["iRT"]
-        # Copy updated iRT to decoy entries from their parent targets (default)
-        for i in range(spectrumLibrary.n_targets, len(spectrumLibrary)):
-            parent = spectrumLibrary.parent_idx[i]
-            if parent >= 0:
-                spectrumLibrary.iRT[i] = spectrumLibrary.iRT[parent]
-
-        # Predict independent RTs for decoy sequences using CNN
-        if config.args.predict_decoys and rt_models_data is not None:
-            models, convertor = rt_models_data
-            decoy_seqs = [spectrumLibrary.seq[i] for i in range(spectrumLibrary.n_targets, len(spectrumLibrary))]
-            predicted_rts = predict_decoy_rts(decoy_seqs, models, convertor)
-            if predicted_rts is not None:
-                for i, rt in enumerate(predicted_rts):
-                    spectrumLibrary.iRT[spectrumLibrary.n_targets + i] = rt
-            del models, convertor
-        elif config.args.predict_decoys:
-            logger.warning("Decoy RT prediction requested but no RT models available (using empirical RT?)")
-
-        del updated_targets
-
-        rt_spl,mz_func = funcs[:2]
-        # Build rt_mz for ALL entries (target + decoy)
-        rt_mz = np.array([[rt_spl(spectrumLibrary.iRT[i]), mz_func(spectrumLibrary.prec_mz[i], spectrumLibrary.iRT[i])]
-                          for i in range(len(spectrumLibrary))])
-        # Column 2: the library's IM mapped onto observed 1/K0 by the alignment.
-        # Left all-NaN when the library carries no IM or the alignment did not
-        # fit, which leaves every downstream IM gate inert.  Decoys keep their
-        # parent's IM unchanged -- unlike m/z there is no decoy offset, since
-        # shifting it would reject decoys systematically and break FDR.
-        rt_mz = np.column_stack([rt_mz, _aligned_library_im(spectrumLibrary)])
-        # Apply decoy m/z offset to decoy entries
-        rt_mz[spectrumLibrary.n_targets:, 1] -= config.decoy_mz_offset
-
     del target_view
+
+    # MZRTfit hands back a whole copy of the target library; keep only the
+    # aligned iRT column of it, indexed like the library
+    target_iRT = spectrumLibrary.iRT[:spectrumLibrary.n_targets].copy()
+    for key in updated_targets:
+        target_iRT[spectrumLibrary.key_to_idx[key]] = updated_targets[key]["iRT"]
+    del updated_targets
 
     ## Re-band MS2 on the fitted IM precision.  The bands built at load time use
     ## a hardcoded width, chosen before anything about this run's mobility
@@ -504,50 +496,143 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     ## bands; the tight gating happens later, within the band.  No-op on non-IM
     ## data (reband_ms2 self-guards on the retained un-banded peaks, which only
     ## the .d path stores).
+    ## Nothing may hold a reference to the old band list across this call:
+    ## reband_ms2 clears DIAspectra.ms2scans, and an alias would keep every old
+    ## band spectrum alive while the new, larger set is allocated -- on a large .d
+    ## that is an extra ~18 GB held for no reason.
     if DIAspectra.has_ion_mobility:
-        # Release the pre-reband alias to the old band list.  reband_ms2 clears
-        # DIAspectra.ms2scans, but this name (bound way back before the initial
-        # search, and unused since) would otherwise keep every old band spectrum
-        # alive while the new, larger set is being allocated -- on a large .d that
-        # is an extra ~18 GB held for no reason.  Rebound from the new bands below.
-        spectra_to_fit = None
         file_reader.reband_ms2(DIAspectra, 4.0 * config.opt_im_precision)
 
-    spectra_to_fit = DIAspectra.ms2scans
-
-    all_keys = list(spectrumLibrary)
+    return funcs, target_iRT, rt_models_data, elution_fwhm, vote_sigma
 
 
+def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, ms2scans):
+    """Map the frozen library into this run's coordinates.
+
+    Every per-run change to what the search sees of the library happens here,
+    and none of it is written back into the library:
+
+    - iRT: the aligned iRT of each target, copied to its decoys, or predicted
+      for them with --predict_decoys.  Only used to build rt_mz.
+    - rt_mz: each entry's RT, precursor m/z and 1/K0 in this run's observed
+      coordinates.
+    - in_window: the entries some isolation window of this run can select;
+      main_search leaves the rest out of the fragment index.
+    - config.target_decoy_ratio: targets over decoys among those entries.
+
+    Timeplex searches the library once per time channel, so on that path the
+    returned library is a new per-channel store, not the one passed in.
+
+    Returns (spectrumLibrary, rt_mz, in_window).
+    """
+    n_entries = len(spectrumLibrary)
+    n_targets = spectrumLibrary.n_targets
+
+    # Per-run iRT: the aligned targets, and each decoy its parent's value
+    iRT = spectrumLibrary.iRT.copy()
+    iRT[:n_targets] = target_iRT
+    parents = spectrumLibrary.parent_idx[n_targets:]
+    has_parent = parents >= 0
+    iRT[n_targets:][has_parent] = iRT[parents[has_parent]]
+
+    if config.args.timeplex:
+        rt_spls,mz_func = funcs[:2]
+
+        plex_lib = {}
+        rt_mz = []
+        for idx in range(len(rt_spls)):
+            for key in spectrumLibrary:
+                plex_lib[key+(idx,)] = spectrumLibrary[key]
+            rt_mz.append([[rt_spls[idx](iRT[i]), mz_func(spectrumLibrary.prec_mz[i], iRT[i])]
+                          for i in range(n_entries)])
+        rt_mz = np.concatenate(rt_mz)
+        # Column 2 as in the standard path.  This path replicates the library once
+        # per plex, so the aligned IM has to be tiled to match row-for-row.
+        _plex_im = _aligned_library_im(spectrumLibrary)
+        rt_mz = np.column_stack([rt_mz, np.tile(_plex_im, len(rt_spls))])
+
+        from src.models.spec_lib.library_store import SpectrumLibraryStore
+        search_library = SpectrumLibraryStore.from_dict(plex_lib)
+        del plex_lib
+
+    else:
+        # Predict independent RTs for decoy sequences using CNN
+        if config.args.predict_decoys and rt_models_data is not None:
+            models, convertor = rt_models_data
+            decoy_seqs = [spectrumLibrary.seq[i] for i in range(n_targets, n_entries)]
+            predicted_rts = predict_decoy_rts(decoy_seqs, models, convertor)
+            if predicted_rts is not None:
+                iRT[n_targets:n_targets + len(predicted_rts)] = predicted_rts
+            del models, convertor
+        elif config.args.predict_decoys:
+            logger.warning("Decoy RT prediction requested but no RT models available (using empirical RT?)")
+
+        rt_spl,mz_func = funcs[:2]
+        # Build rt_mz for ALL entries (target + decoy)
+        rt_mz = np.array([[rt_spl(iRT[i]), mz_func(spectrumLibrary.prec_mz[i], iRT[i])]
+                          for i in range(n_entries)])
+        # Column 2: the library's IM mapped onto observed 1/K0 by the alignment.
+        # Left all-NaN when the library carries no IM or the alignment did not
+        # fit, which leaves every downstream IM gate inert.  Decoys keep their
+        # parent's IM unchanged -- unlike m/z there is no decoy offset, since
+        # shifting it would reject decoys systematically and break FDR.
+        rt_mz = np.column_stack([rt_mz, _aligned_library_im(spectrumLibrary)])
+        # Apply decoy m/z offset to decoy entries
+        rt_mz[n_targets:, 1] -= config.decoy_mz_offset
+        search_library = spectrumLibrary
+
+    del iRT
+
+    # TODO: --ms2_align is broken and needs fixing.  MZRTfit stopped returning
+    # the MS2 m/z function in 1d252a01 (its return is commented out), so
+    # funcs[2] raises IndexError.  Restoring it is not enough: get_spectrum
+    # returns a fresh np.stack, so the assignment below writes into a temporary
+    # copy and changes nothing, and on iso runs the expanded spectra come from
+    # frags, which it never touches.
     if config.args.ms2_align:
         ms2_func = funcs[2]
+        for key in list(search_library):
+            search_library[key]["spectrum"][:,0] = ms2_func(search_library[key]["spectrum"][:,0])
 
-        for key in all_keys:
-            spectrumLibrary[key]["spectrum"][:,0] = ms2_func(spectrumLibrary[key]["spectrum"][:,0])
-    else:
-        ms2_func=None
+    # Precursors no isolation window of this run can select are never
+    # candidates.  Tested on the calibrated m/z, so each tag channel and decoy
+    # is judged on its own m/z.
+    in_window = spec_lib.in_windows(rt_mz[:, 1], ms2scans)
+    _n_out = int((~in_window).sum())
+    if _n_out:
+        logger.info(f"Window filter: {_n_out:,} of {len(in_window):,} library "
+                    f"precursors are outside every isolation window of this run")
+
+    # FDR's target/decoy ratio, over the entries this run can select.  Timeplex
+    # rows repeat the library once per channel at the same m/z, so the first
+    # n_entries rows stand for every channel.
+    _in = in_window[:n_entries]
+    n_t = int(_in[:n_targets].sum())
+    n_d = int(_in[n_targets:].sum())
+    config.target_decoy_ratio = n_t / n_d if n_d else float('inf')
+    logger.info(f"Searchable: {n_t} targets, {n_d} decoys "
+                f"(ratio={config.target_decoy_ratio:.4f})")
+
+    return search_library, rt_mz, in_window
 
 
-    if config.args.iso:
-        # iso_library_multi rebuilds spectra from frags and discards the
-        # sort permutation -- it is the finalizer on iso runs
-        spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
-                                                  tag=config.tag,
-                                                  n_iso=config.args.num_iso)
-    else:
-        # Large libraries: back the six big fragment/spectrum arrays with
-        # read-only memory maps so cold pages evict to SSD instead of
-        # churning the memory compressor
-        spectrumLibrary.finalize_spectra(
-            memmap_dir=os.path.join(results_folder_path, "library_mmap"))
+def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_path):
+    """Fit every MS2 spectrum against the calibrated library.
 
-    spectrumLibrary.bulk_set_top_n(config.top_n)
-    logger.info("Finished Library Setup")
+    Builds the fragment index, writes the search parameters, fits the spectra
+    in batches, and merges the batch parquets into
+    ``outputs/decoylibsearch_coeffs.parquet``.  Returns that path.
+    """
+    spectra_to_fit = DIAspectra.ms2scans
+    all_keys = list(spectrumLibrary)
 
     # Build fragment index (single unified index for targets + decoys)
     if not config.args.timeplex:
         from src.fragment_index import FragmentIndex
         logger.info("Building fragment ion index")
-        frag_index = FragmentIndex.build(spectrumLibrary, all_keys, rt_mz, config.args.ppm)
+        # Entries outside this run's isolation windows are left out
+        frag_index = FragmentIndex.build(spectrumLibrary, all_keys, rt_mz, config.args.ppm,
+                                         include=in_window)
         logger.info("Fragment index built")
     else:
         frag_index = None
@@ -694,10 +779,9 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     # Free large objects no longer needed after search (keep spectrumLibrary
     # alive for fragment correlation features computed inside process_data).
-    del frag_index, _ms1_rt, spectra_to_fit
-    del rt_mz, all_keys, funcs, dino_features
-    import gc as _gc2
-    _gc2.collect()
+    # _fit_kwargs holds the frag index too, so it has to go for the index to.
+    del _fit_kwargs, frag_index, _ms1_rt, _im_bin_ms1, spectra_to_fit, all_keys
+    gc.collect()
 
     # Merge batch parquets into single file (streaming, one batch at a time)
     import glob as _glob
@@ -718,6 +802,13 @@ def main(GUI_config_json=None, GUI_result_queue=None):
             merge_writer.close()
     for bf in batch_files:
         os.remove(bf)
+
+    return decoylib_search_path
+
+
+def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
+                     mass_tag, SILAC, elution_fwhm, vote_sigma):
+    """Select apex scans, score and FDR-filter, quantify, and write the reports."""
     logger.info("Selecting apex scans and scoring")
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,
@@ -727,6 +818,3 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                  timeplex=config.args.timeplex,
                  elution_fwhm=elution_fwhm,
                  vote_sigma=vote_sigma)
-    del spectrumLibrary
-    _gc2.collect()
-    # """
