@@ -1919,15 +1919,13 @@ def run_main_process(tmp_filenames, result_queue, log_queue):
         if i > 1:
             logger.info("")
         logger.info(f"Running JMod: File {i} of {len(tmp_filenames)}\n")
-        from src.run_jmod import main
-        main_result = main(tmp_filename, result_queue)
-        if main_result == "handled_exit": #if handled exception
-            # sys.exit(0)
-            pass
-        if main_result == "failed":  #if unhandled exception
-            result_queue.put("errorGUI_Unkown Error running JMod. JMod exited")
-            logger.error("runERROR: Unknown Error running JMod. Run exited\n")
-            # sys.exit(0)
+        # main logs its own errors to this panel and returns "failed"; this only
+        # catches what escapes it, such as a failure importing the pipeline
+        try:
+            from src.run_jmod import main
+            main(tmp_filename)
+        except Exception:
+            logger.error("JMod stopped: unexpected error", exc_info=True)
 
     logger.info ("")
     logger.info("JMod Finished") #if no exceptions

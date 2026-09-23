@@ -8,12 +8,12 @@ specified-but-unresolvable SDK from silently degrading to the approximation.
 
 import os
 import sys
-from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from src.utils.errors import JModError
 from src.utils.io.file_reader import resolve_bruker_sdk_path
 
 
@@ -26,13 +26,6 @@ def fake_sdk(tmp_path):
     (root / "win64" / "timsdata.dll").write_bytes(b"")
     (root / "linux64" / "libtimsdata.so").write_bytes(b"")
     return root
-
-
-@pytest.fixture(autouse=True)
-def _silence_tk():
-    """send_raise_to_TK touches config/GUI state; the raise is what we assert on."""
-    with patch("src.utils.gui_utils.send_raise_to_TK") as m:
-        yield m
 
 
 def test_sdk_root_resolves_to_linux_library(fake_sdk):
@@ -74,7 +67,7 @@ def test_not_found_three_levels_down(tmp_path):
     lib = tmp_path / "a" / "b" / "c" / "libtimsdata.so"
     lib.parent.mkdir(parents=True)
     lib.write_bytes(b"")
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(JModError):
         resolve_bruker_sdk_path(str(tmp_path), platform="linux")
 
 
@@ -124,20 +117,18 @@ def test_quotes_are_stripped(fake_sdk):
     assert got == str(fake_sdk / "linux64" / "libtimsdata.so")
 
 
-def test_missing_path_raises(tmp_path, _silence_tk):
+def test_missing_path_raises(tmp_path):
     missing = tmp_path / "nope"
-    with pytest.raises(FileNotFoundError) as exc:
+    with pytest.raises(JModError) as exc:
         resolve_bruker_sdk_path(str(missing), platform="linux")
 
     assert str(missing) in str(exc.value)
     assert "settings.json" in str(exc.value)
-    # @log_exceptions relies on this to exit cleanly instead of dumping a traceback.
-    assert _silence_tk.call_count == 1
 
 
 def test_directory_without_library_raises(tmp_path):
     (tmp_path / "empty").mkdir()
-    with pytest.raises(FileNotFoundError) as exc:
+    with pytest.raises(JModError) as exc:
         resolve_bruker_sdk_path(str(tmp_path), platform="linux")
     assert "libtimsdata.so" in str(exc.value)
 
@@ -145,14 +136,14 @@ def test_directory_without_library_raises(tmp_path):
 def test_wrong_platform_library_raises(fake_sdk):
     # linux64/libtimsdata.so is present, but a Windows run needs timsdata.dll.
     (fake_sdk / "win64" / "timsdata.dll").unlink()
-    with pytest.raises(FileNotFoundError) as exc:
+    with pytest.raises(JModError) as exc:
         resolve_bruker_sdk_path(str(fake_sdk), platform="win32")
     assert "timsdata.dll" in str(exc.value)
 
 
 def test_darwin_always_raises(fake_sdk):
     # Bruker publishes no macOS build, so even a valid tree cannot resolve.
-    with pytest.raises(FileNotFoundError) as exc:
+    with pytest.raises(JModError) as exc:
         resolve_bruker_sdk_path(str(fake_sdk), platform="darwin")
     assert "macOS" in str(exc.value)
 
@@ -163,12 +154,10 @@ def test_darwin_unspecified_still_returns_none():
 
 
 @pytest.mark.parametrize("plat", ["linux", "win32", "darwin"])
-def test_non_strict_returns_none_without_reporting(tmp_path, _silence_tk, plat):
-    # The GUI validates candidate paths with strict=False: no exception, and no
-    # send_raise_to_TK, which would otherwise mark the run as already errored.
+def test_non_strict_returns_none_without_raising(tmp_path, plat):
+    # The GUI validates candidate paths with strict=False: no exception.
     assert resolve_bruker_sdk_path(str(tmp_path / "nope"),
                                    platform=plat, strict=False) is None
-    assert _silence_tk.call_count == 0
 
 
 def test_non_strict_still_resolves_a_good_path(fake_sdk):
@@ -219,7 +208,7 @@ class TestResolveBrukerSetting:
     def test_bad_cli_path_does_not_touch_settings(self, tmp_path, settings_file):
         from src.run_jmod import _resolve_bruker_setting
 
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(JModError):
             _resolve_bruker_setting(str(tmp_path / "nope"))
 
         # Regression: the old code persisted before validating, so a typo became
@@ -247,7 +236,7 @@ class TestResolveBrukerSetting:
 
         # A stale stored path fails loudly rather than degrading to the
         # approximation, which would silently produce non-matching m/z.
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(JModError):
             _resolve_bruker_setting(None)
 
     def test_nothing_specified_returns_none(self, settings_file):

@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 import math
 
+from src.utils.errors import JModError
 import src.config as config
 
 
@@ -156,11 +157,11 @@ class TestChangeSeq:
         assert r1 != "PEPTIDE"
 
     def test_change_seq_invalid_rules(self):
-        """Test change_seq with invalid rules raises ValueError"""
-        with pytest.raises(ValueError, match="Unavailable rules selected"):
+        """Test change_seq with invalid rules raises JModError"""
+        with pytest.raises(JModError, match="Unavailable rules selected"):
             change_seq("PEPTIDE", "invalid_rule")
         
-        with pytest.raises(ValueError, match="Unavailable rules selected"):
+        with pytest.raises(JModError, match="Unavailable rules selected"):
             change_seq("PEPTIDE", None)
     
     def test_change_seq_with_tags(self):

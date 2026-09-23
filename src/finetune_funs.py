@@ -26,6 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 load_model = tf.keras.models.load_model
 import statsmodels.api as sm
+from src.utils.errors import JModError
 import src.config as config
 from tensorflow import keras
 import os
@@ -230,9 +231,7 @@ def train_models(models,train_data,results_folder=None):
             try:
                 model.save(results_folder+f'/first_search/fine_tuning/iRT_updated_model{i}')
             except:
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
-                raise ValueError("Path Length Limit Exceeded")
+                raise JModError("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
     logger.debug(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
     return models, all_history
 
@@ -278,10 +277,8 @@ def fine_tune_rt(grouped_df,
         model_path = os.path.join(current_dir,"../rt_models","iRT_TransferLearning_Tag6_updated_05072025_")
         
     else:
-        from src.utils.gui_utils import send_raise_to_TK
         logger.info(f"Tag Name: {tag.name}")
-        send_raise_to_TK("ValueError - Unknown Label")
-        raise ValueError("Unknown label")
+        raise JModError("Unknown label")
         
     
     data_split = X_train, X_test, Y_train, Y_test = create_model_data(grouped_df,seq_name='Stripped.Sequence')

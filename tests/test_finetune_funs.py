@@ -16,6 +16,7 @@ import pytest
 import numpy as np
 import pandas as pd
 import sys, os
+from src.utils.errors import JModError
 from src.finetune_funs import one_hot_encode_sequence, create_model_data, scale_rt, fine_tune_rt
 
 
@@ -118,5 +119,5 @@ class TestFineTuneRT:
         class Tag:
             name = "unknown_tag_xyz"
 
-        with pytest.raises(ValueError, match="Unknown label"):
+        with pytest.raises(JModError, match="Unknown label"):
             fine_tune_rt(sample_df, qc_plots=False, tag=Tag())

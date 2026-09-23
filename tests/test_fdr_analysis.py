@@ -18,6 +18,7 @@ import os
 import types
 import pytest
 
+from src.utils.errors import JModError
 from src.fdr_analysis import score_precursors, score_model, add_median_based_features, process_data, compute_protein_FDR, log_df
 
 def test_score_model_minimal_fixed():
@@ -35,11 +36,9 @@ def test_score_model_minimal_fixed():
         assert isinstance(preds, np.ndarray)
 
     # unsupported model type
-    try:
+    with pytest.raises(JModError, match="Unsupported model type"):
         sm = score_model("unsupported", n_splits=3)
         sm.run_model(X, y)
-    except ValueError:
-        pass
 
 def test_score_precursors_minimal_fixed(tmp_path):
     # Need enough samples for 5-fold CV with iterative negative mining

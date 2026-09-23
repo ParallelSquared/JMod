@@ -31,5 +31,5 @@ if __name__ == "__main__":
     from src import logger
     # Import and run the main module
     from src.run_jmod import main
-    main()
+    sys.exit(0 if main() == "success" else 1)
 

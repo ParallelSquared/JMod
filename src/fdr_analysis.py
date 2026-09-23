@@ -14,6 +14,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from src.utils.errors import JModError
 from src.utils.io.read_output import get_large_prec
 
 from sklearn.model_selection import KFold,GroupKFold
@@ -632,9 +633,7 @@ class score_model():
                     return m
                 
         else:
-            from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK("ValueError - Unsupported Model Type")
-            raise ValueError("Unsupported model type")
+            raise JModError("Unsupported model type")
         
         logger.debug(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
         

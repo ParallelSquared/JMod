@@ -21,6 +21,7 @@ import numpy as np
 import numba as nb
 import polars as pl
 
+from src.utils.errors import JModError
 from src.utils.io.load_files import (
     Spectrum, SpectrumFile, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
 )
@@ -981,24 +982,18 @@ def load_rawfilereader(sdk_path):
     try:
         import clr
     except Exception as e:
-        from src.utils.gui_utils import send_raise_to_TK
         if sys.platform == "darwin":
-            send_raise_to_TK("Failure on import clr. Please use 'brew install mono' to use Thermo RawFileReader .dlls or convert to mzML")
-            raise RuntimeError("Failure on import clr. Please use 'brew install mono' to use Thermo RawFileReader .dlls or convert to mzML")
+            raise JModError("Failure on import clr. Please use 'brew install mono' to use Thermo RawFileReader .dlls or convert to mzML")
         else:
             raise e
         
     try:
         sdk_path = Path(sdk_path)
     except:
-        from src.utils.gui_utils import send_raise_to_TK
-        send_raise_to_TK(f"Thermo RawFileReader path does not exist: {sdk_path}\n          If using command line please add with --rawfilereader_path 'path' or manually update in JMod/Data/Settings.json.")
-        raise FileNotFoundError(f"Thermo RawFileReader path does not exist: {sdk_path}\n          If using command line please add with --rawfilereader_path 'path' or manually update in JMod/Data/Settings.json.")
+        raise JModError(f"Thermo RawFileReader path does not exist: {sdk_path}\n          If using command line please add with --rawfilereader_path 'path' or manually update in JMod/Data/Settings.json.")
 
     if not sdk_path.exists():
-        from src.utils.gui_utils import send_raise_to_TK
-        send_raise_to_TK(f"Thermo RawFileReader path could not be found: {sdk_path}")
-        raise FileNotFoundError(f"Thermo RawFileReader path could not be found: {sdk_path}")
+        raise JModError(f"Thermo RawFileReader path could not be found: {sdk_path}")
 
     if str(sdk_path) not in sys.path:
         sys.path.append(str(sdk_path))
@@ -1020,9 +1015,7 @@ def load_rawfilereader(sdk_path):
                         "  4. The required .NET runtime is installed.\n\n"
                         f"Configured SDK path: {sdk_path}\n\n"
                         f"Original error:\n{e}")
-        from src.utils.gui_utils import send_raise_to_TK
-        send_raise_to_TK(error_message)
-        raise ValueError(error_message) from e
+        raise JModError(error_message) from e
 
 
 _BRUKER_REMEDIATION = (
@@ -1039,15 +1032,9 @@ def _bruker_lib_name(platform):
 
 
 def _fail_bruker(message):
-    """Report a bad --bruker_sdk_path the way the rest of the codebase does.
-
-    send_raise_to_TK sets config.error_already_handled, which lets @log_exceptions
-    exit cleanly instead of dumping a traceback, so it must come before the raise.
-    """
-    from src.utils.gui_utils import send_raise_to_TK
+    """Raise a JModError for a bad --bruker_sdk_path, with how to fix it."""
     full = f"{message}\n\n{_BRUKER_REMEDIATION}"
-    send_raise_to_TK(full)
-    raise FileNotFoundError(full)
+    raise JModError(full)
 
 
 def _safe_iterdir(path):
@@ -1088,11 +1075,10 @@ def resolve_bruker_sdk_path(sdk_path, *, platform=None, strict=True):
     Returns None if and only if nothing was specified (None or blank), in which
     case the caller may fall back to centroiding without the SDK. Otherwise
     returns an absolute path to an existing library file -- never a directory.
-    Raises FileNotFoundError (after send_raise_to_TK) when a path was given but
-    no library could be found: a specified-but-unresolvable SDK is an error, not
-    a reason to silently approximate. Pass ``strict=False`` to get None instead
-    -- for callers merely testing a candidate path, where send_raise_to_TK's
-    error state would be wrong.
+    Raises JModError when a path was given but no library could be found: a
+    specified-but-unresolvable SDK is an error, not a reason to silently
+    approximate. Pass ``strict=False`` to get None instead -- for callers merely
+    testing a candidate path, such as the GUI's folder picker.
 
     The library name and platform directory follow ``sys.platform``, so this
     picks timsdata.dll/win64 on Windows and libtimsdata.so/linux64 elsewhere.

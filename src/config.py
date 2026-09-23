@@ -62,8 +62,6 @@ else:
 RANDOM_SEED = 42
 
 ran_from_GUI = False
-error_already_handled = False
-GUI_result_queue = None
 
 
 ms1_ppm = 20

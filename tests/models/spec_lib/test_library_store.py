@@ -5,6 +5,7 @@ import csv
 import copy
 import os
 
+from src.utils.errors import JModError
 from src.models.spec_lib.library_store import SpectrumLibraryStore, _EntryView, _TargetView, KeyIndex
 from src.models.spec_lib import spec_lib
 from src.iso_functions import iso_library
@@ -315,7 +316,7 @@ class TestFromTSV:
             writer.writerow(["_ACD_", 2, 450.2, "ACD", "b", 3, 1, 300.5, 0.2, 32.5])
             filename = tmp.name
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(JModError) as exc_info:
             SpectrumLibraryStore.from_tsv(filename)
         assert "Nested modification parentheses are not supported" in str(exc_info.value)
         assert "_AC[PHOSPHO (STY)]D_" in str(exc_info.value)

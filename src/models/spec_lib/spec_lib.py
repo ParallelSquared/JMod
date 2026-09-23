@@ -20,6 +20,7 @@ import sqlite3
 import struct
 import zlib
 import pickle
+from src.utils.errors import JModError
 from src.utils.misc_functions import  frag_to_peak
 from src.utils.parse_peptides import change_seq, convert_frags
 import copy
@@ -167,9 +168,7 @@ def load_tsv_speclib(spec_lib_file):
             elif "iRT" in row:
                 rt = row["iRT"]
             else:
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("ValueError - Unknown Retention Time Column")
-                raise ValueError("Unknown retention time column")
+                raise JModError("Unknown retention time column")
             python_lib[unique_id]["iRT"] = None if rt=="" else float(rt)
             python_lib[unique_id].setdefault("frags",{})
             loss=""

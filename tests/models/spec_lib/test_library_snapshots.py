@@ -13,6 +13,7 @@ import pickle
 import numpy as np
 import pytest
 
+from src.utils.errors import JModError
 from src.models.spec_lib.library_store import (
     SpectrumLibraryStore,
     StaleStoreCacheError,
@@ -152,7 +153,7 @@ class TestParsingSemantics:
         assert store.uniprot_id[0] == "P00X"
 
     def test_missing_rt_column_raises(self):
-        with pytest.raises(ValueError, match="retention time"):
+        with pytest.raises(JModError, match="retention time"):
             parse_fixture("library_missing_rt", "tsv")
 
 

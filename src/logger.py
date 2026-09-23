@@ -18,7 +18,6 @@ import time
 import os
 import sys 
 import importlib
-from src.utils.gui_utils import rename_results_folder
 
 class ElapsedFormatter(logging.Formatter):
     def __init__(self, fmt=None, datefmt=None, style="%"):
@@ -56,24 +55,6 @@ def set_log_filepath(logfile_path):
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 
-
-def log_exceptions(func):
-    def wrapper(*args, **kwargs):
-        if "src.config" in sys.modules:   #this weird import somehow solved an error
-            config = sys.modules["src.config"]
-        else:
-            config = importlib.import_module("src.config")
-
-        try:
-            return func(*args, **kwargs)
-        except Exception:
-            if config.error_already_handled:
-                return "handled_exit"
-            else:
-                logging.getLogger("appLogger").error("Unhandled exception", exc_info=True)
-                rename_results_folder(config)
-                return "failed"
-    return wrapper
 
 # load config
 config_file = os.path.join(os.path.dirname(__file__), "logging.conf")

@@ -25,6 +25,7 @@ import sys
 import json
 import dill
 import gc
+import shutil
 
 from src.utils.io import load_files, file_reader
 from src.utils.set_seeds import set_seeds
@@ -41,8 +42,9 @@ from src.fdr_analysis import process_data
 from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
 from src.models.run_state import RunState
+from src.utils.errors import JModError, report_error
 
-from src.logger import logger, set_log_filepath, log_exceptions
+from src.logger import logger, set_log_filepath
 import logging
 
 
@@ -104,13 +106,45 @@ def _datestamped(path):
     return root + "_" + datestamp + ext
 
 
-@log_exceptions
-def main(GUI_config_json=None, GUI_result_queue=None):
+def _mark_run_failed(runState):
+    """Rename a failed run's results folder to run_failed_<name>, if it has one."""
+    results_folder = getattr(runState, "results_folder", None)
+    if results_folder is None or not os.path.exists(results_folder):
+        return
+    failed_folder = os.path.join(os.path.dirname(results_folder),
+                                 "run_failed_" + os.path.basename(results_folder))
+    try:
+        if os.path.exists(failed_folder):
+            shutil.rmtree(failed_folder)
+        shutil.move(results_folder, failed_folder)
+        logger.info(f"Results folder renamed to {failed_folder}")
+    except Exception as rename_error:
+        logger.warning(f"Could not rename results folder: {rename_error}")
+
+
+def main(GUI_config_json=None):
     """Run JMod on every data file in the configuration.
 
     ``mzml`` is either one path or a list of paths; one path is a one-run
     experiment.  The library is built once and shared, then each file is
     searched, scored and quantified on its own, into its own results folder.
+
+    Errors stop here.  One that ends a run is logged and the next run goes
+    ahead (see run_experiment); one anywhere else ends the experiment.  Returns
+    "success", or "failed" when the experiment stopped or any run failed.
+    """
+    try:
+        failed_runs = run_experiment(GUI_config_json)
+    except Exception as e:
+        report_error(e, "JMod stopped")
+        return "failed"
+    return "failed" if failed_runs else "success"
+
+
+def run_experiment(GUI_config_json=None):
+    """Set up the experiment, build the library once, and run every data file.
+
+    Returns the data files whose runs failed.
     """
 
     # Check if a single argument is provided and it's a JSON file
@@ -120,8 +154,6 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     if GUI_config_json:
         config.ran_from_GUI = True
-        config.error_already_handled = False
-        config.GUI_result_queue = GUI_result_queue
         config.args.config_json = GUI_config_json
 
     # Load JSON configuration if specified
@@ -186,32 +218,50 @@ def main(GUI_config_json=None, GUI_result_queue=None):
     mass_tag, SILAC = resolve_tags()
     spectrumLibrary = build_library(lib_file, experiment_dir, mass_tag, SILAC)
 
+    failed_runs = []
     for run_idx, run_file in enumerate(run_files, start=1):
         logger.info("")
         logger.info(f"Run {run_idx} of {len(run_files)}: {run_file}")
-        process_run(run_file, spectrumLibrary, mass_tag, SILAC)
-        logger.info(f"Run {run_idx} of {len(run_files)} finished")
+        runState = RunState()
+        runState.file_name = run_file
+        try:
+            process_run(runState, spectrumLibrary, mass_tag, SILAC)
+        except Exception as e:
+            report_error(e, f"Run {run_idx} of {len(run_files)} failed ({run_file})")
+            _mark_run_failed(runState)
+            failed_runs.append(run_file)
+        else:
+            logger.info(f"Run {run_idx} of {len(run_files)} finished")
+        # A failed run's spectra are only released once its traceback is gone
+        gc.collect()
 
-    logger.info(f"{len(run_files)} files completed. Output at {os.path.abspath(experiment_dir)}")
+    logger.info("")
+    logger.info(f"{len(run_files) - len(failed_runs)} of {len(run_files)} files completed successfully. "
+                f"Output at {os.path.abspath(experiment_dir)}")
+    if failed_runs:
+        logger.error(f"{len(failed_runs)} run(s) failed, see above: {', '.join(failed_runs)}")
 
     del spectrumLibrary
     gc.collect()
+    return failed_runs
 
 
-def process_run(run_file, spectrumLibrary, mass_tag, SILAC):
+def process_run(runState, spectrumLibrary, mass_tag, SILAC):
     """Search, score and quantify one data file against the shared library.
 
     Everything made here belongs to this run and is released when it returns:
     the spectra, the run's calibration (RunState, rt_mz, the window mask) and,
     on timeplex, the per-channel copy of the library.  The shared library is
-    only read.
+    only read.  *runState* arrives holding the run's file_name; the results
+    folder and the fitted values are added to it here.
     """
     # Every run starts from the same seed, so its results do not depend on its
     # position in the list
     set_seeds(config.RANDOM_SEED)
-    runState = RunState()
-    runState.file_name = run_file
+    run_file = runState.file_name
     mzml_file = run_file.replace("\\","/")
+    if not os.path.exists(mzml_file):
+        raise JModError(f"Data file not found: {run_file}")
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
 
     dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
@@ -246,17 +296,11 @@ def process_run(run_file, spectrumLibrary, mass_tag, SILAC):
             os.mkdir(os.path.join(results_folder_path, "outputs"))
         except FileNotFoundError as e:
             if not os.path.exists(os.path.dirname(results_folder_path)):
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK(f"Error Creating Results Folder. Parent path does not exist.\nPath: {os.path.dirname(results_folder_path)}")
-                raise FileNotFoundError(f"Parent Path Does Not Exist - {os.path.dirname(results_folder_path)}")
+                raise JModError(f"Error Creating Results Folder. Parent path does not exist.\nPath: {os.path.dirname(results_folder_path)}") from e
             if "[WinError 3]" in str(e) or "[WinError 206]" in str(e):
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
-                raise ValueError("Path Length Limit Exceeded")
+                raise JModError("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.") from e
         except Exception as e:
-            from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError: \n{str(e)}")
-            raise e
+            raise JModError(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError: \n{str(e)}") from e
 
 
     if len(results_folder_path) >= 225:  ##if results path is long, check to make sure putting things in it wont break (i.e. windows with long paths enabled or different OS)
@@ -267,13 +311,9 @@ def process_run(run_file, spectrumLibrary, mass_tag, SILAC):
             os.remove(test_path)
         except FileNotFoundError as e:
             if "[WinError 3]" in str(e) or "[WinError 206]" in str(e):
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
-                raise ValueError("Path Length Limit Exceeded")
+                raise JModError("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.") from e
         except Exception as e:
-            from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError:\n{str(e)}")
-            raise e
+            raise JModError(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError:\n{str(e)}") from e
 
 
 
@@ -283,7 +323,7 @@ def process_run(run_file, spectrumLibrary, mass_tag, SILAC):
     with open(json_path, "w") as f:
         json.dump(args_dict, f, indent=4)
 
-    config.results_folder_path = results_folder_path
+    runState.results_folder = results_folder_path
 
     if config.args.use_features and os.path.exists(feature_path) and config.args.timeplex:
         logger.info("loading Dinosaur features")
@@ -367,10 +407,8 @@ def resolve_tags():
             SILAC = config.SILAC
         else:
             if config.args.SILAC != "None":
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK(f"Error: SILAC '{config.args.SILAC}' not found in available_tags.")
-                logger.error(f"Available tags: {list(available_tags.keys())}")
-                raise ValueError("Tag Not Found")
+                raise JModError(f"SILAC '{config.args.SILAC}' not found in available tags: "
+                                f"{list(available_tags.keys())}")
             SILAC = None
             config.SILAC = None
     else:
@@ -385,10 +423,8 @@ def resolve_tags():
             mass_tag = config.tag
         else:
             if config.args.tag != "None":
-                from src.utils.gui_utils import send_raise_to_TK
-                send_raise_to_TK(f"Error: Tag '{config.args.tag}' not found in available_tags.")
-                logger.error(f"Available tags: {list(available_tags.keys())}")
-                raise ValueError("Tag Not Found")
+                raise JModError(f"Tag '{config.args.tag}' not found in available tags: "
+                                f"{list(available_tags.keys())}")
             mass_tag = None
             config.tag = None
     else:

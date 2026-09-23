@@ -14,6 +14,7 @@
 
 import numpy as np
 import os
+from src.utils.errors import JModError
 from src.utils.frag_encoding import encode_frag_name, encode_frag_names, encode_frag_columns, decode_frag_names
 import re
 
@@ -2418,9 +2419,7 @@ class SpectrumLibraryStore:
             progress.update(1)
 
         def _raise(message):
-            from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK(f"ValueError - {message}")
-            raise ValueError(message)
+            raise JModError(message)
 
         def _require(canonical, message):
             if canonical not in found and df.height > 0:

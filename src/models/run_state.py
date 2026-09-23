@@ -16,7 +16,8 @@
 class RunState:
     """Values specific to one run.
 
-    ``file_name`` is the run's data file, set when the run starts.  The
+    ``file_name`` is the run's data file, set when the run starts, and
+    ``results_folder`` is where its output goes, set once that exists.  The
     ``opt_`` fields are fitted from the run's data by the first search,
     starting from the defaults in config (e.g. ``opt_rt_tol`` from
     ``config.rt_tol``).  ``target_decoy_ratio`` is counted when the library is
@@ -30,6 +31,7 @@ class RunState:
 
     __slots__ = (
         "file_name",
+        "results_folder",
         "opt_rt_tol",
         "opt_ms1_tol",
         "opt_im_precision",

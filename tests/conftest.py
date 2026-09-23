@@ -55,6 +55,22 @@ except Exception as e:
 # Restore original argv
 sys.argv = original_argv
 
+@pytest.fixture
+def app_log():
+    """Records sent to the appLogger, which feeds the console, log file and GUI."""
+    import logging
+
+    records = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = _Collect(level=logging.DEBUG)
+    logger.addHandler(handler)
+    yield records
+    logger.removeHandler(handler)
+
 @pytest.fixture(autouse=True)
 def reset_config():
     """Reset config for each test"""

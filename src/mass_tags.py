@@ -17,6 +17,7 @@ from matplotlib.path import Path
 from pyteomics import mass
 import tqdm
 import os
+from src.utils.errors import JModError
 import src.config as config
 import numpy as np
 import copy
@@ -181,9 +182,7 @@ def get_tag_pos(AA_seq,rules):
             tag_pos = [0]
 
         else:
-            from src.utils.gui_utils import send_raise_to_TK
-            send_raise_to_TK("ValueError - Unknown Tag Rule")
-            raise(ValueError("Unknown Tag Rule"))
+            raise JModError("Unknown Tag Rule")
         all_tag_pos += tag_pos
         additional_tag_masses[tag_pos]+=1
 
@@ -246,9 +245,7 @@ def set_config_tag(available_tags, config_args_tag):
     elif config_args_tag == "None":
         return None
     else:
-        from src.utils.gui_utils import send_raise_to_TK
-        send_raise_to_TK(f"Exception - Tag {config_args_tag} not in available tags")
-        raise Exception(f"Exception - Tag '{config_args_tag}' not in available tags:\n{list(available_tags.keys())}")
+        raise JModError(f"Tag '{config_args_tag}' not in available tags:\n{list(available_tags.keys())}")
 
 
 config.tag = set_config_tag(available_tags, config.args.tag)

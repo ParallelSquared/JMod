@@ -18,6 +18,7 @@ import hashlib
 import random
 import re
 from pyteomics import mass
+from src.utils.errors import JModError
 import src.config as config
 from src.logger import logger
 
@@ -365,9 +366,7 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
         perm = decoy_permutation(seq, rules)
         new_split_seq = [seq[i] for i in perm]
     else:
-        from src.utils.gui_utils import send_raise_to_TK
-        send_raise_to_TK("ValueError - Unavailable Rules Selected")
-        raise ValueError("Unavailable rules selected")
+        raise JModError("Unavailable rules selected")
     # elif rules==None:
     #     new_seq = "".join(seq)
     
