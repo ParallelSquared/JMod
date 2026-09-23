@@ -719,7 +719,7 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor
 
     n_threads = 3
     logger.info(f"Using {n_threads} threads for main search")
@@ -807,7 +807,11 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
                 for _start in range(0, len(batch_spectra), _CHUNK):
                     futures = [pool.submit(fit_to_lib2, dia_spec, **_fit_kwargs)
                                for dia_spec in batch_spectra[_start:_start + _CHUNK]]
-                    for f in as_completed(futures):
+                    # Drain in submission order, not completion order, so rows are
+                    # written in spectrum order every run.  Scoring depends on row
+                    # order (apex_pc1 ties, CV folds), so completion order made
+                    # repeat runs of the same file give different IDs.
+                    for f in futures:
                         result = f.result()
                         bar.update(1)
                         if result:
