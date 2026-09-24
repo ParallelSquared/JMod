@@ -17,7 +17,6 @@ import json
 from src.default_dict import default_dict
 import sys
 
-from src.logger import logger
 from src.utils.errors import JModError
 
 def _add_arguments(parser, suppress_defaults=False):
@@ -331,4 +330,36 @@ def load_config_from_json(json_path):
     # Options typed on the command line win over the JSON (-i replaces its files)
     for key, value in cli_args.items():
         setattr(args, key, value)
+
+
+def setup(GUI_config_json=None):
+    """Settle the configuration for an experiment.
+
+    Loads the config JSON (the GUI's, or --config_json) under any options typed
+    on the command line, derives the values that follow from others, and checks
+    the inputs are there.  Afterwards args.mzml is a list of paths and
+    args.speclib uses forward slashes.
+    """
+    if GUI_config_json:
+        args.config_json = GUI_config_json
+
+    # Load the JSON configuration, once.  A file that cannot be read raises.
+    if args.config_json:
+        load_config_from_json(args.config_json)
+
+    if args.tag != "None":
+        args.plexDIA = True
+
+    # TODO: validate all args values against default_dict['values'] lists here
+    if not args.speclib:
+        raise JModError("No spectral library given: set speclib in the config JSON "
+                        "or pass -l / --speclib")
+    if not args.mzml:
+        raise JModError("No data files given: set mzml in the config JSON (one path or a "
+                        "list of paths) or pass -i once per file")
+    args.speclib = args.speclib.replace("\\", "/")
+    # One path (a JSON string) or several (a JSON list, or -i given repeatedly).
+    # Left as given: each run's path is written into its results.
+    if not isinstance(args.mzml, list):
+        args.mzml = [args.mzml]
         

@@ -76,6 +76,7 @@ class Test_run_main_process():
             patch("src.run_jmod_from_GUI.sys.exit") as mock_exit, \
             patch("src.run_jmod_from_GUI.logging.getLogger") as mock_get_logger, \
             patch("src.run_jmod_from_GUI.QueueHandler") as mock_QH, \
+            patch("src.config.ran_from_GUI", False), \
             patch("src.run_jmod.main") as mock_main:
 
 

@@ -1919,7 +1919,9 @@ def run_main_process(tmp_filenames, log_queue):
         # main logs its own errors to this panel and returns "failed"; this only
         # catches what escapes it, such as a failure importing the pipeline
         try:
+            import src.config as config
             from src.run_jmod import main
+            config.ran_from_GUI = True  # switches on the progress lines meant for the GUI panel
             main(tmp_filename)
         except Exception:
             logger.error("JMod stopped: unexpected error", exc_info=True)

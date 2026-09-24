@@ -20,7 +20,6 @@ import os
 import time
 import tqdm
 import pandas as pd
-import sys
 import json
 import gc
 
@@ -54,63 +53,16 @@ def main(GUI_config_json=None):
 
 def run_experiment(GUI_config_json=None):
     """Set up the experiment, build the library once, and run every mass spec file."""
-
-    if GUI_config_json:
-        config.ran_from_GUI = True
-        config.args.config_json = GUI_config_json
-
-    # Load the JSON configuration, once.  A file that cannot be read raises.
-    if config.args.config_json:
-        config.load_config_from_json(config.args.config_json)
-
-    if config.args.tag != "None":
-        config.args.plexDIA = True
-
-    # TODO: validate all config.args values against default_dict['values'] lists here
-    set_seeds(config.RANDOM_SEED)
-    if not config.args.speclib:
-        raise JModError("No spectral library given: set speclib in the config JSON "
-                        "or pass -l / --speclib")
-    if not config.args.mzml:
-        raise JModError("No data files given: set mzml in the config JSON (one path or a "
-                        "list of paths) or pass -i once per file")
-    lib_file = config.args.speclib.replace("\\","/")
-    # One path (a JSON string) or several (a JSON list, or -i given repeatedly)
-    run_files = config.args.mzml if isinstance(config.args.mzml, list) else [config.args.mzml]
-
-    # Experiment-level files -- the log, and a memory-mapped library -- go in
-    # the output folder, or next to the first data file when there is none
-    if config.args.output_folder is not None:
-        experiment_dir = config.args.output_folder
-    else:
-        experiment_dir = os.path.dirname(run_files[0].replace("\\","/")) or "."
-    os.makedirs(experiment_dir, exist_ok=True)
-
-    logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
-    set_log_filepath(logfile_path)
-
-    logger.debug(config.args)
-    ##add statements to log once the log file has been created
-    if GUI_config_json:
-        logger.info(f"Loaded configuration from GUI")
-    elif config.args.config_json:
-        logger.info(f"Loaded configuration from {config.args.config_json}")
-        overrides = {k: v for k, v in config.cli_args.items() if k != "config_json"}
-        if overrides:
-            logger.info(f"Command-line options overriding the config JSON: {overrides}")
-
-    # Log the configuration that will be used
-    logger.info("Using configuration:")
-    logger.info(config.args)
-    logger.info("")
-    logger.info(f"{len(run_files)} file(s) to run")
-    logger.info(f"Log writing to {os.path.abspath(logfile_path)}")
+    config.setup(GUI_config_json)
+    experiment_dir = _start_experiment_log()
+    run_files = config.args.mzml
 
     ######################################################
     #### Build the library once.  It comes first, before any run's spectra are
     #### resident, so its build transients never overlap them.
+    set_seeds(config.RANDOM_SEED)
     mass_tag, SILAC = resolve_tags()
-    spectrumLibrary = build_library(lib_file, experiment_dir, mass_tag, SILAC)
+    spectrumLibrary = build_library(config.args.speclib, experiment_dir, mass_tag, SILAC)
 
     failed_runs = []
     for run_idx, run_file in enumerate(run_files, start=1):
@@ -138,6 +90,40 @@ def run_experiment(GUI_config_json=None):
 
     del spectrumLibrary
     gc.collect()
+
+
+def _start_experiment_log():
+    """Create the experiment folder, open the log there, and record the configuration.
+
+    Experiment-level files -- the log, and a memory-mapped library -- go in the
+    output folder, or next to the first data file when there is none.  Returns
+    that folder.
+    """
+    if config.args.output_folder is not None:
+        experiment_dir = config.args.output_folder
+    else:
+        experiment_dir = os.path.dirname(config.args.mzml[0].replace("\\","/")) or "."
+    os.makedirs(experiment_dir, exist_ok=True)
+
+    logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
+    set_log_filepath(logfile_path)
+
+    logger.debug(config.args)
+    if config.ran_from_GUI:
+        logger.info(f"Loaded configuration from GUI")
+    elif config.args.config_json:
+        logger.info(f"Loaded configuration from {config.args.config_json}")
+        overrides = {k: v for k, v in config.cli_args.items() if k != "config_json"}
+        if overrides:
+            logger.info(f"Command-line options overriding the config JSON: {overrides}")
+
+    # Log the configuration that will be used
+    logger.info("Using configuration:")
+    logger.info(config.args)
+    logger.info("")
+    logger.info(f"{len(config.args.mzml)} file(s) to run")
+    logger.info(f"Log writing to {os.path.abspath(logfile_path)}")
+    return experiment_dir
 
 
 def process_run(runState, spectrumLibrary, mass_tag, SILAC):
