@@ -43,14 +43,17 @@ def report_error(e, context):
 
 
 def mark_run_failed(results_folder):
-    """Rename a failed run's results folder to run_failed_<name>; no-op if it has none."""
+    """Rename a failed run's results folder to run_failed_<name>; no-op if it has none.
+
+    Nothing is deleted: if run_failed_<name> is already taken, a datestamp is added.
+    """
     if results_folder is None or not os.path.exists(results_folder):
         return
-    failed_folder = os.path.join(os.path.dirname(results_folder),
-                                 "run_failed_" + os.path.basename(results_folder))
+    # Imported here: misc_functions imports config, which imports this module
+    from src.utils.misc_functions import datestamped
+    failed_folder = datestamped(os.path.join(os.path.dirname(results_folder),
+                                             "run_failed_" + os.path.basename(results_folder)))
     try:
-        if os.path.exists(failed_folder):
-            shutil.rmtree(failed_folder)
         shutil.move(results_folder, failed_folder)
         logger.info(f"Results folder renamed to {failed_folder}")
     except Exception as rename_error:

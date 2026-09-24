@@ -1,6 +1,6 @@
 import logging
 
-from src.utils.errors import JModError, report_error
+from src.utils.errors import JModError, report_error, mark_run_failed
 
 
 def _errors(records):
@@ -22,3 +22,20 @@ class TestReportError:
         (record,) = _errors(app_log)
         assert record.getMessage() == "JMod stopped: unexpected error"
         assert record.exc_info is not None
+
+
+class TestMarkRunFailed:
+    def test_folder_is_renamed(self, tmp_path):
+        (tmp_path / "a_results").mkdir()
+        mark_run_failed(str(tmp_path / "a_results"))
+        assert [p.name for p in tmp_path.iterdir()] == ["run_failed_a_results"]
+
+    def test_earlier_failed_folder_is_kept(self, tmp_path):
+        (tmp_path / "run_failed_a_results").mkdir()
+        (tmp_path / "run_failed_a_results" / "old.txt").write_text("earlier run")
+        (tmp_path / "a_results").mkdir()
+        mark_run_failed(str(tmp_path / "a_results"))
+        assert (tmp_path / "run_failed_a_results" / "old.txt").read_text() == "earlier run"
+        (new_folder,) = [p for p in tmp_path.iterdir() if p.name != "run_failed_a_results"]
+        assert new_folder.name.startswith("run_failed_a_results_")  # datestamped
+        assert not (tmp_path / "a_results").exists()

@@ -245,6 +245,7 @@ def _create_results_folder(mzml_file):
                 raise JModError(f"Error Creating Results Folder. Parent path does not exist.\nPath: {os.path.dirname(results_folder_path)}") from e
             if "[WinError 3]" in str(e) or "[WinError 206]" in str(e):
                 raise JModError("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.") from e
+            raise JModError(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError: \n{str(e)}") from e
         except Exception as e:
             raise JModError(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError: \n{str(e)}") from e
 
@@ -258,6 +259,7 @@ def _create_results_folder(mzml_file):
         except FileNotFoundError as e:
             if "[WinError 3]" in str(e) or "[WinError 206]" in str(e):
                 raise JModError("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.") from e
+            raise JModError(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError:\n{str(e)}") from e
         except Exception as e:
             raise JModError(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError:\n{str(e)}") from e
     return results_folder_path

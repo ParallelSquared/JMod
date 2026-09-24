@@ -89,3 +89,16 @@ class TestErrorHandling:
         experiment.main()
         assert ran == []
         assert any("JMod stopped: bad library" in r.getMessage() for r in _errors(app_log))
+
+
+class TestCreateResultsFolder:
+    def test_unexplained_folder_error_is_raised(self, monkeypatch, tmp_path):
+        # A FileNotFoundError that is neither a missing parent nor a long path
+        def mkdir(*args):
+            raise FileNotFoundError("something else")
+
+        monkeypatch.setattr(config.args, "output_folder", str(tmp_path))
+        monkeypatch.setattr(config.args, "dummy_value", None)
+        monkeypatch.setattr(run_jmod.os, "mkdir", mkdir)
+        with pytest.raises(JModError, match="Error Creating Results Folder"):
+            run_jmod._create_results_folder("data/a.mzML")
