@@ -1152,3 +1152,28 @@ def resolve_bruker_sdk_path(sdk_path, *, platform=None, strict=True):
         f"directly."
     )
 
+
+def resolve_bruker_setting(cli_value):
+    """Resolve the Bruker SDK path, persisting a CLI value once it validates.
+
+    A CLI arg wins and is stored; otherwise the stored setting is used. Both are
+    validated. Returns the resolved library file, or None when nothing was set.
+    """
+    from src.utils.gui_utils import load_settings, save_settings
+
+    settings = load_settings()
+
+    from_cli = cli_value is not None
+    raw_sdk_path = cli_value if from_cli else settings.get("bruker_sdk_path")
+
+    resolved = resolve_bruker_sdk_path(raw_sdk_path)
+
+    if from_cli:
+        # Resolves first, so a bad path cannot poison settings.json. Storing None
+        # for an empty --bruker_sdk_path gives it the meaning "forget my SDK".
+        settings["bruker_sdk_path"] = resolved
+        save_settings(settings)
+
+    return resolved
+
+

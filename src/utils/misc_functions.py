@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import numpy as np
+import os
 import numpy.typing as npt
 import csv
 import re
@@ -828,3 +829,18 @@ def fragment_cor(df: pd.core.frame.DataFrame,didx: int,fn: str="cos") -> np.floa
         return np_pearson_cor(np.array([d1[i] for i in shared_d]),np.array([d2[i] for i in shared_d])).statistic
     
     
+
+
+def datestamped(path):
+    """*path* unchanged if nothing exists there yet, else with a datestamp appended."""
+    if not os.path.exists(path):
+        return path
+    import datetime
+
+    datestamp = str(datetime.datetime.now())
+    datestamp = datestamp.split()
+    datestamp = datestamp[0].replace("-", "_") + "_" + datestamp[1].split(".")[0].replace(":", "_")
+    root, ext = os.path.splitext(path)
+    if os.path.isdir(path):
+        root, ext = path, ""
+    return root + "_" + datestamp + ext

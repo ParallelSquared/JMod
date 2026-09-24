@@ -196,9 +196,9 @@ class TestResolveBrukerSetting:
         return json.loads(settings_file.read_text())
 
     def test_cli_path_is_resolved_and_persisted(self, fake_sdk, settings_file):
-        from src.run_jmod import _resolve_bruker_setting
+        from src.utils.io.file_reader import resolve_bruker_setting
 
-        got = _resolve_bruker_setting(str(fake_sdk))
+        got = resolve_bruker_setting(str(fake_sdk))
 
         expected = str(fake_sdk / "linux64" / "libtimsdata.so")
         assert got == expected
@@ -206,10 +206,10 @@ class TestResolveBrukerSetting:
         assert self._read(settings_file)["bruker_sdk_path"] == expected
 
     def test_bad_cli_path_does_not_touch_settings(self, tmp_path, settings_file):
-        from src.run_jmod import _resolve_bruker_setting
+        from src.utils.io.file_reader import resolve_bruker_setting
 
         with pytest.raises(JModError):
-            _resolve_bruker_setting(str(tmp_path / "nope"))
+            resolve_bruker_setting(str(tmp_path / "nope"))
 
         # Regression: the old code persisted before validating, so a typo became
         # the stored default for every later run.
@@ -218,18 +218,18 @@ class TestResolveBrukerSetting:
     def test_stored_setting_used_when_no_cli_arg(self, fake_sdk, settings_file):
         import json
 
-        from src.run_jmod import _resolve_bruker_setting
+        from src.utils.io.file_reader import resolve_bruker_setting
 
         lib = str(fake_sdk / "linux64" / "libtimsdata.so")
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         settings_file.write_text(json.dumps({"bruker_sdk_path": lib}))
 
-        assert _resolve_bruker_setting(None) == lib
+        assert resolve_bruker_setting(None) == lib
 
     def test_stored_setting_is_validated_too(self, tmp_path, settings_file):
         import json
 
-        from src.run_jmod import _resolve_bruker_setting
+        from src.utils.io.file_reader import resolve_bruker_setting
 
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         settings_file.write_text(json.dumps({"bruker_sdk_path": str(tmp_path / "gone")}))
@@ -237,22 +237,22 @@ class TestResolveBrukerSetting:
         # A stale stored path fails loudly rather than degrading to the
         # approximation, which would silently produce non-matching m/z.
         with pytest.raises(JModError):
-            _resolve_bruker_setting(None)
+            resolve_bruker_setting(None)
 
     def test_nothing_specified_returns_none(self, settings_file):
-        from src.run_jmod import _resolve_bruker_setting
+        from src.utils.io.file_reader import resolve_bruker_setting
 
-        assert _resolve_bruker_setting(None) is None
+        assert resolve_bruker_setting(None) is None
 
     def test_empty_cli_arg_clears_stored_setting(self, fake_sdk, settings_file):
         import json
 
-        from src.run_jmod import _resolve_bruker_setting
+        from src.utils.io.file_reader import resolve_bruker_setting
 
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         settings_file.write_text(
             json.dumps({"bruker_sdk_path": str(fake_sdk / "linux64" / "libtimsdata.so")})
         )
 
-        assert _resolve_bruker_setting("") is None
+        assert resolve_bruker_setting("") is None
         assert self._read(settings_file)["bruker_sdk_path"] is None

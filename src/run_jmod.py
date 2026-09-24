@@ -18,21 +18,18 @@ import src.config as config
 import numpy as np
 import os
 import time
-import datetime
 import tqdm
 import pandas as pd
 import sys
 import json
-import dill
 import gc
-import shutil
 
-from src.utils.io import load_files, file_reader
+from src.utils.io import file_reader
 from src.utils.set_seeds import set_seeds
 from src.models.spec_lib import spec_lib
 from src.spectral_fitting import fit_to_lib2
-from src.rt_alignment import MZRTfit, MZRTfit_timeplex
-from src.utils.misc_functions import write_to_csv
+from src.rt_alignment import MZRTfit, MZRTfit_timeplex, aligned_library_im
+from src.utils.misc_functions import datestamped
 import polars as pl
 import pyarrow.parquet as pq
 from src.utils.io.read_output import get_parquet_schema
@@ -42,110 +39,21 @@ from src.fdr_analysis import process_data
 from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
 from src.models.run_state import RunState
-from src.utils.errors import JModError, report_error
+from src.utils.errors import JModError, report_error, mark_run_failed
 
 from src.logger import logger, set_log_filepath
-import logging
-
-
-def _aligned_library_im(library, im_spl):
-    """Library ion mobility mapped onto observed 1/K0 by the fitted alignment.
-
-    Returns an all-NaN array when the library has no IM column or the alignment
-    (*im_spl*) did not fit, so every IM gate keyed off this value is inert on
-    such runs.
-    """
-    lib_im = np.asarray(library.ion_mob, dtype=np.float64)
-    aligned = np.full(lib_im.shape, np.nan, dtype=np.float64)
-    ok = np.isfinite(lib_im)
-    if im_spl is not None and ok.any():
-        aligned[ok] = im_spl(lib_im[ok])
-        logger.info(f"Aligned library IM for {int(ok.sum())} of {ok.size} entries "
-                    f"(range {np.nanmin(aligned):.4f}-{np.nanmax(aligned):.4f})")
-    elif library.has_ion_mobility:
-        # The library has IM but there is no calibration to map it with; the
-        # admission gate would be comparing un-aligned values against observed
-        # ones, so it stays off rather than silently mis-gating.
-        logger.info("Library has IM but no alignment was fitted; "
-                    "IM candidate admission disabled")
-    return aligned
-
-
-def _resolve_bruker_setting(cli_value):
-    """Resolve the Bruker SDK path, persisting a CLI value once it validates.
-
-    A CLI arg wins and is stored; otherwise the stored setting is used. Both are
-    validated. Returns the resolved library file, or None when nothing was set.
-    """
-    settings = load_settings()
-
-    from_cli = cli_value is not None
-    raw_sdk_path = cli_value if from_cli else settings.get("bruker_sdk_path")
-
-    resolved = file_reader.resolve_bruker_sdk_path(raw_sdk_path)
-
-    if from_cli:
-        # Resolves first, so a bad path cannot poison settings.json. Storing None
-        # for an empty --bruker_sdk_path gives it the meaning "forget my SDK".
-        settings["bruker_sdk_path"] = resolved
-        save_settings(settings)
-
-    return resolved
-
-
-def _datestamped(path):
-    """*path* unchanged if nothing exists there yet, else with a datestamp appended."""
-    if not os.path.exists(path):
-        return path
-    datestamp = str(datetime.datetime.now())
-    datestamp = datestamp.split()
-    datestamp = datestamp[0].replace("-", "_") + "_" + datestamp[1].split(".")[0].replace(":", "_")
-    root, ext = os.path.splitext(path)
-    if os.path.isdir(path):
-        root, ext = path, ""
-    return root + "_" + datestamp + ext
-
-
-def _mark_run_failed(runState):
-    """Rename a failed run's results folder to run_failed_<name>, if it has one."""
-    results_folder = getattr(runState, "results_folder", None)
-    if results_folder is None or not os.path.exists(results_folder):
-        return
-    failed_folder = os.path.join(os.path.dirname(results_folder),
-                                 "run_failed_" + os.path.basename(results_folder))
-    try:
-        if os.path.exists(failed_folder):
-            shutil.rmtree(failed_folder)
-        shutil.move(results_folder, failed_folder)
-        logger.info(f"Results folder renamed to {failed_folder}")
-    except Exception as rename_error:
-        logger.warning(f"Could not rename results folder: {rename_error}")
 
 
 def main(GUI_config_json=None):
-    """Run JMod on every data file in the configuration.
-
-    ``mzml`` is either one path or a list of paths; one path is a one-run
-    experiment.  The library is built once and shared, then each file is
-    searched, scored and quantified on its own, into its own results folder.
-
-    Errors stop here.  One that ends a run is logged and the next run goes
-    ahead (see run_experiment); one anywhere else ends the experiment.  Returns
-    "success", or "failed" when the experiment stopped or any run failed.
-    """
+    """Run JMod on every mass spec file in the configuration."""
     try:
-        failed_runs = run_experiment(GUI_config_json)
+        run_experiment(GUI_config_json)
     except Exception as e:
         report_error(e, "JMod stopped")
-        return "failed"
-    return "failed" if failed_runs else "success"
 
 
 def run_experiment(GUI_config_json=None):
-    """Set up the experiment, build the library once, and run every data file.
-
-    Returns the data files whose runs failed.
-    """
+    """Set up the experiment, build the library once, and run every mass spec file."""
 
     # Check if a single argument is provided and it's a JSON file
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
@@ -195,7 +103,7 @@ def run_experiment(GUI_config_json=None):
         experiment_dir = os.path.dirname(run_files[0].replace("\\","/")) or "."
     os.makedirs(experiment_dir, exist_ok=True)
 
-    logfile_path = _datestamped(os.path.join(experiment_dir, "JMod_log.log"))
+    logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
     set_log_filepath(logfile_path)
 
     logger.debug(config.args)
@@ -233,7 +141,7 @@ def run_experiment(GUI_config_json=None):
             process_run(runState, spectrumLibrary, mass_tag, SILAC)
         except Exception as e:
             report_error(e, f"Run {run_idx} of {len(run_files)} failed ({run_file})")
-            _mark_run_failed(runState)
+            mark_run_failed(getattr(runState, "results_folder", None))
             failed_runs.append(run_file)
         else:
             logger.info(f"Run {run_idx} of {len(run_files)} finished")
@@ -248,7 +156,6 @@ def run_experiment(GUI_config_json=None):
 
     del spectrumLibrary
     gc.collect()
-    return failed_runs
 
 
 def process_run(runState, spectrumLibrary, mass_tag, SILAC):
@@ -289,7 +196,7 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC):
     else:
         results_folder_path = os.path.join(os.path.dirname(mzml_file), results_folder_name)
 
-    results_folder_path = _datestamped(results_folder_path)
+    results_folder_path = datestamped(results_folder_path)
 
 
     if not os.path.exists(results_folder_path):
@@ -354,7 +261,7 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC):
     # peaks.parquet yet, where it supplies the calibration for centroiding.
     bruker_sdk_path = None
     if run_file.rstrip("/").lower().endswith(".d"):
-        bruker_sdk_path = _resolve_bruker_setting(config.args.bruker_sdk_path)
+        bruker_sdk_path = file_reader.resolve_bruker_setting(config.args.bruker_sdk_path)
 
     DIAspectra=file_reader.loadSpectra(mzml_file, bruker_sdk_path=bruker_sdk_path)
 
@@ -378,8 +285,8 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC):
     del dino_features
 
     # On timeplex this is a per-channel copy of the library; otherwise it is the
-    # shared library itself.  Either way the shared library stays untouched for
-    # the next run.
+    # shared library itself - unchanged (calibration is in rt_mz, there is also in_window mask).
+    # The shared library stays untouched for the next run.
     searchLibrary, rt_mz, in_window = calibrate_library(
         spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl,
         DIAspectra.ms2scans, runState)
@@ -637,7 +544,7 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         rt_mz = np.concatenate(rt_mz)
         # Column 2 as in the standard path.  This path replicates the library once
         # per plex, so the aligned IM has to be tiled to match row-for-row.
-        _plex_im = _aligned_library_im(spectrumLibrary, im_spl)
+        _plex_im = aligned_library_im(spectrumLibrary, im_spl)
         rt_mz = np.column_stack([rt_mz, np.tile(_plex_im, len(rt_spls))])
 
         from src.models.spec_lib.library_store import SpectrumLibraryStore
@@ -665,23 +572,23 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         # fit, which leaves every downstream IM gate inert.  Decoys keep their
         # parent's IM unchanged -- unlike m/z there is no decoy offset, since
         # shifting it would reject decoys systematically and break FDR.
-        rt_mz = np.column_stack([rt_mz, _aligned_library_im(spectrumLibrary, im_spl)])
+        rt_mz = np.column_stack([rt_mz, aligned_library_im(spectrumLibrary, im_spl)])
         # Apply decoy m/z offset to decoy entries
         rt_mz[n_targets:, 1] -= config.decoy_mz_offset
-        search_library = spectrumLibrary
 
     del iRT
 
-    # TODO: --ms2_align is broken and needs fixing.  MZRTfit stopped returning
-    # the MS2 m/z function in 1d252a01 (its return is commented out), so
-    # funcs[2] raises IndexError.  Restoring it is not enough: get_spectrum
-    # returns a fresh np.stack, so the assignment below writes into a temporary
-    # copy and changes nothing, and on iso runs the expanded spectra come from
-    # frags, which it never touches.
+    # # TODO: --ms2_align is broken and needs fixing.  MZRTfit stopped returning
+    # # the MS2 m/z function in 1d252a01 (its return is commented out), so
+    # # funcs[2] raises IndexError.  Restoring it is not enough: get_spectrum
+    # # returns a fresh np.stack, so the assignment below writes into a temporary
+    # # copy and changes nothing, and on iso runs the expanded spectra come from
+    # # frags, which it never touches.
     if config.args.ms2_align:
-        ms2_func = funcs[2]
-        for key in list(search_library):
-            search_library[key]["spectrum"][:,0] = ms2_func(search_library[key]["spectrum"][:,0])
+        logger.warning("MS2 Align in not currently supported. --ms2_align ignored")
+        # ms2_func = funcs[2]
+        # for key in list(search_library):
+        #     search_library[key]["spectrum"][:,0] = ms2_func(search_library[key]["spectrum"][:,0])
 
     # Precursors no isolation window of this run can select are never
     # candidates.  Tested on the calibrated m/z, so each tag channel and decoy

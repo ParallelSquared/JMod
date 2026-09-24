@@ -1005,6 +1005,29 @@ def fit_im_alignment(lib_im, obs_im):
                              grid_size=1000, post_smooth_frac=0.01)
 
 
+def aligned_library_im(library, im_spl):
+    """Library ion mobility mapped onto observed 1/K0 by the fitted alignment.
+
+    Returns an all-NaN array when the library has no IM column or the alignment
+    (*im_spl*) did not fit, so every IM gate keyed off this value is inert on
+    such runs.
+    """
+    lib_im = np.asarray(library.ion_mob, dtype=np.float64)
+    aligned = np.full(lib_im.shape, np.nan, dtype=np.float64)
+    ok = np.isfinite(lib_im)
+    if im_spl is not None and ok.any():
+        aligned[ok] = im_spl(lib_im[ok])
+        logger.info(f"Aligned library IM for {int(ok.sum())} of {ok.size} entries "
+                    f"(range {np.nanmin(aligned):.4f}-{np.nanmax(aligned):.4f})")
+    elif library.has_ion_mobility:
+        # The library has IM but there is no calibration to map it with; the
+        # admission gate would be comparing un-aligned values against observed
+        # ones, so it stays off rather than silently mis-gating.
+        logger.info("Library has IM but no alignment was fitted; "
+                    "IM candidate admission disabled")
+    return aligned
+
+
 def plot_im_error_mixture(im_error, results_folder=None, grid_delta=0.00127,
                           filename="im_precision.png",
                           xlabel="fragment 1/K0 - PSM fragment median",

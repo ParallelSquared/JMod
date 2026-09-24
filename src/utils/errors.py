@@ -12,6 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import os
+import shutil
+
 from src.logger import logger
 
 
@@ -37,3 +40,18 @@ def report_error(e, context):
         logger.error(f"{context}: {e}")
     else:
         logger.error(f"{context}: unexpected error", exc_info=e)
+
+
+def mark_run_failed(results_folder):
+    """Rename a failed run's results folder to run_failed_<name>; no-op if it has none."""
+    if results_folder is None or not os.path.exists(results_folder):
+        return
+    failed_folder = os.path.join(os.path.dirname(results_folder),
+                                 "run_failed_" + os.path.basename(results_folder))
+    try:
+        if os.path.exists(failed_folder):
+            shutil.rmtree(failed_folder)
+        shutil.move(results_folder, failed_folder)
+        logger.info(f"Results folder renamed to {failed_folder}")
+    except Exception as rename_error:
+        logger.warning(f"Could not rename results folder: {rename_error}")

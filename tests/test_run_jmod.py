@@ -29,9 +29,12 @@ def _errors(records):
 
 
 class TestErrorHandling:
-    def test_all_runs_succeeding_returns_success(self, experiment, monkeypatch):
-        monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: None)
-        assert experiment.main() == "success"
+    def test_all_runs_succeeding_logs_no_errors(self, experiment, monkeypatch, app_log):
+        ran = []
+        monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: ran.append(runState.file_name))
+        experiment.main()
+        assert ran == ["a.mzML", "b.mzML"]
+        assert _errors(app_log) == []
 
     def test_failed_run_does_not_stop_the_next_one(self, experiment, monkeypatch):
         ran = []
@@ -42,7 +45,7 @@ class TestErrorHandling:
                 raise JModError("bad file")
 
         monkeypatch.setattr(experiment, "process_run", process_run)
-        assert experiment.main() == "failed"
+        experiment.main()
         assert ran == ["a.mzML", "b.mzML"]
 
     def test_failed_run_folder_is_renamed(self, experiment, monkeypatch, tmp_path):
@@ -93,6 +96,6 @@ class TestErrorHandling:
         ran = []
         monkeypatch.setattr(experiment, "build_library", build_library)
         monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: ran.append(runState))
-        assert experiment.main() == "failed"
+        experiment.main()
         assert ran == []
         assert any("JMod stopped: bad library" in r.getMessage() for r in _errors(app_log))
