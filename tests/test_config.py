@@ -32,3 +32,25 @@ class TestLoadConfigFromJson:
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(JModError, match="Could not open config JSON"):
             config.load_config_from_json(str(tmp_path / "missing.json"))
+
+
+class TestCommandLineOverrides:
+    def test_only_typed_options_are_collected(self):
+        given = vars(config._given_parser.parse_args(["--no_ms1_req", "-i", "a.mzML"]))
+        assert given == {"no_ms1_req": False, "mzml": ["a.mzML"]}  # no defaults for the rest
+
+    def test_typed_option_beats_the_json(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config.args, "ppm", config.args.ppm)
+        monkeypatch.setattr(config, "cli_args", {"ppm": 5.0})
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"ppm": 20.0}))
+        config.load_config_from_json(str(path))
+        assert config.args.ppm == 5.0
+
+    def test_i_replaces_the_json_files(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config.args, "mzml", None)
+        monkeypatch.setattr(config, "cli_args", {"mzml": ["c.mzML"]})
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"mzml": ["a.mzML", "b.mzML"]}))
+        config.load_config_from_json(str(path))
+        assert config.args.mzml == ["c.mzML"]

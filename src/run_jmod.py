@@ -55,11 +55,6 @@ def main(GUI_config_json=None):
 def run_experiment(GUI_config_json=None):
     """Set up the experiment, build the library once, and run every mass spec file."""
 
-    # Check if a single argument is provided and it's a JSON file
-    if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
-        # Treat this as the config_json argument
-        config.args.config_json = sys.argv[1]
-
     if GUI_config_json:
         config.ran_from_GUI = True
         config.args.config_json = GUI_config_json
@@ -70,18 +65,6 @@ def run_experiment(GUI_config_json=None):
 
     if config.args.tag != "None":
         config.args.plexDIA = True
-
-    # Check if running in test mode
-    if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
-        # Run tests instead of normal operation
-        import subprocess
-
-        # Remove the test argument and pass remaining args to test runner
-        test_args = sys.argv[2:] if len(sys.argv) > 2 else []
-        cmd = [sys.executable, "run_tests.py"] + test_args
-
-        result = subprocess.run(cmd)
-        sys.exit(result.returncode)
 
     # TODO: validate all config.args values against default_dict['values'] lists here
     set_seeds(config.RANDOM_SEED)
@@ -108,14 +91,13 @@ def run_experiment(GUI_config_json=None):
 
     logger.debug(config.args)
     ##add statements to log once the log file has been created
-    if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
-        logger.info(f"Using configuration file: {config.args.config_json}")
     if GUI_config_json:
         logger.info(f"Loaded configuration from GUI")
     elif config.args.config_json:
         logger.info(f"Loaded configuration from {config.args.config_json}")
-    if len(sys.argv) > 1 and sys.argv[1] in ['--test', '-t', 'test']:
-        logger.info("Running JMod in test mode...")
+        overrides = {k: v for k, v in config.cli_args.items() if k != "config_json"}
+        if overrides:
+            logger.info(f"Command-line options overriding the config JSON: {overrides}")
 
     # Log the configuration that will be used
     logger.info("Using configuration:")
@@ -575,6 +557,7 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         rt_mz = np.column_stack([rt_mz, aligned_library_im(spectrumLibrary, im_spl)])
         # Apply decoy m/z offset to decoy entries
         rt_mz[n_targets:, 1] -= config.decoy_mz_offset
+        search_library = spectrumLibrary
 
     del iRT
 

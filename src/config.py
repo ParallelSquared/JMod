@@ -20,25 +20,42 @@ import sys
 from src.logger import logger
 from src.utils.errors import JModError
 
+def _add_arguments(parser, suppress_defaults=False):
+    """Add every option in default_dict to *parser*.
+
+    With *suppress_defaults*, options not given on the command line are left out
+    of the result entirely, so parsing yields only what was actually typed.
+    """
+    for key, value in default_dict.items():
+        default = argparse.SUPPRESS if suppress_defaults else value['default']
+        if value['takes_value'] is False:
+            parser.add_argument(*value['flags'], action='store_true' if value['default'] is False else 'store_false',
+                                default=default)
+        elif value.get('multiple', False):
+            # Repeatable flag: each use appends, giving a list (None if never given)
+            parser.add_argument(*value['flags'], action='append', default=default, type=str)
+        else:
+            parser.add_argument(*value['flags'], default=default, type=int if value['type'] == 'int' else float if value['type'] == 'float' else str)
+
+
 parser = argparse.ArgumentParser(
                     prog='Jmod',
                     description='What the program does',
                     epilog='Text at the bottom of help')
+_add_arguments(parser)
 
-for key, value in default_dict.items():
-    if value['takes_value'] is False:
-        parser.add_argument(*value['flags'], action='store_true' if value['default'] is False else 'store_false')
-    elif value.get('multiple', False):
-        # Repeatable flag: each use appends, giving a list (None if never given)
-        parser.add_argument(*value['flags'], action='append', default=value['default'], type=str)
-    else:
-        parser.add_argument(*value['flags'], default=value['default'], type=int if value['type'] == 'int' else float if value['type'] == 'float' else str)
+# The same options without defaults: parsing the command line with it gives only
+# the options actually typed, which override the config JSON (load_config_from_json)
+_given_parser = argparse.ArgumentParser(add_help=False)
+_add_arguments(_given_parser, suppress_defaults=True)
 
 if any("ipykernel_launcher" in arg or "jupyter" in arg or "pytest" in arg for arg in sys.argv):
     # running inside Jupyter → pass empty list
     args = parser.parse_args([])
+    cli_args = {}
 else:
     args = parser.parse_args()
+    cli_args = vars(_given_parser.parse_args())
 #if __name__ == "__main__":
 #    args = parser.parse_args()
 #else:
@@ -281,8 +298,9 @@ def limit_blas_threads():
 def load_config_from_json(json_path):
     """Load configuration parameters from a JSON file.
 
-    Raises JModError when the file cannot be opened or parsed, so a bad config
-    stops the run instead of silently leaving the defaults in place.
+    Options typed on the command line win over the JSON, which wins over the
+    defaults.  Raises JModError when the file cannot be opened or parsed, so a
+    bad config stops the run instead of silently leaving the defaults in place.
     """
     try:
         with open(json_path, 'r') as f:
@@ -309,4 +327,8 @@ def load_config_from_json(json_path):
         for key, value in config_data['additional_config'].items():
             if key in globals() and not key.startswith('__'):
                 globals()[key] = value
+
+    # Options typed on the command line win over the JSON (-i replaces its files)
+    for key, value in cli_args.items():
+        setattr(args, key, value)
         
