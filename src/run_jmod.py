@@ -55,6 +55,7 @@ def run_experiment(GUI_config_json=None):
     """Set up the experiment, build the library once, and run every mass spec file."""
     config.setup(GUI_config_json)
     experiment_dir = _start_experiment_log()
+    _write_experiment_config(experiment_dir)
     run_files = config.args.mzml
 
     bruker_sdk_path = _prepare_readers(run_files)
@@ -133,7 +134,6 @@ def _start_experiment_log():
     logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
     set_log_filepath(logfile_path)
 
-    logger.debug(config.args)
     if config.ran_from_GUI:
         logger.info(f"Loaded configuration from GUI")
     elif config.args.config_json:
@@ -149,6 +149,16 @@ def _start_experiment_log():
     logger.info(f"{len(config.args.mzml)} file(s) to run")
     logger.info(f"Log writing to {os.path.abspath(logfile_path)}")
     return experiment_dir
+
+
+def _write_experiment_config(experiment_dir):
+    """Record the experiment's configuration, with every data file, next to its log.
+    Datestamped if the name is taken, so an earlier experiment's record is kept.
+    """
+    json_path = datestamped(os.path.join(experiment_dir, "JMod_config.json"))
+    with open(json_path, "w") as f:
+        json.dump(vars(config.args), f, indent=4)
+    logger.info(f"Configuration written to {os.path.abspath(json_path)}")
 
 
 def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path):

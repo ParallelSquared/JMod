@@ -1,3 +1,4 @@
+import json
 import logging
 
 import pytest
@@ -89,6 +90,21 @@ class TestErrorHandling:
         experiment.main()
         assert ran == []
         assert any("JMod stopped: bad library" in r.getMessage() for r in _errors(app_log))
+
+
+class TestExperimentConfig:
+    def test_config_lists_every_data_file(self, experiment, monkeypatch, tmp_path):
+        monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: None)
+        experiment.main()
+        written = json.loads((tmp_path / "JMod_config.json").read_text())
+        assert written["mzml"] == ["a.mzML", "b.mzML"]
+
+    def test_earlier_config_is_kept(self, experiment, monkeypatch, tmp_path):
+        (tmp_path / "JMod_config.json").write_text("earlier experiment")
+        monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: None)
+        experiment.main()
+        assert (tmp_path / "JMod_config.json").read_text() == "earlier experiment"
+        assert len(list(tmp_path.glob("JMod_config_*.json"))) == 1  # datestamped
 
 
 class TestCreateResultsFolder:

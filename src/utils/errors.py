@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 import os
-import shutil
 
 from src.logger import logger
 
@@ -54,7 +53,10 @@ def mark_run_failed(results_folder):
     failed_folder = datestamped(os.path.join(os.path.dirname(results_folder),
                                              "run_failed_" + os.path.basename(results_folder)))
     try:
-        shutil.move(results_folder, failed_folder)
+        # A rename in place, never shutil.move: when the rename is refused (a
+        # file in the folder is open), that falls back to copying the folder
+        # and deleting the original, leaving a copy and a half-deleted original
+        os.rename(results_folder, failed_folder)
         logger.info(f"Results folder renamed to {failed_folder}")
     except Exception as rename_error:
         logger.warning(f"Could not rename results folder: {rename_error}")

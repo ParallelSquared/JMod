@@ -1,4 +1,7 @@
 import logging
+import sys
+
+import pytest
 
 from src.utils.errors import JModError, report_error, mark_run_failed
 
@@ -39,3 +42,13 @@ class TestMarkRunFailed:
         (new_folder,) = [p for p in tmp_path.iterdir() if p.name != "run_failed_a_results"]
         assert new_folder.name.startswith("run_failed_a_results_")  # datestamped
         assert not (tmp_path / "a_results").exists()
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses the rename")
+    def test_refused_rename_leaves_the_folder_whole(self, tmp_path):
+        (tmp_path / "a_results").mkdir()
+        (tmp_path / "a_results" / "result.txt").write_text("result")
+        # Windows will not rename a folder with an open file in it
+        with open(tmp_path / "a_results" / "open.txt", "w"):
+            mark_run_failed(str(tmp_path / "a_results"))
+        assert [p.name for p in tmp_path.iterdir()] == ["a_results"]  # no copy made
+        assert (tmp_path / "a_results" / "result.txt").read_text() == "result"
