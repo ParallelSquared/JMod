@@ -57,11 +57,11 @@ def run_experiment(GUI_config_json=None):
     experiment_dir = _start_experiment_log()
     run_files = config.args.mzml
 
-    ######################################################
-    #### Build the library once.  It comes first, before any run's spectra are
-    #### resident, so its build transients never overlap them.
+    bruker_sdk_path = _prepare_readers(run_files)
     set_seeds(config.RANDOM_SEED)
     mass_tag, SILAC = resolve_tags()
+
+    #### Build the library once.
     spectrumLibrary = build_library(config.args.speclib, experiment_dir, mass_tag, SILAC)
 
     failed_runs = []
@@ -72,7 +72,7 @@ def run_experiment(GUI_config_json=None):
         runState = RunState()
         runState.file_name = run_file
         try:
-            process_run(runState, spectrumLibrary, mass_tag, SILAC)
+            process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path)
         except Exception as e:
             report_error(e, f"Run {run_idx} of {len(run_files)} failed ({run_file})")
             mark_run_failed(getattr(runState, "results_folder", None))
@@ -90,6 +90,31 @@ def run_experiment(GUI_config_json=None):
 
     del spectrumLibrary
     gc.collect()
+
+
+def _prepare_readers(run_files):
+    """Load the vendor libraries the data files need, once for the experiment.
+
+    Thermo's RawFileReader when any file is a .raw.  For any .d, the Bruker SDK
+    path: a CLI arg wins and is persisted, otherwise the stored setting is used.
+    It is only needed for a .d with no peaks.parquet yet, where it supplies the
+    calibration for centroiding.  Returns the Bruker SDK path, or None.
+    """
+    if any(f.lower().endswith(".raw") for f in run_files):
+        settings = load_settings()
+
+        if config.args.rawfilereader_path is not None:
+            reader_path = config.args.rawfilereader_path
+            settings["rawfilereader_path"] = reader_path
+            save_settings(settings)
+        else:
+            reader_path = settings["rawfilereader_path"]
+
+        file_reader.load_rawfilereader(reader_path)
+
+    if any(f.rstrip("/").lower().endswith(".d") for f in run_files):
+        return file_reader.resolve_bruker_setting(config.args.bruker_sdk_path)
+    return None
 
 
 def _start_experiment_log():
@@ -126,7 +151,7 @@ def _start_experiment_log():
     return experiment_dir
 
 
-def process_run(runState, spectrumLibrary, mass_tag, SILAC):
+def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path):
     """Search, score and quantify one data file against the shared library.
 
     Everything made here belongs to this run and is released when it returns:
@@ -138,23 +163,64 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC):
     # Every run starts from the same seed, so its results do not depend on its
     # position in the list
     set_seeds(config.RANDOM_SEED)
-    run_file = runState.file_name
-    mzml_file = run_file.replace("\\","/")
+    mzml_file = runState.file_name.replace("\\","/")
     if not os.path.exists(mzml_file):
-        raise JModError(f"Data file not found: {run_file}")
+        raise JModError(f"Data file not found: {runState.file_name}")
+
+    runState.results_folder = _create_results_folder(mzml_file)
+    _write_run_config(runState)
+    logger.info(f"Results will be saved to {os.path.abspath(runState.results_folder)}")
+    DIAspectra = _load_spectra(mzml_file, bruker_sdk_path)
+
+    funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma = first_search(
+        DIAspectra, spectrumLibrary, mass_tag, SILAC, runState.results_folder, runState)
+
+    # On timeplex this is a per-channel copy of the library; otherwise it is the
+    # shared library itself - unchanged (calibration is in rt_mz, there is also in_window mask).
+    # The shared library stays untouched for the next run.
+    searchLibrary, rt_mz, in_window = calibrate_library(
+        spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl,
+        DIAspectra.ms2scans, runState)
+    del funcs, target_iRT, rt_models_data, im_spl
+
+    decoylib_search_path = main_search(DIAspectra, searchLibrary, rt_mz, in_window,
+                                       runState.results_folder, runState)
+    del rt_mz, in_window
+    gc.collect()
+
+    score_and_report(decoylib_search_path, DIAspectra, searchLibrary,
+                     mass_tag, SILAC, elution_fwhm, vote_sigma, runState)
+    del searchLibrary, DIAspectra
+    gc.collect()
+
+
+def _load_features(mzml_file):
+    """Dinosaur/biosaur2 MS1 features for the timeplex first search.
+
+    Reads <file>.features.tsv next to the data file, running biosaur2 to make it
+    when it is missing.  Returns None when --use_features is off.
+    """
+    if not config.args.use_features:
+        logger.info("Not using features")
+        return None
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
-
-    dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
-    dino_features=None
     feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv" #TODO this breaks if you run from cd
-    if config.args.use_features and os.path.exists(feature_path):
-        dino_features = pd.read_csv(feature_path,delimiter="\t")
-
-    if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
+    if not os.path.exists(feature_path):
+        logger.info("Dinosaur feature file not found, running biosaur2")
         import subprocess
         subprocess.run(["biosaur2", mzml_file], check=True)
-        dino_features = pd.read_csv(feature_path,delimiter="\t")
+    logger.info("Loading Dinosaur features")
+    return pd.read_csv(feature_path,delimiter="\t")
 
+
+def _create_results_folder(mzml_file):
+    """Create the run's results folder and its subfolders; return its path.
+
+    Named after the data file (plus --dummy_value), in the output folder or
+    next to the data file, with a datestamp added if the name is taken.
+    """
+    spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
+    dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
     results_folder_name = spec_file_name + "_results" + "_" + dummy_val
     results_folder_name = results_folder_name.rstrip("_")
 
@@ -194,43 +260,19 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC):
                 raise JModError("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.") from e
         except Exception as e:
             raise JModError(f"Error Creating Results Folder. Please check the path is valid.\nPath: {results_folder_path}\nError:\n{str(e)}") from e
+    return results_folder_path
 
 
-
+def _write_run_config(runState):
     # This run's record of the configuration, naming only its own data file
-    args_dict = dict(vars(config.args), mzml=run_file)
-    json_path = os.path.join(results_folder_path, "outputs/config.json")
+    args_dict = dict(vars(config.args), mzml=runState.file_name)
+    json_path = os.path.join(runState.results_folder, "outputs/config.json")
     with open(json_path, "w") as f:
         json.dump(args_dict, f, indent=4)
 
-    runState.results_folder = results_folder_path
 
-    if config.args.use_features and os.path.exists(feature_path) and config.args.timeplex:
-        logger.info("loading Dinosaur features")
-    if config.args.use_features and not os.path.exists(feature_path) and config.args.timeplex:
-        logger.info("Dinosaur feature file not found, running biosaur2")
-
-    logger.info(f"Results will be saved to {os.path.abspath(results_folder_path)}")
-
-    if run_file.lower().endswith(".raw"):
-        settings = load_settings()
-
-        if config.args.rawfilereader_path is not None:
-            reader_path = config.args.rawfilereader_path
-            settings["rawfilereader_path"] = reader_path
-            save_settings(settings)
-        else:
-            reader_path = settings["rawfilereader_path"]
-
-        file_reader.load_rawfilereader(reader_path)
-
-    # Bruker SDK, resolved the same way: a CLI arg wins and is persisted,
-    # otherwise fall back to the stored setting. Only used for a .d with no
-    # peaks.parquet yet, where it supplies the calibration for centroiding.
-    bruker_sdk_path = None
-    if run_file.rstrip("/").lower().endswith(".d"):
-        bruker_sdk_path = file_reader.resolve_bruker_setting(config.args.bruker_sdk_path)
-
+def _load_spectra(mzml_file, bruker_sdk_path):
+    """Load the run's spectra; with --test_mode, keep only the test RT/m/z range."""
     DIAspectra=file_reader.loadSpectra(mzml_file, bruker_sdk_path=bruker_sdk_path)
 
     if config.args.test_mode:
@@ -246,29 +288,7 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC):
         logger.info(f"Selected {len(filtered_ms2_scans)} out of {len(DIAspectra.ms2scans)} MS2 scans for test mode")
         DIAspectra.ms2scans = filtered_ms2_scans
         del filtered_ms2_scans
-
-    funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma = first_search(
-        DIAspectra, spectrumLibrary, mass_tag, SILAC,
-        dino_features, feature_path, results_folder_path, runState)
-    del dino_features
-
-    # On timeplex this is a per-channel copy of the library; otherwise it is the
-    # shared library itself - unchanged (calibration is in rt_mz, there is also in_window mask).
-    # The shared library stays untouched for the next run.
-    searchLibrary, rt_mz, in_window = calibrate_library(
-        spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl,
-        DIAspectra.ms2scans, runState)
-    del funcs, target_iRT, rt_models_data, im_spl
-
-    decoylib_search_path = main_search(DIAspectra, searchLibrary, rt_mz, in_window,
-                                       results_folder_path, runState)
-    del rt_mz, in_window
-    gc.collect()
-
-    score_and_report(decoylib_search_path, DIAspectra, searchLibrary,
-                     mass_tag, SILAC, elution_fwhm, vote_sigma, runState)
-    del searchLibrary, DIAspectra
-    gc.collect()
+    return DIAspectra
 
 
 def resolve_tags():
@@ -399,8 +419,7 @@ def build_library(lib_file, work_dir, mass_tag, SILAC):
     return spectrumLibrary
 
 
-def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC,
-                 dino_features, feature_path, results_folder_path, runState):
+def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC, results_folder_path, runState):
     """Fit this run's calibration.
 
     Searches the monoisotopic target spectra to fit the RT, precursor m/z and
@@ -422,23 +441,20 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC,
     target_view = spectrumLibrary.monoisotopic_targets()
 
     if config.args.timeplex:
-        if config.args.use_features and os.path.exists(feature_path):
-            logger.info("Loading Dinosaur features")
-            dino_features = pd.read_csv(feature_path, delimiter="\t")
-            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align, runState=runState)
-        else:
-            logger.info("Not using features")
-            funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, None, (config.args.ppm * 1e-6), results_folder=results_folder_path,
-                                            ms2=config.args.ms2_align, runState=runState)
+        # Only the timeplex first search uses MS1 features: it starts from them
+        dino_features = _load_features(runState.file_name.replace("\\","/"))
+        funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6), results_folder=results_folder_path,
+                                        ms2=config.args.ms2_align, runState=runState)
+        del dino_features
         # Timeplex path doesn't compute elution SD yet — use the historical default.
         vote_sigma = 1.0
         rt_models_data = None
         im_spl = None
 
     else:
+        # MZRTfit takes MS1 features but no longer uses them
         funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma, im_spl = MZRTfit(
-            DIAspectra, target_view, dino_features, (config.args.ppm * 1e-6),
+            DIAspectra, target_view, None, (config.args.ppm * 1e-6),
             results_folder=results_folder_path,
             ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
             return_rt_models=config.args.predict_decoys, runState=runState,

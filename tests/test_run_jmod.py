@@ -76,7 +76,7 @@ class TestErrorHandling:
         runState = run_jmod.RunState()
         runState.file_name = str(tmp_path / "missing.mzML")
         with pytest.raises(JModError, match="Data file not found"):
-            run_jmod.process_run(runState, None, None, None)
+            run_jmod.process_run(runState, None, None, None, None)
         assert list(tmp_path.iterdir()) == []  # fails before any results folder is made
 
     def test_error_outside_the_runs_stops_the_experiment(self, experiment, monkeypatch, app_log):
