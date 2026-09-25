@@ -1,7 +1,7 @@
 import polars as pl
 import pytest
 
-from src.multi_run import collect_results, combine_runs
+from src.multi_run import collect_results, combine_runs, precursors_per_run
 
 
 def _write_run(tmp_path, run_name, rows):
@@ -22,7 +22,7 @@ def _write_run(tmp_path, run_name, rows):
         "PredVal": [score for _, _, score, _ in rows], "protein": ["P1"] * n,
         "BestChannel_Qvalue": [q for *_, q in rows], "plex_Area": [1.0] * n,
         "seq": seqs, "silac_channel": [float("nan")] * n, "untag_seq": seqs,
-        "rt": [1.0] * n, "mz": [500.0] * n, "coeff": [1.0] * n,
+        "rt": [1.0] * n, "mz": [500.0] * n, "prec_im": [float("nan")] * n, "coeff": [1.0] * n,
     }).write_parquet(folder / "outputs" / "all_IDs_filtered.parquet")
     return str(folder)
 
@@ -57,6 +57,16 @@ class TestGlobalQvalue:
         assert _global_q(precursors) == {"AAA_2": 2.0, "DDD_2": 2.0}
 
 
+class TestPrecursorsPerRun:
+    def test_missing_area_is_left_out_of_the_log(self):
+        df = pl.DataFrame({"run_idx": [1, 1, 2], "untag_prec": ["AAA_2", "BBB_2", "AAA_2"],
+                           "plex_Area": [8.0, float("nan"), 4.0],
+                           "untag_prec_Global_Qvalue": [0.001, 0.5, 0.001]})
+        rows = precursors_per_run(df, fdr_threshold=0.01).sort("run_idx", "untag_prec")
+        assert rows.select("run_idx", "untag_prec", "log2_area", "retained").rows() == [
+            (1, "AAA_2", 3.0, True), (1, "BBB_2", None, False), (2, "AAA_2", 2.0, True)]
+
+
 class TestGroupedResults:
     def test_run_level_targets_are_kept_sorted_by_precursor(self, tmp_path):
         runs = {1: _write_run(tmp_path, "a", [("BBB", False, 0.9, 0.001), ("AAA", False, 0.8, 0.001),
@@ -67,11 +77,32 @@ class TestGroupedResults:
         assert grouped.select("untag_prec", "run_idx").rows() == [("AAA_2", 1), ("AAA_2", 2), ("BBB_2", 1)]
         assert "untag_prec_Global_Qvalue" in grouped.columns
 
-    def test_table_and_plots_are_written(self, tmp_path):
-        runs = {1: _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001), ("DDD", True, 0.1, 0.9)]),
-                2: _write_run(tmp_path, "b", [("AAA", False, 0.8, 0.001), ("DDD", True, 0.2, 0.9)])}
+    def test_table_and_every_plot_are_written_to_their_folder(self, tmp_path):
+        rows = [("AAA", False, 0.9, 0.001), ("DDD", True, 0.1, 0.9)]
+        runs = {i: _write_run(tmp_path, name, rows) for i, name in enumerate("abc", start=1)}
         experiment_dir = tmp_path / "experiment"
         experiment_dir.mkdir()
         combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
-        assert sorted(p.name for p in experiment_dir.iterdir()) == [
-            "grouped_best_score_run.png", "grouped_lost_to_global_q.png", "grouped_results.parquet"]
+        assert sorted(p.name for p in (experiment_dir / "experiment_results").iterdir()) == [
+            "01_ids_per_run.png", "02_proteins_per_run.png", "03_data_completeness.png",
+            "04_summed_intensity_per_run.png", "05_intensity_per_run.png", "06_run_correlation.png",
+            "07_lost_to_global_q.png", "08_best_score_run.png", "combined_filtered_IDs.parquet"]
+
+    def test_single_run_gets_only_the_per_run_plots(self, tmp_path):
+        runs = {1: _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001), ("DDD", True, 0.1, 0.9)])}
+        experiment_dir = tmp_path / "experiment"
+        experiment_dir.mkdir()
+        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
+        assert sorted(p.name for p in (experiment_dir / "experiment_results").iterdir()) == [
+            "01_ids_per_run.png", "02_proteins_per_run.png", "04_summed_intensity_per_run.png",
+            "05_intensity_per_run.png", "combined_filtered_IDs.parquet"]
+
+    def test_earlier_results_folder_is_kept(self, tmp_path):
+        runs = {1: _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001)])}
+        experiment_dir = tmp_path / "experiment"
+        (experiment_dir / "experiment_results").mkdir(parents=True)
+        (experiment_dir / "experiment_results" / "combined_filtered_IDs.parquet").write_text("earlier experiment")
+        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
+        assert ((experiment_dir / "experiment_results" / "combined_filtered_IDs.parquet").read_text()
+                == "earlier experiment")
+        assert len(list(experiment_dir.glob("experiment_results_*"))) == 1  # datestamped
