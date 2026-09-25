@@ -39,6 +39,7 @@ from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
 from src.models.run_state import RunState
 from src.utils.errors import JModError, report_error, mark_run_failed
+from src.multi_run import combine_runs
 
 from src.logger import logger, set_log_filepath
 
@@ -66,6 +67,7 @@ def run_experiment(GUI_config_json=None):
     spectrumLibrary = build_library(config.args.speclib, experiment_dir, mass_tag, SILAC)
 
     failed_runs = []
+    completed_run_folders = {}
     for run_idx, run_file in enumerate(run_files, start=1):
         logger.info("")
         logger.info(f"Run {run_idx} of {len(run_files)}", extra={"highlight": True})
@@ -80,6 +82,7 @@ def run_experiment(GUI_config_json=None):
             failed_runs.append(run_file)
         else:
             logger.info(f"Run {run_idx} of {len(run_files)} finished")
+            completed_run_folders[run_idx] = runState.results_folder
         # A failed run's spectra are only released once its traceback is gone
         gc.collect()
 
@@ -89,8 +92,15 @@ def run_experiment(GUI_config_json=None):
     if failed_runs:
         logger.error(f"{len(failed_runs)} run(s) failed, see above: {', '.join(failed_runs)}")
 
+    # The global q-value counts targets and decoys like the per-run one, over
+    # the whole library
+    n_decoys = spectrumLibrary.n_decoys
+    target_decoy_ratio = spectrumLibrary.n_targets / n_decoys if n_decoys else float('inf')
     del spectrumLibrary
     gc.collect()
+
+    if len(completed_run_folders) >= 1:
+        combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, config.fdr_threshold)
 
 
 def _prepare_readers(run_files):
