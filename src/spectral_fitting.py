@@ -2381,6 +2381,9 @@ def fit_to_lib2(dia_spec,
                 rt_tol,
                 ms1_tol,
                 mz_tol,
+                im_tol,
+                im_accuracy,
+                file_name,
                 dino_features=None,rt_filter=False,ms1_mz=None,
                ms1_spectra = None,
                return_frags = False,
@@ -2388,11 +2391,7 @@ def fit_to_lib2(dia_spec,
                output_folder=None,
                frag_index=None,
                ms1_rt=None,
-               im_bin_ms1=None,
-               *,
-               im_tol,
-               im_accuracy,
-               file_name):
+               im_bin_ms1=None):
     # spec_idx,dia_spec,library = inputs
     # im_tol: fragment IM tolerance (the run's fitted precision).
     # im_accuracy: widening of the IM candidate gate (the run's fitted library-IM
@@ -2868,14 +2867,13 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
                rt_tol,
                ms1_tol,
                mz_tol,
+               file_name,
                dino_features=None,
                rt_filter=False,
                ms1_mz=None,
                ms1_spectra = None,
                return_frags = False,
-               frac_matched = 0.5,
-               *,
-               file_name):
+               frac_matched = 0.5):
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num

@@ -271,7 +271,7 @@ def walk_to_local_max(fitted, start_pos, apex_jitter=None):
 #     return fdc
 
 
-def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,timeplex=False,vote_sigma=1.0,*,im_tol):
+def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=False,vote_sigma=1.0):
     # X = fdc.iloc[:,6:-5]
     fit_whole_MS1 = False
    
@@ -765,7 +765,7 @@ class score_model():
         return np.concatenate(self.predictions)[rev_order]
 
 
-def score_precursors(fdc,model_type="rf",fdr_t=0.01, folder=None, *, target_decoy_ratio):
+def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder=None):
     """
     Parameters
     ----------
@@ -986,7 +986,7 @@ def log_df(df):
     for line in df_no_first.to_string(index=False).splitlines():
         logger.info(line)
 
-def compute_protein_FDR(df,results_folder=None, *, target_decoy_ratio):
+def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
     logger.info("")
     logger.info("Computing Protein FDR")
 
@@ -1156,8 +1156,8 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     return result_df
 
 
-def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0,
-                 *, ms1_tol, rt_tol, im_tol, target_decoy_ratio):
+def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
+                 mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0):
     # ms1_tol, rt_tol, im_tol: the run's fitted tolerances (RunState.opt_*);
     # target_decoy_ratio: targets over decoys among the run's searchable entries
 
@@ -1265,8 +1265,8 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
     corr_features.index = fdc.index
     fdc = pd.concat([fdc, corr_features], axis=1)
 
-    fdx = score_precursors(fdc.reset_index(drop=True), config.score_model, config.fdr_threshold, folder=results_folder,
-                          target_decoy_ratio=target_decoy_ratio)
+    fdx = score_precursors(fdc.reset_index(drop=True), target_decoy_ratio, config.score_model, config.fdr_threshold,
+                          folder=results_folder)
 
     fdx['PredVal'] = fdx['PredVal'].fillna(0)
     fdx['Qvalue'] = fdx['Qvalue'].fillna(1)
@@ -1284,8 +1284,8 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
 
     
-    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, timeplex, vote_sigma=vote_sigma,
-                          im_tol=im_tol)
+    fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, im_tol, timeplex,
+                          vote_sigma=vote_sigma)
 
     fdx_quant["last_aa"] = [i[-1] for i in fdx_quant["stripped_seq"]]
     fdx_quant["seq_len"] = [len(i) for i in fdx_quant["stripped_seq"]]

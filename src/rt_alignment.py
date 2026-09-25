@@ -1580,7 +1580,7 @@ def cdf_plots(emp_data,emp_p,percentile,boundary,pred_data=None,pred_p=None,resu
         
         plt.close("all")
 
-def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, mass_tag=None, SILAC=None, return_rt_models=False, *, runState):
+def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,results_folder=None,ms2=False, mass_tag=None, SILAC=None, return_rt_models=False):
     """
     Perform a preliminary search of the specrta to align the library mz and RT values
 
@@ -2589,7 +2589,7 @@ def timeplex_algnment_plots(n_timeplex, t_vals, results_folder = None):
         plt.savefig(results_folder+"/MZdiff.png",dpi=600,bbox_inches="tight")
 """
 
-def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_folder=None,ms2=False, *, runState):
+def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,results_folder=None,ms2=False):
     """
     Perform a preliminary search of the timeplex spectra to align the library mz and RT values
 
