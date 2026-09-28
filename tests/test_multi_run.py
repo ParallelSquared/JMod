@@ -1,7 +1,10 @@
 import polars as pl
 import pytest
 
-from src.multi_run import collect_results, combine_runs, precursors_per_run
+from src.mass_tags import available_tags
+from src.models.spec_lib.library_store import SpectrumLibraryStore
+from src.multi_run import collect_results, combine_runs, mbr_library_rts, mbr_targets, precursors_per_run
+from tests.models.spec_lib.test_decoy_differential import _entry
 
 
 def _write_run(tmp_path, run_name, rows):
@@ -65,6 +68,47 @@ class TestPrecursorsPerRun:
         rows = precursors_per_run(df, fdr_threshold=0.01).sort("run_idx", "untag_prec")
         assert rows.select("run_idx", "untag_prec", "log2_area", "retained").rows() == [
             (1, "AAA_2", 3.0, True), (1, "BBB_2", None, False), (2, "AAA_2", 2.0, True)]
+
+
+def _first_pass_ids(rows):
+    """A combined first-pass table of (run_idx, untag_prec, rt, PredVal) rows, all
+    target IDs passing the run-level FDR."""
+    run_idx, untag_prec, rt, pred_val = zip(*rows)
+    n = len(rows)
+    return pl.DataFrame({"run_idx": run_idx, "untag_prec": untag_prec, "rt": rt, "PredVal": pred_val,
+                         "BestChannel_Qvalue": [0.001] * n, "untag_prec_Global_Qvalue": [0.001] * n,
+                         "is_decoy": [False] * n})
+
+
+class TestMbrLibraryRts:
+    def test_runs_are_aligned_to_the_run_with_most_ids(self, tmp_path):
+        # Run 2 has the most IDs; run 1 elutes everything 2 minutes later, and
+        # also has one precursor run 2 lacks
+        shared = [(f"P{i}_2", 10.0 + i) for i in range(40)]
+        rows = ([(2, prec, rt, 0.9) for prec, rt in shared + [("REF_2", 60.0), ("REF2_2", 61.0)]]
+                + [(1, prec, rt + 2.0, 0.9) for prec, rt in shared] + [(1, "ONLY_2", 72.0, 0.9)])
+        rts = dict(mbr_library_rts(_first_pass_ids(rows), 0.01, str(tmp_path)).iter_rows())
+        assert rts["P5_2"] == pytest.approx(15.0)      # the reference run's own RT
+        assert rts["ONLY_2"] == pytest.approx(70.0)    # aligned onto the reference's time scale
+        assert (tmp_path / "library_size_by_run.png").is_file()
+        assert (tmp_path / "lowess" / "run_1.png").is_file()
+
+    def test_best_scoring_channel_gives_the_rt(self, tmp_path):
+        rows = [(1, "AAA_2", 10.0, 0.9), (1, "AAA_2", 12.0, 0.5)]  # e.g. two channels of one run
+        assert mbr_library_rts(_first_pass_ids(rows), 0.01, str(tmp_path)).rows() == [("AAA_2", 10.0)]
+
+
+class TestMbrTargets:
+    def test_tagged_and_detagged_entries_match_on_untag_prec(self):
+        frags = {'b2_1': [200.0, 1.0], 'y2_1': [300.0, 0.5]}
+        targets = SpectrumLibraryStore.from_dict({
+            ("PEPTIDEK", 2.0): _entry("PEPTIDEK", "PEPTIDEK", 464.7, 2.0, frags),
+            ("(mTRAQ-0)ELVISK", 2.0): _entry("(mTRAQ-0)ELVISK", "ELVISK", 400.2, 2.0, frags),
+            ("NOTFOUNDK", 2.0): _entry("NOTFOUNDK", "NOTFOUNDK", 500.3, 2.0, frags),
+        })
+        library_rts = pl.DataFrame({"untag_prec": ["ELVISK_2", "PEPTIDEK_2"], "rt": [40.0, 30.0]})
+        mbr = mbr_targets(targets, library_rts, available_tags["mTRAQ"], None)
+        assert list(zip(mbr.mod_seq, mbr.iRT)) == [("PEPTIDEK", 30.0), ("(mTRAQ-0)ELVISK", 40.0)]
 
 
 class TestGroupedResults:

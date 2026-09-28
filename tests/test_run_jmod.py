@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +24,7 @@ def experiment(monkeypatch, tmp_path, combined):
     monkeypatch.setattr(run_jmod, "set_log_filepath", lambda path: None)
     monkeypatch.setattr(run_jmod, "resolve_tags", lambda: (None, None))
     monkeypatch.setattr(run_jmod, "build_library",
-                        lambda *args: SimpleNamespace(n_targets=10, n_decoys=10))
+                        lambda *args: SimpleNamespace(target_decoy_ratio=1.0))
     return run_jmod
 
 
@@ -32,7 +33,12 @@ def combined(monkeypatch):
     """The calls main() makes to combine_runs, recorded instead of run: the
     stubbed runs write no outputs to combine."""
     calls = []
-    monkeypatch.setattr(run_jmod, "combine_runs", lambda *args: calls.append(args))
+
+    def combine_runs(*args):
+        calls.append(args)
+        return "combined IDs"  # stands in for the combined table
+
+    monkeypatch.setattr(run_jmod, "combine_runs", combine_runs)
     return calls
 
 
@@ -150,6 +156,44 @@ class TestCombinedResults:
         monkeypatch.setattr(experiment, "process_run", process_run)
         experiment.main()
         assert combined == []
+
+
+class TestMatchBetweenRuns:
+    @pytest.fixture
+    def mbr_experiment(self, experiment, monkeypatch):
+        """The two-file experiment with --mbr, recording each run's results
+        parent and use_emp_rt, and the input to build_mbr_library."""
+        monkeypatch.setattr(config.args, "mbr", True)
+        monkeypatch.setattr(config.args, "use_emp_rt", False)  # the final pass sets it
+        runs, mbr_inputs = [], []
+
+        def process_run(runState, *rest):
+            runs.append((runState.file_name, rest[-1], config.args.use_emp_rt))
+            _finish(runState)
+
+        def build_mbr_library(combined_ids, *rest):
+            mbr_inputs.append(combined_ids)
+            return SimpleNamespace(target_decoy_ratio=1.0)
+
+        monkeypatch.setattr(experiment, "process_run", process_run)
+        monkeypatch.setattr(experiment, "build_mbr_library", build_mbr_library)
+        return SimpleNamespace(runs=runs, mbr_inputs=mbr_inputs)
+
+    def test_first_pass_goes_in_first_pass_and_the_final_pass_keeps_normal_names(
+            self, experiment, mbr_experiment, combined, tmp_path):
+        experiment.main()
+        first_pass = os.path.join(str(tmp_path), "first_pass")
+        assert mbr_experiment.runs == [("a.mzML", first_pass, False), ("b.mzML", first_pass, False),
+                                       ("a.mzML", None, True), ("b.mzML", None, True)]
+        assert [args[1] for args in combined] == [first_pass, str(tmp_path)]
+        assert mbr_experiment.mbr_inputs == ["combined IDs"]  # built from the first pass
+        assert (tmp_path / "mbr_library").is_dir()
+
+    def test_single_file_skips_mbr(self, experiment, mbr_experiment, monkeypatch, app_log):
+        monkeypatch.setattr(config.args, "mzml", ["a.mzML"])
+        experiment.main()
+        assert mbr_experiment.runs == [("a.mzML", None, False)]
+        assert any("skipping match between runs" in r.getMessage() for r in app_log)
 
 
 class TestCreateResultsFolder:

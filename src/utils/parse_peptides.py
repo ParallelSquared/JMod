@@ -282,6 +282,18 @@ diann_rules = {
                  'D':'E'
                  }
 
+def untag_sequences(seqs, mass_tag, SILAC) -> list[str]:
+    """*seqs* with every mass tag and SILAC channel label removed, e.g.
+    "PEPTIDEK(mTRAQ-4)" -> "PEPTIDEK".  untag_prec is this plus the charge.
+
+    *mass_tag* and *SILAC* are the tag objects in use, or None.
+    """
+    untagged = list(seqs)
+    for label in (mass_tag, SILAC):
+        if label:
+            untagged = [re.sub(f"(\\({label.name}-\\d+\\))?", "", peptide) for peptide in untagged]
+    return untagged
+
 def decoy_permutation(tokens, rules: str) -> list:
     """Index permutation that change_seq applies for 'rev', 'rev_nc', or
     'shuffle'. Single source of truth for which decoy a peptide becomes:

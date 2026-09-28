@@ -352,6 +352,19 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # Match between runs: search every file again against a library of the
+    # first pass's IDs, with RTs aligned across runs
+    'mbr': {
+        'flags': ('--mbr',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': False,
+        'type': '',
+        'widget': 'checkbutton',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'unfiltered_quant': {
         'flags': ('--unfiltered_quant',),
         'default': True,

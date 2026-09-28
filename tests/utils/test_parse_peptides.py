@@ -12,8 +12,10 @@ import src.config as config
 
 # Import the functions we want to test
 from src.utils.parse_peptides import (
-    change_seq, convert_prec_mz, convert_frags, parse_peptide, extract_mod, split_frag_name
+    change_seq, convert_prec_mz, convert_frags, parse_peptide, extract_mod, split_frag_name,
+    untag_sequences
 )
+from src.mass_tags import available_tags
 
 class TestChangeSeq:
     """Test cases for the change_seq function"""
@@ -437,3 +439,21 @@ class TestSplitFragName:
         frag_type, frag_idx, loss, frag_z = split_frag_name("y5-98_1")
         assert loss == "98"  # Numeric loss (like -98 Da)
 
+
+class TestUntagSequences:
+    """Test cases for the untag_sequences function"""
+
+    def test_mass_tag_labels_are_removed_wherever_they_are(self):
+        seqs = ["(mTRAQ-0)PEPTIDEK(mTRAQ-0)", "(mTRAQ-8)ELVISK(mTRAQ-8)"]
+        assert untag_sequences(seqs, available_tags["mTRAQ"], None) == ["PEPTIDEK", "ELVISK"]
+
+    def test_mass_tag_and_SILAC_labels_are_both_removed(self):
+        seqs = ["(mTRAQ-4)PEPTIDEK(mTRAQ-4)(K_6C13-6)"]
+        assert untag_sequences(seqs, available_tags["mTRAQ"], available_tags["K_6C13"]) == ["PEPTIDEK"]
+
+    def test_other_modifications_are_kept(self):
+        seqs = ["(mTRAQ-0)PEPC(UniMod:4)TIDEK(mTRAQ-0)"]
+        assert untag_sequences(seqs, available_tags["mTRAQ"], None) == ["PEPC(UniMod:4)TIDEK"]
+
+    def test_without_tags_the_sequences_are_unchanged(self):
+        assert untag_sequences(["PEPTIDEK(mTRAQ-0)"], None, None) == ["PEPTIDEK(mTRAQ-0)"]

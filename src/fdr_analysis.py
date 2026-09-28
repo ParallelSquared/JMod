@@ -34,6 +34,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import tqdm
 import re
+from src.utils.parse_peptides import untag_sequences
 import os
 import pandas as pd
 
@@ -1182,14 +1183,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     fdc["sq_mz_error"] = np.power(fdc["mz_error"],2)
 
     # Handle untag_seq
-    if mass_tag and SILAC:
-        fdc["untag_seq"] = [re.sub(f"(\({SILAC.name}-\d+\))?","",re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide)) for peptide in fdc["seq"]]
-    elif mass_tag:
-        fdc["untag_seq"] = [re.sub(f"(\({mass_tag.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
-    elif SILAC:
-        fdc["untag_seq"] = [re.sub(f"(\({SILAC.name}-\d+\))?","",peptide) for peptide in fdc["seq"]]
-    else:
-        fdc["untag_seq"] = fdc["seq"]
+    fdc["untag_seq"] = untag_sequences(fdc["seq"], mass_tag, SILAC)
     #print(fdc.columns)  # Ensure 'seq' is in fdc
 
     # Add untag_prec and channels_matched
@@ -1330,7 +1324,8 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
-                       "protein",'BestChannel_Qvalue', 'plex_Area', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff"]
+                       "protein",'BestChannel_Qvalue', 'plex_Area', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+                       "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")
 

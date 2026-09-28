@@ -23,8 +23,20 @@ from matplotlib.ticker import MaxNLocator
 import numpy as np
 import polars as pl
 
+from statsmodels.nonparametric.smoothers_lowess import lowess
+
 from src.logger import logger
+from src.utils.parse_peptides import untag_sequences
+from src.utils.errors import JModError
 from src.utils.misc_functions import datestamped
+
+# The first pass's IDs that go into the match-between-runs library: those with
+# this q-value below the FDR threshold.  "untag_prec_Global_Qvalue" is the
+# stricter choice, keeping the union of the runs' IDs at the FDR threshold.
+MBR_QVALUE_COLUMN = "BestChannel_Qvalue"
+
+# A run is aligned to the reference only if they share at least this many precursors
+_MIN_SHARED_FOR_ALIGNMENT = 20
 
 # Chart colours, from a validated palette: blue and orange categorical slots,
 # a lighter blue for the second part of a stack, the blue sequential ramp for
@@ -49,7 +61,7 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     every run's IDs that pass the run-level FDR, with a global q-value per
     untagged precursor.  Nothing is filtered on the global q-value; that is
     left to the user.  The plots go there too; those that compare runs only
-    when there are enough runs to compare.
+    when there are enough runs to compare.  Returns the combined table.
     """
     logger.info("")
     logger.info(f"Combining the results of {len(completed_run_folders)} run(s)")
@@ -75,6 +87,7 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
         plot_data_completeness(precursors, len(run_idxs), fdr_threshold, results_dir)
     if len(run_idxs) >= 3:
         plot_run_correlation(precursors, run_idxs, results_dir)
+    return df
 
 
 def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
@@ -92,9 +105,12 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
         for run_idx, folder_path in folder_path_dict.items()
     ], how="vertical_relaxed")  # a column's type can differ between runs (e.g. channel int vs float)
 
+    # Timeplex runs also carry each ID's time channel
+    time_channel = ["time_channel"] if "time_channel" in df.collect_schema().names() else []
     df = (
         df
         .select(["run_idx", "file_name", "protein", "seq", "z", "channel", "silac_channel",
+                 *time_channel,
                  "PredVal", "Qvalue", "BestChannel_Qvalue", "Protein_Qvalue",
                  "plex_Area", "coeff", "stripped_seq", "untag_seq", "untag_prec",
                  "mz", "rt", "prec_im", "is_decoy"])
@@ -179,6 +195,119 @@ def precursors_per_run(df, fdr_threshold):
             pl.when(pl.col("area") > 0).then(pl.col("area").log(2)).alias("log2_area")
         )
     )
+
+
+def mbr_library_rts(combined_ids, fdr_threshold, mbr_dir, qvalue_column=MBR_QVALUE_COLUMN):
+    """One aligned RT for every untagged precursor the first pass identified.
+
+    The IDs are those with *qvalue_column* below *fdr_threshold*.  Each run's
+    RTs are aligned to a reference run, the one with the most IDs: a LOWESS fit
+    of the RT difference over the precursors the two share, after dropping
+    differences more than 4 SD from their mean, is added to every RT of the
+    run.  A precursor's library RT is then its reference-run RT, or else the
+    median of its aligned RTs.  Within a run, a precursor identified in several
+    channels takes the RT of its best-scoring one.
+
+    On timeplex each time channel of each run is aligned as a unit of its own,
+    so the channels' offsets are removed along with the drift between runs.
+    ##TODO test on timeplex data once the timeplex changes are merged
+
+    Writes the plots to *mbr_dir*.  Returns one row per untag_prec with its rt.
+    """
+    ids = combined_ids.filter(pl.col(qvalue_column) < fdr_threshold, ~pl.col("is_decoy"))
+    if ids.is_empty():
+        raise JModError("The first pass identified no precursors, so there is no "
+                        "match-between-runs library to build")
+    unit_columns = ["run_idx"] + (["time_channel"] if "time_channel" in ids.columns else [])
+    unit_rts = (
+        ids.group_by(*unit_columns, "untag_prec")
+        .agg(pl.col("rt").sort_by(["PredVal", "rt"], descending=[True, False]).first().cast(pl.Float64))
+    )
+    units = {unit: frame.drop(unit_columns)
+             for unit, frame in unit_rts.partition_by(unit_columns, as_dict=True).items()}
+    reference = max(sorted(units), key=lambda unit: units[unit].height)
+    logger.info(f"MBR library: aligning RTs to {_unit_name(reference, unit_columns)}, "
+                f"which has the most IDs ({units[reference].height:,})")
+    reference_rts = units[reference].rename({"rt": "reference_rt"})
+
+    lowess_dir = os.path.join(mbr_dir, "lowess")
+    os.makedirs(lowess_dir, exist_ok=True)
+    aligned = [units[reference].with_columns(pl.lit(True).alias("is_reference"))]
+    for unit in sorted(units):
+        if unit == reference:
+            continue
+        name = _unit_name(unit, unit_columns)
+        shared = units[unit].join(reference_rts, on="untag_prec")
+        if shared.height < _MIN_SHARED_FOR_ALIGNMENT:
+            logger.warning(f"MBR library: {name} shares only {shared.height} precursors with the "
+                           f"reference, too few to align; its RTs are left out")
+            continue
+        shared_rt = shared["rt"].to_numpy()
+        delta, kept, curve = _fit_rt_alignment(shared_rt, shared["reference_rt"].to_numpy())
+        plot_rt_alignment(shared_rt, delta, kept, curve, name, lowess_dir)
+        rt = units[unit]["rt"].to_numpy()
+        aligned.append(units[unit].with_columns(
+            pl.Series("rt", rt + np.interp(rt, curve[:, 0], curve[:, 1])),
+            pl.lit(False).alias("is_reference"),
+        ))
+
+    plot_library_size_by_run(combined_ids.filter(~pl.col("is_decoy")), fdr_threshold, qvalue_column, mbr_dir)
+    return (
+        pl.concat(aligned)
+        .group_by("untag_prec")
+        .agg(
+            pl.when(pl.col("is_reference").any())
+            .then(pl.col("rt").filter(pl.col("is_reference")).first())
+            .otherwise(pl.col("rt").median())
+            .alias("rt")
+        )
+        .sort("untag_prec")
+    )
+
+
+def mbr_targets(targets, library_rts, mass_tag, SILAC):
+    """The library targets the first pass identified, with their aligned RTs.
+
+    *targets* is the input library as loaded, before decoys and tagging.
+    Tagged or detagged, it is matched on untag_prec.  Returns a new target
+    store of the matched entries, with their iRT replaced by the aligned RT
+    (on the reference run's time scale).
+    """
+    untag_prec = (pl.Series(untag_sequences(targets.mod_seq, mass_tag, SILAC), dtype=pl.String)
+                  + "_" + pl.Series(targets.prec_z).cast(pl.Int64).cast(pl.String))
+    rt = untag_prec.replace_strict(library_rts["untag_prec"], library_rts["rt"],
+                                   default=None, return_dtype=pl.Float64)
+    matched = rt.is_not_null()
+    if not matched.any():
+        raise JModError("No first-pass ID matches an entry of the spectral library, "
+                        "so there is no match-between-runs library to build")
+    logger.info(f"MBR library: {int(matched.sum()):,} of {len(targets):,} library precursors "
+                f"were identified in the first pass")
+    mbr = targets.subset_entries(matched.to_numpy())
+    mbr.iRT = rt.filter(matched).to_numpy().astype(targets.iRT.dtype)
+    return mbr
+
+
+def _fit_rt_alignment(rt, reference_rt):
+    """LOWESS fit of the difference reference_rt - rt against rt.
+
+    Differences more than 4 SD from their mean are left out of the fit.
+    Returns (delta, kept, curve); the curve's columns are rt and the
+    correction to add to it.
+    """
+    delta = reference_rt - rt
+    # <= rather than <: runs with no spread at all keep every point
+    kept = np.abs(delta - delta.mean()) <= 4 * np.std(delta, ddof=1)
+    curve = lowess(delta[kept], rt[kept], frac=0.2, return_sorted=True)
+    return delta, kept, curve
+
+
+def _unit_name(unit, unit_columns):
+    # e.g. "run 3", or "run 3, time channel 1" on timeplex
+    parts = [f"run {unit[0]}"]
+    if len(unit_columns) > 1:
+        parts.append(f"time channel {int(unit[1])}")
+    return ", ".join(parts)
 
 
 def plot_ids_per_run(precursors, run_idxs, fdr_threshold, results_dir):
@@ -407,6 +536,66 @@ def plot_run_correlation(precursors, run_idxs, results_dir):
     ax.set_ylabel("Run", color=_MUTED_COLOR)
     ax.set_title("Run-to-run correlation of log2 plex_Area", loc="left", color=_TEXT_COLOR)
     _save(fig, results_dir, "06_run_correlation.png")
+
+
+def plot_library_size_by_run(targets, fdr_threshold, qvalue_column, mbr_dir):
+    """Step plot: how large the MBR library has grown after each run, in file
+    order, counting every precursor identified in that run or an earlier one.
+
+    One line for the run-level IDs (*targets*: the first pass's combined
+    targets) and one for those that also pass the global q-value; the legend
+    marks the one the library was built from (*qvalue_column*).
+    """
+    run_idxs = sorted(targets["run_idx"].unique().to_list())
+    fig, ax = plt.subplots(figsize=(_figure_width(len(run_idxs)), 4))
+    largest = 0
+    for column, name, color in (("BestChannel_Qvalue", "Run-level q-value", _BLUE),
+                                ("untag_prec_Global_Qvalue", "Global untag_prec q-value", _LIGHT_BLUE)):
+        ids = targets.filter(pl.col(column) < fdr_threshold)
+        by_run = dict(ids.group_by("run_idx").agg(pl.col("untag_prec").unique()).iter_rows())
+        seen, library_size = set(), []
+        for r in run_idxs:
+            seen |= set(by_run.get(r, []))
+            library_size.append(len(seen))
+        largest = max(largest, library_size[-1])
+        label = f"{name} < {fdr_threshold:g}" + (" (the library)" if column == qvalue_column else "")
+        ax.step(run_idxs, library_size, where="post", color=color, linewidth=2, label=label)
+
+    _style_axes(ax, run_idxs)
+    ax.set_ylim(0, max(largest, 1) * 1.05)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    if len(run_idxs) <= 30:
+        ax.set_xticks(run_idxs)  # every run labelled while they fit
+    ax.set_xlabel("Run", color=_MUTED_COLOR)
+    ax.set_ylabel("Precursors", color=_MUTED_COLOR)
+    ax.set_title("MBR library size by run", loc="left", color=_TEXT_COLOR)
+    _legend(ax)
+    _save(fig, mbr_dir, "library_size_by_run.png")
+
+
+def plot_rt_alignment(rt, delta, kept, curve, name, lowess_dir):
+    """Two panels for one run: its RT difference to the reference with the
+    LOWESS fit, and what is left of the difference after the correction."""
+    rt, delta = rt[kept], delta[kept]
+    residual = delta - np.interp(rt, curve[:, 0], curve[:, 1])
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
+    for ax, values, title in ((axes[0], delta, "Before"), (axes[1], residual, "After correction")):
+        ax.scatter(rt, values, s=2, alpha=0.4, color=_BLUE, linewidths=0)
+        ax.axhline(0, color=_MUTED_COLOR, linewidth=1)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.spines[["left", "bottom"]].set_color(_GRID_COLOR)
+        ax.tick_params(colors=_MUTED_COLOR, length=0)
+        ax.grid(axis="y", color=_GRID_COLOR, linewidth=0.8)
+        ax.set_axisbelow(True)
+        ax.set_xlabel(f"RT, {name}", color=_MUTED_COLOR)
+        ax.set_title(title, loc="left", fontsize=10, color=_TEXT_COLOR)
+    axes[0].plot(curve[:, 0], curve[:, 1], color=_ORANGE, linewidth=2, label="LOWESS fit")
+    axes[0].set_ylabel("RT difference (reference - run)", color=_MUTED_COLOR)
+    axes[0].legend(loc="upper right", frameon=False, fontsize=9, labelcolor=_MUTED_COLOR)
+    fig.suptitle(f"RT alignment of {name} to the reference ({int(kept.sum()):,} shared precursors)",
+                 x=0.01, ha="left", color=_TEXT_COLOR)
+    _save(fig, lowess_dir, name.replace(", ", "_").replace(" ", "_") + ".png")
 
 
 def _figure_width(n_columns):

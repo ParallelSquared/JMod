@@ -39,7 +39,7 @@ from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
 from src.models.run_state import RunState
 from src.utils.errors import JModError, report_error, mark_run_failed
-from src.multi_run import combine_runs
+from src.multi_run import combine_runs, mbr_library_rts, mbr_targets
 
 from src.logger import logger, set_log_filepath
 
@@ -53,7 +53,12 @@ def main(GUI_config_json=None):
 
 
 def run_experiment(GUI_config_json=None):
-    """Set up the experiment, build the library once, and run every mass spec file."""
+    """Set up the experiment, build the library once, and run every mass spec file.
+
+    With --mbr every file is searched twice: a first pass against the input
+    library, written to first_pass/, then the final pass against a
+    match-between-runs library built from the first pass's IDs.
+    """
     config.setup(GUI_config_json)
     experiment_dir = _start_experiment_log()
     _write_experiment_config(experiment_dir)
@@ -62,10 +67,42 @@ def run_experiment(GUI_config_json=None):
     bruker_sdk_path = _prepare_readers(run_files)
     set_seeds(config.RANDOM_SEED)
     mass_tag, SILAC = resolve_tags()
+    mbr = _use_mbr(run_files)
+    # With MBR the first pass is not the final result, so it goes in first_pass/
+    first_pass_dir = os.path.join(experiment_dir, "first_pass") if mbr else None
 
     #### Build the library once.
     spectrumLibrary = build_library(config.args.speclib, experiment_dir, mass_tag, SILAC)
+    # The global q-value counts targets and decoys like the per-run one, over
+    # the whole library
+    target_decoy_ratio = spectrumLibrary.target_decoy_ratio
+    if mbr:
+        logger.info("")
+        logger.info("First pass", extra={"highlight": True})
+    completed_run_folders = search_runs(run_files, spectrumLibrary, mass_tag, SILAC,
+                                        bruker_sdk_path, first_pass_dir)
+    del spectrumLibrary
+    gc.collect()
+    combined_ids = _combine(completed_run_folders, first_pass_dir or experiment_dir, target_decoy_ratio)
 
+    if mbr:
+        if combined_ids is None:
+            logger.warning("No run completed the first pass; skipping match between runs")
+        else:
+            _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC, bruker_sdk_path)
+
+    logger.info("")
+    logger.info(f"Output at {os.path.abspath(experiment_dir)}", extra={"highlight": True})
+
+
+def search_runs(run_files, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, results_parent=None):
+    """Search, score and quantify every data file against *spectrumLibrary*.
+
+    A run that fails is reported and its folder marked, and the next one
+    starts.  The results folders go in *results_parent* if given, otherwise
+    where process_run puts them.  Returns {run index: results folder} for the
+    runs that completed.
+    """
     failed_runs = []
     completed_run_folders = {}
     for run_idx, run_file in enumerate(run_files, start=1):
@@ -75,7 +112,7 @@ def run_experiment(GUI_config_json=None):
         runState = RunState()
         runState.file_name = run_file
         try:
-            process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path)
+            process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, results_parent)
         except Exception as e:
             report_error(e, f"Run {run_idx} of {len(run_files)} failed ({run_file})")
             mark_run_failed(getattr(runState, "results_folder", None))
@@ -87,20 +124,54 @@ def run_experiment(GUI_config_json=None):
         gc.collect()
 
     logger.info("")
-    logger.info(f"{len(run_files) - len(failed_runs)} of {len(run_files)} files completed successfully. "
-                f"Output at {os.path.abspath(experiment_dir)}", extra={"highlight": True})
+    logger.info(f"{len(run_files) - len(failed_runs)} of {len(run_files)} files completed successfully",
+                extra={"highlight": True})
     if failed_runs:
         logger.error(f"{len(failed_runs)} run(s) failed, see above: {', '.join(failed_runs)}")
+    return completed_run_folders
 
-    # The global q-value counts targets and decoys like the per-run one, over
-    # the whole library
-    n_decoys = spectrumLibrary.n_decoys
-    target_decoy_ratio = spectrumLibrary.n_targets / n_decoys if n_decoys else float('inf')
+
+def _combine(completed_run_folders, parent_dir, target_decoy_ratio):
+    """combine_runs over the completed runs, in *parent_dir*.  Returns the
+    combined table, or None when no run completed."""
+    if len(completed_run_folders) >= 1:
+        return combine_runs(completed_run_folders, parent_dir, target_decoy_ratio, config.fdr_threshold)
+    return None
+
+
+def _use_mbr(run_files):
+    """Whether to match between runs: --mbr, with two or more data files."""
+    if not config.args.mbr:
+        return False
+    if len(run_files) < 2:
+        logger.warning("--mbr needs two or more data files; skipping match between runs")
+        return False
+    return True
+
+
+def _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC, bruker_sdk_path):
+    """The final pass: search every file again, against a library of the first
+    pass's IDs (*combined_ids*) with their RTs aligned across runs.
+
+    The library and its plots go in mbr_library/; the runs' results take the
+    normal names, as without MBR.
+    """
+    logger.info("")
+    logger.info("Match between runs: building the library from the first pass's IDs",
+                extra={"highlight": True})
+    mbr_dir = datestamped(os.path.join(experiment_dir, "mbr_library"))
+    os.makedirs(mbr_dir)
+    spectrumLibrary = build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC)
+    target_decoy_ratio = spectrumLibrary.target_decoy_ratio
+
+    # The library's RTs are now empirical: RT prediction has nothing to add
+    config.args.use_emp_rt = True
+    logger.info("")
+    logger.info("Final pass, against the MBR library (use_emp_rt set)", extra={"highlight": True})
+    completed_run_folders = search_runs(run_files, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path)
     del spectrumLibrary
     gc.collect()
-
-    if len(completed_run_folders) >= 1:
-        combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, config.fdr_threshold)
+    _combine(completed_run_folders, experiment_dir, target_decoy_ratio)
 
 
 def _prepare_readers(run_files):
@@ -171,14 +242,15 @@ def _write_experiment_config(experiment_dir):
     logger.info(f"Configuration written to {os.path.abspath(json_path)}")
 
 
-def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path):
+def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, results_parent=None):
     """Search, score and quantify one data file against the shared library.
 
     Everything made here belongs to this run and is released when it returns:
     the spectra, the run's calibration (RunState, rt_mz, the window mask) and,
     on timeplex, the per-channel copy of the library.  The shared library is
     only read.  *runState* arrives holding the run's file_name; the results
-    folder and the fitted values are added to it here.
+    folder and the fitted values are added to it here.  The results folder
+    goes in *results_parent* if given (see _create_results_folder).
     """
     # Every run starts from the same seed, so its results do not depend on its
     # position in the list
@@ -187,7 +259,7 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path):
     if not os.path.exists(mzml_file):
         raise JModError(f"Data file not found: {runState.file_name}")
 
-    runState.results_folder = _create_results_folder(mzml_file)
+    runState.results_folder = _create_results_folder(mzml_file, results_parent)
     _write_run_config(runState)
     logger.info(f"Results will be saved to {os.path.abspath(runState.results_folder)}")
     DIAspectra = _load_spectra(mzml_file, bruker_sdk_path)
@@ -233,10 +305,11 @@ def _load_features(mzml_file):
     return pd.read_csv(feature_path,delimiter="\t")
 
 
-def _create_results_folder(mzml_file):
+def _create_results_folder(mzml_file, results_parent=None):
     """Create the run's results folder and its subfolders; return its path.
 
-    Named after the data file (plus --dummy_value), in the output folder or
+    Named after the data file (plus --dummy_value), in *results_parent* if
+    given (an MBR experiment's first_pass/), else the output folder, else
     next to the data file, with a datestamp added if the name is taken.
     """
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
@@ -244,7 +317,10 @@ def _create_results_folder(mzml_file):
     results_folder_name = spec_file_name + "_results" + "_" + dummy_val
     results_folder_name = results_folder_name.rstrip("_")
 
-    if config.args.output_folder is not None:
+    if results_parent is not None:
+        os.makedirs(results_parent, exist_ok=True)
+        results_folder_path = os.path.join(results_parent, results_folder_name)
+    elif config.args.output_folder is not None:
         os.makedirs(config.args.output_folder, exist_ok=True)
         results_folder_path = os.path.join(config.args.output_folder, results_folder_name)
     else:
@@ -357,14 +433,37 @@ def resolve_tags():
 
 
 def build_library(lib_file, work_dir, mass_tag, SILAC):
-    """Load the spectral library and build the target + decoy search library.
+    """Load the spectral library and build the target + decoy search library:
+    load_library, then prepare_library."""
+    targets, library_tag_bool, source_channel = load_library(lib_file, mass_tag)
+    return prepare_library(targets, work_dir, mass_tag, SILAC, library_tag_bool, source_channel)
 
-    Adds decoys, tags every entry with *mass_tag* and *SILAC* (from
-    resolve_tags), expands isotopes (--iso) or finalizes the spectra, sets
-    top_n, and freezes the result.  Nothing here depends on a run, and nothing
-    after it writes to the library: per-run changes live in
-    calibrate_library's return values.  Large non-iso libraries are
-    memory-mapped under *work_dir*.
+
+def build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC):
+    """The match-between-runs search library, from the first pass's IDs.
+
+    The input library's entries for the precursors the first pass identified,
+    with their RTs aligned across runs (multi_run.mbr_library_rts), go through
+    the same decoys, tagging and isotopes as the first pass's library.  The
+    entries are also written to <mbr_dir>/mbrlib.parquet, next to the
+    alignment plots.
+    """
+    library_rts = mbr_library_rts(combined_ids, config.fdr_threshold, mbr_dir)
+    targets, library_tag_bool, source_channel = load_library(config.args.speclib, mass_tag)
+    targets = mbr_targets(targets, library_rts, mass_tag, SILAC)
+    mbr_lib_path = os.path.join(mbr_dir, "mbrlib.parquet")
+    targets.to_diann_df().write_parquet(mbr_lib_path)
+    logger.info(f"MBR library written to {os.path.abspath(mbr_lib_path)}")
+    return prepare_library(targets, mbr_dir, mass_tag, SILAC, library_tag_bool, source_channel)
+
+
+def load_library(lib_file, mass_tag):
+    """Load the spectral library's targets as the file has them: no decoys, no tagging.
+
+    A pre-tagged library's tag is relabelled to the closest channel of
+    *mass_tag*.  Returns (targets, library_tag_bool, source_channel): whether
+    the file is tagged, and the channel its entries now carry (None unless it
+    is tagged and a mass tag is in use).
     """
     spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
 
@@ -396,7 +495,19 @@ def build_library(lib_file, work_dir, mass_tag, SILAC):
         spectrumLibrary.relabel_tag(library_tag_name, source_channel)
     else:
         source_channel = None
+    return spectrumLibrary, library_tag_bool, source_channel
 
+
+def prepare_library(spectrumLibrary, work_dir, mass_tag, SILAC, library_tag_bool, source_channel):
+    """Build the frozen target + decoy search library from load_library's targets.
+
+    Adds decoys, tags every entry with *mass_tag* and *SILAC* (from
+    resolve_tags), expands isotopes (--iso) or finalizes the spectra, sets
+    top_n, and freezes the result.  Nothing here depends on a run, and nothing
+    after it writes to the library: per-run changes live in
+    calibrate_library's return values.  Large non-iso libraries are
+    memory-mapped under *work_dir*.
+    """
     ######################################################
     #### Generate decoys (before tagging/isotopes so they apply to both)
     logger.info("Creating Decoy Library")
