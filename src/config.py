@@ -318,8 +318,9 @@ def load_config_from_json(json_path):
     # Update args with values from JSON. Downstream code reads
     # ``config.args.X`` directly, so there is no module-level alias to
     # re-sync — mutating the Namespace is enough.
+    # config_json in a JSON JMod wrote is where *that* run was loaded from, not a setting
     for key, value in config_data.items():
-        if hasattr(args, key):
+        if hasattr(args, key) and key != "config_json":
             setattr(args, key, value)
 
     # Set additional config variables if present

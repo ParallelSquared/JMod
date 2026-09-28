@@ -30,6 +30,14 @@ class TestLoadConfigFromJson:
         with pytest.raises(JModError, match="forward slashes"):
             config.load_config_from_json(str(path))
 
+    def test_recorded_config_json_is_not_loaded(self, tmp_path, monkeypatch):
+        # A JSON JMod wrote names the JSON its own run came from; that is not a setting
+        path = tmp_path / "JMod_config.json"
+        path.write_text(json.dumps({"config_json": "an/earlier/config.json"}))
+        monkeypatch.setattr(config.args, "config_json", str(path))
+        config.load_config_from_json(str(path))
+        assert config.args.config_json == str(path)
+
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(JModError, match="Could not open config JSON"):
             config.load_config_from_json(str(tmp_path / "missing.json"))

@@ -691,28 +691,38 @@ class JModGUI(ThemedTk):
         files = filedialog.askopenfilenames(title="Select .mzML or .raw Files", filetypes=[("Mass Spec Files", "*.mzML *.raw"), ("mzML files", "*.mzML"), ("Thermo Raw files", "*.raw")], initialdir=self.last_opened_dir)
         if files:
             for file in files:
-                if file not in self.file_dropdown.files:
+                self._add_mzml_or_raw(file)
 
-                    #check if user has path for RawFileReader
-                    if os.path.splitext(file)[1].lower() in [".raw"]:
-                        settings = load_settings()
-                        if not settings["rawfilereader_path"] or not self._rawfilereader_path_valid(settings["rawfilereader_path"]):
-                            new_path = self.locate_raw_path()
-                            if new_path and self._rawfilereader_path_valid(new_path):
-                                settings["rawfilereader_path"] = new_path
-                            elif new_path is None:
-                                settings["rawfilereader_path"] = None
-                            else:
-                                tk.messagebox.showerror("RawFileReader Error", f"{new_path} does not contain 'ThermoFisher.CommonCore.Data.dll'")
-                                settings["rawfilereader_path"] = None
-                            save_settings(settings)
+    def _add_mzml_or_raw(self, file):
+        """
+        Add one .mzML or .raw file to the file list, unless it is already there.
+        A .raw needs Thermo's RawFileReader: if its path is not set, ask for it,
+        and leave the file out if there is still none.
+        Called by: select_mzml, _offer_json_data_files
+        """
+        if file in self.file_dropdown.files:
+            return
 
-                        if not settings["rawfilereader_path"]:
-                            tk.messagebox.showinfo("File not added", f"Raw file could not be added due to absence of RawFileReader:\n\n{file}")
-                            continue
+        #check if user has path for RawFileReader
+        if os.path.splitext(file)[1].lower() in [".raw"]:
+            settings = load_settings()
+            if not settings["rawfilereader_path"] or not self._rawfilereader_path_valid(settings["rawfilereader_path"]):
+                new_path = self.locate_raw_path()
+                if new_path and self._rawfilereader_path_valid(new_path):
+                    settings["rawfilereader_path"] = new_path
+                elif new_path is None:
+                    settings["rawfilereader_path"] = None
+                else:
+                    tk.messagebox.showerror("RawFileReader Error", f"{new_path} does not contain 'ThermoFisher.CommonCore.Data.dll'")
+                    settings["rawfilereader_path"] = None
+                save_settings(settings)
 
-                    self.file_dropdown.add_files([file])
-                    self.last_opened_dir = os.path.dirname(file)
+            if not settings["rawfilereader_path"]:
+                tk.messagebox.showinfo("File not added", f"Raw file could not be added due to absence of RawFileReader:\n\n{file}")
+                return
+
+        self.file_dropdown.add_files([file])
+        self.last_opened_dir = os.path.dirname(file)
 
     def select_d_folder(self):
         """
@@ -727,6 +737,15 @@ class JModGUI(ThemedTk):
         if os.path.splitext(folder)[1].lower() != ".d":
             tk.messagebox.showerror("Not a .d folder", f"{folder} is not a Bruker .d folder.")
             return
+        self._add_d_folder(folder)
+
+    def _add_d_folder(self, folder):
+        """
+        Add one Bruker .d folder to the file list, unless it is already there.
+        A .d with no peaks.parquet yet needs the Bruker SDK to be centroided: if
+        its path is not set, ask for it, or whether to add the folder without it.
+        Called by: select_d_folder, _offer_json_data_files
+        """
         if folder in self.file_dropdown.files:
             return
 
@@ -816,7 +835,7 @@ class JModGUI(ThemedTk):
             # Update args with values from JSON
             for key, value in config_data.items():
                 if key in default_dict.keys():
-                    if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF", "rawfilereader_path", "bruker_sdk_path"]: ##does not allow file input from JSON. plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects
+                    if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF", "rawfilereader_path", "bruker_sdk_path", "config_json"]: ##does not allow file input from JSON (mzml is offered separately, _offer_json_data_files). plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects. config_json is where the JSON's own run was loaded from, not a setting
                         continue
                     if key == "speclib" or key == "output_folder":
                         if value is None or value == "":
@@ -862,6 +881,8 @@ class JModGUI(ThemedTk):
             for arg in args_list:
                 self.additional_text.insert(tk.END, f"{arg} ")
 
+            self._offer_json_data_files(config_data.get("mzml"))
+
         except json.JSONDecodeError as e:
             tk.messagebox.showerror("Failed to Decode JSON File", f"Failed to decode JSON file:\n\nCheck JSON file for formatting errors\n\n {e}")
             return False
@@ -870,6 +891,49 @@ class JModGUI(ThemedTk):
             return False
         self.update_masstag()
         return True
+
+    # How each kind of data file is named in _offer_json_data_files' question
+    _DATA_FILE_KINDS = ((".mzml", ".mzml Files"), (".raw", ".raw Files"), (".d", ".d Folders"))
+
+    def _offer_json_data_files(self, mzml):
+        """
+        Ask whether to add the data files a configuration JSON lists (the mzml
+        of a previous experiment), and add them if so, with the same checks as
+        the Browse buttons.  Presets list none, so nothing is asked for them.
+        Files already in the list are skipped, and so are files that no longer
+        exist, with one warning listing those.
+        Called by: import_json
+        """
+        if not mzml:
+            return
+        paths = [mzml] if isinstance(mzml, str) else list(mzml)
+        extension = lambda path: os.path.splitext(path.rstrip("/\\"))[1].lower()
+        counts = {ext: sum(extension(p) == ext for p in paths) for ext, _ in self._DATA_FILE_KINDS}
+        lines = [f"{counts[ext]} {name}" for ext, name in self._DATA_FILE_KINDS if counts[ext]]
+        if not lines:
+            return
+        add = messagebox.askyesno(
+            "Add Data Files?",
+            "Configuration File Contains:\n\n" + "\n".join(lines) + "\n\nDo you want to add these?",
+            default=messagebox.YES)
+        if not add:
+            return
+
+        missing = []
+        for path in paths:
+            if extension(path) not in counts:
+                continue
+            if not os.path.exists(path):
+                missing.append(path)
+            elif extension(path) == ".d":
+                self._add_d_folder(path.rstrip("/\\"))
+            else:
+                self._add_mzml_or_raw(path)
+        if missing:
+            shown = "\n".join(missing[:10]) + (f"\n... and {len(missing) - 10} more" if len(missing) > 10 else "")
+            tk.messagebox.showwarning("Files Not Found",
+                                      f"{len(missing)} file(s) in the configuration no longer exist "
+                                      f"and were not added:\n\n{shown}")
 
 
     ####         MS Funcs      #######

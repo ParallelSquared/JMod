@@ -94,3 +94,41 @@ class Test_run_main_process():
 
             # sys.exit should NOT be called
             mock_exit.assert_not_called()
+
+
+class TestOfferJsonDataFiles:
+    """Loading a configuration JSON that lists data files offers to add them."""
+
+    @pytest.fixture
+    def gui(self):
+        # Called on a stand-in for the GUI object: no window is needed
+        import src.run_jmod_from_GUI as gui_module
+        stand_in = types.SimpleNamespace(_DATA_FILE_KINDS=gui_module.JModGUI._DATA_FILE_KINDS,
+                                         _add_mzml_or_raw=MagicMock(), _add_d_folder=MagicMock())
+        return lambda mzml: gui_module.JModGUI._offer_json_data_files(stand_in, mzml), stand_in
+
+    def test_presets_are_not_asked_about(self, gui):
+        offer, _ = gui
+        with patch("tkinter.messagebox.askyesno") as ask:
+            offer(None)
+        ask.assert_not_called()
+
+    def test_question_lists_only_the_kinds_present(self, gui):
+        offer, stand_in = gui
+        with patch("tkinter.messagebox.askyesno", return_value=False) as ask:
+            offer(["a.mzML", "b.mzML", "c.d"])
+        message = ask.call_args.args[1]
+        assert "2 .mzml Files" in message and "1 .d Folders" in message and ".raw" not in message
+        stand_in._add_mzml_or_raw.assert_not_called()  # answered No
+
+    def test_yes_adds_the_files_and_warns_about_missing_ones(self, gui, tmp_path):
+        offer, stand_in = gui
+        for name in ("a.mzML", "r.raw"):
+            (tmp_path / name).write_text("")
+        (tmp_path / "x.d").mkdir()
+        paths = [str(tmp_path / n) for n in ("a.mzML", "r.raw", "x.d", "gone.mzML")]
+        with patch("tkinter.messagebox.askyesno", return_value=True),                 patch("tkinter.messagebox.showwarning") as warn:
+            offer(paths)
+        assert [c.args[0] for c in stand_in._add_mzml_or_raw.call_args_list] == paths[:2]
+        stand_in._add_d_folder.assert_called_once_with(paths[2])
+        assert "gone.mzML" in warn.call_args.args[1]
