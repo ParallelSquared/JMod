@@ -52,6 +52,7 @@ class TestSetup:
         monkeypatch.setattr(config.args, "mzml", ["a.mzML"])
         monkeypatch.setattr(config.args, "mzml_folder", None)
         monkeypatch.setattr(config.args, "tag", "None")
+        monkeypatch.setattr(config.args, "SILAC", None)
         monkeypatch.setattr(config.args, "plexDIA", False)
 
     def test_no_spectral_library_raises(self, inputs, monkeypatch):
@@ -73,6 +74,18 @@ class TestSetup:
         monkeypatch.setattr(config.args, "tag", "mTRAQ")
         config.setup()
         assert config.args.plexDIA is True
+
+    def test_SILAC_turns_on_plexDIA(self, inputs, monkeypatch):
+        monkeypatch.setattr(config.args, "SILAC", "K_6C13")
+        config.setup()
+        assert config.args.plexDIA is True
+
+    @pytest.mark.parametrize("no_label", [None, "", "None"])
+    def test_no_tag_or_SILAC_leaves_plexDIA_off(self, inputs, monkeypatch, no_label):
+        monkeypatch.setattr(config.args, "tag", no_label)
+        monkeypatch.setattr(config.args, "SILAC", no_label)
+        config.setup()
+        assert config.args.plexDIA is False
 
 
 class TestDataFolder:

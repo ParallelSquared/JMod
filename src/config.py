@@ -353,7 +353,10 @@ def setup(GUI_config_json=None):
     if args.config_json:
         load_config_from_json(args.config_json)
 
-    if args.tag != "None":
+    # A mass tag or a SILAC label in use means plexDIA: there are channels to
+    # propagate IDs across.  No label may be None, empty, or "None" (the tag's default)
+    no_label = [None, "", "None"]
+    if args.tag not in no_label or args.SILAC not in no_label:
         args.plexDIA = True
 
     # TODO: validate all args values against default_dict['values'] lists here
