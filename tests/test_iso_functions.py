@@ -12,6 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from functools import partial
+
 import pytest
 import numpy as np
 import sys, os
@@ -1183,7 +1185,8 @@ class Test_iso_layout():
             }}
         return library
 
-    @pytest.mark.parametrize("iso_func", [iso_library, iso_library_multi])
+    @pytest.mark.parametrize("iso_func", [iso_library, partial(iso_library_multi, n_workers=3)],
+                             ids=["iso_library", "iso_library_multi"])
     @pytest.mark.parametrize("n_iso", [2, 3])
     def test_layout_is_compact(self, iso_func, n_iso):
         store = iso_func(SpectrumLibraryStore.from_dict(self.build_library()), None, n_iso)
@@ -1196,7 +1199,8 @@ class Test_iso_layout():
         assert np.array_equal(store.spectrum_offsets[1:], np.cumsum(lengths)[:-1])
         assert store.spectrum_offsets[0] == 0
 
-    @pytest.mark.parametrize("iso_func", [iso_library, iso_library_multi])
+    @pytest.mark.parametrize("iso_func", [iso_library, partial(iso_library_multi, n_workers=3)],
+                             ids=["iso_library", "iso_library_multi"])
     @pytest.mark.parametrize("n_iso", [2, 3])
     def test_peak_count_is_exact(self, iso_func, n_iso):
         """Every fragment yields exactly n_iso peaks while the intensity cut is off."""
