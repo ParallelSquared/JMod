@@ -128,6 +128,17 @@ class TestExperimentConfig:
         written = json.loads((tmp_path / "JMod_config.json").read_text())
         assert written["mzml"] == ["a.mzML", "b.mzML"]
 
+    def test_folder_is_recorded_as_its_files(self, experiment, monkeypatch, tmp_path):
+        folder = tmp_path / "data"
+        folder.mkdir()
+        (folder / "c.mzML").write_text("")
+        monkeypatch.setattr(config.args, "mzml_folder", str(folder))
+        monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: _finish(runState))
+        experiment.main()
+        written = json.loads((tmp_path / "JMod_config.json").read_text())
+        assert written["mzml"] == ["a.mzML", "b.mzML", f"{folder}/c.mzML"]
+        assert written["mzml_folder"] is None
+
     def test_earlier_config_is_kept(self, experiment, monkeypatch, tmp_path):
         (tmp_path / "JMod_config.json").write_text("earlier experiment")
         monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: _finish(runState))

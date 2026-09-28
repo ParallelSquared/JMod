@@ -227,6 +227,8 @@ def _start_experiment_log():
     logger.info("Using configuration:")
     logger.info(config.args)
     logger.info("")
+    if config.args.mzml_folder:
+        logger.info(f"Data files found in {config.args.mzml_folder}")
     logger.info(f"{len(config.args.mzml)} file(s) to run")
     logger.info(f"Log writing to {os.path.abspath(logfile_path)}")
     return experiment_dir
@@ -235,10 +237,13 @@ def _start_experiment_log():
 def _write_experiment_config(experiment_dir):
     """Record the experiment's configuration, with every data file, next to its log.
     Datestamped if the name is taken, so an earlier experiment's record is kept.
+
+    --mzml_folder is left out: its files are already in mzml, and keeping it
+    would make a rerun from this record pick up files added to it since.
     """
     json_path = datestamped(os.path.join(experiment_dir, "JMod_config.json"))
     with open(json_path, "w") as f:
-        json.dump(vars(config.args), f, indent=4)
+        json.dump(dict(vars(config.args), mzml_folder=None), f, indent=4)
     logger.info(f"Configuration written to {os.path.abspath(json_path)}")
 
 
@@ -363,7 +368,8 @@ def _create_results_folder(mzml_file, results_parent=None):
 
 def _write_run_config(runState):
     # This run's record of the configuration, naming only its own data file
-    args_dict = dict(vars(config.args), mzml=runState.file_name)
+    # (and no --mzml_folder, whose files mzml already lists)
+    args_dict = dict(vars(config.args), mzml=runState.file_name, mzml_folder=None)
     json_path = os.path.join(runState.results_folder, "outputs/config.json")
     with open(json_path, "w") as f:
         json.dump(args_dict, f, indent=4)

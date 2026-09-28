@@ -44,6 +44,19 @@ default_dict = {
         'special_upload': False,  #mzml is special, but hard coded specially in GUI
         'values': 'any'
     },
+    # A folder of data files (.mzML, .raw, .d) directly inside it.  config.setup
+    # adds them to mzml; the configs JMod writes list the files, not the folder.
+    'mzml_folder': {
+        'flags': ('--mzml_folder',),
+        'default': None,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'diaPASEF': {
         'flags': ('-d', '--diaPASEF'),
         'default': False,

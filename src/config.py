@@ -14,6 +14,7 @@
 
 import argparse
 import json
+import os
 from src.default_dict import default_dict
 import sys
 
@@ -327,7 +328,11 @@ def load_config_from_json(json_path):
             if key in globals() and not key.startswith('__'):
                 globals()[key] = value
 
-    # Options typed on the command line win over the JSON (-i replaces its files)
+    # Options typed on the command line win over the JSON.  The data files count
+    # as one setting: -i or --mzml_folder typed replace the JSON's files and folder
+    if "mzml" in cli_args or "mzml_folder" in cli_args:
+        args.mzml = None
+        args.mzml_folder = None
     for key, value in cli_args.items():
         setattr(args, key, value)
 
@@ -354,12 +359,42 @@ def setup(GUI_config_json=None):
     if not args.speclib:
         raise JModError("No spectral library given: set speclib in the config JSON "
                         "or pass -l / --speclib")
-    if not args.mzml:
-        raise JModError("No data files given: set mzml in the config JSON (one path or a "
-                        "list of paths) or pass -i once per file")
-    args.speclib = args.speclib.replace("\\", "/")
+
     # One path (a JSON string) or several (a JSON list, or -i given repeatedly).
     # Left as given: each run's path is written into its results.
-    if not isinstance(args.mzml, list):
+    if args.mzml is None:
+        args.mzml = []
+    elif not isinstance(args.mzml, list):
         args.mzml = [args.mzml]
+
+    # A folder's data files join the list.  The folder stays in args for the
+    # log, but the configs JMod writes leave it out: they list the files, so
+    # rerunning one cannot pick up files added to the folder since
+    if args.mzml_folder:
+        args.mzml += [f for f in _data_files_in(args.mzml_folder) if f not in args.mzml]
+
+    if not args.mzml:
+        raise JModError("No data files given: set mzml in the config JSON (one path or a "
+                        "list of paths), pass -i once per file, or pass --mzml_folder")
+    args.speclib = args.speclib.replace("\\", "/")
+
+
+def _data_files_in(folder):
+    """The mass spec data files directly in *folder*, sorted by name.
+
+    .mzML and .raw files and .d folders, matched in any case; subfolders are
+    not searched.  Raises JModError when the folder is missing or has none.
+    """
+    if not os.path.isdir(folder):
+        raise JModError(f"Data folder not found: {folder}")
+    found = []
+    for name in sorted(os.listdir(folder)):
+        path = folder.rstrip("/\\") + "/" + name
+        extension = os.path.splitext(name)[1].lower()
+        if (extension == ".d" and os.path.isdir(path)) or \
+                (extension in (".mzml", ".raw") and os.path.isfile(path)):
+            found.append(path)
+    if not found:
+        raise JModError(f"No .mzML, .raw or .d data files found in {folder}")
+    return found
         
