@@ -922,7 +922,7 @@ class Test_iso_library_multi():
 
         n_iso = 3
 
-        new_library_output = iso_library_multi(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
+        new_library_output = iso_library_multi(SpectrumLibraryStore.from_dict(new_library),tag,n_iso,3)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {
@@ -1084,7 +1084,7 @@ class Test_iso_library_multi():
 
         n_iso = 2
 
-        new_library_output = iso_library_multi(SpectrumLibraryStore.from_dict(new_library),tag,n_iso)
+        new_library_output = iso_library_multi(SpectrumLibraryStore.from_dict(new_library),tag,n_iso,3)
 
         new_library_expected = {
             ("PEPTIDEK", 2.0): {

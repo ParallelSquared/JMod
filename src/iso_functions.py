@@ -387,7 +387,7 @@ def _iso_arg_gen(library, all_keys, tag, n_iso):
         yield (k[0], library[k]["frags"], tag, n_iso)
 
 
-def iso_library_multi(library, tag, n_iso):
+def iso_library_multi(library, tag, n_iso, n_workers):
     """
     Generate isotopes for library fragments (multiprocessed).
 
@@ -402,6 +402,9 @@ def iso_library_multi(library, tag, n_iso):
         A massTag instance.
     n_iso : int
         Number of isotopes per fragment to generate.
+    n_workers : int
+        Worker processes to generate them with (--iso_workers), at most one
+        per CPU.  Each is a separate process with its own memory.
 
     Returns
     -------
@@ -424,7 +427,7 @@ def iso_library_multi(library, tag, n_iso):
     library.spectrum_perm = None  # iso rebuilds spectra; acts as the finalizer
 
     logger.info("Generating isotopes for library:")
-    p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), 61),
+    p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), n_workers),
                                                   initializer=config.limit_blas_threads)
 
     chunksize = 1000

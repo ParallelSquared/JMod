@@ -132,6 +132,20 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    # Worker processes for isotope generation (--iso).  Each is a separate
+    # process with its own memory; capped at the number of CPUs.
+    'iso_workers': {
+        'flags': ('--iso_workers',),
+        'default': 3,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
+    },
+    ##TODO --threads is read nowhere; wire it to something (e.g. main_search's n_threads) or remove it
     'threads': {
         'flags': ('-t', '--threads'),
         'default': 10,

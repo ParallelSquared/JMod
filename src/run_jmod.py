@@ -537,7 +537,8 @@ def prepare_library(spectrumLibrary, work_dir, mass_tag, SILAC, library_tag_bool
         # monoisotopic_targets()
         spectrumLibrary = iso_f.iso_library_multi(spectrumLibrary,
                                                   tag=mass_tag,
-                                                  n_iso=config.args.num_iso)
+                                                  n_iso=config.args.num_iso,
+                                                  n_workers=config.args.iso_workers)
     else:
         # Large libraries: back the six big fragment/spectrum arrays with
         # read-only memory maps so cold pages evict to SSD instead of
