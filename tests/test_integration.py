@@ -31,6 +31,19 @@ import pytest
 # Path to test data
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 TEST_MZML = os.path.join(DATA_DIR, 'test_mode_filtered.mzML')
+
+
+def _find_run_folder(output_dir):
+    """The run's results folder in *output_dir*, or None.
+
+    Found by name -- <data file>_results, or run_failed_<data file>_results
+    if the run failed -- since the output folder also holds the experiment's
+    own folders, such as experiment_results/.
+    """
+    name = os.path.splitext(os.path.basename(TEST_MZML))[0] + "_results"
+    folders = [d for d in os.listdir(output_dir)
+               if os.path.isdir(os.path.join(output_dir, d)) and d.endswith(name)]
+    return os.path.join(output_dir, folders[0]) if folders else None
 TEST_LIBRARY = os.path.join(DATA_DIR, 'filtered_library.tsv')
 TEST_CONFIG = os.path.join(DATA_DIR, 'test_mode.json')
 
@@ -76,9 +89,7 @@ def pipeline_results(request):
         exit_code = e.code
 
     # Find results folder
-    results_folders = [d for d in os.listdir(temp_dir)
-                      if os.path.isdir(os.path.join(temp_dir, d))]
-    results_folder = os.path.join(temp_dir, results_folders[0]) if results_folders else None
+    results_folder = _find_run_folder(temp_dir)
 
     # Provide results to tests
     yield {
@@ -215,9 +226,7 @@ def silac_pipeline_results(request):
     except SystemExit as e:
         exit_code = e.code
 
-    results_folders = [d for d in os.listdir(temp_dir)
-                      if os.path.isdir(os.path.join(temp_dir, d))]
-    results_folder = os.path.join(temp_dir, results_folders[0]) if results_folders else None
+    results_folder = _find_run_folder(temp_dir)
 
     yield {
         'output_dir': temp_dir,
