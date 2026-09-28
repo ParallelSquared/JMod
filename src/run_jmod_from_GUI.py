@@ -120,7 +120,7 @@ class JModGUI(ThemedTk):
         self.logging_frame = ttk.LabelFrame(self, text="Logging")
         self.logging_frame.grid(row=0, column=11, columnspan=10, rowspan=6, padx=10, pady=3, sticky="ew")
 
-        self.text_widget = tk.Text(self.logging_frame, height=52, width=100)
+        self.text_widget = tk.Text(self.logging_frame, height=52, width=95)
         self.text_widget.pack(fill="both", expand=True)
 
 
@@ -206,7 +206,7 @@ class JModGUI(ThemedTk):
         self.mzml_button = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=self.select_mzml)
         self.mzml_button.grid(row=0, column=2, padx=10, pady=10)
         # .d is a directory, so it needs askdirectory rather than the file dialog.
-        self.d_button = ttk.Button(self.input_frame, text="Browse .d", command=self.select_d_folder)
+        self.d_button = ttk.Button(self.input_frame, text=".d", command=self.select_d_folder)
         self.d_button.grid(row=0, column=3, padx=(0, 10), pady=10)
         Hovertip(self.d_button, "Add a Bruker timsTOF .d folder ")
         # Add a "Clear All" button
@@ -238,6 +238,11 @@ class JModGUI(ThemedTk):
         self.presets_label.grid(row=0, column=1, padx=10, pady=10)
         self.json_button_in = ttk.Button(self.presets_frame, text="Browse", style="Accent.TButton", command=lambda: self.select_json())
         self.json_button_in.grid(row=0, column=2, padx=10, pady=10)
+        # An empty column as wide as Input Files' .d column, so this Browse lines up
+        # under the Browse buttons above (the two frames lay out their columns
+        # separately).  Kept in step with the .d button's actual width (+ its padding)
+        self.d_button.bind("<Configure>", lambda event: self.presets_frame.columnconfigure(
+            3, minsize=event.width + 10), add="+")
 
         ####         MS Frame      #######
         self.ms_frame = ttk.LabelFrame(self, text="MS Settings")
@@ -321,15 +326,14 @@ class JModGUI(ThemedTk):
         self.isotopes_dropdown.grid(row=1, column=7, padx=5, pady=5, sticky="w")
         self.isotopes_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
 
-        # Apex Jitter (label + combobox)
-        self.apex_jitter_lab = ttk.Label(self.ms_frame, text="Apex Jitter:")
-        self.apex_jitter_lab.grid(row=2, column=0, padx=20, pady=5, sticky="e")
-        Hovertip(self.apex_jitter_lab, "Maximum MS1 cycles a channel's apex can drift from the group-voted apex via monotonic ascent during MS1 quant (0 = no drift, channels pinned to voted apex)")
-        self.apex_jitter_var = tk.IntVar(value=0)
-        default_dict["apex_jitter"]["tk_handle"] = self.apex_jitter_var
-        self.apex_jitter_dropdown = ttk.Combobox(self.ms_frame, textvariable=self.apex_jitter_var, values=list(range(0, 11)), width=3, state="readonly")
-        self.apex_jitter_dropdown.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-        self.apex_jitter_dropdown.bind("<<ComboboxSelected>>", on_combobox_select)
+        # Match between runs (label + checkbox)
+        self.mbr_lab = ttk.Label(self.ms_frame, text="MBR:")
+        self.mbr_lab.grid(row=2, column=0, padx=20, pady=5, sticky="e")
+        Hovertip(self.mbr_lab, "Match between runs: after every file is searched, search them all again against a library of their IDs, with retention times aligned across runs")
+        self.mbr_var = tk.BooleanVar(value=False)
+        default_dict["mbr"]["tk_handle"] = self.mbr_var
+        self.mbr_cb = ttk.Checkbutton(self.ms_frame, variable=self.mbr_var)
+        self.mbr_cb.grid(row=2, column=1, padx=5, pady=5, sticky="w")
 
         ####         Multiplex Frame      #######
         self.multiplex_frame = ttk.LabelFrame(self, text="Multiplexing")
@@ -1794,6 +1798,16 @@ class JModGUI(ThemedTk):
             if not all([x.get() for x in self.tag_checkbox_list]): ##if the user has specified only specific tag channels
                 new_tag_name = self.generate_tag_subset(base_tag_name)
                 config_args_dict['tag'] = new_tag_name
+
+        # Match between runs needs runs to match between.  (From the command line
+        # one file only warns and skips MBR; here the user can still fix it.)
+        if run and config_args_dict['mbr'] and len(mzml_paths) < 2:
+            tk.messagebox.showerror(
+                "Match Between Runs",
+                f"Match between runs needs two or more data files, but {len(mzml_paths)} "
+                f"{'is' if len(mzml_paths) == 1 else 'are'} selected.\n\n"
+                "Add more files, or turn MBR off.")
+            return None
         return config_args_dict
     
 
