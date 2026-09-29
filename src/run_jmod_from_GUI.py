@@ -673,6 +673,11 @@ class JModGUI(ThemedTk):
     ####         Logging Funcs      #######
 
     def poll_log_queue(self):
+        self.drain_log_queue()
+        self.after(100, self.poll_log_queue)
+
+    def drain_log_queue(self):
+        """Show every record waiting in the log queue"""
         while True:
             try:
                 record = self.log_queue.get_nowait()
@@ -682,9 +687,8 @@ class JModGUI(ThemedTk):
                 self.tk_handler.emit(record)
             except Exception:
                 pass
-        self.after(100, self.poll_log_queue)
 
-    
+
     #######     input funcs      #######
 
     def select_mzml(self):
@@ -1539,14 +1543,24 @@ class JModGUI(ThemedTk):
             self.queue_add_button.config(state="normal")
 
 
-    def check_process(self, p):
+    def check_process(self, p, experiment_idx):
         """
-        While main is running as a process, check every 1 second whether it is still running.
+        While an experiment is running as a process, check every 1 second whether it is still running.
         Errors reach the log panel through the log queue.
-        If the process is no longer running for any reason, make run button clickable
+        When it has ended, start the next experiment; after the last, make run button clickable
         """
         if p.is_alive():
-            self.after(1_000, lambda: self.check_process(p))
+            self.after(1_000, lambda: self.check_process(p, experiment_idx))
+            return
+        # main reports its own errors, so a non-zero exit code means the process
+        # itself died (e.g. killed for running out of memory)
+        if p.exitcode != 0 and not self._stop_requested:
+            self.drain_log_queue()  # the experiment's last lines come before this one
+            logging.getLogger("GUI").error(
+                f"Experiment {experiment_idx} of {self._n_experiments} stopped unexpectedly "
+                f"(exit code {p.exitcode})")
+        if self._pending_experiments:
+            self.start_next_experiment()
         else:
             self.enable_buttons()
 
@@ -1558,10 +1572,10 @@ class JModGUI(ThemedTk):
         get temp_filenames (JSONs) to run: Either create them with the function or get them from the queue
 
         Reset logger start time
-        Run_main_process in its own process and begin check_process checking
+        Run each experiment in its own process, one after another (start_next_experiment)
 
         Button: Run JMod
-        
+
         """
         if not hasattr(self, "queue_data") or self.queue_data == []: #JMod ran without Queue
             tmp_filenames = self.get_tmp_filenames()
@@ -1578,9 +1592,22 @@ class JModGUI(ThemedTk):
 
                 
         self.disable_buttons()
-        self.proc = multiprocessing.Process(target=run_main_process, args=(tmp_filenames, self.log_queue))
+        self._pending_experiments = list(enumerate(tmp_filenames, start=1))
+        self._n_experiments = len(tmp_filenames)
+        self._stop_requested = False
+        self.start_next_experiment()
+
+    def start_next_experiment(self):
+        """
+        Run the next pending experiment in a new process of its own, so nothing one
+        experiment sets (config.args, additional_config's module globals) reaches the next
+        """
+        experiment_idx, tmp_filename = self._pending_experiments.pop(0)
+        self.proc = multiprocessing.Process(
+            target=run_main_process,
+            args=(tmp_filename, self.log_queue, experiment_idx, self._n_experiments))
         self.proc.start()
-        self.check_process(self.proc)
+        self.check_process(self.proc, experiment_idx)
 
     def get_tmp_filenames(self):
         """
@@ -1603,9 +1630,11 @@ class JModGUI(ThemedTk):
 
     def end_main(self, show_message=True):
         """
-        Terminate the process
+        Terminate the process, and drop the experiments still waiting to run
         Called by: Stop button or closing TK window
         """
+        self._pending_experiments = []
+        self._stop_requested = True
         if show_message is True:
             logging.getLogger("GUI").info("")
             logging.getLogger("GUI").info("Process Manually Terminated.\n", extra={"highlight": True})
@@ -1972,10 +2001,11 @@ class JModGUI(ThemedTk):
 
 
 
-def run_main_process(tmp_filenames, log_queue):
+def run_main_process(tmp_filename, log_queue, experiment_idx, n_experiments):
     """
-    Run JMod in a separate process.
-    This is a standalone function so it can be safely used with multiprocessing.
+    Run one experiment (its config JSON, *tmp_filename*) in a separate process.
+    The GUI starts a new process for each experiment, so every one begins from freshly
+    imported modules. This is a standalone function so it can be safely used with multiprocessing.
     """
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     # from src.run_jmod import main
@@ -1989,23 +2019,23 @@ def run_main_process(tmp_filenames, log_queue):
     logger.addHandler(qh)
     logger.setLevel(logging.DEBUG)
 
-    for i, tmp_filename in enumerate(tmp_filenames, start=1):
-        if i > 1:
-            logger.info("")
-        logger.info(f"Running JMod: Experiment {i} of {len(tmp_filenames)}\n",
-                    extra={"highlight": True})
-        # main logs its own errors to this panel and returns "failed"; this only
-        # catches what escapes it, such as a failure importing the pipeline
-        try:
-            import src.config as config
-            from src.run_jmod import main
-            config.ran_from_GUI = True  # switches on the progress lines meant for the GUI panel
-            main(tmp_filename)
-        except Exception:
-            logger.error("JMod stopped: unexpected error", exc_info=True)
+    if experiment_idx > 1:
+        logger.info("")
+    logger.info(f"Running JMod: Experiment {experiment_idx} of {n_experiments}\n",
+                extra={"highlight": True})
+    # main logs its own errors to this panel and returns "failed"; this only
+    # catches what escapes it, such as a failure importing the pipeline
+    try:
+        import src.config as config
+        from src.run_jmod import main
+        config.ran_from_GUI = True  # switches on the progress lines meant for the GUI panel
+        main(tmp_filename)
+    except Exception:
+        logger.error("JMod stopped: unexpected error", exc_info=True)
 
-    logger.info ("")
-    logger.info("JMod Finished") #if no exceptions
+    if experiment_idx == n_experiments:
+        logger.info ("")
+        logger.info("JMod Finished") #if no exceptions
 
 
 

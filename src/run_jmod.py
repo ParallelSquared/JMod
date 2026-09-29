@@ -225,7 +225,7 @@ def _start_experiment_log():
 
     # Log the configuration that will be used
     logger.info("Using configuration:")
-    logger.info(config.args)
+    logger.debug(config.args)
     logger.info("")
     if config.args.mzml_folder:
         logger.info(f"Data files found in {config.args.mzml_folder}")

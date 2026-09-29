@@ -63,11 +63,8 @@ class Test_run_main_process():
 
 
     def test_run_main_process_success(self, tmp_path, log_queue):
-        tmp_files = []
-        for i in range(2):
-            p = tmp_path / f"tmp_{i}.txt"
-            p.write_text("test")
-            tmp_files.append(str(p))
+        tmp_file = tmp_path / "tmp_0.txt"
+        tmp_file.write_text("test")
 
         fake_run_jmod = types.ModuleType("src.run_jmod")
         fake_run_jmod.main = MagicMock(return_value=None)
@@ -87,13 +84,60 @@ class Test_run_main_process():
             mock_logger = MagicMock()
             mock_get_logger.return_value = mock_logger
 
-            run_main_process(tmp_files, log_queue)
+            run_main_process(str(tmp_file), log_queue, 1, 2)
 
-            # main should be called once per file
-            assert mock_main.call_count == 2
+            # One process runs one experiment
+            mock_main.assert_called_once_with(str(tmp_file))
 
             # sys.exit should NOT be called
             mock_exit.assert_not_called()
+
+
+class TestExperimentQueue:
+    """The GUI runs each experiment in its own process, one after another."""
+
+    @pytest.fixture
+    def gui(self):
+        # check_process called on a stand-in for the GUI object: no window is needed
+        import src.run_jmod_from_GUI as gui_module
+        stand_in = types.SimpleNamespace(after=MagicMock(), start_next_experiment=MagicMock(),
+                                         enable_buttons=MagicMock(), drain_log_queue=MagicMock(),
+                                         _pending_experiments=[], _n_experiments=2,
+                                         _stop_requested=False)
+        return lambda p, idx: gui_module.JModGUI.check_process(stand_in, p, idx), stand_in
+
+    @staticmethod
+    def _ended_process(exitcode):
+        return MagicMock(is_alive=MagicMock(return_value=False), exitcode=exitcode)
+
+    def test_an_ended_experiment_starts_the_next(self, gui):
+        check_process, stand_in = gui
+        stand_in._pending_experiments = [(2, "second.json")]
+        check_process(self._ended_process(0), 1)
+        stand_in.start_next_experiment.assert_called_once()
+        stand_in.enable_buttons.assert_not_called()
+
+    def test_the_last_experiment_ending_enables_the_buttons(self, gui):
+        check_process, stand_in = gui
+        check_process(self._ended_process(0), 2)
+        stand_in.start_next_experiment.assert_not_called()
+        stand_in.enable_buttons.assert_called_once()
+
+    def test_a_process_that_died_is_reported_and_the_queue_goes_on(self, gui):
+        check_process, stand_in = gui
+        stand_in._pending_experiments = [(2, "second.json")]
+        with patch("src.run_jmod_from_GUI.logging.getLogger") as mock_get_logger:
+            check_process(self._ended_process(3221225477), 1)
+        assert "Experiment 1 of 2 stopped unexpectedly" in mock_get_logger.return_value.error.call_args[0][0]
+        stand_in.start_next_experiment.assert_called_once()
+
+    def test_a_stopped_experiment_is_not_reported(self, gui):
+        check_process, stand_in = gui
+        stand_in._stop_requested = True
+        with patch("src.run_jmod_from_GUI.logging.getLogger") as mock_get_logger:
+            check_process(self._ended_process(-15), 1)
+        mock_get_logger.return_value.error.assert_not_called()
+        stand_in.enable_buttons.assert_called_once()
 
 
 class TestOfferJsonDataFiles:
