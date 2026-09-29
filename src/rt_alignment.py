@@ -1637,12 +1637,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     # print(f"Fitting the {config.n_most_intense} most intense spectra")
     
     ms1spectra = dia_spectra.ms1scans
-    ms2spectra = dia_spectra.ms2scans
-    # """ 
-    ms1_rt = np.array([i.RT for i in ms1spectra])
+    # ms2spectra = dia_spectra.ms2scans
+    # # """ 
+    # ms1_rt = np.array([i.RT for i in ms1spectra])
     
-    all_keys = list(librarySpectra)
-    rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
+    # all_keys = list(librarySpectra)
+    # rt_mz = np.array([[i["iRT"], i["prec_mz"]] for i in librarySpectra.values()])
     
 
     # Run a preliminary search returning results at the PSM level
