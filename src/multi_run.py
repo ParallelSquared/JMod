@@ -14,6 +14,7 @@
 
 import math
 import os
+from typing import NamedTuple
 
 import matplotlib
 matplotlib.use("Agg")
@@ -52,6 +53,29 @@ _GRID_COLOR = "#e4e3df"
 _SURFACE_COLOR = "#ffffff"
 
 
+class _Level(NamedTuple):
+    """What the global q-value plots of one level (precursor or protein) are about."""
+    key: str             # the column the global q-value is computed per
+    noun: str            # e.g. "precursor", in the labels
+    global_q: str        # its global q-value, in the labels
+    run_level_fdr: str   # its run-level FDR, in the labels
+    lost_file: str       # plot_lost_to_global_q's file
+    best_run_file: str   # plot_best_score_run's file
+    completeness_file: str  # plot_data_completeness's file
+
+
+_PRECURSOR_LEVEL = _Level("untag_prec", "precursor", "global q-value", "run-level FDR",
+                          "08_precursors_lost_to_global_q.png", "09_precursor_best_score_run.png",
+                          "03_precursor_data_completeness.png")
+_PROTEIN_LEVEL = _Level("protein", "protein", "global protein q-value", "run-level protein FDR",
+                        "10_proteins_lost_to_global_q.png", "12_protein_best_score_run.png",
+                        "04_protein_data_completeness.png")
+
+# plot_proteins_lost_by_precursor_count's last column holds this many
+# precursors and more, so a long tail of large proteins stays readable
+_MAX_PRECURSOR_COLUMN = 10
+
+
 def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_threshold):
     """Combine the completed runs into one table, and plot it.
 
@@ -59,13 +83,14 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     folder.  Writes an experiment_results folder in *experiment_dir*,
     datestamped if the name is taken, holding combined_filtered_IDs.parquet:
     every run's IDs that pass the run-level FDR, with a global q-value per
-    untagged precursor.  Nothing is filtered on the global q-value; that is
-    left to the user.  The plots go there too; those that compare runs only
+    untagged precursor and per protein.  Nothing is filtered on the global
+    q-values; that is left to the user.  The plots go there too; those that compare runs only
     when there are enough runs to compare.  Returns the combined table.
     """
     logger.info("")
     logger.info(f"Combining the results of {len(completed_run_folders)} run(s)")
-    df, untag_prec_global_qs = collect_results(completed_run_folders, target_decoy_ratio, fdr_threshold)
+    df, untag_prec_global_qs, protein_global_qs = collect_results(completed_run_folders, target_decoy_ratio,
+                                                                  fdr_threshold)
 
     results_dir = datestamped(os.path.join(experiment_dir, "experiment_results"))
     os.makedirs(results_dir)
@@ -74,30 +99,36 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
 
     run_idxs = sorted(completed_run_folders)
     precursors = precursors_per_run(df, fdr_threshold)
-    # The plots' file names are numbered in reading order: identifications,
-    # completeness, quantity, then the global q-value's diagnostics
+    proteins = proteins_per_run(df, fdr_threshold)
+    # Made in the order of their numbers: identifications, completeness,
+    # quantity, then the global q-values' diagnostics, precursors before
+    # proteins.  Those that compare runs are made only when there are enough runs
+    n_runs = len(run_idxs)
     plot_ids_per_run(precursors, run_idxs, fdr_threshold, results_dir)
-    plot_proteins_per_run(df, run_idxs, fdr_threshold, results_dir)
+    plot_proteins_per_run(proteins, run_idxs, fdr_threshold, results_dir)
+    if n_runs >= 2:
+        plot_data_completeness(precursors, _PRECURSOR_LEVEL, n_runs, fdr_threshold, results_dir)
+        plot_data_completeness(proteins, _PROTEIN_LEVEL, n_runs, fdr_threshold, results_dir)
     plot_summed_intensity_per_run(precursors, run_idxs, results_dir)
     plot_intensity_per_run(precursors, run_idxs, results_dir)
-    # These compare runs
-    if len(run_idxs) >= 2:
-        plot_lost_to_global_q(precursors, len(run_idxs), fdr_threshold, results_dir)
-        plot_best_score_run(untag_prec_global_qs, run_idxs, results_dir)
-        plot_data_completeness(precursors, len(run_idxs), fdr_threshold, results_dir)
-    if len(run_idxs) >= 3:
+    if n_runs >= 3:
         plot_run_correlation(precursors, run_idxs, results_dir)
+    if n_runs >= 2:
+        plot_lost_to_global_q(precursors, _PRECURSOR_LEVEL, n_runs, fdr_threshold, results_dir)
+        plot_best_score_run(untag_prec_global_qs, _PRECURSOR_LEVEL, run_idxs, results_dir)
+        plot_lost_to_global_q(proteins, _PROTEIN_LEVEL, n_runs, fdr_threshold, results_dir)
+        plot_proteins_lost_by_precursor_count(df, fdr_threshold, results_dir)
+        plot_best_score_run(protein_global_qs, _PROTEIN_LEVEL, run_idxs, results_dir)
     return df
 
 
 def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
-    """Every run's IDs, with a global q-value for each untagged precursor.
+    """Every run's IDs, with a global q-value for each untagged precursor and
+    for each protein (global_qvalues).
 
-    The global q-value ranks each untagged precursor by its best PredVal across
-    runs and channels, and counts targets and decoys as the per-run q-value
-    does.  Returns (the run-level IDs that pass *fdr_threshold*, sorted by
-    precursor; one row per untagged precursor with its best score, the run it
-    came from and its global q-value).
+    Returns (the run-level IDs that pass *fdr_threshold*, sorted by precursor,
+    with both global q-values; global_qvalues' table for untagged precursors;
+    and for proteins).
     """
     df = pl.concat([
         pl.scan_parquet(os.path.join(folder_path, "outputs", "all_IDs_filtered.parquet"))
@@ -105,62 +136,30 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
         for run_idx, folder_path in folder_path_dict.items()
     ], how="vertical_relaxed")  # a column's type can differ between runs (e.g. channel int vs float)
 
-    # Timeplex runs also carry each ID's time channel
-    time_channel = ["time_channel"] if "time_channel" in df.collect_schema().names() else []
+    # Kept when the runs' results carry them: timeplex runs have each ID's time
+    # channel, and coeff and prec_im are there when the results were written with them
+    available = df.collect_schema().names()
+    time_channel, coeff, prec_im = ([c] if c in available else [] for c in ("time_channel", "coeff", "prec_im"))
     df = (
         df
         .select(["run_idx", "file_name", "protein", "seq", "z", "channel", "silac_channel",
                  *time_channel,
                  "PredVal", "Qvalue", "BestChannel_Qvalue", "Protein_Qvalue",
-                 "plex_Area", "coeff", "stripped_seq", "untag_seq", "untag_prec",
-                 "mz", "rt", "prec_im", "is_decoy"])
+                 "plex_Area", *coeff, "stripped_seq", "untag_seq", "untag_prec",
+                 "mz", "rt", *prec_im, "is_decoy"])
         .with_columns(
             (pl.col("seq") + pl.lit("_") + pl.col("z").cast(pl.Int16).cast(pl.String)).alias("Prec")
         )
     )
 
-    untag_prec_scores = (
-        df.group_by("untag_prec")  ##across run, channel, SILAC channel
-        .agg(
-            pl.col("PredVal").max().alias("MaxPredVal"),
-            pl.col("is_decoy").first().alias("is_decoy"), ##This assumes that no target decoy collisions have made it this far
-            # Ties go to the earliest run
-            pl.col("run_idx").sort_by(["PredVal", "run_idx"], descending=[True, False]).first().alias("BestRun"),
-            pl.col("run_idx").n_unique().alias("n_scored_runs"),
-        )
-    )
+    untag_prec_global_qs = global_qvalues(df, "untag_prec", target_decoy_ratio, "untag_prec_Global_Qvalue")
+    # Each protein by its best precursor; rows without a protein are left out, as
+    # the run-level protein q-value leaves them out (fdr_analysis.compute_protein_FDR)
+    protein_global_qs = global_qvalues(df.filter(pl.col("protein").is_not_null()), "protein",
+                                       target_decoy_ratio, "Protein_Global_Qvalue")
 
-    untag_prec_global_qs = (
-        untag_prec_scores
-        .sort("MaxPredVal", descending=True)
-        .with_columns(
-            (~pl.col("is_decoy")).cast(pl.Int64).cum_sum().alias("n_target"),
-            pl.col("is_decoy").cast(pl.Int64).cum_sum().alias("n_decoy"),
-        )
-        # Tied scores are a single threshold step: give every precursor in a tie
-        # the counts from its end, so the q-value doesn't depend on row order
-        .with_columns(
-            pl.col("n_target").max().over("MaxPredVal"),
-            pl.col("n_decoy").max().over("MaxPredVal"),
-        )
-    )
-
-    untag_prec_global_qs = (
-        untag_prec_global_qs
-        .with_columns(
-            # As the per-run q-value (fdr_analysis.score_precursors)
-            ((1 + pl.col("n_decoy")) / pl.col("n_target") * target_decoy_ratio).alias("FDR")
-        )
-        .with_columns(
-            pl.col("FDR")
-            .reverse()
-            .cum_min()
-            .reverse()
-            .alias("untag_prec_Global_Qvalue")
-        )
-        .collect()
-    )
-
+    # Only targets are kept, so only the target proteins' q-values are joined
+    # (a decoy shares its target's protein name)
     df = (
         df
         .filter(pl.col("BestChannel_Qvalue") < fdr_threshold)
@@ -170,11 +169,68 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
             on="untag_prec",
             how="left",
         )
+        .join(
+            protein_global_qs.lazy().filter(~pl.col("is_decoy")).select(["protein", "Protein_Global_Qvalue"]),
+            on="protein",
+            how="left",
+        )
         .sort(["untag_prec", "Prec", "run_idx"])
         .collect()
     )
 
-    return df, untag_prec_global_qs
+    return df, untag_prec_global_qs, protein_global_qs
+
+
+def global_qvalues(df, key, target_decoy_ratio, qvalue_name):
+    """A global q-value for each *key* (untag_prec, or protein), over every run.
+
+    Each key's target and decoy are ranked by their best PredVal across runs,
+    channels and SILAC channels (and a protein's precursors), and targets and
+    decoys are counted as the per-run q-value does.  Returns one row per key and
+    is_decoy with its best score, the run it came from, and the q-value, named
+    *qvalue_name*.
+    """
+    scores = (
+        # A decoy shares its target's protein name, so they are told apart by is_decoy
+        df.group_by(key, "is_decoy")
+        .agg(
+            pl.col("PredVal").max().alias("MaxPredVal"),
+            # Ties go to the earliest run
+            pl.col("run_idx").sort_by(["PredVal", "run_idx"], descending=[True, False]).first().alias("BestRun"),
+            pl.col("run_idx").n_unique().alias("n_scored_runs"),
+        )
+    )
+
+    global_qs = (
+        scores
+        .sort("MaxPredVal", descending=True)
+        .with_columns(
+            (~pl.col("is_decoy")).cast(pl.Int64).cum_sum().alias("n_target"),
+            pl.col("is_decoy").cast(pl.Int64).cum_sum().alias("n_decoy"),
+        )
+        # Tied scores are a single threshold step: give every key in a tie the
+        # counts from its end, so the q-value doesn't depend on row order
+        .with_columns(
+            pl.col("n_target").max().over("MaxPredVal"),
+            pl.col("n_decoy").max().over("MaxPredVal"),
+        )
+    )
+
+    return (
+        global_qs
+        .with_columns(
+            # As the per-run q-value (fdr_analysis.score_precursors)
+            ((1 + pl.col("n_decoy")) / pl.col("n_target") * target_decoy_ratio).alias("FDR")
+        )
+        .with_columns(
+            pl.col("FDR")
+            .reverse()
+            .cum_min()
+            .reverse()
+            .alias(qvalue_name)
+        )
+        .collect()
+    )
 
 
 def precursors_per_run(df, fdr_threshold):
@@ -194,6 +250,19 @@ def precursors_per_run(df, fdr_threshold):
         .with_columns(
             pl.when(pl.col("area") > 0).then(pl.col("area").log(2)).alias("log2_area")
         )
+    )
+
+
+def proteins_per_run(df, fdr_threshold):
+    """One row per run and protein it identifies at the run-level protein
+    q-value, among its run-level precursor IDs, for the plots.
+
+    ``retained`` is whether the protein passes the global protein q-value.
+    """
+    return (
+        df.filter(pl.col("Protein_Qvalue") < fdr_threshold)
+        .group_by("run_idx", "protein")
+        .agg((pl.col("Protein_Global_Qvalue").first() < fdr_threshold).alias("retained"))
     )
 
 
@@ -326,8 +395,8 @@ def plot_ids_per_run(precursors, run_idxs, fdr_threshold, results_dir):
     # A thin surface-coloured edge keeps the two segments apart
     ax.bar(run_idxs, retained, width=width, color=_BLUE, edgecolor=_SURFACE_COLOR, linewidth=0.8,
            label=f"Pass the global q-value ({fdr_threshold:g})")
-    ax.bar(run_idxs, lost, bottom=retained, width=width, color=_LIGHT_BLUE, edgecolor=_SURFACE_COLOR,
-           linewidth=0.8, label="Removed by the global q-value")
+    _unstick(ax.bar(run_idxs, lost, bottom=retained, width=width, color=_LIGHT_BLUE, edgecolor=_SURFACE_COLOR,
+                    linewidth=0.8, label="Removed by the global q-value"))
     _label_columns(ax, run_idxs, retained + lost, "{:,}")
     _style_axes(ax, run_idxs)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
@@ -335,28 +404,36 @@ def plot_ids_per_run(precursors, run_idxs, fdr_threshold, results_dir):
     ax.set_ylabel("Precursors", color=_MUTED_COLOR)
     ax.set_title(f"Precursors per run (run-level q-value < {fdr_threshold:g})", loc="left", color=_TEXT_COLOR)
     _legend(ax)
-    _save(fig, results_dir, "01_ids_per_run.png")
+    _save(fig, results_dir, "01_precursors_per_run.png")
 
 
-def plot_proteins_per_run(df, run_idxs, fdr_threshold, results_dir):
-    """Columns: each run's proteins at the run-level protein q-value, among its
-    run-level precursor IDs."""
-    ##TODO stack by the global protein q-value, as plot_ids_per_run does for
-    ##precursors, once there is one
-    counts = dict(df.filter(pl.col("Protein_Qvalue") < fdr_threshold)
-                  .group_by("run_idx").agg(pl.col("protein").n_unique())
-                  .iter_rows())
-    proteins = np.array([counts.get(r, 0) for r in run_idxs])
+def plot_proteins_per_run(proteins, run_idxs, fdr_threshold, results_dir):
+    """Stacked columns: each run's proteins at the run-level protein q-value,
+    among its run-level precursor IDs, split into those the global protein
+    q-value keeps and, on top, those it removes."""
+    counts = {r: (0, 0) for r in run_idxs}
+    for run_idx, retained, lost in (proteins.group_by("run_idx")
+                                    .agg(pl.col("retained").sum(), (~pl.col("retained")).sum().alias("lost"))
+                                    .iter_rows()):
+        counts[run_idx] = (retained, lost)
+    retained = np.array([counts[r][0] for r in run_idxs])
+    lost = np.array([counts[r][1] for r in run_idxs])
 
     fig, ax = plt.subplots(figsize=(_figure_width(len(run_idxs)), 4))
-    ax.bar(run_idxs, proteins, width=_bar_width(fig, len(run_idxs)), color=_BLUE)
-    _label_columns(ax, run_idxs, proteins, "{:,}")
+    width = _bar_width(fig, len(run_idxs))
+    # A thin surface-coloured edge keeps the two segments apart
+    ax.bar(run_idxs, retained, width=width, color=_BLUE, edgecolor=_SURFACE_COLOR, linewidth=0.8,
+           label=f"Pass the global protein q-value ({fdr_threshold:g})")
+    _unstick(ax.bar(run_idxs, lost, bottom=retained, width=width, color=_LIGHT_BLUE, edgecolor=_SURFACE_COLOR,
+                    linewidth=0.8, label="Removed by the global protein q-value"))
+    _label_columns(ax, run_idxs, retained + lost, "{:,}")
     _style_axes(ax, run_idxs)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     ax.set_xlabel("Run", color=_MUTED_COLOR)
     ax.set_ylabel("Proteins", color=_MUTED_COLOR)
     ax.set_title(f"Proteins per run (run-level protein q-value < {fdr_threshold:g})",
                  loc="left", color=_TEXT_COLOR)
+    _legend(ax)
     _save(fig, results_dir, "02_proteins_per_run.png")
 
 
@@ -374,7 +451,7 @@ def plot_summed_intensity_per_run(precursors, run_idxs, results_dir):
     ax.set_ylabel("log2 summed plex_Area", color=_MUTED_COLOR)
     ax.set_title("Summed intensity per run", loc="left", color=_TEXT_COLOR)
     _subtitle(ax, f"{n_unquantified:,} IDs without a plex_Area left out")
-    _save(fig, results_dir, "04_summed_intensity_per_run.png")
+    _save(fig, results_dir, "05_summed_intensity_per_run.png")
 
 
 def plot_intensity_per_run(precursors, run_idxs, results_dir):
@@ -398,17 +475,21 @@ def plot_intensity_per_run(precursors, run_idxs, results_dir):
     ax.set_ylabel("log2 plex_Area", color=_MUTED_COLOR)
     ax.set_title("Intensity per run", loc="left", color=_TEXT_COLOR)
     _subtitle(ax, "Whiskers at 1.5 x IQR; outliers not drawn")
-    _save(fig, results_dir, "05_intensity_per_run.png")
+    _save(fig, results_dir, "06_intensity_per_run.png")
 
 
-def plot_lost_to_global_q(precursors, n_runs, fdr_threshold, results_dir):
-    """Columns: the precursors the global q-value removes, by the number of
-    runs they pass the run-level FDR in."""
-    per_precursor = (
-        precursors.group_by("untag_prec")
+def plot_lost_to_global_q(per_run, level, n_runs, fdr_threshold, results_dir):
+    """Columns: the precursors (or proteins, per *level*) the global q-value
+    removes, by the number of runs they pass the run-level FDR in.
+
+    *per_run* has a row per run and precursor (protein) it identifies, as
+    precursors_per_run (proteins_per_run) gives.
+    """
+    per_key = (
+        per_run.group_by(level.key)
         .agg(pl.col("run_idx").n_unique().alias("n_runs"), pl.col("retained").first())
     )
-    lost = per_precursor.filter(~pl.col("retained"))
+    lost = per_key.filter(~pl.col("retained"))
     lost_by_n_runs = dict(lost.group_by("n_runs").len().iter_rows())
 
     x = np.arange(1, n_runs + 1)
@@ -422,31 +503,32 @@ def plot_lost_to_global_q(precursors, n_runs, fdr_threshold, results_dir):
     if not counts.any():
         ax.set_ylim(0, 1)
         ax.text(0.5, 0.5, "None", transform=ax.transAxes, ha="center", va="center", color=_MUTED_COLOR)
-    ax.set_xlabel("Runs the precursor passes the run-level FDR in", color=_MUTED_COLOR)
-    ax.set_ylabel("Precursors", color=_MUTED_COLOR)
-    ax.set_title(f"Precursors failing the global q-value ({fdr_threshold:g}): "
-                 f"{lost.height:,} of {per_precursor.height:,}",
+    ax.set_xlabel(f"Runs the {level.noun} passes the {level.run_level_fdr} in", color=_MUTED_COLOR)
+    ax.set_ylabel(f"{level.noun.capitalize()}s", color=_MUTED_COLOR)
+    ax.set_title(f"{level.noun.capitalize()}s failing the {level.global_q} ({fdr_threshold:g}): "
+                 f"{lost.height:,} of {per_key.height:,}",
                  loc="left", color=_TEXT_COLOR)
-    _save(fig, results_dir, "07_lost_to_global_q.png")
+    _save(fig, results_dir, level.lost_file)
 
 
-def plot_best_score_run(untag_prec_global_qs, run_idxs, results_dir):
-    """Which run each precursor's best score, the one the global q-value uses,
-    came from: one panel for targets, one for decoys.
+def plot_best_score_run(global_qs, level, run_idxs, results_dir):
+    """Which run each precursor's (or protein's, per *level*) best score, the
+    one the global q-value uses, came from: one panel for targets, one for
+    decoys.  *global_qs* is global_qvalues' table.
 
-    Only precursors scored in two or more runs are counted; for the rest there
-    is no choice of run.  If no run's scores run higher than the others',
-    each run holds about an even share.
+    Only those scored in two or more runs are counted; for the rest there is
+    no choice of run.  If no run's scores run higher than the others', each
+    run holds about an even share.
     """
-    shared = untag_prec_global_qs.filter(pl.col("n_scored_runs") >= 2)
+    shared = global_qs.filter(pl.col("n_scored_runs") >= 2)
     even_share = 100 / len(run_idxs)
 
     fig, axes = plt.subplots(2, 1, sharex=True, figsize=(_figure_width(len(run_idxs)), 6))
     for ax, is_decoy, name, color in ((axes[0], False, "Targets", _BLUE),
                                       (axes[1], True, "Decoys", _ORANGE)):
-        precursors = shared.filter(pl.col("is_decoy") == is_decoy)
-        best_by_run = dict(precursors.group_by("BestRun").len().iter_rows())
-        shares = np.array([100 * best_by_run.get(r, 0) / max(precursors.height, 1) for r in run_idxs])
+        subset = shared.filter(pl.col("is_decoy") == is_decoy)
+        best_by_run = dict(subset.group_by("BestRun").len().iter_rows())
+        shares = np.array([100 * best_by_run.get(r, 0) / max(subset.height, 1) for r in run_idxs])
 
         ax.bar(run_idxs, shares, width=_bar_width(fig, len(run_idxs)), color=color)
         ax.axhline(even_share, color=_MUTED_COLOR, linewidth=1)
@@ -454,24 +536,29 @@ def plot_best_score_run(untag_prec_global_qs, run_idxs, results_dir):
                     xytext=(0, 3), textcoords="offset points", ha="right", va="bottom",
                     fontsize=8, color=_MUTED_COLOR)
         _style_axes(ax, run_idxs)
-        ax.set_ylabel("% of precursors", color=_MUTED_COLOR)
-        ax.set_title(f"{name} ({precursors.height:,} scored in 2+ runs)",
+        ax.set_ylabel(f"% of {level.noun}s", color=_MUTED_COLOR)
+        ax.set_title(f"{name} ({subset.height:,} scored in 2+ runs)",
                      loc="left", fontsize=10, color=_TEXT_COLOR)
     axes[1].set_xlabel("Run", color=_MUTED_COLOR)
-    fig.suptitle("Run each precursor's best score came from", x=0.01, ha="left", color=_TEXT_COLOR)
-    _save(fig, results_dir, "08_best_score_run.png")
+    fig.suptitle(f"Run each {level.noun}'s best score came from", x=0.01, ha="left", color=_TEXT_COLOR)
+    _save(fig, results_dir, level.best_run_file)
 
 
-def plot_data_completeness(precursors, n_runs, fdr_threshold, results_dir):
-    """Lines: how many precursors are identified in at least k runs, for every
-    k, for all run-level IDs and for those that also pass the global q-value."""
-    per_precursor = (
-        precursors.group_by("untag_prec")
+def plot_data_completeness(per_run, level, n_runs, fdr_threshold, results_dir):
+    """Lines: how many precursors (or proteins, per *level*) are identified in
+    at least k runs, for every k, for all run-level IDs and for those that also
+    pass the global q-value.
+
+    *per_run* has a row per run and precursor (protein) it identifies, as
+    precursors_per_run (proteins_per_run) gives.
+    """
+    per_key = (
+        per_run.group_by(level.key)
         .agg(pl.col("run_idx").n_unique().alias("n_runs"), pl.col("retained").first())
     )
     k = np.arange(1, n_runs + 1)
-    n_all = per_precursor["n_runs"].to_numpy()
-    n_retained = per_precursor.filter(pl.col("retained"))["n_runs"].to_numpy()
+    n_all = per_key["n_runs"].to_numpy()
+    n_retained = per_key.filter(pl.col("retained"))["n_runs"].to_numpy()
     at_least_all = np.array([(n_all >= i).sum() for i in k])
     at_least_retained = np.array([(n_retained >= i).sum() for i in k])
 
@@ -480,14 +567,52 @@ def plot_data_completeness(precursors, n_runs, fdr_threshold, results_dir):
     ax.plot(k, at_least_all, color=_LIGHT_BLUE, linewidth=2, marker=marker, markersize=5,
             markeredgecolor=_SURFACE_COLOR, label="All run-level IDs")
     ax.plot(k, at_least_retained, color=_BLUE, linewidth=2, marker=marker, markersize=5,
-            markeredgecolor=_SURFACE_COLOR, label=f"Also pass the global q-value ({fdr_threshold:g})")
+            markeredgecolor=_SURFACE_COLOR, label=f"Also pass the {level.global_q} ({fdr_threshold:g})")
     _style_axes(ax, k)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     ax.set_xlabel("Identified in at least this many runs", color=_MUTED_COLOR)
-    ax.set_ylabel("Precursors", color=_MUTED_COLOR)
-    ax.set_title("Data completeness", loc="left", color=_TEXT_COLOR)
+    ax.set_ylabel(f"{level.noun.capitalize()}s", color=_MUTED_COLOR)
+    ax.set_title(f"{level.noun.capitalize()} data completeness", loc="left", color=_TEXT_COLOR)
     _legend(ax)
-    _save(fig, results_dir, "03_data_completeness.png")
+    _save(fig, results_dir, level.completeness_file)
+
+
+def plot_proteins_lost_by_precursor_count(df, fdr_threshold, results_dir):
+    """Columns: the proteins the global protein q-value removes, by how many
+    untagged precursors identify them.
+
+    Over the proteins at the run-level protein q-value in some run, counting
+    each one's untagged precursors among its run-level IDs in every run.  From
+    _MAX_PRECURSOR_COLUMN on, the counts share one column.
+    """
+    per_protein = (
+        df.filter(pl.col("Protein_Qvalue") < fdr_threshold)
+        .group_by("protein")
+        .agg(pl.col("untag_prec").n_unique().alias("n_precursors"),
+             (pl.col("Protein_Global_Qvalue").first() < fdr_threshold).alias("retained"))
+    )
+    lost = per_protein.filter(~pl.col("retained"))
+    lost_by_count = dict(lost.group_by(pl.col("n_precursors").clip(upper_bound=_MAX_PRECURSOR_COLUMN))
+                         .len().iter_rows())
+
+    x = np.arange(1, _MAX_PRECURSOR_COLUMN + 1)
+    counts = np.array([lost_by_count.get(n, 0) for n in x])
+
+    fig, ax = plt.subplots(figsize=(_figure_width(len(x)), 4))
+    ax.bar(x, counts, width=_bar_width(fig, len(x)), color=_BLUE)
+    _label_columns(ax, x, counts, "{:,}")
+    _style_axes(ax, x)
+    ax.set_xticks(x, [str(n) for n in x[:-1]] + [f"{x[-1]}+"])
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    if not counts.any():
+        ax.set_ylim(0, 1)
+        ax.text(0.5, 0.5, "None", transform=ax.transAxes, ha="center", va="center", color=_MUTED_COLOR)
+    ax.set_xlabel("Untagged precursors identifying the protein", color=_MUTED_COLOR)
+    ax.set_ylabel("Proteins", color=_MUTED_COLOR)
+    ax.set_title(f"Proteins failing the global protein q-value ({fdr_threshold:g}): "
+                 f"{lost.height:,} of {per_protein.height:,}",
+                 loc="left", color=_TEXT_COLOR)
+    _save(fig, results_dir, "11_proteins_lost_by_precursor_count.png")
 
 
 def plot_run_correlation(precursors, run_idxs, results_dir):
@@ -535,7 +660,7 @@ def plot_run_correlation(precursors, run_idxs, results_dir):
     ax.set_xlabel("Run", color=_MUTED_COLOR)
     ax.set_ylabel("Run", color=_MUTED_COLOR)
     ax.set_title("Run-to-run correlation of log2 plex_Area", loc="left", color=_TEXT_COLOR)
-    _save(fig, results_dir, "06_run_correlation.png")
+    _save(fig, results_dir, "07_run_correlation.png")
 
 
 def plot_library_size_by_run(targets, fdr_threshold, qvalue_column, mbr_dir):
@@ -607,6 +732,14 @@ def _bar_width(fig, n_columns):
     # A fraction of each slot, but never wider than about a quarter of an inch
     slot_inches = fig.get_figwidth() * 0.8 / n_columns
     return min(0.8, 0.25 / slot_inches)
+
+
+def _unstick(bars):
+    # A stacked segment's base is a sticky edge, which autoscaling will not pad
+    # past: sitting on the tallest column, it would leave no room above it for
+    # the column's label
+    for bar in bars:
+        bar.sticky_edges.y.clear()
 
 
 def _label_columns(ax, x, values, fmt):
