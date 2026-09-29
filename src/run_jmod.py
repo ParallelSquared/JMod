@@ -663,8 +663,7 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         for idx in range(len(rt_spls)):
             for key in spectrumLibrary:
                 plex_lib[key+(idx,)] = spectrumLibrary[key]
-            rt_mz.append([[rt_spls[idx](iRT[i]), mz_func(spectrumLibrary.prec_mz[i], iRT[i])]
-                          for i in range(n_entries)])
+            rt_mz.append(np.column_stack([rt_spls[idx](iRT), mz_func(spectrumLibrary.prec_mz, iRT)]))
         rt_mz = np.concatenate(rt_mz)
         # Column 2 as in the standard path.  This path replicates the library once
         # per plex, so the aligned IM has to be tiled to match row-for-row.
@@ -688,9 +687,9 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
             logger.warning("Decoy RT prediction requested but no RT models available (using empirical RT?)")
 
         rt_spl,mz_func = funcs[:2]
-        # Build rt_mz for ALL entries (target + decoy)
-        rt_mz = np.array([[rt_spl(iRT[i]), mz_func(spectrumLibrary.prec_mz[i], iRT[i])]
-                          for i in range(n_entries)])
+        # Build rt_mz for ALL entries (target + decoy).  The RT and m/z
+        # alignments are interpolators, applied to every entry at once
+        rt_mz = np.column_stack([rt_spl(iRT), mz_func(spectrumLibrary.prec_mz, iRT)])
         # Column 2: the library's IM mapped onto observed 1/K0 by the alignment.
         # Left all-NaN when the library carries no IM or the alignment did not
         # fit, which leaves every downstream IM gate inert.  Decoys keep their
