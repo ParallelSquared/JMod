@@ -58,16 +58,16 @@ class _Level(NamedTuple):
     key: str             # the column the global q-value is computed per
     noun: str            # e.g. "precursor", in the labels
     global_q: str        # its global q-value, in the labels
-    run_level_fdr: str   # its run-level FDR, in the labels
+    ids_file: str        # plot_ids_per_run's file
     lost_file: str       # plot_lost_to_global_q's file
     best_run_file: str   # plot_best_score_run's file
     completeness_file: str  # plot_data_completeness's file
 
 
-_PRECURSOR_LEVEL = _Level("untag_prec", "precursor", "global q-value", "run-level FDR",
+_PRECURSOR_LEVEL = _Level("untag_prec", "precursor", "global q-value", "01_precursors_per_run.png",
                           "08_precursors_lost_to_global_q.png", "09_precursor_best_score_run.png",
                           "03_precursor_data_completeness.png")
-_PROTEIN_LEVEL = _Level("protein", "protein", "global protein q-value", "run-level protein FDR",
+_PROTEIN_LEVEL = _Level("protein", "protein", "global protein q-value", "02_proteins_per_run.png",
                         "10_proteins_lost_to_global_q.png", "12_protein_best_score_run.png",
                         "04_protein_data_completeness.png")
 
@@ -104,8 +104,8 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     # quantity, then the global q-values' diagnostics, precursors before
     # proteins.  Those that compare runs are made only when there are enough runs
     n_runs = len(run_idxs)
-    plot_ids_per_run(precursors, run_idxs, fdr_threshold, results_dir)
-    plot_proteins_per_run(proteins, run_idxs, fdr_threshold, results_dir)
+    plot_ids_per_run(precursors, _PRECURSOR_LEVEL, run_idxs, fdr_threshold, results_dir)
+    plot_ids_per_run(proteins, _PROTEIN_LEVEL, run_idxs, fdr_threshold, results_dir)
     if n_runs >= 2:
         plot_data_completeness(precursors, _PRECURSOR_LEVEL, n_runs, fdr_threshold, results_dir)
         plot_data_completeness(proteins, _PROTEIN_LEVEL, n_runs, fdr_threshold, results_dir)
@@ -379,78 +379,54 @@ def _unit_name(unit, unit_columns):
     return ", ".join(parts)
 
 
-def plot_ids_per_run(precursors, run_idxs, fdr_threshold, results_dir):
-    """Stacked columns: each run's precursors at the run-level FDR, split into
-    those the global q-value keeps and, on top, those it removes."""
+def plot_ids_per_run(per_run, level, run_idxs, fdr_threshold, results_dir):
+    """Stacked columns: each run's precursors (or proteins, per *level*) at the
+    run-level q-value, split into those the global q-value keeps and, on top,
+    those it removes.
+
+    *per_run* has a row per run and precursor (protein) it identifies, as
+    precursors_per_run (proteins_per_run) gives.
+    """
     counts = {r: (0, 0) for r in run_idxs}
-    for run_idx, retained, lost in (precursors.group_by("run_idx")
+    for run_idx, retained, lost in (per_run.group_by("run_idx")
                                     .agg(pl.col("retained").sum(), (~pl.col("retained")).sum().alias("lost"))
                                     .iter_rows()):
         counts[run_idx] = (retained, lost)
     retained = np.array([counts[r][0] for r in run_idxs])
     lost = np.array([counts[r][1] for r in run_idxs])
 
+    noun = level.noun.capitalize()
     fig, ax = plt.subplots(figsize=(_figure_width(len(run_idxs)), 4))
     width = _bar_width(fig, len(run_idxs))
     # A thin surface-coloured edge keeps the two segments apart
     ax.bar(run_idxs, retained, width=width, color=_BLUE, edgecolor=_SURFACE_COLOR, linewidth=0.8,
-           label=f"Pass the global q-value ({fdr_threshold:g})")
+           label=f"Global Qvalue < {fdr_threshold:g}")
     _unstick(ax.bar(run_idxs, lost, bottom=retained, width=width, color=_LIGHT_BLUE, edgecolor=_SURFACE_COLOR,
-                    linewidth=0.8, label="Removed by the global q-value"))
+                    linewidth=0.8, label=f"Qvalue < {fdr_threshold:g}"))
     _label_columns(ax, run_idxs, retained + lost, "{:,}")
     _style_axes(ax, run_idxs)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     ax.set_xlabel("Run", color=_MUTED_COLOR)
-    ax.set_ylabel("Precursors", color=_MUTED_COLOR)
-    ax.set_title(f"Precursors per run (run-level q-value < {fdr_threshold:g})", loc="left", color=_TEXT_COLOR)
-    _legend(ax)
-    _save(fig, results_dir, "01_precursors_per_run.png")
-
-
-def plot_proteins_per_run(proteins, run_idxs, fdr_threshold, results_dir):
-    """Stacked columns: each run's proteins at the run-level protein q-value,
-    among its run-level precursor IDs, split into those the global protein
-    q-value keeps and, on top, those it removes."""
-    counts = {r: (0, 0) for r in run_idxs}
-    for run_idx, retained, lost in (proteins.group_by("run_idx")
-                                    .agg(pl.col("retained").sum(), (~pl.col("retained")).sum().alias("lost"))
-                                    .iter_rows()):
-        counts[run_idx] = (retained, lost)
-    retained = np.array([counts[r][0] for r in run_idxs])
-    lost = np.array([counts[r][1] for r in run_idxs])
-
-    fig, ax = plt.subplots(figsize=(_figure_width(len(run_idxs)), 4))
-    width = _bar_width(fig, len(run_idxs))
-    # A thin surface-coloured edge keeps the two segments apart
-    ax.bar(run_idxs, retained, width=width, color=_BLUE, edgecolor=_SURFACE_COLOR, linewidth=0.8,
-           label=f"Pass the global protein q-value ({fdr_threshold:g})")
-    _unstick(ax.bar(run_idxs, lost, bottom=retained, width=width, color=_LIGHT_BLUE, edgecolor=_SURFACE_COLOR,
-                    linewidth=0.8, label="Removed by the global protein q-value"))
-    _label_columns(ax, run_idxs, retained + lost, "{:,}")
-    _style_axes(ax, run_idxs)
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_xlabel("Run", color=_MUTED_COLOR)
-    ax.set_ylabel("Proteins", color=_MUTED_COLOR)
-    ax.set_title(f"Proteins per run (run-level protein q-value < {fdr_threshold:g})",
-                 loc="left", color=_TEXT_COLOR)
-    _legend(ax)
-    _save(fig, results_dir, "02_proteins_per_run.png")
+    ax.set_ylabel(f"{noun}s", color=_MUTED_COLOR)
+    ax.set_title(f"{noun}s Per Run", loc="center", color=_TEXT_COLOR)
+    _legend(ax, below=True)
+    _save(fig, results_dir, level.ids_file)
 
 
 def plot_summed_intensity_per_run(precursors, run_idxs, results_dir):
     """Columns: log2 of each run's summed plex_Area over its run-level IDs."""
     summed = dict(precursors.group_by("run_idx").agg(pl.col("area").sum()).iter_rows())
     log2_summed = np.array([math.log2(summed[r]) if summed.get(r, 0) > 0 else 0 for r in run_idxs])
-    n_unquantified = precursors.filter(pl.col("log2_area").is_null()).height
 
     fig, ax = plt.subplots(figsize=(_figure_width(len(run_idxs)), 4))
     ax.bar(run_idxs, log2_summed, width=_bar_width(fig, len(run_idxs)), color=_BLUE)
     _label_columns(ax, run_idxs, log2_summed, "{:.1f}")
     _style_axes(ax, run_idxs)
+    if log2_summed.max() > 0:
+        ax.set_ylim(top=log2_summed.max() * 1.1)  # room above the column labels
     ax.set_xlabel("Run", color=_MUTED_COLOR)
-    ax.set_ylabel("log2 summed plex_Area", color=_MUTED_COLOR)
-    ax.set_title("Summed intensity per run", loc="left", color=_TEXT_COLOR)
-    _subtitle(ax, f"{n_unquantified:,} IDs without a plex_Area left out")
+    ax.set_ylabel("log2 sum plex_Area", color=_MUTED_COLOR)
+    ax.set_title("Summed intensity per run", loc="center", color=_TEXT_COLOR)
     _save(fig, results_dir, "05_summed_intensity_per_run.png")
 
 
@@ -473,8 +449,7 @@ def plot_intensity_per_run(precursors, run_idxs, results_dir):
     _style_axes(ax, run_idxs, zero_baseline=False)
     ax.set_xlabel("Run", color=_MUTED_COLOR)
     ax.set_ylabel("log2 plex_Area", color=_MUTED_COLOR)
-    ax.set_title("Intensity per run", loc="left", color=_TEXT_COLOR)
-    _subtitle(ax, "Whiskers at 1.5 x IQR; outliers not drawn")
+    ax.set_title("Intensity per run", loc="center", color=_TEXT_COLOR)
     _save(fig, results_dir, "06_intensity_per_run.png")
 
 
@@ -503,11 +478,11 @@ def plot_lost_to_global_q(per_run, level, n_runs, fdr_threshold, results_dir):
     if not counts.any():
         ax.set_ylim(0, 1)
         ax.text(0.5, 0.5, "None", transform=ax.transAxes, ha="center", va="center", color=_MUTED_COLOR)
-    ax.set_xlabel(f"Runs the {level.noun} passes the {level.run_level_fdr} in", color=_MUTED_COLOR)
+    ax.set_xlabel(f"Number of Runs with Q < {fdr_threshold:g}", color=_MUTED_COLOR)
     ax.set_ylabel(f"{level.noun.capitalize()}s", color=_MUTED_COLOR)
     ax.set_title(f"{level.noun.capitalize()}s failing the {level.global_q} ({fdr_threshold:g}): "
                  f"{lost.height:,} of {per_key.height:,}",
-                 loc="left", color=_TEXT_COLOR)
+                 loc="center", color=_TEXT_COLOR)
     _save(fig, results_dir, level.lost_file)
 
 
@@ -516,17 +491,17 @@ def plot_best_score_run(global_qs, level, run_idxs, results_dir):
     one the global q-value uses, came from: one panel for targets, one for
     decoys.  *global_qs* is global_qvalues' table.
 
-    Only those scored in two or more runs are counted; for the rest there is
-    no choice of run.  If no run's scores run higher than the others', each
-    run holds about an even share.
+    Only those scored in every run are counted, so each run has the same
+    chance to hold the best score: if no run's scores run higher than the
+    others', each run holds about an even share.
     """
-    shared = global_qs.filter(pl.col("n_scored_runs") >= 2)
+    in_every_run = global_qs.filter(pl.col("n_scored_runs") == len(run_idxs))
     even_share = 100 / len(run_idxs)
 
     fig, axes = plt.subplots(2, 1, sharex=True, figsize=(_figure_width(len(run_idxs)), 6))
     for ax, is_decoy, name, color in ((axes[0], False, "Targets", _BLUE),
                                       (axes[1], True, "Decoys", _ORANGE)):
-        subset = shared.filter(pl.col("is_decoy") == is_decoy)
+        subset = in_every_run.filter(pl.col("is_decoy") == is_decoy)
         best_by_run = dict(subset.group_by("BestRun").len().iter_rows())
         shares = np.array([100 * best_by_run.get(r, 0) / max(subset.height, 1) for r in run_idxs])
 
@@ -537,10 +512,10 @@ def plot_best_score_run(global_qs, level, run_idxs, results_dir):
                     fontsize=8, color=_MUTED_COLOR)
         _style_axes(ax, run_idxs)
         ax.set_ylabel(f"% of {level.noun}s", color=_MUTED_COLOR)
-        ax.set_title(f"{name} ({subset.height:,} scored in 2+ runs)",
+        ax.set_title(f"{name} ({subset.height:,} scored in all runs)",
                      loc="left", fontsize=10, color=_TEXT_COLOR)
     axes[1].set_xlabel("Run", color=_MUTED_COLOR)
-    fig.suptitle(f"Run each {level.noun}'s best score came from", x=0.01, ha="left", color=_TEXT_COLOR)
+    fig.suptitle(f"Run each {level.noun}'s best score came from", color=_TEXT_COLOR)
     _save(fig, results_dir, level.best_run_file)
 
 
@@ -562,18 +537,21 @@ def plot_data_completeness(per_run, level, n_runs, fdr_threshold, results_dir):
     at_least_all = np.array([(n_all >= i).sum() for i in k])
     at_least_retained = np.array([(n_retained >= i).sum() for i in k])
 
+    noun = level.noun.capitalize()
     fig, ax = plt.subplots(figsize=(_figure_width(n_runs), 4))
     marker = "o" if n_runs <= 30 else None
+    # Drawn first so its legend entry comes first, as in plot_ids_per_run, and
+    # raised so it stays on top where the lines meet
+    ax.plot(k, at_least_retained, color=_BLUE, linewidth=2, marker=marker, markersize=5, zorder=3,
+            markeredgecolor=_SURFACE_COLOR, label=f"Global Qvalue < {fdr_threshold:g}")
     ax.plot(k, at_least_all, color=_LIGHT_BLUE, linewidth=2, marker=marker, markersize=5,
-            markeredgecolor=_SURFACE_COLOR, label="All run-level IDs")
-    ax.plot(k, at_least_retained, color=_BLUE, linewidth=2, marker=marker, markersize=5,
-            markeredgecolor=_SURFACE_COLOR, label=f"Also pass the {level.global_q} ({fdr_threshold:g})")
+            markeredgecolor=_SURFACE_COLOR, label=f"Qvalue < {fdr_threshold:g}")
     _style_axes(ax, k)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_xlabel("Identified in at least this many runs", color=_MUTED_COLOR)
-    ax.set_ylabel(f"{level.noun.capitalize()}s", color=_MUTED_COLOR)
-    ax.set_title(f"{level.noun.capitalize()} data completeness", loc="left", color=_TEXT_COLOR)
-    _legend(ax)
+    ax.set_xlabel("Identified in at least K runs", color=_MUTED_COLOR)
+    ax.set_ylabel(f"{noun}s", color=_MUTED_COLOR)
+    ax.set_title(f"{noun} Data Completeness", loc="center", color=_TEXT_COLOR)
+    _legend(ax, below=True)
     _save(fig, results_dir, level.completeness_file)
 
 
@@ -607,7 +585,7 @@ def plot_proteins_lost_by_precursor_count(df, fdr_threshold, results_dir):
     if not counts.any():
         ax.set_ylim(0, 1)
         ax.text(0.5, 0.5, "None", transform=ax.transAxes, ha="center", va="center", color=_MUTED_COLOR)
-    ax.set_xlabel("Untagged precursors identifying the protein", color=_MUTED_COLOR)
+    ax.set_xlabel(f"Number of Untag Precs with Q < {fdr_threshold:g}", color=_MUTED_COLOR)
     ax.set_ylabel("Proteins", color=_MUTED_COLOR)
     ax.set_title(f"Proteins failing the global protein q-value ({fdr_threshold:g}): "
                  f"{lost.height:,} of {per_protein.height:,}",
@@ -659,7 +637,7 @@ def plot_run_correlation(precursors, run_idxs, results_dir):
                             color=_SURFACE_COLOR if corr[i, j] > midpoint else _TEXT_COLOR)
     ax.set_xlabel("Run", color=_MUTED_COLOR)
     ax.set_ylabel("Run", color=_MUTED_COLOR)
-    ax.set_title("Run-to-run correlation of log2 plex_Area", loc="left", color=_TEXT_COLOR)
+    ax.set_title("Run-to-run correlation of log2 plex_Area", loc="center", color=_TEXT_COLOR)
     _save(fig, results_dir, "07_run_correlation.png")
 
 
@@ -752,14 +730,16 @@ def _label_columns(ax, x, values, fmt):
                     ha="center", va="bottom", fontsize=8, color=_MUTED_COLOR)
 
 
-def _subtitle(ax, text):
-    ax.annotate(text, xy=(0, 1), xycoords="axes fraction", xytext=(0, 2), textcoords="offset points",
-                ha="left", va="bottom", fontsize=8, color=_MUTED_COLOR)
-    ax.set_title(ax.get_title(loc="left"), loc="left", color=_TEXT_COLOR, pad=16)
-
-
-def _legend(ax):
-    legend = ax.legend(loc="upper left", bbox_to_anchor=(1, 1), frameon=False, fontsize=9)
+def _legend(ax, below=False):
+    # Right of the plot, one entry per line; or *below* it, in one row in the
+    # order the entries were drawn, anchored to the figure's bottom edge so it
+    # clears the x-axis label
+    if below:
+        handles, _ = ax.get_legend_handles_labels()
+        legend = ax.figure.legend(loc="upper center", bbox_to_anchor=(0.5, 0), ncol=len(handles),
+                                  frameon=False, fontsize=9)
+    else:
+        legend = ax.legend(loc="upper left", bbox_to_anchor=(1, 1), frameon=False, fontsize=9)
     for text in legend.get_texts():
         text.set_color(_MUTED_COLOR)
 
