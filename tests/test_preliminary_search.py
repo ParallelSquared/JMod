@@ -22,10 +22,12 @@ import pytest
 import polars as pl
 
 from src.utils.io.load_files import SpectrumFile
-from src.models.spec_lib.spec_lib import loadSpecLib
+from src.models.spec_lib.spec_lib import loadSpecLib, create_decoy_lib
+from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.preliminary_search import (
     fit_with_features,
     hellinger_score_polars_udf,
+    library_entries_for,
     scribe_score_polars_udf,
 )
 
@@ -130,6 +132,43 @@ class TestFitWithFeatures:
         valid_values = all((0 <= x <= 100) or (x == -999.0) for x in matched_pct)
         assert valid_values, \
             "Matched library percentage should be between 0 and 100, or -999 for errors"
+
+
+def _keys(entries):
+    return [(v["mod_seq"], v["prec_z"]) for v in entries]
+
+
+def _small_library(keys):
+    """A store with one entry per (mod_seq, charge) in *keys*, in that order."""
+    from src.utils.misc_functions import frag_to_peak
+    frags = {'y3_1': [350.2, 1.0], 'b2_1': [200.1, 0.5]}
+    spectrum, ordered_frags = frag_to_peak(frags, return_frags=True)
+    return SpectrumLibraryStore.from_dict({
+        (seq, z): {'mod_seq': seq, 'seq': seq, 'prec_mz': 400.0 + i, 'prec_z': z, 'iRT': 10.0 + i,
+                   'frags': frags, 'spectrum': spectrum, 'ordered_frags': ordered_frags}
+        for i, (seq, z) in enumerate(keys)})
+
+
+class TestLibraryEntriesFor:
+    """The entries fit_with_features reads for the peptides its search hit.  Dicts built
+    from them must hold what dicts built from the whole library do for those peptides."""
+
+    def test_every_charge_of_each_hit_in_library_order(self):
+        # ACD at two charges, with another peptide between them
+        library = _small_library([("ACD", 2.0), ("EFGH", 3.0), ("ACD", 3.0), ("KLM", 2.0)])
+        entries = library_entries_for(library, ["KLM", "ACD"])
+        assert _keys(entries) == [("ACD", 2.0), ("ACD", 3.0), ("KLM", 2.0)]
+        assert _keys(entries) == _keys(v for v in library.values() if v["mod_seq"] in ("KLM", "ACD"))
+
+    def test_a_target_view_leaves_out_decoys(self, library_spectra):
+        combined = create_decoy_lib(library_spectra, rules="rev")
+        decoy_seq = combined.mod_seq[combined.n_targets]
+        target_seq = combined.mod_seq[0]
+        entries = library_entries_for(combined.target_view(), [decoy_seq, target_seq])
+        assert {seq for seq, _ in _keys(entries)} == {target_seq}
+
+    def test_peptides_not_in_the_library_are_ignored(self, library_spectra):
+        assert library_entries_for(library_spectra, ["NOTAPEPTIDE"]) == []
 
 
 LIB_KEY = ("PEPTIDEK", 2)

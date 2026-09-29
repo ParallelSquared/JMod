@@ -246,10 +246,14 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # 5. Filter out large MS1 errors (Polars syntax)
     df = df.filter(pl.col('ppm_error_ms1').abs() < ms1_ppm_error)
 
+    # Everything below looks the library up only for the peptides the search hit,
+    # so only their entries are read, not the whole library
+    hit_entries = library_entries_for(library_spectra, df["modified_peptide"])
+
     # Get RTs for alignment
-    lib_rts = {v['mod_seq'] : v['iRT'] for v in library_spectra.values()}
+    lib_rts = {v['mod_seq'] : v['iRT'] for v in hit_entries}
     # Library ion mobilities, for the IM alignment (NaN when the library has no IM column)
-    lib_ims = {v['mod_seq'] : v['IonMob'] for v in library_spectra.values()}
+    lib_ims = {v['mod_seq'] : v['IonMob'] for v in hit_entries}
 
     # Adapt the dataframe to the format expected downstream
     logger.info("Adapting output dataframe")
@@ -257,13 +261,14 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
     # Calculate spectral angle
     logger.info("Creating fragment library map")
-    fragment_library_map = create_fragment_library_map(library_spectra)
+    fragment_library_map = create_fragment_library_map(hit_entries)
 
     # Filter to only peptides present in the library (before computing expensive scores)
     valid_keys_df = pl.DataFrame({
-        "seq": [v["mod_seq"] for v in library_spectra.values()],
-        "z": [int(v["prec_z"]) for v in library_spectra.values()]
+        "seq": [v["mod_seq"] for v in hit_entries],
+        "z": [int(v["prec_z"]) for v in hit_entries]
     }).unique()
+    del hit_entries
 
     # Semi-join to keep only rows where (seq, z) exists in the library
     df = df.join(valid_keys_df, on=["seq", "z"], how="semi")
@@ -339,10 +344,26 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     return df
 
 
-def create_fragment_library_map(library_spectra):
+def library_entries_for(library_spectra, mod_seqs):
+    """The entries of *library_spectra* whose mod_seq is one of *mod_seqs*.
+
+    Every charge of each peptide, in library order, as library_spectra.values()
+    gives them, so a dict built from these holds what one built from the whole
+    library holds for those peptides.  The match is vectorised; only the
+    matched entries are read.
     """
-    Converts the library spectra dictionary into a nested, fast-lookup map
-    for spectral comparison.
+    n = len(library_spectra)
+    library_mod_seq = library_spectra.mod_seq
+    is_hit = pl.Series(library_mod_seq[:n], dtype=pl.String).is_in(
+        pl.Series(mod_seqs, dtype=pl.String).unique()).to_numpy()
+    prec_z = library_spectra.prec_z
+    return [library_spectra[(library_mod_seq[i], float(prec_z[i]))] for i in np.flatnonzero(is_hit)]
+
+
+def create_fragment_library_map(library_entries):
+    """
+    Converts the library entries (dict-like, e.g. library_spectra.values()) into a
+    nested, fast-lookup map for spectral comparison.
 
     Keys: (Modified Sequence, Precursor Charge) [TUPLE KEY REQUIRED FOR ACCURACY]
     Values: Dict mapping (ion_kind, ordinal, charge) -> RelativeIntensity
@@ -350,7 +371,7 @@ def create_fragment_library_map(library_spectra):
     This function is updated to correctly handle the tuple key.
     """
     frag_map = {}
-    for data in library_spectra.values():
+    for data in library_entries:
         mod_seq = data.get('mod_seq')
         prec_z = data.get('prec_z')  # New: Get precursor charge
         library_frags = data.get('frags', {})
