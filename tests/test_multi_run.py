@@ -5,16 +5,17 @@ import pytest
 
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
-from src.multi_run import collect_results, combine_runs, mbr_library_rts, mbr_targets, precursors_per_run
+from src.multi_run import (_Units, collect_results, combine_runs, mbr_library_rts, mbr_targets,
+                           precursors_per_run)
 from tests.models.spec_lib.test_decoy_differential import _entry
 
 
-def _write_run(tmp_path, run_name, rows, proteins=None):
+def _write_run(tmp_path, run_name, rows, proteins=None, channels=None):
     """A run's results folder, with an outputs/all_IDs_filtered.parquet of *rows*.
 
     Each row is (sequence, is_decoy, PredVal, BestChannel_Qvalue); every
-    precursor is charge 2, label-free, of protein P1 unless *proteins* names
-    one per row.
+    precursor is charge 2, of protein P1 unless *proteins* names one per row,
+    and label-free (channel 0) unless *channels* names one per row.
     """
     folder = tmp_path / run_name
     (folder / "outputs").mkdir(parents=True)
@@ -22,7 +23,7 @@ def _write_run(tmp_path, run_name, rows, proteins=None):
     n = len(rows)
     pl.DataFrame({
         "stripped_seq": seqs, "z": [2.0] * n, "untag_prec": [s + "_2" for s in seqs],
-        "file_name": [run_name] * n, "channel": [0] * n,
+        "file_name": [run_name] * n, "channel": channels or [0] * n,
         "is_decoy": [decoy for _, decoy, _, _ in rows],
         "Qvalue": [q for *_, q in rows], "Protein_Qvalue": [0.001] * n,
         "PredVal": [score for _, _, score, _ in rows], "protein": proteins or ["P1"] * n,
@@ -78,12 +79,24 @@ class TestGlobalProteinQvalue:
 
 class TestPrecursorsPerRun:
     def test_missing_area_is_left_out_of_the_log(self):
-        df = pl.DataFrame({"run_idx": [1, 1, 2], "untag_prec": ["AAA_2", "BBB_2", "AAA_2"],
-                           "plex_Area": [8.0, float("nan"), 4.0],
+        df = pl.DataFrame({"run_idx": [1, 1, 2], "channel": [0, 0, 0], "untag_prec": ["AAA_2", "BBB_2", "AAA_2"],
+                           "plex_Area": [8.0, float("nan"), 4.0], "Qvalue": [0.001] * 3,
                            "untag_prec_Global_Qvalue": [0.001, 0.5, 0.001]})
-        rows = precursors_per_run(df, fdr_threshold=0.01).sort("run_idx", "untag_prec")
+        rows = precursors_per_run(df, _Units(df, [1, 2]), fdr_threshold=0.01).sort("run_idx", "untag_prec")
         assert rows.select("run_idx", "untag_prec", "log2_area", "retained").rows() == [
             (1, "AAA_2", 3.0, True), (1, "BBB_2", None, False), (2, "AAA_2", 2.0, True)]
+
+    def test_each_channel_of_a_run_is_its_own_unit(self):
+        # AAA in two channels of run 1: two rows, areas not summed, and only
+        # channel 4 passing on its own Qvalue (channel 0 through its best channel)
+        df = pl.DataFrame({"run_idx": [1, 1, 2], "channel": [0, 4, 4], "untag_prec": ["AAA_2"] * 3,
+                           "plex_Area": [8.0, 4.0, 2.0], "Qvalue": [0.5, 0.001, 0.001],
+                           "untag_prec_Global_Qvalue": [0.001] * 3})
+        units = _Units(df, [1, 2])
+        assert units.labels == ["1·0", "1·4", "2·0", "2·4"]
+        rows = precursors_per_run(df, units, fdr_threshold=0.01).sort("unit")
+        assert rows.select("unit", "log2_area", "qvalue_pass").rows() == [
+            (0, 3.0, False), (1, 2.0, True), (3, 1.0, True)]
 
 
 def _first_pass_ids(rows):
@@ -156,10 +169,19 @@ class TestGroupedResults:
         combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
         assert sorted(p.name for p in (experiment_dir / "experiment_results").iterdir()) == [
             "01_precursors_per_run.png", "02_proteins_per_run.png", "03_precursor_data_completeness.png",
-            "04_protein_data_completeness.png", "05_summed_intensity_per_run.png", "06_intensity_per_run.png",
-            "07_run_correlation.png", "08_precursors_lost_to_global_q.png", "09_precursor_best_score_run.png",
-            "10_proteins_lost_to_global_q.png", "11_proteins_lost_by_precursor_count.png",
-            "12_protein_best_score_run.png", "combined_filtered_IDs.parquet"]
+            "04_protein_data_completeness.png", "05_intensity_per_run.png", "06_run_correlation.png",
+            "07_precursors_lost_to_global_q.png", "08_proteins_lost_to_global_q.png",
+            "09_proteins_lost_by_precursor_count.png", "combined_filtered_IDs.parquet", "run_index.txt"]
+
+    def test_channels_make_one_run_comparable(self, tmp_path):
+        rows = [("AAA", False, 0.9, 0.001), ("AAA", False, 0.8, 0.001), ("DDD", True, 0.1, 0.9)]
+        runs = {1: _write_run(tmp_path, "a", rows, channels=[0, 4, 0])}
+        experiment_dir = tmp_path / "experiment"
+        experiment_dir.mkdir()
+        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
+        # One run of two channels is two (run, channel) units, enough to compare
+        names = {p.name for p in (experiment_dir / "experiment_results").iterdir()}
+        assert {"00_channel_colors.png", "03_precursor_data_completeness.png"} <= names
 
     def test_single_run_gets_only_the_per_run_plots(self, tmp_path):
         runs = {1: _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001), ("DDD", True, 0.1, 0.9)])}
@@ -167,8 +189,8 @@ class TestGroupedResults:
         experiment_dir.mkdir()
         combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
         assert sorted(p.name for p in (experiment_dir / "experiment_results").iterdir()) == [
-            "01_precursors_per_run.png", "02_proteins_per_run.png", "05_summed_intensity_per_run.png",
-            "06_intensity_per_run.png", "combined_filtered_IDs.parquet"]
+            "01_precursors_per_run.png", "02_proteins_per_run.png", "05_intensity_per_run.png",
+            "combined_filtered_IDs.parquet", "run_index.txt"]
 
     def test_earlier_results_folder_is_kept(self, tmp_path):
         runs = {1: _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001)])}
