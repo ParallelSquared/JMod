@@ -789,38 +789,72 @@ def plot_run_correlation(precursors, units, results_dir):
 
 
 def plot_library_size_by_run(targets, fdr_threshold, qvalue_column, mbr_dir):
-    """Step plot: how large the MBR library has grown after each run, in file
-    order, counting every precursor identified in that run or an earlier one.
+    """Lines: how large the MBR library grows as runs are added, counting every
+    untagged precursor identified in that run or an earlier one.
 
-    One line for the run-level IDs (*targets*: the first pass's combined
-    targets) and one for those that also pass the global q-value; the legend
-    marks the one the library was built from (*qvalue_column*).
+    The runs are added in the order that grows the library fastest: first the
+    one with the most IDs (MBR's reference run), then each time the one adding
+    the most not yet in it, on *qvalue_column* (the library's q-value).  One
+    line for the run-level IDs of *targets* (the first pass's combined
+    targets), one for those that also pass the global q-value, each labelled
+    with its final size.
     """
     run_idxs = sorted(targets["run_idx"].unique().to_list())
-    fig, ax = plt.subplots(figsize=(_figure_width(len(run_idxs)), 4))
-    largest = 0
-    for column, name, color in (("BestChannel_Qvalue", "Run-level q-value", _BLUE),
-                                ("untag_prec_Global_Qvalue", "Global untag_prec q-value", _LIGHT_BLUE)):
-        ids = targets.filter(pl.col(column) < fdr_threshold)
-        by_run = dict(ids.group_by("run_idx").agg(pl.col("untag_prec").unique()).iter_rows())
-        seen, library_size = set(), []
-        for r in run_idxs:
-            seen |= set(by_run.get(r, []))
-            library_size.append(len(seen))
-        largest = max(largest, library_size[-1])
-        label = f"{name} < {fdr_threshold:g}" + (" (the library)" if column == qvalue_column else "")
-        ax.step(run_idxs, library_size, where="post", color=color, linewidth=2, label=label)
+    ids_by_run = {}
+    for column in ("untag_prec_Global_Qvalue", "BestChannel_Qvalue"):
+        by_run = dict(targets.filter(pl.col(column) < fdr_threshold)
+                      .group_by("run_idx").agg(pl.col("untag_prec").unique()).iter_rows())
+        ids_by_run[column] = {r: set(by_run.get(r, [])) for r in run_idxs}
+    order = _greedy_run_order(ids_by_run[qvalue_column])
 
-    _style_axes(ax, run_idxs)
-    ax.set_ylim(0, max(largest, 1) * 1.05)
+    # On channels the run-level IDs are the best channel's, as in the other plots
+    channels = any(c in targets.columns and targets[c].n_unique() > 1 for c in _CHANNEL_COLUMNS)
+    run_level = "BestChannel Qvalue" if channels else "Qvalue"
+    x = np.arange(1, len(order) + 1)
+    fig, ax = plt.subplots(figsize=(_figure_width(len(order)), 4))
+    finals = {}
+    for column, name, color in (("untag_prec_Global_Qvalue", "Global Qvalue", _BLUE),
+                                ("BestChannel_Qvalue", run_level, _LIGHT_BLUE)):
+        seen, library_size = set(), []
+        for r in order:
+            seen |= ids_by_run[column][r]
+            library_size.append(len(seen))
+        finals[column] = library_size[-1]
+        ax.plot(x, library_size, color=color, linewidth=2, marker="o" if len(order) <= 30 else None,
+                markersize=5, markeredgecolor=_SURFACE_COLOR, zorder=3 if column == "untag_prec_Global_Qvalue" else 2,
+                label=f"{name} < {fdr_threshold:g}")
+    # Each line's final size beside its last point; the larger above, the smaller below
+    for column, size in finals.items():
+        above = size >= max(finals.values())
+        ax.annotate(f"{size:,}", xy=(x[-1], size), xytext=(6, 3 if above else -3), textcoords="offset points",
+                    ha="left", va="bottom" if above else "top", fontsize=8, color=_MUTED_COLOR)
+
+    _style_axes(ax, x)
+    ax.set_xlim(0.4, len(order) + 0.9)  # room for the final sizes on the right
+    ax.set_ylim(0, max(max(finals.values()), 1) * 1.08)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    if len(run_idxs) <= 30:
-        ax.set_xticks(run_idxs)  # every run labelled while they fit
+    step = math.ceil(len(order) / 30)  # at most about 30 run labels
+    ax.set_xticks(x[::step], [str(r) for r in order[::step]])
     ax.set_xlabel("Run", color=_MUTED_COLOR)
-    ax.set_ylabel("Precursors", color=_MUTED_COLOR)
-    ax.set_title("MBR library size by run", loc="left", color=_TEXT_COLOR)
-    _legend(ax)
+    ax.set_ylabel("Untagged precursors", color=_MUTED_COLOR)
+    ax.set_title("MBR library size by run", loc="center", color=_TEXT_COLOR)
+    _legend(ax, below=True)
     _save(fig, mbr_dir, "library_size_by_run.png")
+
+
+def _greedy_run_order(ids_by_run):
+    """The runs of *ids_by_run* ({run: set of IDs}) in the order that grows
+    their union fastest: first the one with the most IDs, then each time the
+    one adding the most not yet included.  Ties go to the lower run index."""
+    remaining = {r: set(ids) for r, ids in ids_by_run.items()}
+    order = []
+    while remaining:
+        best = max(sorted(remaining), key=lambda r: len(remaining[r]))
+        added = remaining.pop(best)
+        order.append(best)
+        for ids in remaining.values():
+            ids -= added
+    return order
 
 
 def plot_rt_alignment(rt, delta, kept, curve, name, lowess_dir):
