@@ -45,9 +45,13 @@ from src.logger import logger, set_log_filepath
 
 
 def main(GUI_config_json=None):
-    """Run JMod on every mass spec file in the configuration."""
+    """Run JMod on every mass spec file in the configuration, or with
+    --posthoc_mbr only build an earlier experiment's MBR library."""
     try:
-        run_experiment(GUI_config_json)
+        if config.args.posthoc_mbr:
+            run_posthoc_mbr(config.args.posthoc_mbr)
+        else:
+            run_experiment(GUI_config_json)
     except Exception as e:
         report_error(e, "JMod stopped")
 
@@ -172,6 +176,144 @@ def _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC
     del spectrumLibrary
     gc.collect()
     _combine(completed_run_folders, experiment_dir, target_decoy_ratio)
+
+
+def run_posthoc_mbr(experiment_dir):
+    """--posthoc_mbr: build the match-between-runs library of an experiment
+    that has already run, without searching anything.
+
+    The settings are the experiment's (its JMod_config.json, or a run's
+    outputs/config.json for experiments from before that was written), under
+    any options typed on the command line, e.g. -l for a library that has
+    moved.  The IDs are its experiment_results/combined_filtered_IDs.parquet,
+    which is made from the run folders first if the experiment has none.  The
+    library goes in <experiment_dir>/mbr_library/, as with --mbr; one run gives
+    a library of its own IDs at their RTs.
+    """
+    if not os.path.isdir(experiment_dir):
+        raise JModError(f"Experiment folder not found: {experiment_dir}")
+    run_folders = _completed_run_folders(experiment_dir)
+    config.args.config_json = _experiment_settings_json(experiment_dir, run_folders)
+    config.setup()
+    # The library is only read after the runs are combined and aligned: check
+    # it is there before any of that
+    if not os.path.isfile(config.args.speclib):
+        raise JModError(f"Spectral library not found: {config.args.speclib} (resolved to "
+                        f"{os.path.abspath(config.args.speclib)}), from {config.args.config_json}. "
+                        f"If it has moved, pass its current path with -l")
+
+    mbr_dir = datestamped(os.path.join(experiment_dir, "mbr_library"))
+    os.makedirs(mbr_dir)
+    set_log_filepath(os.path.join(mbr_dir, "JMod_log.log"))
+    logger.info(f"Match between runs for {os.path.abspath(experiment_dir)}")
+    logger.info(f"Settings from {config.args.config_json}")
+    logger.info(f"Library: {config.args.speclib}")
+    logger.info(f"{len(run_folders)} completed run(s)")
+
+    mass_tag, SILAC = resolve_tags()
+    combined_ids = _experiment_ids(experiment_dir, run_folders)
+    write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC)
+    logger.info("")
+    logger.info(f"Search with it: -l {os.path.abspath(os.path.join(mbr_dir, 'mbrlib.parquet'))} --use_emp_rt")
+
+
+def _completed_run_folders(experiment_dir):
+    """The experiment's completed runs, {run index: results folder}.
+
+    The folders directly in *experiment_dir* holding a run's results
+    (outputs/all_IDs_filtered.parquet), leaving out failed runs, numbered in
+    the order of the experiment's data files (JMod_config.json's mzml), and
+    otherwise by folder name.
+    """
+    folders = [os.path.join(experiment_dir, name) for name in sorted(os.listdir(experiment_dir))
+               if not name.startswith("run_failed_")
+               and os.path.isfile(os.path.join(experiment_dir, name, "outputs", "all_IDs_filtered.parquet"))]
+    if not folders:
+        raise JModError(f"No completed runs in {experiment_dir}: no folder in it has "
+                        f"outputs/all_IDs_filtered.parquet")
+
+    data_files = []
+    experiment_json = os.path.join(experiment_dir, "JMod_config.json")
+    if os.path.isfile(experiment_json):
+        with open(experiment_json) as f:
+            data_files = json.load(f).get("mzml") or []
+        if isinstance(data_files, str):
+            data_files = [data_files]
+
+    def position(folder):
+        # A run's own config.json names its data file
+        run_json = os.path.join(folder, "outputs", "config.json")
+        data_file = None
+        if os.path.isfile(run_json):
+            with open(run_json) as f:
+                data_file = json.load(f).get("mzml")
+        return data_files.index(data_file) if data_file in data_files else len(data_files)
+
+    return {run_idx: folder for run_idx, folder in enumerate(sorted(folders, key=position), start=1)}
+
+
+def _experiment_settings_json(experiment_dir, run_folders):
+    """The JSON holding the experiment's settings: its JMod_config.json, or, for
+    experiments from before that was written, its first run's outputs/config.json
+    (the same settings, naming that run's data file)."""
+    experiment_json = os.path.join(experiment_dir, "JMod_config.json")
+    if os.path.isfile(experiment_json):
+        return experiment_json
+    run_json = os.path.join(run_folders[min(run_folders)], "outputs", "config.json")
+    if os.path.isfile(run_json):
+        return run_json
+    raise JModError(f"No settings found for {experiment_dir}: neither JMod_config.json nor "
+                    f"{run_json} exists")
+
+
+def _experiment_ids(experiment_dir, run_folders):
+    """The experiment's combined IDs: its experiment_results/combined_filtered_IDs.parquet,
+    or, when it has no experiment_results yet, combine_runs over its runs (which
+    writes experiment_results)."""
+    combined_path = os.path.join(experiment_dir, "experiment_results", "combined_filtered_IDs.parquet")
+    if os.path.isfile(combined_path):
+        logger.info(f"IDs from {os.path.abspath(combined_path)}")
+        return pl.read_parquet(combined_path)
+    logger.info("No experiment_results yet: combining the runs first")
+    return combine_runs(run_folders, experiment_dir, _library_target_decoy_ratio(run_folders),
+                        config.fdr_threshold)
+
+
+def _library_target_decoy_ratio(run_folders):
+    """The library's target/decoy ratio, for the global q-value, from the runs'
+    outputs/params.txt.
+
+    Runs from before the multi-run changes recorded the whole library's under
+    Config; later runs record their own under Run, counted over the entries
+    that run can select, and their mean stands in for the library's.
+    """
+    library_ratio, run_ratios = None, []
+    for folder in run_folders.values():
+        params_path = os.path.join(folder, "outputs", "params.txt")
+        if not os.path.isfile(params_path):
+            continue
+        section = None
+        with open(params_path) as f:
+            for line in f:
+                line = line.strip()
+                if line in ("Args", "Config", "Run"):
+                    section = line
+                elif line.startswith("target_decoy_ratio:"):
+                    value = float(line.split(":", 1)[1])
+                    if section == "Config" and library_ratio is None:
+                        library_ratio = value
+                    elif section == "Run":
+                        run_ratios.append(value)
+    if library_ratio is not None:
+        logger.info(f"Library target/decoy ratio {library_ratio:.4f}, from the runs' params.txt")
+        return library_ratio
+    if run_ratios:
+        ratio = float(np.mean(run_ratios))
+        logger.warning(f"The runs' params.txt have no library target/decoy ratio; using the mean of "
+                       f"the runs' own, {ratio:.4f}, for the global q-value")
+        return ratio
+    raise JModError("No target/decoy ratio in the runs' outputs/params.txt, which the global "
+                    "q-value needs to combine the runs")
 
 
 def _prepare_readers(run_files):
@@ -454,13 +596,24 @@ def build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC):
     entries are also written to <mbr_dir>/mbrlib.parquet, next to the
     alignment plots.
     """
+    targets, library_tag_bool, source_channel = write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC)
+    return prepare_library(targets, mbr_dir, mass_tag, SILAC, library_tag_bool, source_channel)
+
+
+def write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC):
+    """The match-between-runs library's targets, before decoys and tagging:
+    the input library's entries for the precursors in *combined_ids*, with
+    their RTs aligned across runs.  Written to <mbr_dir>/mbrlib.parquet, next
+    to the alignment plots.  Returns load_library's (targets,
+    library_tag_bool, source_channel) for these entries.
+    """
     library_rts = mbr_library_rts(combined_ids, config.fdr_threshold, mbr_dir)
     targets, library_tag_bool, source_channel = load_library(config.args.speclib, mass_tag)
     targets = mbr_targets(targets, library_rts, mass_tag, SILAC)
     mbr_lib_path = os.path.join(mbr_dir, "mbrlib.parquet")
     targets.to_diann_df().write_parquet(mbr_lib_path)
     logger.info(f"MBR library written to {os.path.abspath(mbr_lib_path)}")
-    return prepare_library(targets, mbr_dir, mass_tag, SILAC, library_tag_bool, source_channel)
+    return targets, library_tag_bool, source_channel
 
 
 def load_library(lib_file, mass_tag):

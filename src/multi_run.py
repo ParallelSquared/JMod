@@ -836,7 +836,7 @@ def plot_library_size_by_run(targets, fdr_threshold, qvalue_column, mbr_dir):
     step = math.ceil(len(order) / 30)  # at most about 30 run labels
     ax.set_xticks(x[::step], [str(r) for r in order[::step]])
     ax.set_xlabel("Run", color=_MUTED_COLOR)
-    ax.set_ylabel("Untagged precursors", color=_MUTED_COLOR)
+    ax.set_ylabel("Untagged Precursors", color=_MUTED_COLOR)
     ax.set_title("MBR library size by run", loc="center", color=_TEXT_COLOR)
     _legend(ax, below=True)
     _save(fig, mbr_dir, "library_size_by_run.png")

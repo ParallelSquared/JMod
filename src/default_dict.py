@@ -392,6 +392,17 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    'posthoc_mbr': {
+        'flags': ('--posthoc_mbr',),
+        'default': None,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'unfiltered_quant': {
         'flags': ('--unfiltered_quant',),
         'default': True,
