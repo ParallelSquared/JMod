@@ -230,32 +230,34 @@ class TestMatchBetweenRuns:
         assert any("skipping match between runs" in r.getMessage() for r in app_log)
 
 
+@pytest.fixture
+def finished(monkeypatch, tmp_path, combined):
+    """A finished experiment's folder with runs a and b, for --make_library and
+    --combine_results; the library step recorded instead of run.  Tests add
+    the experiment's files."""
+    for name in ("config_json", "speclib", "mzml", "make_library", "combine_results", "plexDIA"):
+        monkeypatch.setattr(config.args, name, getattr(config.args, name))  # restored after
+    monkeypatch.setattr(config, "cli_args", {})
+    monkeypatch.setattr(run_jmod, "set_log_filepath", lambda path: None)
+    monkeypatch.setattr(run_jmod, "resolve_tags", lambda: (None, None))
+    library_inputs = []
+    monkeypatch.setattr(run_jmod, "write_mbr_library",
+                        lambda ids, mbr_dir, *tags: library_inputs.append((ids, config.args.speclib)))
+    experiment_dir = tmp_path / "experiment"
+    library = tmp_path / "lib.tsv"
+    library.write_text("")  # only its existence is checked; loading it is stubbed
+    for run in ("a", "b"):
+        outputs = experiment_dir / f"{run}_results" / "outputs"
+        outputs.mkdir(parents=True)
+        (outputs / "all_IDs_filtered.parquet").write_text("")  # combine_runs is stubbed
+        (outputs / "config.json").write_text(json.dumps({"speclib": str(library), "mzml": f"{run}.mzML"}))
+        (outputs / "params.txt").write_text("Args\nppm: 10\n\nConfig\ntarget_decoy_ratio: 0.95\n")
+    return SimpleNamespace(dir=experiment_dir, library=library, library_inputs=library_inputs,
+                           combined=combined)
+
+
 class TestMakeLibrary:
     """--make_library builds a finished experiment's MBR library, without searching."""
-
-    @pytest.fixture
-    def finished(self, monkeypatch, tmp_path, combined):
-        """An experiment folder with runs a and b, the library step recorded
-        instead of run.  Tests add the experiment's files."""
-        for name in ("config_json", "speclib", "mzml", "make_library", "plexDIA"):
-            monkeypatch.setattr(config.args, name, getattr(config.args, name))  # restored after
-        monkeypatch.setattr(config, "cli_args", {})
-        monkeypatch.setattr(run_jmod, "set_log_filepath", lambda path: None)
-        monkeypatch.setattr(run_jmod, "resolve_tags", lambda: (None, None))
-        library_inputs = []
-        monkeypatch.setattr(run_jmod, "write_mbr_library",
-                            lambda ids, mbr_dir, *tags: library_inputs.append((ids, config.args.speclib)))
-        experiment_dir = tmp_path / "experiment"
-        library = tmp_path / "lib.tsv"
-        library.write_text("")  # only its existence is checked; loading it is stubbed
-        for run in ("a", "b"):
-            outputs = experiment_dir / f"{run}_results" / "outputs"
-            outputs.mkdir(parents=True)
-            (outputs / "all_IDs_filtered.parquet").write_text("")  # combine_runs is stubbed
-            (outputs / "config.json").write_text(json.dumps({"speclib": str(library), "mzml": f"{run}.mzML"}))
-            (outputs / "params.txt").write_text("Args\nppm: 10\n\nConfig\ntarget_decoy_ratio: 0.95\n")
-        return SimpleNamespace(dir=experiment_dir, library=library, library_inputs=library_inputs,
-                               combined=combined)
 
     def test_the_experiments_combined_ids_are_used(self, finished, monkeypatch):
         import polars as pl
@@ -312,3 +314,21 @@ class TestCreateResultsFolder:
         monkeypatch.setattr(config.args, "dummy_value", "batch2")
         folder = run_jmod._create_results_folder("data/a.mzML", str(tmp_path))
         assert os.path.basename(folder) == "a_results"
+
+
+class TestCombineResults:
+    """--combine_results combines a finished experiment's runs again, without the library."""
+
+    def test_the_runs_are_combined_again_even_with_combined_ids(self, finished, monkeypatch):
+        (finished.dir / "combined_filtered_IDs.parquet").write_text("an earlier combination")
+        monkeypatch.setattr(config.args, "combine_results", str(finished.dir))
+        run_jmod.main()
+        (run_folders, experiment_dir, ratio, _), = finished.combined
+        assert run_folders == {1: str(finished.dir / "a_results"), 2: str(finished.dir / "b_results")}
+        assert (experiment_dir, ratio) == (str(finished.dir), 0.95)
+
+    def test_no_library_is_read_or_made(self, finished):
+        finished.library.unlink()  # the library the runs were searched with is not needed
+        run_jmod.run_combine_results(str(finished.dir))
+        assert len(finished.combined) == 1
+        assert finished.library_inputs == [] and not (finished.dir / "mbr_library").exists()

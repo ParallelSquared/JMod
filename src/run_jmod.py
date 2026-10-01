@@ -46,10 +46,13 @@ from src.logger import logger, set_log_filepath
 
 def main(GUI_config_json=None):
     """Run JMod on every mass spec file in the configuration, or with
-    --make_library only build an earlier experiment's MBR library."""
+    --make_library only build an earlier experiment's MBR library, or with
+    --combine_results only combine its runs again."""
     try:
         if config.args.make_library:
             run_make_library(config.args.make_library)
+        elif config.args.combine_results:
+            run_combine_results(config.args.combine_results)
         else:
             run_experiment(GUI_config_json)
     except Exception as e:
@@ -216,6 +219,27 @@ def run_make_library(experiment_dir):
     write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC)
     logger.info("")
     logger.info(f"Search with it: -l {os.path.abspath(os.path.join(mbr_dir, 'mbrlib.parquet'))} --use_emp_rt")
+
+
+def run_combine_results(experiment_dir):
+    """--combine_results: combine an experiment's finished runs again, without
+    searching anything or reading the library: combined_filtered_IDs.parquet
+    and experiment_results/ (combine_runs), each datestamped beside any
+    earlier ones.
+
+    The runs are found and the library's target/decoy ratio read as for
+    --make_library.  The log is a JMod_log.log in *experiment_dir*,
+    datestamped beside the experiment's own.
+    """
+    if not os.path.isdir(experiment_dir):
+        raise JModError(f"Experiment folder not found: {experiment_dir}")
+    run_folders = _completed_run_folders(experiment_dir)
+    set_log_filepath(datestamped(os.path.join(experiment_dir, "JMod_log.log")))
+    logger.info(f"Combining the results of {os.path.abspath(experiment_dir)}", extra={"highlight": True})
+    logger.info(f"{len(run_folders)} completed run(s)")
+    combine_runs(run_folders, experiment_dir, _library_target_decoy_ratio(run_folders), config.fdr_threshold)
+    logger.info("")
+    logger.info(f"Output at {os.path.abspath(experiment_dir)}", extra={"highlight": True})
 
 
 def _completed_run_folders(experiment_dir):
