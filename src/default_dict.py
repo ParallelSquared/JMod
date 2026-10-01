@@ -392,8 +392,8 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
-    'posthoc_mbr': {
-        'flags': ('--posthoc_mbr',),
+    'make_library': {
+        'flags': ('--make_library',),
         'default': None,
         'takes_value': True,
         'in_GUI': False,

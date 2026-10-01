@@ -207,14 +207,14 @@ class TestMatchBetweenRuns:
         assert any("skipping match between runs" in r.getMessage() for r in app_log)
 
 
-class TestPosthocMbr:
-    """--posthoc_mbr builds a finished experiment's MBR library, without searching."""
+class TestMakeLibrary:
+    """--make_library builds a finished experiment's MBR library, without searching."""
 
     @pytest.fixture
-    def posthoc(self, monkeypatch, tmp_path, combined):
+    def finished(self, monkeypatch, tmp_path, combined):
         """An experiment folder with runs a and b, the library step recorded
         instead of run.  Tests add the experiment's files."""
-        for name in ("config_json", "speclib", "mzml", "posthoc_mbr", "plexDIA"):
+        for name in ("config_json", "speclib", "mzml", "make_library", "plexDIA"):
             monkeypatch.setattr(config.args, name, getattr(config.args, name))  # restored after
         monkeypatch.setattr(config, "cli_args", {})
         monkeypatch.setattr(run_jmod, "set_log_filepath", lambda path: None)
@@ -234,45 +234,45 @@ class TestPosthocMbr:
         return SimpleNamespace(dir=experiment_dir, library=library, library_inputs=library_inputs,
                                combined=combined)
 
-    def test_the_experiments_combined_ids_are_used(self, posthoc, monkeypatch):
+    def test_the_experiments_combined_ids_are_used(self, finished, monkeypatch):
         import polars as pl
-        (posthoc.dir / "experiment_results").mkdir()
+        (finished.dir / "experiment_results").mkdir()
         ids = pl.DataFrame({"untag_prec": ["AAA_2"], "run_idx": [1]})
-        ids.write_parquet(posthoc.dir / "experiment_results" / "combined_filtered_IDs.parquet")
-        monkeypatch.setattr(config.args, "posthoc_mbr", str(posthoc.dir))
+        ids.write_parquet(finished.dir / "experiment_results" / "combined_filtered_IDs.parquet")
+        monkeypatch.setattr(config.args, "make_library", str(finished.dir))
         run_jmod.main()
-        assert posthoc.combined == []  # nothing recombined
-        assert [i.equals(ids) for i, _ in posthoc.library_inputs] == [True]
-        assert (posthoc.dir / "mbr_library").is_dir()
+        assert finished.combined == []  # nothing recombined
+        assert [i.equals(ids) for i, _ in finished.library_inputs] == [True]
+        assert (finished.dir / "mbr_library").is_dir()
 
-    def test_an_older_experiment_is_combined_first_from_its_runs(self, posthoc):
+    def test_an_older_experiment_is_combined_first_from_its_runs(self, finished):
         # No JMod_config.json and no experiment_results: the settings are a run's,
         # the runs go by name, and the ratio is the library's from params.txt
-        run_jmod.run_posthoc_mbr(str(posthoc.dir))
-        (run_folders, experiment_dir, ratio, _), = posthoc.combined
-        assert run_folders == {1: str(posthoc.dir / "a_results"), 2: str(posthoc.dir / "b_results")}
-        assert (experiment_dir, ratio) == (str(posthoc.dir), 0.95)
-        assert posthoc.library_inputs == [("combined IDs", str(posthoc.library).replace("\\", "/"))]
+        run_jmod.run_make_library(str(finished.dir))
+        (run_folders, experiment_dir, ratio, _), = finished.combined
+        assert run_folders == {1: str(finished.dir / "a_results"), 2: str(finished.dir / "b_results")}
+        assert (experiment_dir, ratio) == (str(finished.dir), 0.95)
+        assert finished.library_inputs == [("combined IDs", str(finished.library).replace("\\", "/"))]
 
-    def test_runs_are_numbered_in_the_order_of_the_data_files(self, posthoc):
-        (posthoc.dir / "JMod_config.json").write_text(json.dumps({"speclib": str(posthoc.library),
+    def test_runs_are_numbered_in_the_order_of_the_data_files(self, finished):
+        (finished.dir / "JMod_config.json").write_text(json.dumps({"speclib": str(finished.library),
                                                                   "mzml": ["b.mzML", "a.mzML"]}))
-        run_jmod.run_posthoc_mbr(str(posthoc.dir))
-        (run_folders, *_), = posthoc.combined
-        assert run_folders == {1: str(posthoc.dir / "b_results"), 2: str(posthoc.dir / "a_results")}
+        run_jmod.run_make_library(str(finished.dir))
+        (run_folders, *_), = finished.combined
+        assert run_folders == {1: str(finished.dir / "b_results"), 2: str(finished.dir / "a_results")}
 
-    def test_a_moved_library_is_given_on_the_command_line(self, posthoc, monkeypatch, tmp_path):
+    def test_a_moved_library_is_given_on_the_command_line(self, finished, monkeypatch, tmp_path):
         moved = tmp_path / "moved.tsv"
         moved.write_text("")
         monkeypatch.setattr(config, "cli_args", {"speclib": str(moved)})
-        run_jmod.run_posthoc_mbr(str(posthoc.dir))
-        assert [speclib for _, speclib in posthoc.library_inputs] == [str(moved).replace("\\", "/")]
+        run_jmod.run_make_library(str(finished.dir))
+        assert [speclib for _, speclib in finished.library_inputs] == [str(moved).replace("\\", "/")]
 
-    def test_a_missing_library_stops_before_anything_is_combined(self, posthoc):
-        posthoc.library.unlink()
+    def test_a_missing_library_stops_before_anything_is_combined(self, finished):
+        finished.library.unlink()
         with pytest.raises(JModError, match="Spectral library not found"):
-            run_jmod.run_posthoc_mbr(str(posthoc.dir))
-        assert posthoc.combined == [] and not (posthoc.dir / "mbr_library").exists()
+            run_jmod.run_make_library(str(finished.dir))
+        assert finished.combined == [] and not (finished.dir / "mbr_library").exists()
 
 
 class TestCreateResultsFolder:

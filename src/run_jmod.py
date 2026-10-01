@@ -46,10 +46,10 @@ from src.logger import logger, set_log_filepath
 
 def main(GUI_config_json=None):
     """Run JMod on every mass spec file in the configuration, or with
-    --posthoc_mbr only build an earlier experiment's MBR library."""
+    --make_library only build an earlier experiment's MBR library."""
     try:
-        if config.args.posthoc_mbr:
-            run_posthoc_mbr(config.args.posthoc_mbr)
+        if config.args.make_library:
+            run_make_library(config.args.make_library)
         else:
             run_experiment(GUI_config_json)
     except Exception as e:
@@ -178,8 +178,8 @@ def _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC
     _combine(completed_run_folders, experiment_dir, target_decoy_ratio)
 
 
-def run_posthoc_mbr(experiment_dir):
-    """--posthoc_mbr: build the match-between-runs library of an experiment
+def run_make_library(experiment_dir):
+    """--make_library: build the match-between-runs library of an experiment
     that has already run, without searching anything.
 
     The settings are the experiment's (its JMod_config.json, or a run's
