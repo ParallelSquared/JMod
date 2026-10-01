@@ -636,7 +636,7 @@ class score_model():
             send_raise_to_TK("ValueError - Unsupported Model Type")
             raise ValueError("Unsupported model type")
         
-        logger.debug(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
+        logger.info(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
         
         kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = config.RANDOM_SEED)
         k_orders = [i for i in kf.split(X,y)]
@@ -1106,7 +1106,7 @@ def compute_protein_FDR(df,results_folder=None):
 
     return df
 
-def add_median_based_features(df, metric_columns, group_col="untag_prec", count_col="channels_matched", verbose=True):
+def add_median_based_features(df, metric_columns, group_col="untag_prec", count_col="channels_matched"):
     """
     Calculate median-based features for specified metrics across groups.
     
@@ -1120,9 +1120,6 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
         Column to group by for median calculations
     count_col : str, default="channels_matched"
         Column indicating how many channels each group has
-    verbose : bool, default=True
-        Whether to print summary statistics
-        
     Returns:
     --------
     pandas.DataFrame
@@ -1130,9 +1127,6 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     """
     # Make a copy to avoid modifying the original
     result_df = df.copy()
-    
-    if verbose:
-        logger.debug(f"Adding median-based features for {len(metric_columns)} metrics...")
     
     for metric_col in metric_columns:
         # Calculate median for each group
@@ -1149,11 +1143,6 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
         # Fill NA with mean of non-NA values
         mean_val = result_df[diff_col].mean()
         result_df[diff_col] = result_df[diff_col].fillna(mean_val)
-        
-        if verbose:
-            logger.debug(f"  Added {diff_col} (mean for NA values: {mean_val:.5f})")
-            logger.debug(f"  Summary stats: min={result_df[diff_col].min():.5f}, max={result_df[diff_col].max():.5f}, mean={result_df[diff_col].mean():.5f}")
-    
     return result_df
 
 
