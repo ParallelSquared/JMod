@@ -19,7 +19,8 @@ import types
 import pytest
 
 from src.utils.errors import JModError
-from src.fdr_analysis import score_precursors, score_model, add_median_based_features, process_data, compute_protein_FDR, log_df
+from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
+                               compute_protein_FDR, log_df, untag_prec_qvalues)
 
 def test_score_model_minimal_fixed():
     # 12 samples, 2 classes
@@ -152,6 +153,22 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
 
     for fname in expected_files:
         assert (tmp_path.parent / fname).exists()
+    # Label-free: each untagged precursor is one row, so its q-value is the row's
+    written = pd.read_parquet(tmp_path.parent / "outputs/all_IDs_filtered.parquet")
+    assert written["untag_prec_Qvalue"].tolist() == written["Qvalue"].tolist()
+
+
+def test_untag_prec_qvalues_rank_each_plex_set_by_its_best_channel():
+    # Two channels each: P1 0.9, P2 0.8, decoy D1 0.7, P3 0.6 as their best.
+    # Counted down that order: 1/1, 1/2, 2/2, 2/3, monotonized
+    fdx = pd.DataFrame({
+        "file_name": ["f"] * 8,
+        "untag_prec": ["P1_2", "P1_2", "P2_2", "P2_2", "D1_2", "D1_2", "P3_2", "P3_2"],
+        "is_decoy": [False] * 4 + [True] * 2 + [False] * 2,
+        "PredVal": [0.9, 0.1, 0.2, 0.8, 0.7, 0.05, 0.3, 0.6],
+    })
+    q = untag_prec_qvalues(fdx, target_decoy_ratio=1.0)
+    assert q.tolist() == pytest.approx([0.5, 0.5, 0.5, 0.5, 2 / 3, 2 / 3, 2 / 3, 2 / 3])
         
         
 def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):

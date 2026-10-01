@@ -987,6 +987,31 @@ def log_df(df):
     for line in df_no_first.to_string(index=False).splitlines():
         logger.info(line)
 
+def untag_prec_qvalues(fdx, target_decoy_ratio):
+    """Each row's untag_prec_Qvalue: the run's q-value of its untagged
+    precursor (its plexDIA set of channels).
+
+    Each untagged precursor, targets and decoys apart, is scored by its best
+    PredVal over its channels; those are ranked and counted as score_precursors
+    counts the rows for Qvalue, with the same *target_decoy_ratio*.  Grouped
+    like BestChannel_Qvalue (run, untag_prec, is_decoy).  Returns a Series
+    aligned with *fdx*.
+    """
+    group = fdx.groupby(["file_name", "untag_prec", "is_decoy"], sort=False).ngroup().to_numpy()
+    by_group = fdx.groupby(group)
+    best = by_group["PredVal"].max().to_numpy()
+    is_decoy = by_group["is_decoy"].first().to_numpy().astype(bool)
+
+    score_order = np.argsort(-best, kind="stable")
+    decoy_order = is_decoy[score_order]
+    with np.errstate(divide="ignore"):  # as for Qvalue: no target yet at the top gives inf
+        q_ordered = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order) * target_decoy_ratio
+    q_ordered = np.minimum.accumulate(q_ordered[::-1])[::-1]  # Monotonize, as for Qvalue
+    q = np.empty_like(q_ordered)
+    q[score_order] = q_ordered
+    return pd.Series(q[group], index=fdx.index)
+
+
 def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
     logger.info("")
     logger.info("Computing Protein FDR")
@@ -1274,8 +1299,10 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     
     if config.args.plexDIA or config.args.timeplex:
         fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "is_decoy"])["Qvalue"].transform("min") #within a run
+        fdx["untag_prec_Qvalue"] = untag_prec_qvalues(fdx, target_decoy_ratio)
     else:
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
+        fdx["untag_prec_Qvalue"] = fdx["Qvalue"]  # one row per untagged precursor, so the same
 
     
     fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, im_tol, timeplex,
@@ -1324,7 +1351,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
-                       "protein",'BestChannel_Qvalue', 'plex_Area', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'plex_Area', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")

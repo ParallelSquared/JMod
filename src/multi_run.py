@@ -188,14 +188,16 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
     ], how="vertical_relaxed")  # a column's type can differ between runs (e.g. channel int vs float)
 
     # Kept when the runs' results carry them: timeplex runs have each ID's time
-    # channel, and coeff and prec_im are there when the results were written with them
+    # channel, and coeff, prec_im and untag_prec_Qvalue are there when the
+    # results were written with them
     available = df.collect_schema().names()
-    time_channel, coeff, prec_im = ([c] if c in available else [] for c in ("time_channel", "coeff", "prec_im"))
+    time_channel, coeff, prec_im, untag_prec_q = ([c] if c in available else []
+                                                  for c in ("time_channel", "coeff", "prec_im", "untag_prec_Qvalue"))
     df = (
         df
         .select(["run_idx", "file_name", "protein", "seq", "z", "channel", "silac_channel",
                  *time_channel,
-                 "PredVal", "Qvalue", "BestChannel_Qvalue", "Protein_Qvalue",
+                 "PredVal", "Qvalue", "BestChannel_Qvalue", *untag_prec_q, "Protein_Qvalue",
                  "plex_Area", *coeff, "stripped_seq", "untag_seq", "untag_prec",
                  "mz", "rt", *prec_im, "is_decoy"])
         .with_columns(
