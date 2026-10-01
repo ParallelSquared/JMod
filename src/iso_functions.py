@@ -13,6 +13,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import warnings
+
+# TODO: remove once we figure out what imports psims at startup on Windows (jmod never writes mzMLb)
+warnings.filterwarnings("ignore", message="hdf5plugin is missing")
+
 from brainpy import isotopic_variants
 import re
 from pyteomics import mass

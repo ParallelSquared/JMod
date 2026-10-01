@@ -20,6 +20,17 @@ This allows you to keep the main script in src/ while still running from root.
 
 import sys
 import os
+import logging
+import warnings
+
+# TODO: remove once we figure out what imports psims at startup on Windows (jmod never writes mzMLb)
+warnings.filterwarnings("ignore", message="hdf5plugin is missing")
+
+# TODO: revisit if TF C++ INFO logs are ever needed; hides the benign oneDNN round-off notice
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "1")
+# TODO: remove once the dependency stops calling deprecated tf.losses.sparse_softmax_cross_entropy;
+# note this silences ALL TF Python-side warnings, not just that one
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
 
 
 # Add src directory to Python path
