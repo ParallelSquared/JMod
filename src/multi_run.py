@@ -503,7 +503,9 @@ def _fit_rt_alignment(rt, reference_rt):
     delta = reference_rt - rt
     # <= rather than <: runs with no spread at all keep every point
     kept = np.abs(delta - delta.mean()) <= 4 * np.std(delta, ddof=1)
-    curve = lowess(delta[kept], rt[kept], frac=0.2, return_sorted=True)
+    # delta: fit at points 1% of the RT range apart and interpolate between
+    # them, the same curve in a fraction of the time
+    curve = lowess(delta[kept], rt[kept], frac=0.2, delta=0.01 * np.ptp(rt[kept]), return_sorted=True)
     return delta, kept, curve
 
 
