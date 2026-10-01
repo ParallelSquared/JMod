@@ -114,11 +114,13 @@ def pipeline_results(request):
     temp_config_path, exit_code = _run_experiment(config, temp_dir)
 
     # Find results folder
-    results_folder = _find_run_folder(temp_dir)
+    # Everything the experiment makes goes in its JMod_Results folder
+    experiment_dir = os.path.join(temp_dir, 'JMod_Results')
+    results_folder = _find_run_folder(experiment_dir)
 
     # Provide results to tests
     yield {
-        'output_dir': temp_dir,
+        'output_dir': experiment_dir,
         'config_path': temp_config_path,
         'results_folder': results_folder,
         'exit_code': exit_code,
@@ -220,9 +222,9 @@ class TestJModIntegration:
 
     def test_experiment_results_combine_the_run(self, pipeline_results):
         """The experiment's combined table holds this one run's IDs."""
-        combined_path = os.path.join(pipeline_results['output_dir'], 'experiment_results',
-                                     'combined_filtered_IDs.parquet')
-        assert os.path.isfile(combined_path), "experiment_results/combined_filtered_IDs.parquet not found"
+        combined_path = os.path.join(pipeline_results['output_dir'], 'combined_filtered_IDs.parquet')
+        assert os.path.isfile(combined_path), "combined_filtered_IDs.parquet not found"
+        assert os.path.isdir(os.path.join(pipeline_results['output_dir'], 'experiment_results'))
         combined = pd.read_parquet(combined_path)
         assert len(combined) > 0, "The combined table is empty"
         assert set(combined['run_idx']) == {1}
@@ -247,10 +249,12 @@ def silac_pipeline_results(request):
 
     temp_config_path, exit_code = _run_experiment(config, temp_dir)
 
-    results_folder = _find_run_folder(temp_dir)
+    # Everything the experiment makes goes in its JMod_Results folder
+    experiment_dir = os.path.join(temp_dir, 'JMod_Results')
+    results_folder = _find_run_folder(experiment_dir)
 
     yield {
-        'output_dir': temp_dir,
+        'output_dir': experiment_dir,
         'config_path': temp_config_path,
         'results_folder': results_folder,
         'exit_code': exit_code,
@@ -314,11 +318,12 @@ def mbr_pipeline_results(request):
     config['mbr'] = True
 
     _run_experiment(config, temp_dir)
+    experiment_dir = os.path.join(temp_dir, 'JMod_Results')
 
     yield {
-        'output_dir': temp_dir,
-        'first_pass_dir': os.path.join(temp_dir, 'first_pass'),
-        'mbr_dir': os.path.join(temp_dir, 'mbr_library'),
+        'output_dir': experiment_dir,
+        'first_pass_dir': os.path.join(experiment_dir, 'first_pass'),
+        'mbr_dir': os.path.join(experiment_dir, 'mbr_library'),
     }
 
     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -349,8 +354,7 @@ class TestMBRIntegration:
     def test_first_pass_goes_in_first_pass(self, mbr_pipeline_results):
         first_pass_dir = mbr_pipeline_results['first_pass_dir']
         _completed_run_folders(first_pass_dir)
-        assert os.path.isfile(os.path.join(first_pass_dir, 'experiment_results',
-                                           'combined_filtered_IDs.parquet'))
+        assert os.path.isfile(os.path.join(first_pass_dir, 'combined_filtered_IDs.parquet'))
 
     def test_first_pass_runs_give_the_same_ids(self, mbr_pipeline_results):
         run_folders = _completed_run_folders(mbr_pipeline_results['first_pass_dir'])
@@ -367,7 +371,7 @@ class TestMBRIntegration:
     def test_mbr_library_holds_the_first_pass_ids(self, mbr_pipeline_results):
         library = pd.read_parquet(os.path.join(mbr_pipeline_results['mbr_dir'], 'mbrlib.parquet'))
         first_pass = pd.read_parquet(os.path.join(mbr_pipeline_results['first_pass_dir'],
-                                                  'experiment_results', 'combined_filtered_IDs.parquet'))
+                                                  'combined_filtered_IDs.parquet'))
         library_precursors = set(library['ModifiedPeptide'] + '_' + library['PrecursorCharge'].astype(str))
         assert len(library_precursors) > 0, "The MBR library is empty"
         assert library_precursors == set(first_pass['untag_prec'])
@@ -375,7 +379,7 @@ class TestMBRIntegration:
     def test_mbr_library_rts_are_the_reference_runs(self, mbr_pipeline_results):
         library = pd.read_parquet(os.path.join(mbr_pipeline_results['mbr_dir'], 'mbrlib.parquet'))
         first_pass = pd.read_parquet(os.path.join(mbr_pipeline_results['first_pass_dir'],
-                                                  'experiment_results', 'combined_filtered_IDs.parquet'))
+                                                  'combined_filtered_IDs.parquet'))
         library_rt = (library.assign(untag_prec=library['ModifiedPeptide'] + '_'
                                      + library['PrecursorCharge'].astype(str))
                       .groupby('untag_prec')['RT'].first())

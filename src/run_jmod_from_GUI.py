@@ -436,7 +436,7 @@ class JModGUI(ThemedTk):
         # Output Folder Label + Entry + Select Button
         self.output_folder_label = ttk.Label(self.output_frame, text="Output Folder:")
         self.output_folder_label.grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        Hovertip(self.output_folder_label, "Select the folder where output folders will be saved ")
+        Hovertip(self.output_folder_label, "Select the folder to make the experiment's JMod_Results folder in")
 
         self.output_folder_var = tk.StringVar()
         self.output_folder_entry = ttk.Entry(self.output_frame, textvariable=self.output_folder_var, width=50)
@@ -1899,7 +1899,7 @@ class JModGUI(ThemedTk):
             mzml_display_name = files_label + "   " + (cfg.get("dummy_value") or "")
             if cfg.get("dummy_value") is None and self.has_shown_no_dummy_val is False:
                 self.has_shown_no_dummy_val = True
-                tk.messagebox.showinfo("Queue Information", "Tip: You can use '-z your_text_here' in the additional commands frame to add a suffix to a foldername")
+                tk.messagebox.showinfo("Queue Information", "Tip: You can use '-z your_text_here' in the additional commands frame to name the experiment's results folder (JMod_Results_your_text_here)")
             display_name = f"Queue {run_queue_number} - {mzml_display_name}"
             self.queue_data.append((display_name, tmp_filename))
             self.queue_listbox.insert(tk.END, display_name)

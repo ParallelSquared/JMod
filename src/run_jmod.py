@@ -84,7 +84,7 @@ def run_experiment(GUI_config_json=None):
         logger.info("")
         logger.info("First pass", extra={"highlight": True})
     completed_run_folders = search_runs(run_files, spectrumLibrary, mass_tag, SILAC,
-                                        bruker_sdk_path, first_pass_dir)
+                                        bruker_sdk_path, first_pass_dir or experiment_dir)
     del spectrumLibrary
     gc.collect()
     combined_ids = _combine(completed_run_folders, first_pass_dir or experiment_dir, target_decoy_ratio)
@@ -99,12 +99,12 @@ def run_experiment(GUI_config_json=None):
     logger.info(f"Output at {os.path.abspath(experiment_dir)}", extra={"highlight": True})
 
 
-def search_runs(run_files, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, results_parent=None):
+def search_runs(run_files, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, results_parent):
     """Search, score and quantify every data file against *spectrumLibrary*.
 
     A run that fails is reported and its folder marked, and the next one
-    starts.  The results folders go in *results_parent* if given, otherwise
-    where process_run puts them.  Returns {run index: results folder} for the
+    starts.  The results folders go in *results_parent* (the experiment
+    folder, or first_pass/).  Returns {run index: results folder} for the
     runs that completed.
     """
     failed_runs = []
@@ -172,7 +172,8 @@ def _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC
     config.args.use_emp_rt = True
     logger.info("")
     logger.info("Final pass, against the MBR library (use_emp_rt set)", extra={"highlight": True})
-    completed_run_folders = search_runs(run_files, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path)
+    completed_run_folders = search_runs(run_files, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path,
+                                        experiment_dir)
     del spectrumLibrary
     gc.collect()
     _combine(completed_run_folders, experiment_dir, target_decoy_ratio)
@@ -185,7 +186,7 @@ def run_make_library(experiment_dir):
     The settings are the experiment's (its JMod_config.json, or a run's
     outputs/config.json for experiments from before that was written), under
     any options typed on the command line, e.g. -l for a library that has
-    moved.  The IDs are its experiment_results/combined_filtered_IDs.parquet,
+    moved.  The IDs are its combined_filtered_IDs.parquet (see _experiment_ids),
     which is made from the run folders first if the experiment has none.  The
     library goes in <experiment_dir>/mbr_library/, as with --mbr; one run gives
     a library of its own IDs at their RTs.
@@ -267,14 +268,13 @@ def _experiment_settings_json(experiment_dir, run_folders):
 
 
 def _experiment_ids(experiment_dir, run_folders):
-    """The experiment's combined IDs: its experiment_results/combined_filtered_IDs.parquet,
-    or, when it has no experiment_results yet, combine_runs over its runs (which
-    writes experiment_results)."""
-    combined_path = os.path.join(experiment_dir, "experiment_results", "combined_filtered_IDs.parquet")
+    """The experiment's combined IDs: its combined_filtered_IDs.parquet, or, when
+    it has none, combine_runs over its runs, which writes it."""
+    combined_path = os.path.join(experiment_dir, "combined_filtered_IDs.parquet")
     if os.path.isfile(combined_path):
         logger.info(f"IDs from {os.path.abspath(combined_path)}")
         return pl.read_parquet(combined_path)
-    logger.info("No experiment_results yet: combining the runs first")
+    logger.info("No combined IDs yet: combining the runs first")
     return combine_runs(run_folders, experiment_dir, _library_target_decoy_ratio(run_folders),
                         config.fdr_threshold)
 
@@ -344,15 +344,20 @@ def _prepare_readers(run_files):
 def _start_experiment_log():
     """Create the experiment folder, open the log there, and record the configuration.
 
-    Experiment-level files -- the log, and a memory-mapped library -- go in the
-    output folder, or next to the first data file when there is none.  Returns
-    that folder.
+    Everything the experiment makes goes in one new folder, JMod_Results (or
+    JMod_Results_<--dummy_value>), datestamped if the name is taken: the log,
+    the configuration, the runs' results folders, experiment_results/ and, as
+    needed, first_pass/, mbr_library/ and a memory-mapped library.  It is made
+    in the output folder, or next to the first data file when there is none.
+    Returns it.
     """
     if config.args.output_folder is not None:
-        experiment_dir = config.args.output_folder
+        parent_dir = config.args.output_folder
     else:
-        experiment_dir = os.path.dirname(config.args.mzml[0].replace("\\","/")) or "."
-    os.makedirs(experiment_dir, exist_ok=True)
+        parent_dir = os.path.dirname(config.args.mzml[0].replace("\\","/")) or "."
+    name = "JMod_Results" + (f"_{config.args.dummy_value}" if config.args.dummy_value else "")
+    experiment_dir = datestamped(os.path.join(parent_dir, name))
+    os.makedirs(experiment_dir)
 
     logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
     set_log_filepath(logfile_path)
@@ -389,7 +394,7 @@ def _write_experiment_config(experiment_dir):
     logger.info(f"Configuration written to {os.path.abspath(json_path)}")
 
 
-def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, results_parent=None):
+def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, results_parent):
     """Search, score and quantify one data file against the shared library.
 
     Everything made here belongs to this run and is released when it returns:
@@ -397,7 +402,7 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, res
     on timeplex, the per-channel copy of the library.  The shared library is
     only read.  *runState* arrives holding the run's file_name; the results
     folder and the fitted values are added to it here.  The results folder
-    goes in *results_parent* if given (see _create_results_folder).
+    goes in *results_parent* (see _create_results_folder).
     """
     # Every run starts from the same seed, so its results do not depend on its
     # position in the list
@@ -452,28 +457,15 @@ def _load_features(mzml_file):
     return pd.read_csv(feature_path,delimiter="\t")
 
 
-def _create_results_folder(mzml_file, results_parent=None):
+def _create_results_folder(mzml_file, results_parent):
     """Create the run's results folder and its subfolders; return its path.
 
-    Named after the data file (plus --dummy_value), in *results_parent* if
-    given (an MBR experiment's first_pass/), else the output folder, else
-    next to the data file, with a datestamp added if the name is taken.
+    <data file>_results, in *results_parent* (the experiment folder, or an
+    MBR experiment's first_pass/), with a datestamp added if the name is taken.
     """
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
-    dummy_val = str(config.args.dummy_value) if config.args.dummy_value else ""
-    results_folder_name = spec_file_name + "_results" + "_" + dummy_val
-    results_folder_name = results_folder_name.rstrip("_")
-
-    if results_parent is not None:
-        os.makedirs(results_parent, exist_ok=True)
-        results_folder_path = os.path.join(results_parent, results_folder_name)
-    elif config.args.output_folder is not None:
-        os.makedirs(config.args.output_folder, exist_ok=True)
-        results_folder_path = os.path.join(config.args.output_folder, results_folder_name)
-    else:
-        results_folder_path = os.path.join(os.path.dirname(mzml_file), results_folder_name)
-
-    results_folder_path = datestamped(results_folder_path)
+    os.makedirs(results_parent, exist_ok=True)
+    results_folder_path = datestamped(os.path.join(results_parent, spec_file_name + "_results"))
 
 
     if not os.path.exists(results_folder_path):

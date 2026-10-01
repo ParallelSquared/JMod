@@ -19,6 +19,7 @@ def experiment(monkeypatch, tmp_path, combined):
     monkeypatch.setattr(config.args, "mzml", ["a.mzML", "b.mzML"])
     monkeypatch.setattr(config.args, "speclib", "lib.tsv")
     monkeypatch.setattr(config.args, "output_folder", str(tmp_path))
+    monkeypatch.setattr(config.args, "dummy_value", None)
     monkeypatch.setattr(config.args, "config_json", None)
     monkeypatch.setattr(config.args, "plexDIA", config.args.plexDIA)  # main may set it
     monkeypatch.setattr(run_jmod, "set_log_filepath", lambda path: None)
@@ -106,7 +107,7 @@ class TestErrorHandling:
         runState = run_jmod.RunState()
         runState.file_name = str(tmp_path / "missing.mzML")
         with pytest.raises(JModError, match="Data file not found"):
-            run_jmod.process_run(runState, None, None, None, None)
+            run_jmod.process_run(runState, None, None, None, None, str(tmp_path / "experiment"))
         assert list(tmp_path.iterdir()) == []  # fails before any results folder is made
 
     def test_error_outside_the_runs_stops_the_experiment(self, experiment, monkeypatch, app_log):
@@ -121,11 +122,39 @@ class TestErrorHandling:
         assert any("JMod stopped: bad library" in r.getMessage() for r in _errors(app_log))
 
 
+class TestExperimentFolder:
+    def test_everything_goes_in_a_new_jmod_results_folder(self, experiment, monkeypatch, tmp_path):
+        parents = []
+
+        def process_run(runState, *rest):
+            parents.append(rest[-1])
+            _finish(runState)
+
+        monkeypatch.setattr(experiment, "process_run", process_run)
+        experiment.main()
+        assert parents == [str(tmp_path / "JMod_Results")] * 2  # the runs' results folders go in it
+        assert (tmp_path / "JMod_Results" / "JMod_config.json").is_file()
+
+    def test_dummy_value_names_the_folder(self, experiment, monkeypatch, tmp_path):
+        monkeypatch.setattr(config.args, "dummy_value", "batch2")
+        monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: _finish(runState))
+        experiment.main()
+        assert (tmp_path / "JMod_Results_batch2" / "JMod_config.json").is_file()
+
+    def test_an_earlier_experiments_folder_is_kept(self, experiment, monkeypatch, tmp_path):
+        (tmp_path / "JMod_Results").mkdir()
+        (tmp_path / "JMod_Results" / "JMod_config.json").write_text("earlier experiment")
+        monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: _finish(runState))
+        experiment.main()
+        assert (tmp_path / "JMod_Results" / "JMod_config.json").read_text() == "earlier experiment"
+        assert len(list(tmp_path.glob("JMod_Results_*"))) == 1  # datestamped
+
+
 class TestExperimentConfig:
     def test_config_lists_every_data_file(self, experiment, monkeypatch, tmp_path):
         monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: _finish(runState))
         experiment.main()
-        written = json.loads((tmp_path / "JMod_config.json").read_text())
+        written = json.loads((tmp_path / "JMod_Results" / "JMod_config.json").read_text())
         assert written["mzml"] == ["a.mzML", "b.mzML"]
 
     def test_folder_is_recorded_as_its_files(self, experiment, monkeypatch, tmp_path):
@@ -135,16 +164,9 @@ class TestExperimentConfig:
         monkeypatch.setattr(config.args, "mzml_folder", str(folder))
         monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: _finish(runState))
         experiment.main()
-        written = json.loads((tmp_path / "JMod_config.json").read_text())
+        written = json.loads((tmp_path / "JMod_Results" / "JMod_config.json").read_text())
         assert written["mzml"] == ["a.mzML", "b.mzML", f"{folder}/c.mzML"]
         assert written["mzml_folder"] is None
-
-    def test_earlier_config_is_kept(self, experiment, monkeypatch, tmp_path):
-        (tmp_path / "JMod_config.json").write_text("earlier experiment")
-        monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: _finish(runState))
-        experiment.main()
-        assert (tmp_path / "JMod_config.json").read_text() == "earlier experiment"
-        assert len(list(tmp_path.glob("JMod_config_*.json"))) == 1  # datestamped
 
 
 class TestCombinedResults:
@@ -193,17 +215,18 @@ class TestMatchBetweenRuns:
     def test_first_pass_goes_in_first_pass_and_the_final_pass_keeps_normal_names(
             self, experiment, mbr_experiment, combined, tmp_path):
         experiment.main()
-        first_pass = os.path.join(str(tmp_path), "first_pass")
+        experiment_dir = str(tmp_path / "JMod_Results")
+        first_pass = os.path.join(experiment_dir, "first_pass")
         assert mbr_experiment.runs == [("a.mzML", first_pass, False), ("b.mzML", first_pass, False),
-                                       ("a.mzML", None, True), ("b.mzML", None, True)]
-        assert [args[1] for args in combined] == [first_pass, str(tmp_path)]
+                                       ("a.mzML", experiment_dir, True), ("b.mzML", experiment_dir, True)]
+        assert [args[1] for args in combined] == [first_pass, experiment_dir]
         assert mbr_experiment.mbr_inputs == ["combined IDs"]  # built from the first pass
-        assert (tmp_path / "mbr_library").is_dir()
+        assert (tmp_path / "JMod_Results" / "mbr_library").is_dir()
 
-    def test_single_file_skips_mbr(self, experiment, mbr_experiment, monkeypatch, app_log):
+    def test_single_file_skips_mbr(self, experiment, mbr_experiment, monkeypatch, app_log, tmp_path):
         monkeypatch.setattr(config.args, "mzml", ["a.mzML"])
         experiment.main()
-        assert mbr_experiment.runs == [("a.mzML", None, False)]
+        assert mbr_experiment.runs == [("a.mzML", str(tmp_path / "JMod_Results"), False)]
         assert any("skipping match between runs" in r.getMessage() for r in app_log)
 
 
@@ -236,9 +259,8 @@ class TestMakeLibrary:
 
     def test_the_experiments_combined_ids_are_used(self, finished, monkeypatch):
         import polars as pl
-        (finished.dir / "experiment_results").mkdir()
         ids = pl.DataFrame({"untag_prec": ["AAA_2"], "run_idx": [1]})
-        ids.write_parquet(finished.dir / "experiment_results" / "combined_filtered_IDs.parquet")
+        ids.write_parquet(finished.dir / "combined_filtered_IDs.parquet")
         monkeypatch.setattr(config.args, "make_library", str(finished.dir))
         run_jmod.main()
         assert finished.combined == []  # nothing recombined
@@ -281,8 +303,12 @@ class TestCreateResultsFolder:
         def mkdir(*args):
             raise FileNotFoundError("something else")
 
-        monkeypatch.setattr(config.args, "output_folder", str(tmp_path))
-        monkeypatch.setattr(config.args, "dummy_value", None)
         monkeypatch.setattr(run_jmod.os, "mkdir", mkdir)
         with pytest.raises(JModError, match="Error Creating Results Folder"):
-            run_jmod._create_results_folder("data/a.mzML")
+            run_jmod._create_results_folder("data/a.mzML", str(tmp_path))
+
+    def test_named_after_the_data_file_only(self, monkeypatch, tmp_path):
+        # --dummy_value names the experiment folder, not the runs'
+        monkeypatch.setattr(config.args, "dummy_value", "batch2")
+        folder = run_jmod._create_results_folder("data/a.mzML", str(tmp_path))
+        assert os.path.basename(folder) == "a_results"

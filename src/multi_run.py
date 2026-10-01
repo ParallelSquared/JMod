@@ -112,21 +112,24 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     """Combine the completed runs into one table, and plot it.
 
     *completed_run_folders* maps each completed run's index to its results
-    folder.  Writes an experiment_results folder in *experiment_dir*,
-    datestamped if the name is taken, holding combined_filtered_IDs.parquet:
-    every run's IDs that pass the run-level FDR, with a global q-value per
-    untagged precursor and per protein.  Nothing is filtered on the global
-    q-values; that is left to the user.  The plots go there too; those that compare runs only
-    when there are enough runs to compare.  Returns the combined table.
+    folder.  Writes combined_filtered_IDs.parquet in *experiment_dir*: every
+    run's IDs that pass the run-level FDR, with a global q-value per untagged
+    precursor and per protein.  Nothing is filtered on the global q-values;
+    that is left to the user.  The plots and run_index.txt go in an
+    experiment_results folder beside it; those that compare runs only when
+    there are enough runs to compare.  Each is datestamped if its name is
+    taken.  Returns the combined table.
     """
     logger.info("")
     logger.info(f"Combining the results of {len(completed_run_folders)} run(s)")
     df, untag_prec_global_qs, protein_global_qs = collect_results(completed_run_folders, target_decoy_ratio,
                                                                   fdr_threshold)
 
+    combined_path = datestamped(os.path.join(experiment_dir, "combined_filtered_IDs.parquet"))
+    df.write_parquet(combined_path)
+    logger.info(f"Combined IDs written to {os.path.abspath(combined_path)}")
     results_dir = datestamped(os.path.join(experiment_dir, "experiment_results"))
     os.makedirs(results_dir)
-    df.write_parquet(os.path.join(results_dir, "combined_filtered_IDs.parquet"))
     write_run_index(df, completed_run_folders, results_dir)
     logger.info(f"Experiment results written to {os.path.abspath(results_dir)}")
 
