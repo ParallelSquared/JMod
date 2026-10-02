@@ -138,6 +138,13 @@ JMod can be run through the command line with various search parameters. An exam
 uv run python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_to_search.mzML
 ```
 
+To search multiple files with one library, repeat `-i` or give a folder of data files with `--mzml_folder`:
+
+```
+uv run python path/to/run_jmod.py -l path/to/library.tsv -i path/to/file_1.mzML -i path/to/file_2.mzML
+uv run python path/to/run_jmod.py -l path/to/library.tsv --mzml_folder path/to/data_folder
+```
+
 Some commonly used search parameters are listed below. A more extensive list of commands can be found [here](/Help/commands.pdf).
 
 <details>
@@ -145,7 +152,9 @@ Some commonly used search parameters are listed below. A more extensive list of 
 
 ```
 -i, --mzml
-  Input file in mzML format
+  Input file in mzML format. Repeat to search multiple files
+--mzml_folder
+  Search every .mzML, .raw and .d file in this folder
 -l, --speclib
   Spectrum library in DIANN output format (must be .tsv or .parquet)
 -m --atleast_m
@@ -176,6 +185,16 @@ Some commonly used search parameters are listed below. A more extensive list of 
   default = False
 --ms1_ppm
   User provided MS1 ppm error tolerance.
+--mbr
+  Match between runs. Requires two or more files.
+  default = False
+--make_library
+  Build the match between runs library from a finished search's results folder, without searching.
+--combine_results
+  Combine the results of a finished search's results folder again, without searching.
+--iso_workers
+  Number of processes used to generate isotopes.
+  default = 3
   ```
 
 </details>
@@ -187,6 +206,8 @@ JMod can also be run using a configuration file. Each JMod search produces its o
 ```
 uv run python path/to/run_jmod.py --config_json path/to/config.json
 ```
+
+Options given on the command line override those in the configuration file.
 
 
 <details>
@@ -207,33 +228,42 @@ uv run python run_jmod.py -i data/test_mode_filtered.mzML -l data/filtered_libra
 ## Output Files
 
 
-JMod produces multiple output files. Below is a brief description of the main outputs alongside an example directory structure. A more comprehensive description of each output file can be found [here.](/Help/outputs.pdf)
+JMod produces multiple output files. Each search writes them to a new `JMod_Results` folder in the output folder (`JMod_Results_<text>` with `-z <text>`), with one results folder per searched file. Below is a brief description of the main outputs alongside an example directory structure. A more comprehensive description of each output file can be found [here.](/Help/outputs.pdf)
 
+- ```combined_filtered_IDs.parquet```: IDs from all searched files filtered at 1% FDR, with global q-values
+- ```experiment_results/```: Plots comparing the searched files
+- ```JMod_config.json```: Configuration file for this current search
+- ```JMod_log.log```: Log of the search
 - ```filtered_IDs.parquet```: IDs filtered at 1% FDR with select columns
 - ```filtered_IDs.csv```: IDs filtered at 1% FDR with extended columns
-- ```config.json```: Configuration file for this current search
-- ```Log.log```: Log of the search
 - ```Summary.txt```: Summary of precursor & protein identifications
+
+With `--mbr`, the first search of each file is in `first_pass/` and the match between runs library is in `mbr_library/`.
 
 ####
 
 ```text
-search_results_directory
+JMod_Results
 
-├── filtered_IDs.parquet
-├── filtered_IDs.csv
-├── config.json
-├── Log.log
-├── Summary.txt
-├── first_search/
-│   └── firstSearch.tsv
-├── outputs/
-│   ├── all_IDs_filtered.parquet
-│   ├── all_IDs.csv
-│   ├── decoylibsearch_coeffs.parquet
-│   └── params.txt
-├── scoring/
-└────── [scoring_plots].png
+├── combined_filtered_IDs.parquet
+├── JMod_config.json
+├── JMod_log.log
+├── experiment_results/
+│   └── [experiment_plots].png
+└── [file]_results/
+    ├── filtered_IDs.parquet
+    ├── filtered_IDs.csv
+    ├── Summary.txt
+    ├── first_search/
+    │   └── firstSearch.tsv
+    ├── outputs/
+    │   ├── all_IDs_filtered.parquet
+    │   ├── all_IDs.csv
+    │   ├── config.json
+    │   ├── decoylibsearch_coeffs.parquet
+    │   └── params.txt
+    ├── scoring/
+    └────── [scoring_plots].png
 
 ```
 
