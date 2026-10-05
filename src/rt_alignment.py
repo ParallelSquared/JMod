@@ -951,16 +951,30 @@ def fit_im_tolerance(im_error):
     return model["tolerance"]
 
 
+def _im_loess(x, y):
+    """Robust LOESS through (library 1/K0, observed 1/K0), as an interpolator."""
+    frac = min(0.95, max(0.15, 2000 / len(x)))
+    fitted = lowess(y, x, frac=frac, it=2, delta=0.002, return_sorted=True)
+    # collapse duplicate x (discrete TIMS grid) for interp1d
+    xu, idx = np.unique(fitted[:, 0], return_index=True)
+    yu = fitted[idx, 1]
+    return interp1d(xu, yu, bounds_error=False, fill_value=(yu[0], yu[-1]))
+
+
 def fit_im_alignment(lib_im, obs_im):
     """
     Calibrate library ion mobility onto observed 1/K0.
 
-    Structurally identical to the RT alignment in ``empirical_fit``: modal LOWESS
-    through (library, observed), a 4-sigma residual trim from ``fit_gaussian``,
-    then a refit on the survivors.  The only parameter that differs is ``anchors``,
-    scaled to the anchor count -- an IM fit sees hundreds of PSMs where the RT fit
-    sees tens of thousands, and a fixed anchors=1000 would request more anchors
-    than data points.
+    The wrong-match population (cross-charge pairs offset well above the
+    band) can be the local majority in sparse regions, where any local
+    estimator gets captured by it.  Globally it never is -- so it is removed
+    globally first: residual from the band trendline as the split axis, a
+    2-component mixture on that residual, and the upper component excised
+    when it is a separated minority.  A robust LOESS (local linear,
+    bisquare iterations) is then fit through the cleaned band, followed by
+    the usual trim-and-refit against the curve.  Local-linear fitting has
+    no boundary bias, so sparse tails follow whatever trend the band has
+    there.  Everything is O(n) or runs on a bounded subsample.
 
     Distinct from ``fit_im_tolerance``, which measures the spread of *observed* IM
     (matched-fragment median minus precursor 1/K0) and never looks at the library.
@@ -975,6 +989,8 @@ def fit_im_alignment(lib_im, obs_im):
     callable or None
         ``f(library_im) -> observed_im``, or ``None`` when there is nothing to fit.
     """
+    from sklearn.mixture import GaussianMixture
+
     lib = np.asarray(lib_im, dtype=float)
     obs = np.asarray(obs_im, dtype=float)
     if lib.shape != obs.shape:
@@ -989,20 +1005,33 @@ def fit_im_alignment(lib_im, obs_im):
 
     x, y = lib[good], obs[good]
 
-    def _anchors(count):
-        return min(1000, max(10, count // 4))
+    # Global cloud gate: split axis = residual from the band trendline
+    # (O(n) least squares -- the cloud shifts the intercept, not the
+    # direction), then a 2-component Gaussian mixture on the residual.
+    # The +1/cross-charge population is always present in this data, so the
+    # upper-mean component is always excised.
+    coeffs = np.linalg.lstsq(np.column_stack([x, np.ones_like(x)]), y, rcond=None)[0]
+    resid = y - (coeffs[0] * x + coeffs[1])
+    sub = resid[:: max(1, n // 10_000)].reshape(-1, 1)
+    gm = GaussianMixture(2, random_state=0, n_init=1).fit(sub)
+    lo = int(np.argmin(gm.means_.ravel()))
+    band = gm.predict(resid.reshape(-1, 1)) == lo
+    n_cloud = int((~band).sum())
+    logger.info(f"IM alignment: removed {n_cloud} of {n} pairs as "
+                f"off-band (+1/cross-charge) interference before fitting")
+    if int(band.sum()) < 10:
+        return None
 
-    spl = fast_modal_lowess(x, y, .01, anchors=_anchors(n),
-                            grid_size=1000, post_smooth_frac=0.01)
+    spl = _im_loess(x[band], y[band])
 
-    diffs = spl(x) - y
-    _, _, sd = fit_gaussian(diffs)
-    keep = np.abs(diffs) < 4 * np.abs(sd)
+    # Trim against the curve and refit on survivors
+    diffs = spl(x[band]) - y[band]
+    sd = 1.4826 * np.median(np.abs(diffs - np.median(diffs)))
+    keep = np.abs(diffs) < 4 * sd if sd > 0 else np.ones(int(band.sum()), dtype=bool)
     if int(keep.sum()) < 10:
         return spl
 
-    return fast_modal_lowess(x[keep], y[keep], .01, anchors=_anchors(int(keep.sum())),
-                             grid_size=1000, post_smooth_frac=0.01)
+    return _im_loess(x[band][keep], y[band][keep])
 
 
 def aligned_library_im(library, im_spl):
@@ -1934,13 +1963,17 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     if config.args.user_rt_tol:
         logger.info("Using user specified RT tolerance")
         new_rt_tol = config.args.rt_tol
-    logger.info(f"Optimized RT tolerance: {new_rt_tol}")
-    runState.opt_rt_tol = np.abs(new_rt_tol)
+    # Tolerances are rounded at storage (MS1 in ppm space), so the values
+    # the search gates on are exactly the values the log reports. Detail
+    # lines are emitted where each fit happens; the "Optimized ..." values
+    # are collected and emitted as one clean block at the end.
+    new_rt_tol = round(float(np.abs(new_rt_tol)), 5)
+    runState.opt_rt_tol = new_rt_tol
+    _opt_block = [f"Optimized RT tolerance: {new_rt_tol:.5f}"]
 
 
-    new_ms1_tol = np.abs(mz_boundary)
-    logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
-    logger.info("")
+    new_ms1_tol = round(float(np.abs(mz_boundary)) * 1e6, 5) * 1e-6
+    _opt_block.append(f"Optimized MS1 tolerance: {new_ms1_tol * 1e6:.5f} ppm")
 
 
     if config.args.ms1_ppm!=0:
@@ -2032,11 +2065,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
             frag_dev = _frag_deviations(frag_lists)
             new_im_tol = fit_im_tolerance(frag_dev)
             if new_im_tol is not None:
-                runState.opt_im_precision = np.abs(new_im_tol)
+                runState.opt_im_precision = round(float(np.abs(new_im_tol)), 5)
                 logger.info(
-                    f"Fitted IM fragment spread: {runState.opt_im_precision} "
-                    f"(band width {4*runState.opt_im_precision:.5f}) "
-                    f"[{frag_dev.size} fragment deviations from {len(frag_lists)} PSMs]")
+                    f"IM fragment spread fit: band width {4*runState.opt_im_precision:.5f}; "
+                    f"{frag_dev.size} fragment deviations from {len(frag_lists)} PSMs")
+                _opt_block.append(
+                    f"Optimized IM fragment spread: {runState.opt_im_precision:.5f}")
             else:
                 logger.info("IM fragment-spread fit failed; keeping default band tol: "
                             f"{runState.opt_im_precision}")
@@ -2099,13 +2133,12 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
                                         f"(residual mixture fit failed; keeping default "
                                         f"IM accuracy {runState.opt_im_accuracy})")
                         else:
-                            runState.opt_im_accuracy = float(np.abs(_rmodel["tolerance"]))
+                            runState.opt_im_accuracy = round(float(np.abs(_rmodel["tolerance"])), 5)
                             logger.info(
-                                f"IM alignment fitted on {n_anchor} anchors; "
-                                f"residual core SD {_rmodel['b'] * np.sqrt(2.0):.5f} 1/K0, "
-                                f"{_rmodel['weight']:.0%} of anchors in core; "
-                                f"library IM accuracy {runState.opt_im_accuracy:.5f} "
-                                f"(vs fragment spread {runState.opt_im_precision:.5f})")
+                                f"IM alignment fit: core SD {_rmodel['b'] * np.sqrt(2.0):.5f}; "
+                                f"{_rmodel['weight']:.0%} of {n_anchor} anchors in core")
+                            _opt_block.append(
+                                f"Optimized IM tolerance: {runState.opt_im_accuracy:.5f}")
                         if results_folder is not None:
                             plot_im_alignment(lib_anchor, obs_anchor, im_spl,
                                               results_folder=results_folder,
@@ -2113,6 +2146,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
                             with open(results_folder + "/first_search/im_spl", "wb") as dill_file:
                                 dill.dump(im_spl, dill_file)
 
+
+    for _line in _opt_block:
+        logger.info(_line)
 
     ################################################################
     ########### Save the functions and Plot the alignment   ########
@@ -3005,7 +3041,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     if config.args.user_rt_tol:
         logger.info("Using user specified RT tolerance")
         new_rt_tol = np.abs(config.args.rt_tol)
-    logger.info(f"Optimized RT tolerance: {new_rt_tol}")
+    logger.info(f"Optimized RT tolerance: {new_rt_tol:.5f}")
 
     
     # ## ensure there is no overlap
@@ -3034,11 +3070,11 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     if new_rt_tol>np.abs(min_prediction_diff/2):
         logger.warning("Warning; Library RTs overlapping")
         new_rt_tol = np.abs(min_prediction_diff/2)*.99 # ensure no overlap
-        logger.warning(f"Reseting tolerance to {new_rt_tol}")
+        logger.warning(f"Reseting tolerance to {new_rt_tol:.5f}")
     
 
     
-    runState.opt_rt_tol = new_rt_tol
+    runState.opt_rt_tol = round(float(np.abs(new_rt_tol)), 5)
     
     
     
@@ -3051,10 +3087,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     #                                    )[is_real])[int(sum(is_real)*.95)]*buffer,6+5)#6 for 1e-6 the 5 decimal places
 
 
-    new_ms1_tol = np.abs(4*mz_stddev)
-    logger.info(f"Optimized MS1 tolerance: {new_ms1_tol}")
-    logger.info("")
-    
+    new_ms1_tol = round(float(np.abs(4*mz_stddev)) * 1e6, 5) * 1e-6
+    logger.info(f"Optimized MS1 tolerance: {new_ms1_tol * 1e6:.5f} ppm")
+
     runState.opt_ms1_tol  = new_ms1_tol
 
     # Timeplex does not fit ion mobility; keep the defaults
