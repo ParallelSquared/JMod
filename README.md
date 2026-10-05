@@ -178,14 +178,16 @@ Some commonly used search parameters are listed below. A more extensive list of 
   Input file in mzML format. Repeat to search multiple files
 --mzml_folder
   Search every .mzML, .raw and .d file in this folder
--l, --speclib
-  Spectrum library in DIANN output format (must be .tsv or .parquet)
 -o, --output_folder
   Specify an output folder to send search results
   default = location of files being searched
--m --atleast_m
-  Required number of fragments matched from top N fragments (N=10)
-  default = 3
+-l, --speclib
+  Spectrum library in DIANN output format (must be .tsv or .parquet)
+-t, --threads
+  Number of threads to be used for the search
+  default = 10
+--ms1_ppm
+  User provided MS1 ppm error tolerance.
 -p --ppm
   MS2 matching tolerance in parts per million.
   default = 10
@@ -195,6 +197,15 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --num_iso
   Number of MS2 isotopes to consider if using them
   default = 2
+--iso_workers
+  Number of processes used to generate isotopes.
+  default = 3
+-m --atleast_m
+  Required number of fragments matched from top N fragments (N=10)
+  default = 3
+--no_ms1_req
+  Don't require observation of an MS1 peak for consideration in the search.
+  default = False
 --apex_jitter
   Allow center scan for MS1 quant to slide this many scans if intensity is monotonically increasing.
   default = 0
@@ -210,12 +221,12 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --num_timeplex
   Number of time offset injections for timePlex search
   default = 0
--t, --threads
-  Number of threads to be used for the search
-  default = 10
 --tag
   Tag used in the experiment, if any. See mass_tags.py for details.
   default = None
+--SILAC
+  Adds stable isotope label
+  default = False
 --use_emp_rt
   Force use of library retention time for alignment.
   default = False
@@ -224,11 +235,6 @@ Some commonly used search parameters are listed below. A more extensive list of 
   default = False
 --rt_tol
   User provided retention time tolerance.
---no_ms1_req
-  Don't require observation of an MS1 peak for consideration in the search.
-  default = False
---ms1_ppm
-  User provided MS1 ppm error tolerance.
 --mbr
   Match between runs. Requires two or more files.
   default = False
@@ -236,9 +242,9 @@ Some commonly used search parameters are listed below. A more extensive list of 
   Build the match between runs library from a finished search's results folder, without searching.
 --combine_results
   Combine the results of a finished search's results folder again, without searching.
---iso_workers
-  Number of processes used to generate isotopes.
-  default = 3
+--dummy_value
+  Append string to end of folder name
+  default = None
 --rawfilereader_path
   Path to the ThermoRawFileParser if using .raw files
 --bruker_sdk_path
