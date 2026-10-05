@@ -49,16 +49,16 @@ def _entry(mod_seq, seq, prec_mz, prec_z, frags):
 
 
 def make_tagged_store():
-    """Small pre-tagged library, incl. a double-tagged N-terminal K token."""
+    """Small pre-tagged library, incl. a double-tagged N-terminal K."""
     b = lambda s, z=1: mass.fast_mass(sequence=s, ion_type='b', charge=z)
     y = lambda s, z=1: mass.fast_mass(sequence=s, ion_type='y', charge=z)
     d = {
-        ("P(test_one_channel-0)EPTIDEK(test_one_channel-0)", 2.0): _entry(
-            "P(test_one_channel-0)EPTIDEK(test_one_channel-0)", "PEPTIDEK", 464.75, 2.0,
+        ("(test_one_channel-0)PEPTIDEK(test_one_channel-0)", 2.0): _entry(
+            "(test_one_channel-0)PEPTIDEK(test_one_channel-0)", "PEPTIDEK", 464.75, 2.0,
             {'b3_1': [b("PEP"), 1.0], 'b4_1': [b("PEPT"), 0.85],
              'y3_1': [y("DEK"), 0.5], 'y4_1': [y("IDEK"), 0.4]}),
-        ("K(test_one_channel-0)(test_one_channel-0)LIONELR", 2.0): _entry(
-            "K(test_one_channel-0)(test_one_channel-0)LIONELR", "KLIONELR", 500.3, 2.0,
+        ("(test_one_channel-0)K(test_one_channel-0)LIONELR", 2.0): _entry(
+            "(test_one_channel-0)K(test_one_channel-0)LIONELR", "KLIONELR", 500.3, 2.0,
             {'b2_1': [b("KL"), 0.6], 'y3_1': [y("ELR"), 1.0],
              'y5-H2O_1': [y("ONELR") - 18.01, 0.2]}),
     }
@@ -162,6 +162,25 @@ class TestDecoyDifferential:
         assert combined.mod_seq[2] == "PPEETDIK"
 
 
+class TestNTerminalModificationDecoys:
+    """A decoy keeps its target's N-terminal modification at the N-terminus,
+    so the modification shifts the decoy's b ions and none of its y ions."""
+
+    def test_acetyl_stays_on_the_b_ions(self):
+        acetyl = 42.010565
+        b = lambda s: mass.fast_mass(sequence=s, ion_type='b', charge=1)
+        y = lambda s: mass.fast_mass(sequence=s, ion_type='y', charge=1)
+        target = "(UniMod:1)PEPTIDEK"
+        store = SpectrumLibraryStore.from_dict({(target, 2.0): _entry(
+            target, "PEPTIDEK", 485.24, 2.0,
+            {'b3_1': [b("PEP") + acetyl, 1.0], 'y3_1': [y("DEK"), 0.5]})})
+        combined = create_decoy_lib(store, rules="rev", tag=None)
+
+        decoy = combined[("(UniMod:1)EDITPEPK", 2.0)]
+        assert decoy['frags']['b3_1'][0] == pytest.approx(b("EDI") + acetyl, abs=1e-4)
+        assert decoy['frags']['y3_1'][0] == pytest.approx(y("PEK"), abs=1e-4)
+
+
 class TestCombinedStoreDtypes:
     """Silent-recast audit on the combined target+decoy store."""
 
@@ -207,8 +226,8 @@ class TestShuffleSeedContract:
 
     def test_tagged(self):
         tag = one_channel_tag()
-        assert change_seq("P(test_one_channel-0)EPTIDEK(test_one_channel-0)",
-                          "shuffle", tag=tag) == "P(test_one_channel-0)PEETDIK(test_one_channel-0)"
+        assert change_seq("(test_one_channel-0)PEPTIDEK(test_one_channel-0)",
+                          "shuffle", tag=tag) == "(test_one_channel-0)PPEETDIK(test_one_channel-0)"
 
     def test_low_diversity_falls_back_to_reverse(self):
         assert change_seq("AAK", "shuffle") == "AAK"

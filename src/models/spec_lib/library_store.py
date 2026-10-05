@@ -34,7 +34,7 @@ _STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
 
 # Version stamp for the .npz binary cache. Bump whenever parsing semantics
 # change so stale caches are re-parsed instead of silently loaded.
-STORE_VERSION = 4
+STORE_VERSION = 5
 
 
 class StaleStoreCacheError(ValueError):
@@ -1627,9 +1627,10 @@ class SpectrumLibraryStore:
         prefix[k] = masses of first k+1 tokens summed left-to-right (the
         exact fast_mass accumulation order, so b ions are bit-identical);
         suffix[k] = last k+1 tokens (y ions, float-noise-level differences).
+        N-terminal modifications stay on the decoy's first token.
         """
         from src.utils.parse_peptides import (
-            parse_peptide, decoy_permutation, change_seq, extract_mod,
+            parse_peptide, decoy_permutation, change_seq, extract_mod, split_nterm,
         )
         from pyteomics.mass import std_aa_mass
         from src import config
@@ -1655,6 +1656,10 @@ class SpectrumLibraryStore:
                 token_cache[tok] = cached
             return cached
 
+        def nterm_mod_mass(nterm):
+            # a placeholder residue, so the group parses as one token's mods
+            return token_masses("G" + nterm)[1] if nterm else 0.0
+
         n_target_collisions = 0
         n_decoy_collisions = 0
         valid_indices = []          # target index per surviving decoy
@@ -1677,10 +1682,13 @@ class SpectrumLibraryStore:
                 continue
             seen_decoy_keys.add(decoy_key)
 
-            tokens = parse_peptide(mod_seq_i)
+            nterm, body = split_nterm(mod_seq_i)
+            tokens = parse_peptide(body)
             if tag:
                 tag_lists = [tag_re.findall(t) for t in tokens]
                 stripped = [tag_re.sub("", t) for t in tokens]
+                nterm_tags = tag_re.findall(nterm)
+                nterm = tag_re.sub("", nterm)
             else:
                 stripped = tokens
             perm = decoy_permutation(stripped, rules)
@@ -1688,12 +1696,10 @@ class SpectrumLibraryStore:
             L = len(new_tokens)
 
             if tag:
-                # N-terminal tag pinned to position 0; others follow their
+                # N-terminal tags stay at position 0; others follow their
                 # residue (same rule as change_seq)
-                n_term_tag = tag_lists[0][:1]
-                residue_tags_at_0 = tag_lists[0][1:]
-                new_tags = [tag_lists[j] if j > 0 else residue_tags_at_0 for j in perm]
-                new_tags[0] = new_tags[0] + n_term_tag
+                new_tags = [tag_lists[j] for j in perm]
+                new_tags[0] = new_tags[0] + nterm_tags
                 tag_mass = [
                     sum([tag.mass_dict[t.strip("()")] for t in grp
                          if t.strip("()") in tag.mass_dict])
@@ -1709,6 +1715,8 @@ class SpectrumLibraryStore:
             mod = [0.0] * L
             for j, tok in enumerate(new_tokens):
                 aa[j], mod[j] = token_masses(tok)
+            if nterm:
+                mod[0] += nterm_mod_mass(nterm)
 
             pa = pm = pt = 0.0
             for j in range(L):
@@ -2013,7 +2021,7 @@ class SpectrumLibraryStore:
             Mass tag with ``channel_names``, ``channel_masses``,
             ``rules``, ``name``.
         """
-        from src.utils.parse_peptides import parse_peptide
+        from src.utils.parse_peptides import parse_peptide, split_nterm
         from src.mass_tags import get_tag_pos
         from src.utils.frag_encoding import get_ion_type, get_index, get_charge
         from src.logger import logger
@@ -2080,14 +2088,21 @@ class SpectrumLibraryStore:
                 num_tags_n = np.cumsum(actual_tag_mask)
                 num_tags_c = np.cumsum(actual_tag_mask[::-1])
             else:
-                split_peptide = parse_peptide(peptide)
+                nterm, body = split_nterm(peptide)
+                split_peptide = parse_peptide(body)
                 all_tag_pos, additional_tag_masses = get_tag_pos(split_peptide, tag.rules)
                 n_tag_sites[i] = len(all_tag_pos)
                 num_tags_n = np.cumsum(additional_tag_masses, dtype=int)
                 num_tags_c = np.cumsum(additional_tag_masses[::-1], dtype=int)
-                for pos in all_tag_pos:
+                # The N-terminal tag goes in front of the first residue,
+                # after any N-terminal modifications already there
+                residue_tag_pos = list(all_tag_pos)
+                if "n" in tag.rules:
+                    residue_tag_pos.remove(0)
+                    nterm += "(" + tag.name + ")"
+                for pos in residue_tag_pos:
                     split_peptide[pos] += "(" + tag.name + ")"
-                tagged_templates[i] = "".join(split_peptide)
+                tagged_templates[i] = nterm + "".join(split_peptide)
 
             foff = int(target_store.frag_offsets[i])
             flen = int(target_store.frag_lengths[i])
@@ -2440,8 +2455,9 @@ class SpectrumLibraryStore:
             _require("StrippedPeptide", "Unknown StrippedPeptide column")
             _require("PrecursorCharge", "Unknown PrecursorCharge column")
 
-            # ModifiedPeptide with wrapping underscores stripped; decoy/invalid
-            # bookkeeping uses this pre-N-terminal-move form
+            # ModifiedPeptide with wrapping underscores stripped.  N-terminal
+            # modifications stay in front of the first residue, as DIA-NN
+            # writes them (see parse_peptides.split_nterm)
             df = df.with_columns(
                 _utf8("ModifiedPeptide")
                 .str.strip_chars("_")
@@ -2485,13 +2501,7 @@ class SpectrumLibraryStore:
                 _raise(f"Nested modification parentheses are not supported "
                        f"({nested.height} rows, e.g. {example})")
 
-            ## Move DIANN N-terminal tags/modifications behind the first AA:
-            ## (tag)C(UniMod:4)SQAPVYGR → C(UniMod:4)(tag)SQAPVYGR
-            df = df.with_columns(
-                pl.col("_mod_pep_raw").str.replace(
-                    r'^((?:\([^)]*\))+)([A-Z])((?:\([^)]*\))*)(.*)$', "${2}${3}${1}${4}"
-                ).alias("_mod_pep")
-            )
+            df = df.with_columns(pl.col("_mod_pep_raw").alias("_mod_pep"))
 
             # Skip precursors carrying residues with no defined mass rather than
             # letting them reach decoy generation, where fast_mass raises.

@@ -668,6 +668,7 @@ def load_library(lib_file, mass_tag):
         source_channel = mass_tag.name + "-" + str(closest_channel_name)
         logger.info(f"Tag found in library: {source_channel}. (mass difference: {mass_diff:.6f} Da)")
         spectrumLibrary.relabel_tag(library_tag_name, source_channel)
+        spec_lib.check_nterm_tags(spectrumLibrary.mod_seq, mass_tag)
     else:
         source_channel = None
     return spectrumLibrary, library_tag_bool, source_channel

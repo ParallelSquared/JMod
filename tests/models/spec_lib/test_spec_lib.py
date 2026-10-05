@@ -6,7 +6,9 @@ import tempfile
 import csv
 import types
 
-from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib, has_mass_tag, in_windows
+from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib, has_mass_tag, in_windows, check_nterm_tags
+from src.utils.errors import JModError
+from src.mass_tags import massTag
 
 
 def test_create_python_lib_basic():
@@ -171,6 +173,34 @@ class Test_has_mass_tag():
         assert found is True
         assert np.isclose(source_channel_mass, 150)
         assert name == "PSMtag-0"
+
+
+    def test_several_channels_of_one_tag_raise(self):
+        peptides = ["(PSMtag-0)PEPTIDEK(PSMtag-0)", "(PSMtag-4)ELVISK(PSMtag-4)"]
+        with pytest.raises(JModError, match="Multi-channel libraries are not supported"):
+            has_mass_tag(peptides, [600.0, 500.0], [2, 2])
+
+    def test_several_unknown_modifications_raise(self):
+        peptides = ["(PSMtag-0)PEPTIDEK(PSMtag-0)", "(DimethylNter)ELVISK"]
+        with pytest.raises(JModError, match="DimethylNter, PSMtag-0"):
+            has_mass_tag(peptides, [600.0, 500.0], [2, 2])
+
+
+class Test_check_nterm_tags():
+    tag = massTag(rules="nK", base_mass=140.0949630177, delta=[0.0],
+                  channel_names=["0"], name="mTRAQ")
+
+    def test_tags_in_front_of_the_first_residue_pass(self):
+        check_nterm_tags(["(mTRAQ-0)PEPTIDEK(mTRAQ-0)", "(mTRAQ-0)K(mTRAQ-0)EPR"], self.tag)
+
+    @pytest.mark.parametrize("peptide", ["P(mTRAQ-0)EPTIDEK(mTRAQ-0)", "K(mTRAQ-0)(mTRAQ-0)EPR"])
+    def test_tags_behind_the_first_residue_raise(self, peptide):
+        with pytest.raises(JModError, match="behind the first residue"):
+            check_nterm_tags(["(mTRAQ-0)ELVISK(mTRAQ-0)", peptide], self.tag)
+
+    def test_tags_without_an_n_rule_pass(self):
+        k_only = massTag(rules="K", base_mass=0, delta=[0.0], channel_names=["0"], name="mTRAQ")
+        check_nterm_tags(["K(mTRAQ-0)EPK(mTRAQ-0)"], k_only)
 
 
 def _scans(*windows):

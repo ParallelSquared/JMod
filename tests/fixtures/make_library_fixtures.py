@@ -44,7 +44,7 @@ EDGECASE_ROWS = [
     ("PEPXTIDEK", "PEPXTIDEK", "2", "510.20", "30.0", "0.9", "PG3", "Prot3", "P003", "GENE3", "0", "y", "4", "1", "", "503.29", "0.7"),
     # P4: contains Z (no defined mass) -> skipped.
     ("PEPZTIDEK", "PEPZTIDEK", "2", "511.21", "31.0", "0.9", "PG4", "Prot4", "P004", "GENE4", "0", "y", "4", "1", "", "504.29", "0.7"),
-    # P5: DIA-NN N-terminal tag that must move behind the first residue, empty
+    # P5: DIA-NN N-terminal tag, kept in front of the first residue, empty
     # Genes (-> '""'), IonMobility "0.0" (-> NaN), fragment charge 2.
     ("(tag)C(UniMod:4)SQAPVYGR", "CSQAPVYGR", "2", "540.26", "18.2", "0.0", "PG5", "Prot5", "P005", "", "0", "y", "5", "2", "", "289.66", "1.0"),
     # P6: underscore-wrapped ModifiedPeptide, IonMobility "" (-> NaN).

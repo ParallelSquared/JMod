@@ -13,7 +13,7 @@ import src.config as config
 # Import the functions we want to test
 from src.utils.parse_peptides import (
     change_seq, convert_prec_mz, convert_frags, parse_peptide, extract_mod, split_frag_name,
-    untag_sequences
+    untag_sequences, split_nterm
 )
 from src.mass_tags import available_tags
 
@@ -167,62 +167,62 @@ class TestChangeSeq:
             change_seq("PEPTIDE", None)
     
     def test_change_seq_with_tags(self):
-        """Test change_seq with tagged sequences"""
+        """Test change_seq with tagged sequences: the N-terminal tag stays in front"""
 
         mock_tag = Mock()
         mock_tag.name = "mTRAQ"
 
         # Test with tagged sequence
-        result = change_seq("K(mTRAQ)PEPTIDE", "diann", tag=mock_tag)
-        assert result == "L(mTRAQ)LDLSVED"
+        result = change_seq("(mTRAQ)KPEPTIDE", "diann", tag=mock_tag)
+        assert result == "(mTRAQ)LLDLSVED"
 
         # Test reverse with tags
-        result = change_seq("K(mTRAQ)PEPTIDE", "rev", tag=mock_tag)
-        assert result == "D(mTRAQ)ITPEPKE"
+        result = change_seq("(mTRAQ)KPEPTIDE", "rev", tag=mock_tag)
+        assert result == "(mTRAQ)DITPEPKE"
 
-        result = change_seq("P(mTRAQ)EK(mTRAQ)PTIDER", "rev", tag=mock_tag)
-        assert result == "E(mTRAQ)DITPK(mTRAQ)EPR"
+        result = change_seq("(mTRAQ)PEK(mTRAQ)PTIDER", "rev", tag=mock_tag)
+        assert result == "(mTRAQ)EDITPK(mTRAQ)EPR"
 
-        result = change_seq("K(mTRAQ)(mTRAQ)EK(mTRAQ)PTIDER", "rev", tag=mock_tag)
-        assert result == "E(mTRAQ)DITPK(mTRAQ)EK(mTRAQ)R"
+        result = change_seq("(mTRAQ)K(mTRAQ)EK(mTRAQ)PTIDER", "rev", tag=mock_tag)
+        assert result == "(mTRAQ)EDITPK(mTRAQ)EK(mTRAQ)R"
 
-        result = change_seq("P(mTRAQ)EPTIDEK(mTRAQ)K(mTRAQ)", "rev", tag=mock_tag)
-        assert result == "K(mTRAQ)(mTRAQ)EDITPEPK(mTRAQ)"
+        result = change_seq("(mTRAQ)PEPTIDEK(mTRAQ)K(mTRAQ)", "rev", tag=mock_tag)
+        assert result == "(mTRAQ)K(mTRAQ)EDITPEPK(mTRAQ)"
 
-        result = change_seq("C(UniMod:4)(mTRAQ)EPTIDER", "rev", tag=mock_tag)
-        assert result == "E(mTRAQ)DITPEC(UniMod:4)R"
+        result = change_seq("(mTRAQ)C(UniMod:4)EPTIDER", "rev", tag=mock_tag)
+        assert result == "(mTRAQ)EDITPEC(UniMod:4)R"
 
         #test rev_nc with tags
-        result = change_seq("K(mTRAQ)PEPTIDE", "rev_nc", tag=mock_tag)
-        assert result == "K(mTRAQ)DITPEPE"
+        result = change_seq("(mTRAQ)KPEPTIDE", "rev_nc", tag=mock_tag)
+        assert result == "(mTRAQ)KDITPEPE"
 
-        result = change_seq("P(mTRAQ)EK(mTRAQ)PTIDER", "rev_nc", tag=mock_tag)
-        assert result == "P(mTRAQ)EDITPK(mTRAQ)ER"
+        result = change_seq("(mTRAQ)PEK(mTRAQ)PTIDER", "rev_nc", tag=mock_tag)
+        assert result == "(mTRAQ)PEDITPK(mTRAQ)ER"
 
-        result = change_seq("K(mTRAQ)(mTRAQ)EK(mTRAQ)PTIDER", "rev_nc", tag=mock_tag)
-        assert result == "K(mTRAQ)(mTRAQ)EDITPK(mTRAQ)ER"
+        result = change_seq("(mTRAQ)K(mTRAQ)EK(mTRAQ)PTIDER", "rev_nc", tag=mock_tag)
+        assert result == "(mTRAQ)K(mTRAQ)EDITPK(mTRAQ)ER"
 
-        result = change_seq("P(mTRAQ)EPTIDEK(mTRAQ)K(mTRAQ)", "rev_nc", tag=mock_tag)
-        assert result == "P(mTRAQ)K(mTRAQ)EDITPEK(mTRAQ)"
+        result = change_seq("(mTRAQ)PEPTIDEK(mTRAQ)K(mTRAQ)", "rev_nc", tag=mock_tag)
+        assert result == "(mTRAQ)PK(mTRAQ)EDITPEK(mTRAQ)"
 
-        result = change_seq("C(UniMod:4)(mTRAQ)EPTIDER", "rev_nc", tag=mock_tag)
-        assert result == "C(UniMod:4)(mTRAQ)EDITPER"
+        result = change_seq("(mTRAQ)C(UniMod:4)EPTIDER", "rev_nc", tag=mock_tag)
+        assert result == "(mTRAQ)C(UniMod:4)EDITPER"
 
         #test shuffle with tags
-        result = change_seq("K(mTRAQ)PEPTIDE", "shuffle", tag=mock_tag)
-        assert result == "E(mTRAQ)TIPPKDE"
+        result = change_seq("(mTRAQ)KPEPTIDE", "shuffle", tag=mock_tag)
+        assert result == "(mTRAQ)ETIPPKDE"
 
-        result = change_seq("P(mTRAQ)EK(mTRAQ)PTIDER", "shuffle", tag=mock_tag)
-        assert result == "T(mTRAQ)PEK(mTRAQ)EPIDR"
+        result = change_seq("(mTRAQ)PEK(mTRAQ)PTIDER", "shuffle", tag=mock_tag)
+        assert result == "(mTRAQ)TPEK(mTRAQ)EPIDR"
 
-        result = change_seq("K(mTRAQ)(mTRAQ)EK(mTRAQ)PTIDER", "shuffle", tag=mock_tag)
-        assert result == "E(mTRAQ)PK(mTRAQ)DETK(mTRAQ)IR"
+        result = change_seq("(mTRAQ)K(mTRAQ)EK(mTRAQ)PTIDER", "shuffle", tag=mock_tag)
+        assert result == "(mTRAQ)EPK(mTRAQ)DETK(mTRAQ)IR"
 
-        result = change_seq("P(mTRAQ)EPTIDEK(mTRAQ)K(mTRAQ)", "shuffle", tag=mock_tag)
-        assert result == "K(mTRAQ)(mTRAQ)PTIEDPEK(mTRAQ)"
+        result = change_seq("(mTRAQ)PEPTIDEK(mTRAQ)K(mTRAQ)", "shuffle", tag=mock_tag)
+        assert result == "(mTRAQ)K(mTRAQ)PTIEDPEK(mTRAQ)"
 
-        result = change_seq("C(UniMod:4)(mTRAQ)EPTIDER", "shuffle", tag=mock_tag)
-        assert result == "E(mTRAQ)DC(UniMod:4)IPTER"
+        result = change_seq("(mTRAQ)C(UniMod:4)EPTIDER", "shuffle", tag=mock_tag)
+        assert result == "(mTRAQ)EDC(UniMod:4)IPTER"
         
     def test_change_seq_invalid_aa_keyerror(self):
         """Test that change_seq raises KeyError for unknown amino acids with diann rules"""
@@ -457,3 +457,23 @@ class TestUntagSequences:
 
     def test_without_tags_the_sequences_are_unchanged(self):
         assert untag_sequences(["PEPTIDEK(mTRAQ-0)"], None, None) == ["PEPTIDEK(mTRAQ-0)"]
+
+
+
+class TestNTerminalModifications:
+    """N-terminal modifications are written in front of the first residue."""
+
+    def test_split_nterm_separates_the_leading_modifications(self):
+        assert split_nterm("(UniMod:1)(mTRAQ-0)PEPTIDEK(mTRAQ-0)") == ("(UniMod:1)(mTRAQ-0)", "PEPTIDEK(mTRAQ-0)")
+        assert split_nterm("PEPTIDEK") == ("", "PEPTIDEK")
+
+    def test_parse_peptide_adds_them_to_the_first_residue(self):
+        assert parse_peptide("(mTRAQ)K(mTRAQ)PEK") == ["K(mTRAQ)(mTRAQ)", "P", "E", "K"]
+
+    @pytest.mark.parametrize("rules, expected", [
+        ("rev", "(UniMod:1)EDITPEPK"),
+        ("rev_nc", "(UniMod:1)PEDITPEK"),
+        ("shuffle", "(UniMod:1)PPEETDIK"),
+    ])
+    def test_decoys_keep_them_at_the_N_terminus(self, rules, expected):
+        assert change_seq("(UniMod:1)PEPTIDEK", rules) == expected

@@ -213,8 +213,8 @@ class Test_tag_library():
          }
         initial_store = SpectrumLibraryStore.from_dict(initial_dict)
         final_dict = tag_library(initial_store, tag)
-        key = final_dict[("P(test_one_channel-0)EPTIDEK(test_one_channel-0)", 2.0)]
-        assert key['mod_seq'] == "P(test_one_channel-0)EPTIDEK(test_one_channel-0)"
+        key = final_dict[("(test_one_channel-0)PEPTIDEK(test_one_channel-0)", 2.0)]
+        assert key['mod_seq'] == "(test_one_channel-0)PEPTIDEK(test_one_channel-0)"
         assert key['seq'] == "PEPTIDEK"
         assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
         assert key['prec_z'] == 2
@@ -267,8 +267,8 @@ class Test_tag_library():
          }
         initial_store = SpectrumLibraryStore.from_dict(initial_dict)
         final_dict = tag_library(initial_store, tag)
-        key = final_dict[("P(test_one_channel-0)EPTIDER", 3.0)]
-        assert key['mod_seq'] == "P(test_one_channel-0)EPTIDER"
+        key = final_dict[("(test_one_channel-0)PEPTIDER", 3.0)]
+        assert key['mod_seq'] == "(test_one_channel-0)PEPTIDER"
         assert key['seq'] == "PEPTIDER"
         assert key['prec_mz'] == 319.48702501677 + (1*tag.mass)/3
         assert key['prec_z'] == 3
@@ -322,8 +322,8 @@ class Test_tag_library():
 
         initial_store = SpectrumLibraryStore.from_dict(initial_dict)
         final_dict = tag_library(initial_store, tag)
-        key = final_dict[("P(test_one_channel-0)EPT(Unimod:21)IDER", 3.0)]
-        assert key['mod_seq'] == "P(test_one_channel-0)EPT(Unimod:21)IDER"
+        key = final_dict[("(test_one_channel-0)PEPT(Unimod:21)IDER", 3.0)]
+        assert key['mod_seq'] == "(test_one_channel-0)PEPT(Unimod:21)IDER"
         assert key['seq'] == "PEPTIDER"
         assert key['prec_mz'] == 319.48702501677 + phospho_mass + (1*tag.mass)/3
         assert key['prec_z'] == 3
@@ -378,9 +378,9 @@ class Test_tag_library():
         final_dict = tag_library(initial_store, tag)
         assert len(final_dict) == tag.n_channels*len(initial_dict)
         for i, channel in enumerate(tag.channel_names):
-            key = final_dict[(f"P(test_basic-{channel})EPTIDEK(test_basic-{channel})", 2.0)]
+            key = final_dict[(f"(test_basic-{channel})PEPTIDEK(test_basic-{channel})", 2.0)]
 
-            assert key['mod_seq'] == f"P(test_basic-{channel})EPTIDEK(test_basic-{channel})"
+            assert key['mod_seq'] == f"(test_basic-{channel})PEPTIDEK(test_basic-{channel})"
 
             assert key['seq'] == "PEPTIDEK"
 
@@ -481,8 +481,8 @@ class Test_tag_library():
         
         initial_store = SpectrumLibraryStore.from_dict(initial_dict)
         final_dict = tag_library(initial_store, tag)
-        key = final_dict[("P(test_one_channel-0)EPTIDEK(test_one_channel-0)", 2.0)]
-        assert key['mod_seq'] == "P(test_one_channel-0)EPTIDEK(test_one_channel-0)"
+        key = final_dict[("(test_one_channel-0)PEPTIDEK(test_one_channel-0)", 2.0)]
+        assert key['mod_seq'] == "(test_one_channel-0)PEPTIDEK(test_one_channel-0)"
         assert key['seq'] == "PEPTIDEK"
         assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
         assert key['prec_z'] == 2

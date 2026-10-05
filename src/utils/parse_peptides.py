@@ -22,6 +22,24 @@ from src.utils.errors import JModError
 import src.config as config
 from src.logger import logger
 
+# The modifications in front of the first residue: N-terminal ones, as DIA-NN
+# writes them, e.g. "(UniMod:1)" in "(UniMod:1)PEPTIDEK"
+_NTERM_MODS = re.compile(r"(?:\([^()]*\)|\[[^\[\]]*\])*")
+
+def split_nterm(seq: str) -> tuple[str, str]:
+    """Split *seq* into its N-terminal modifications and the rest.
+
+    N-terminal modifications are written in front of the first residue, as
+    DIA-NN writes them.  Every library sequence uses this form.
+
+    >>> split_nterm("(UniMod:1)(mTRAQ-0)PEPTIDEK(mTRAQ-0)")
+    ('(UniMod:1)(mTRAQ-0)', 'PEPTIDEK(mTRAQ-0)')
+    >>> split_nterm("PEPTIDEK")
+    ('', 'PEPTIDEK')
+    """
+    nterm = _NTERM_MODS.match(seq).group(0)
+    return nterm, seq[len(nterm):]
+
 def parse_peptide(seq: str) -> list[str]:
     """Parse a peptide sequence into individual amino acids with their modifications.
     
@@ -56,6 +74,9 @@ def parse_peptide(seq: str) -> list[str]:
     
     >>> parse_peptide("C[+57.02]PEPTIDE")
     ['C[+57.02]', 'P', 'E', 'P', 'T', 'I', 'D', 'E']
+
+    >>> parse_peptide("(mTRAQ)K(mTRAQ)PEPTIDE")
+    ['K(mTRAQ)(mTRAQ)', 'P', 'E', 'P', 'T', 'I', 'D', 'E']
     
     >>> parse_peptide("")
     []
@@ -64,9 +85,13 @@ def parse_peptide(seq: str) -> list[str]:
     -----
     - Modifications must be properly closed with matching brackets
     - Nested brackets are handled correctly
-    - If a sequence starts with a modification (edge case), it's added as a standalone element
+    - N-terminal modifications (in front of the first residue) are added to the
+      first residue's token, after its own modifications.  The tokens are for
+      mass calculations, where the two are the same; code that writes sequences
+      keeps the N-terminal ones in front (see split_nterm)
     - Both parentheses () and square brackets [] are supported for modifications
     """
+    nterm, seq = split_nterm(seq)
     ### extract all [] or () from seq with preceding AA
     close_d = {"[": "]", "(": ")"}
     new_seq = []
@@ -100,6 +125,12 @@ def parse_peptide(seq: str) -> list[str]:
 
     if current:  # Append the last residue
         new_seq.append(current)
+
+    if nterm:
+        if new_seq:
+            new_seq[0] += nterm
+        else:
+            new_seq.append(nterm)
 
     return new_seq
     
@@ -299,8 +330,9 @@ def decoy_permutation(tokens, rules: str) -> list:
     'shuffle'. Single source of truth for which decoy a peptide becomes:
     both the string path (change_seq) and the columnar decoy builder use it.
 
-    tokens : tag-stripped peptide tokens (mods still attached), as produced
-             by parse_peptide.
+    tokens : tag-stripped residue tokens (mods still attached), as produced
+             by parse_peptide from the sequence without its N-terminal
+             modifications (split_nterm).
     """
     n = len(tokens)
     if rules == "rev":
@@ -341,6 +373,10 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
         transformation and re-applied afterward so all channels get
         the same underlying decoy sequence.
 
+    N-terminal modifications (in front of the first residue, see split_nterm)
+    stay at the N-terminus; all other modifications and tags follow their
+    residue.
+
     Returns
     -------
     str
@@ -352,12 +388,17 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
     "LDLSVED"
     >>> change_seq("PEPTIDE", "rev")
     "EDITPEP"
+    >>> change_seq("(UniMod:1)PEPTIDEK", "rev")
+    "(UniMod:1)EDITPEPK"
     """
     # seq: list of AAs
     # frags: dictionary of frags
     # re.findall("([A-Z](?:\(.*?\))?)",peptide)
     if type(seq)==str:
-        seq = parse_peptide(seq)
+        nterm, body = split_nterm(seq)
+        seq = parse_peptide(body)
+    else:
+        nterm = ""
     # else:
     #     seq = [re.sub("\(.*\)","",aa) for aa in seq]\
         
@@ -382,15 +423,9 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
     # elif rules==None:
     #     new_seq = "".join(seq)
     
-    # new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq,tags)])
-    if tag:
-        n_term_tag = tags[0][:1] ##only save the first tag as N terminal sepcific (double tagged n-terminal K)
-        residue_tags_at_0 = tags[0][1:]  
-        new_tags = [tags[i] if i > 0 else residue_tags_at_0 for i in perm]  # non-N-term tags follow their residue
-        new_tags[0] += n_term_tag                              # N-term tag always stays at position 0
-    else:
-        new_tags = tags
-    new_seq = "".join([i+"".join(j) for i,j in zip(new_split_seq, new_tags)])
+    # Residue tags follow their residue; N-terminal ones are in nterm
+    new_tags = [tags[i] for i in perm]
+    new_seq = nterm + "".join([i+"".join(j) for i,j in zip(new_split_seq, new_tags)])
     
     return new_seq
 

@@ -27,6 +27,7 @@ import copy
 import src.config as config
 from src.logger import logger
 import re
+import polars as pl
 from pyteomics import mass
 
 
@@ -278,11 +279,26 @@ def load_blib(spec_lib_file):
 # lib = load_blib("/Volumes/One Touch/PTI/Specter/EcoliSpectralLibrary.blib")    
 _MOD_PATTERN = re.compile(r"\(([^)]+)\)")
 
+def library_mod_names(modified_peptides):
+    """The distinct parenthetical modification names in *modified_peptides*,
+    e.g. {"UniMod:4", "PSMtag-0"}.  Vectorised: under a second for a
+    library of a few million precursors."""
+    names = (pl.Series(modified_peptides, dtype=pl.String)
+             .str.extract_all(_MOD_PATTERN.pattern)
+             .explode().drop_nulls().unique())
+    return {name[1:-1].strip() for name in names}
+
+
 def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
     """
     Returns True if any ModifiedPeptide string contains a non-UniMod
     parenthetical modification (a mass tag),
     along with the back-calculated mass of that tag.
+
+    The library may hold one modification that config.diann_mods does not
+    know, which is its tag.  More than one raises a JModError: several
+    channels of one tag (multi-channel libraries are not supported), or
+    modifications JMod has no mass for.
 
     Parameters
     ----------
@@ -301,6 +317,18 @@ def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
         (0, False, None) if no tag is present.
     """
     diann_mods = config.diann_mods
+    unknown = sorted(library_mod_names(modified_peptides) - set(diann_mods))
+    if not unknown:
+        return 0, False, None
+    if len(unknown) > 1:
+        tag_names = {name.rsplit("-", 1)[0] for name in unknown}
+        if len(tag_names) == 1:
+            raise JModError(f"The spectral library contains several channels of one tag "
+                            f"({', '.join(unknown)}). Multi-channel libraries are not supported")
+        raise JModError(f"The spectral library contains {len(unknown)} modifications JMod has no "
+                        f"mass for: {', '.join(unknown)}. JMod takes one unknown modification "
+                        f"to be the library's tag; more than one is not supported")
+
     for pep, prec_mz, prec_z in zip(modified_peptides, prec_mzs, prec_zs):
         if not pep:
             continue
@@ -321,6 +349,31 @@ def has_mass_tag(modified_peptides, prec_mzs, prec_zs):
         return source_channel_mass, True, tag_mods[0]
 
     return 0, False, None
+
+def check_nterm_tags(modified_peptides, tag):
+    """Raise a JModError if the library writes the N-terminal *tag* behind
+    the first residue, as older JMod versions did ("P(tag-0)EPTIDEK(tag-0)"),
+    instead of in front of it ("(tag-0)PEPTIDEK(tag-0)").  Decoys would
+    otherwise move that tag away from the N-terminus.
+
+    A tag copy on the first residue beyond what the tag's residue rules put
+    there is a misplaced N-terminal one.  Tags without an "n" rule pass.
+    """
+    if "n" not in tag.rules:
+        return
+    seqs = pl.Series(modified_peptides, dtype=pl.String)
+    first_residue = seqs.str.extract(r"^([A-Z](?:\([^()]*\))*)", 1)
+    tag_copies = first_residue.str.count_matches(rf"\({re.escape(tag.name)}-[^()]*\)")
+    residue_tags = first_residue.str.slice(0, 1).is_in(list(tag.rules.replace("n", ""))).cast(pl.UInt32)
+    misplaced = (tag_copies > residue_tags).fill_null(False)
+    n_misplaced = int(misplaced.sum())
+    if n_misplaced:
+        example = seqs.filter(misplaced)[0]
+        raise JModError(f"{n_misplaced:,} spectral library precursors have their N-terminal tag "
+                        f"behind the first residue (e.g. {example}), as older JMod versions wrote "
+                        f"them. Write N-terminal tags in front of the first residue: "
+                        f"({tag.name}-0)PEPTIDEK({tag.name}-0)")
+
 
 def in_windows(mz, ms2scans, margin_ppm=50.0):
     """Boolean mask of the m/z values that at least one isolation window of
