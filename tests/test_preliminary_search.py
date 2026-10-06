@@ -28,6 +28,7 @@ from src.preliminary_search import (
     fit_with_features,
     hellinger_score_polars_udf,
     library_entries_for,
+    peptide_to_mod_array,
     scribe_score_polars_udf,
 )
 
@@ -48,6 +49,18 @@ def dia_spectra():
 def library_spectra():
     """Load library spectra from test TSV file."""
     return loadSpecLib(TEST_LIBRARY)[0]
+
+
+class TestPeptideToModArray:
+    """Slot 0 is the N-terminus, slots 1..n the residues, the last the C-terminus."""
+    masses = {"UniMod:4": 57.021464, "tag": 300.0}
+
+    def test_mods_in_front_of_the_first_residue_go_in_the_N_terminal_slot(self):
+        assert peptide_to_mod_array("(tag)PEK(tag)", self.masses) == [300.0, 0.0, 0.0, 300.0, 0.0]
+
+    def test_a_first_residue_keeps_its_own_mods(self):
+        assert peptide_to_mod_array("(tag)K(tag)EK", self.masses) == [300.0, 300.0, 0.0, 0.0, 0.0]
+        assert peptide_to_mod_array("C(UniMod:4)EK", self.masses) == [0.0, 57.021464, 0.0, 0.0, 0.0]
 
 
 class TestFitWithFeatures:

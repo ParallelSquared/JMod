@@ -719,6 +719,10 @@ def peptide_to_mod_array(peptide_str, mod_dict):
     Supports two modification notations:
       - Parenthesized names, looked up in ``mod_dict``:  ``K(UniMod:4)PEPTIDE``
       - Bracketed numeric masses (sign required):        ``K[+57.0]PEPTIDE``
+
+    Slot 0 is the N-terminus: the modifications written in front of the first
+    residue, e.g. ``(UniMod:1)PEPTIDE``.  Slots 1..n are the residues, and the
+    last slot the C-terminus.
     """
     mod_pattern = re.compile(r'\([^\)]+\)|\[[^\]]+\]')
     clean_seq = mod_pattern.sub('', peptide_str)
@@ -726,7 +730,6 @@ def peptide_to_mod_array(peptide_str, mod_dict):
 
     seq_index = 0
     i = 0
-    mods_after_first_aa = 0
     mods_after_last_aa = 0
 
     seq_len = len(clean_seq)
@@ -754,11 +757,9 @@ def peptide_to_mod_array(peptide_str, mod_dict):
             next_char = peptide_str[j + 1] if j + 1 < len(peptide_str) else ''
             next_is_mod = next_char == '(' or next_char == '['
 
-            # --- N-terminal logic ---
-            if seq_index == 1 and mods_after_first_aa == 0:
-                # First mod after the first residue → N-term
+            # --- N-terminal mods: in front of the first residue ---
+            if seq_index == 0:
                 mod_array[0] += mod_mass
-                mods_after_first_aa += 1
 
             # --- C-terminal logic ---
             elif seq_index == seq_len:
