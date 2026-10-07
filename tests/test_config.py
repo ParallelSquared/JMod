@@ -80,6 +80,11 @@ class TestSetup:
         config.setup()
         assert config.args.plexDIA is True
 
+    def test_modifications_added_by_an_earlier_experiment_are_forgotten(self, inputs):
+        config.diann_mods["Label"] = 8.0
+        config.setup()
+        assert "Label" not in config.diann_mods
+
     @pytest.mark.parametrize("no_label", [None, "", "None"])
     def test_no_tag_or_SILAC_leaves_plexDIA_off(self, inputs, monkeypatch, no_label):
         monkeypatch.setattr(config.args, "tag", no_label)

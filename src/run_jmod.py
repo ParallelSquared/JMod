@@ -74,12 +74,13 @@ def run_experiment(GUI_config_json=None):
     bruker_sdk_path = _prepare_readers(run_files)
     set_seeds(config.RANDOM_SEED)
     mass_tag, SILAC = resolve_tags()
+    mod_edits = spec_lib.resolve_mod_edits(config.args.add_fixed_mod, config.args.strip_mod)
     mbr = _use_mbr(run_files)
     # With MBR the first pass is not the final result, so it goes in first_pass/
     first_pass_dir = os.path.join(experiment_dir, "first_pass") if mbr else None
 
     #### Build the library once.
-    spectrumLibrary = build_library(config.args.speclib, experiment_dir, mass_tag, SILAC)
+    spectrumLibrary = build_library(config.args.speclib, experiment_dir, mass_tag, SILAC, mod_edits)
     # The global q-value counts targets and decoys like the per-run one, over
     # the whole library
     target_decoy_ratio = spectrumLibrary.target_decoy_ratio
@@ -96,7 +97,8 @@ def run_experiment(GUI_config_json=None):
         if combined_ids is None:
             logger.warning("No run completed the first pass; skipping match between runs")
         else:
-            _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC, bruker_sdk_path)
+            _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC, mod_edits,
+                                bruker_sdk_path)
 
     logger.info("")
     logger.info(f"Output at {os.path.abspath(experiment_dir)}", extra={"highlight": True})
@@ -156,7 +158,8 @@ def _use_mbr(run_files):
     return True
 
 
-def _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC, bruker_sdk_path):
+def _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC, mod_edits,
+                        bruker_sdk_path):
     """The final pass: search every file again, against a library of the first
     pass's IDs (*combined_ids*) with their RTs aligned across runs.
 
@@ -168,7 +171,7 @@ def _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC
                 extra={"highlight": True})
     mbr_dir = datestamped(os.path.join(experiment_dir, "mbr_library"))
     os.makedirs(mbr_dir)
-    spectrumLibrary = build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC)
+    spectrumLibrary = build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits)
     target_decoy_ratio = spectrumLibrary.target_decoy_ratio
 
     # The library's RTs are now empirical: RT prediction has nothing to add
@@ -215,8 +218,9 @@ def run_make_library(experiment_dir):
     logger.info(f"{len(run_folders)} completed run(s)")
 
     mass_tag, SILAC = resolve_tags()
+    mod_edits = spec_lib.resolve_mod_edits(config.args.add_fixed_mod, config.args.strip_mod)
     combined_ids = _experiment_ids(experiment_dir, run_folders)
-    write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC)
+    write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits)
     logger.info("")
     logger.info(f"Search with it: -l {os.path.abspath(os.path.join(mbr_dir, 'mbrlib.parquet'))} --use_emp_rt")
 
@@ -596,14 +600,14 @@ def resolve_tags():
     return mass_tag, SILAC
 
 
-def build_library(lib_file, work_dir, mass_tag, SILAC):
+def build_library(lib_file, work_dir, mass_tag, SILAC, mod_edits):
     """Load the spectral library and build the target + decoy search library:
     load_library, then prepare_library."""
-    targets, library_tag_bool, source_channel = load_library(lib_file, mass_tag)
+    targets, library_tag_bool, source_channel = load_library(lib_file, mass_tag, mod_edits)
     return prepare_library(targets, work_dir, mass_tag, SILAC, library_tag_bool, source_channel)
 
 
-def build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC):
+def build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits):
     """The match-between-runs search library, from the first pass's IDs.
 
     The input library's entries for the precursors the first pass identified,
@@ -612,11 +616,12 @@ def build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC):
     entries are also written to <mbr_dir>/mbrlib.parquet, next to the
     alignment plots.
     """
-    targets, library_tag_bool, source_channel = write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC)
+    targets, library_tag_bool, source_channel = write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC,
+                                                                  mod_edits)
     return prepare_library(targets, mbr_dir, mass_tag, SILAC, library_tag_bool, source_channel)
 
 
-def write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC):
+def write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits):
     """The match-between-runs library's targets, before decoys and tagging:
     the input library's entries for the precursors in *combined_ids*, with
     their RTs aligned across runs.  Written to <mbr_dir>/mbrlib.parquet, next
@@ -624,7 +629,7 @@ def write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC):
     library_tag_bool, source_channel) for these entries.
     """
     library_rts = mbr_library_rts(combined_ids, config.fdr_threshold, mbr_dir)
-    targets, library_tag_bool, source_channel = load_library(config.args.speclib, mass_tag)
+    targets, library_tag_bool, source_channel = load_library(config.args.speclib, mass_tag, mod_edits)
     targets = mbr_targets(targets, library_rts, mass_tag, SILAC)
     mbr_lib_path = os.path.join(mbr_dir, "mbrlib.parquet")
     targets.to_diann_df().write_parquet(mbr_lib_path)
@@ -632,15 +637,25 @@ def write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC):
     return targets, library_tag_bool, source_channel
 
 
-def load_library(lib_file, mass_tag):
+def load_library(lib_file, mass_tag, mod_edits):
     """Load the spectral library's targets as the file has them: no decoys, no tagging.
 
     A pre-tagged library's tag is relabelled to the closest channel of
     *mass_tag*.  Returns (targets, library_tag_bool, source_channel): whether
     the file is tagged, and the channel its entries now carry (None unless it
-    is tagged and a mass tag is in use).
+    is tagged and a mass tag is in use).  *mod_edits* (resolve_mod_edits) are
+    applied first.  A library with a modification JMod has no mass for, and no
+    mass tag in use, raises.
     """
-    spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = spec_lib.loadSpecLib(lib_file)
+    spectrumLibrary, library_tag_bool, source_channel_mass, library_tag_name = \
+        spec_lib.loadSpecLib(lib_file, mod_edits)
+    # Only a mass tag explains a modification JMod has no mass for.  Without
+    # one, decoys would give it no mass and the first search fails on it
+    if library_tag_bool and not mass_tag:
+        raise JModError(f"The spectral library contains a modification JMod has no mass for "
+                        f"({library_tag_name}). If it is the library's mass tag, choose that tag (--tag). "
+                        f"Otherwise give its mass with --add_fixed_mod {library_tag_name},MASS,SITES, "
+                        f"or remove it with --strip_mod {library_tag_name},MASS,SITES")
 
     if config.args.test_mode:
         # Pre-filter the library to speed up processing

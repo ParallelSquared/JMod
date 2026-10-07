@@ -176,3 +176,19 @@ class TestOfferJsonDataFiles:
         assert [c.args[0] for c in stand_in._add_mzml_or_raw.call_args_list] == paths[:2]
         stand_in._add_d_folder.assert_called_once_with(paths[2])
         assert "gone.mzML" in warn.call_args.args[1]
+
+
+class TestCommandLineArgs:
+    """Command-line-only options from a loaded JSON, as additional-commands text."""
+
+    def test_a_list_gives_the_flag_once_per_value(self):
+        from src.run_jmod_from_GUI import command_line_args
+        assert command_line_args("strip_mod", ["UniMod:4,C", "DimethylNter,28.0313,n"]) == [
+            "--strip_mod UniMod:4,C", "--strip_mod DimethylNter,28.0313,n"]
+
+    def test_the_text_parses_back_to_the_list(self):
+        import shlex
+        from src.config import parser
+        from src.run_jmod_from_GUI import command_line_args
+        text = " ".join(command_line_args("add_fixed_mod", ["Label,8.0120,n", "UniMod:4,C"]))
+        assert parser.parse_args(shlex.split(text)).add_fixed_mod == ["Label,8.0120,n", "UniMod:4,C"]

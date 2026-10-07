@@ -332,3 +332,11 @@ class TestCombineResults:
         run_jmod.run_combine_results(str(finished.dir))
         assert len(finished.combined) == 1
         assert finished.library_inputs == [] and not (finished.dir / "mbr_library").exists()
+
+
+class TestLoadLibrary:
+    def test_an_unknown_modification_without_a_tag_raises(self, monkeypatch):
+        monkeypatch.setattr(run_jmod.spec_lib, "loadSpecLib",
+                            lambda lib_file, mod_edits: (None, True, 150.0, "Foo"))
+        with pytest.raises(JModError, match=r"no mass for \(Foo\).*--add_fixed_mod Foo,MASS,SITES"):
+            run_jmod.load_library("lib.tsv", None, None)

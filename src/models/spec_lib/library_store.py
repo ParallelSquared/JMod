@@ -2815,6 +2815,127 @@ class SpectrumLibraryStore:
 
         return self
 
+    def edit_mods(self, edits):
+        """Strip, then add, the fixed modifications in *edits*
+        (spec_lib.ModEdits) on every entry, shifting precursor and
+        fragment m/z to match.
+
+        A modification is stripped from each of its sites that carries it and
+        added to each that does not, so a library that already has the change
+        stays as it is.  Entries that become identical (stripping a
+        modification some copies of a peptide carried and others did not) are
+        reduced to the first.  Returns the edited store, this one or a subset
+        of it: the caller rebinds.
+        """
+        from src.utils.parse_peptides import parse_peptide, split_nterm
+        from src.utils.frag_encoding import get_ion_type, get_index, get_charge
+        from src.logger import logger
+        import polars as pl
+        import tqdm
+
+        if self.is_finalized:
+            # New m/z values change each spectrum's sort order: go back to the
+            # pre-finalize form, which keeps only that order
+            perm = np.empty(len(self.frag_mz), dtype=np.uint16)
+            for i in range(len(self)):
+                o, n = int(self.frag_offsets[i]), int(self.frag_lengths[i])
+                perm[o:o + n] = np.argsort(self.frag_mz[o:o + n], kind="stable")
+            self.spectrum_perm = perm
+            self.spectrum_mz = self.spectrum_int = self.frag_names_data = None
+            self.spectrum_offsets = self.spectrum_lengths = None
+        for field in ("prec_mz", "frag_mz", "spectrum_perm"):
+            if not getattr(self, field).flags.writeable:
+                setattr(self, field, getattr(self, field).copy())
+
+        # Sites changed, per --strip_mod and per --add_fixed_mod, by position: the
+        # same modification may be both stripped and added
+        stripped = [0] * len(edits.strip)
+        added = [0] * len(edits.add)
+        already = [0] * len(edits.add)   # sites that had it
+        n_changed = 0
+        for i in tqdm.tqdm(range(len(self)), desc="Editing library modifications", miniters=100000):
+            nterm, body = split_nterm(self.mod_seq[i])
+            tokens = parse_peptide(body)
+            if not tokens:
+                continue
+            delta = np.zeros(len(tokens))   # mass change at each residue
+            changed = False
+
+            for s, spec in enumerate(edits.strip):
+                mod = spec.annotation
+                if spec.nterm and mod in nterm:
+                    nterm = nterm.replace(mod, "", 1)
+                    delta[0] -= spec.mass
+                    stripped[s] += 1
+                    changed = True
+                for j, token in enumerate(tokens):
+                    if token[0] in spec.residues and mod in token:
+                        tokens[j] = token.replace(mod, "", 1)
+                        delta[j] -= spec.mass
+                        stripped[s] += 1
+                        changed = True
+
+            for a, spec in enumerate(edits.add):
+                mod = spec.annotation
+                ##TODO Decide whether an N-terminus that already carries another
+                ## N-terminal modification (e.g. protein N-terminal acetyl) is skipped
+                if spec.nterm:
+                    if mod in nterm:
+                        already[a] += 1
+                    else:
+                        nterm += mod
+                        delta[0] += spec.mass
+                        added[a] += 1
+                        changed = True
+                for j, token in enumerate(tokens):
+                    if token[0] in spec.residues:
+                        if mod in token:
+                            already[a] += 1
+                        else:
+                            tokens[j] = token + mod
+                            delta[j] += spec.mass
+                            added[a] += 1
+                            changed = True
+
+            if not changed:
+                continue
+            n_changed += 1
+            self.mod_seq[i] = nterm + "".join(tokens)
+            if not delta.any():
+                continue
+            self.prec_mz[i] += delta.sum() / self.prec_z[i]
+            foff, flen = int(self.frag_offsets[i]), int(self.frag_lengths[i])
+            if flen == 0:
+                continue
+            # A b ion (or a/c) holds the first k residues, a y ion (or x/z) the last k
+            codes = self.frag_keys_data[foff:foff + flen]
+            ion_types = get_ion_type(codes)
+            k = get_index(codes).astype(np.int64) - 1
+            n_term_ion = (ion_types == 0) | (ion_types == 2) | (ion_types == 3)
+            shift = np.where(n_term_ion, np.cumsum(delta)[k], np.cumsum(delta[::-1])[k])
+            new_mz = (self.frag_mz[foff:foff + flen].astype(np.float64)
+                      + shift / get_charge(codes)).astype(np.float32)
+            self.frag_mz[foff:foff + flen] = new_mz
+            self.spectrum_perm[foff:foff + flen] = np.argsort(new_mz, kind="stable")
+
+        for spec, n in zip(edits.strip, stripped):
+            logger.info(f"Stripped {spec.name} from {n:,} sites")
+        for spec, n, n_already in zip(edits.add, added, already):
+            note = f" ({n_already:,} sites already had it)" if n_already else ""
+            logger.info(f"Added {spec.name} to {n:,} sites{note}")
+        logger.info(f"Modifications edited on {n_changed:,} of {len(self):,} library precursors")
+
+        keep = (pl.DataFrame({"mod_seq": pl.Series(self.mod_seq, dtype=pl.String),
+                              "prec_z": self.prec_z})
+                .select(pl.struct(pl.all()).is_first_distinct()).to_series().to_numpy())
+        n_duplicates = int((~keep).sum())
+        if n_duplicates:
+            logger.info(f"{n_duplicates:,} library precursors became identical to another "
+                        f"one after the modification edits and were removed")
+            return self.subset_entries(keep)
+        self.build_key_index()
+        return self
+
 
 class _EntryView:
     """Lightweight proxy that makes ``store[key]`` behave like a dict.

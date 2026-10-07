@@ -246,6 +246,85 @@ class TestStoreMutation:
         assert ('ACD', 2.0) not in store
 
 
+def _peptide_store(*mod_seqs):
+    """A store of charge-2 precursors, each with b3 and y3 at their true m/z."""
+    from pyteomics import mass
+    from src.utils.misc_functions import frag_to_peak
+    from src.utils.parse_peptides import parse_peptide
+    entries = {}
+    for mod_seq in mod_seqs:
+        seq = "".join(token[0] for token in parse_peptide(mod_seq))
+        frags = {'b3_1': [mass.fast_mass(seq[:3], ion_type='b', charge=1), 1.0],
+                 'y3_1': [mass.fast_mass(seq[-3:], ion_type='y', charge=1), 0.5]}
+        spectrum, ordered_frags = frag_to_peak(frags, return_frags=True)
+        entries[(mod_seq, 2.0)] = {
+            'mod_seq': mod_seq, 'seq': seq, 'prec_mz': mass.fast_mass(seq, charge=2),
+            'prec_z': 2.0, 'iRT': 10.0, 'frags': frags,
+            'spectrum': spectrum, 'ordered_frags': ordered_frags}
+    return SpectrumLibraryStore.from_dict(entries)
+
+
+class TestEditMods:
+    from src.models.spec_lib.spec_lib import ModEdits, ModSpec
+    label = ModSpec("Label", 8.0, "nK")
+
+    def test_added_mod_shifts_the_precursor_and_the_fragments_that_hold_it(self):
+        store = _peptide_store("PEPTIDEK")
+        entry = store[("PEPTIDEK", 2.0)]   # a view: read the values before the edit
+        prec_mz, b3, y3 = entry['prec_mz'], entry['frags']['b3_1'][0], entry['frags']['y3_1'][0]
+        store = store.edit_mods(self.ModEdits(add=(self.label,)))
+
+        after = store[("(Label)PEPTIDEK(Label)", 2.0)]
+        assert after['prec_mz'] == pytest.approx(prec_mz + 2 * 8.0 / 2)
+        assert after['frags']['b3_1'][0] == pytest.approx(b3 + 8.0, abs=1e-3)   # holds the N-terminus
+        assert after['frags']['y3_1'][0] == pytest.approx(y3 + 8.0, abs=1e-3)   # holds the K
+
+    def test_adding_a_mod_already_there_changes_nothing(self):
+        once = _peptide_store("PEPTIDEK").edit_mods(self.ModEdits(add=(self.label,)))
+        prec_mz = once.prec_mz.copy()
+        twice = once.edit_mods(self.ModEdits(add=(self.label,)))
+        assert list(twice.mod_seq) == ["(Label)PEPTIDEK(Label)"]
+        assert np.array_equal(twice.prec_mz, prec_mz)
+
+    def test_stripping_undoes_adding(self):
+        original = _peptide_store("PEPTIDEK")
+        prec_mz, frag_mz = original.prec_mz.copy(), original.frag_mz.copy()
+        store = original.edit_mods(self.ModEdits(add=(self.label,)))
+        store = store.edit_mods(self.ModEdits(strip=(self.label,)))
+        assert list(store.mod_seq) == ["PEPTIDEK"]
+        assert store.prec_mz == pytest.approx(prec_mz)
+        assert store.frag_mz == pytest.approx(frag_mz, abs=1e-3)
+
+    def test_stripping_and_adding_the_same_mod_are_counted_apart(self, app_log):
+        store = _peptide_store("PEPTIDEK")
+        store.edit_mods(self.ModEdits(strip=(self.label,), add=(self.label,)))
+        messages = [r.getMessage() for r in app_log]
+        assert "Stripped Label from 0 sites" in messages
+        assert "Added Label to 2 sites" in messages
+
+    def test_entries_made_identical_are_reduced_to_the_first(self):
+        store = _peptide_store("PEPM(UniMod:35)K", "PEPMK")
+        store = store.edit_mods(self.ModEdits(strip=(self.ModSpec("UniMod:35", 15.994915, "M"),)))
+        assert list(store.mod_seq) == ["PEPMK"]
+        assert len(store) == 1
+
+    def test_a_parsed_library_is_edited(self):
+        store = _edgecases_store()
+        i = store.key_to_idx[("(tag)C(UniMod:4)SQAPVYGR", 2.0)]
+        prec_mz = store.prec_mz[i]
+        store = store.edit_mods(self.ModEdits(strip=(self.ModSpec("UniMod:4", 57.021464, "C"),)))
+        i = store.key_to_idx[("(tag)CSQAPVYGR", 2.0)]
+        assert store.prec_mz[i] == pytest.approx(prec_mz - 57.021464 / 2)
+
+    def test_spectra_stay_sorted_by_mz(self):
+        # +500 at K moves y3 above b3 in the m/z order
+        store = _peptide_store("PEPTIDEK").edit_mods(
+            self.ModEdits(add=(self.ModSpec("Heavy", 500.0, "K"),)))
+        store.finalize_spectra()
+        spectrum = store[("PEPTIDEK(Heavy)", 2.0)]['spectrum']
+        assert np.all(np.diff(spectrum[:, 0]) >= 0)
+
+
 class TestSerialization:
     def test_save_load_roundtrip(self, tmp_path):
         d = _make_sample_dict()

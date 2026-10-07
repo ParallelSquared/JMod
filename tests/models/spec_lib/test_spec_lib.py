@@ -7,6 +7,8 @@ import csv
 import types
 
 from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib, has_mass_tag, in_windows, check_nterm_tags
+from src.models.spec_lib.spec_lib import ModSpec, parse_mod_spec, resolve_mod_edits
+import src.config as config
 from src.utils.errors import JModError
 from src.mass_tags import massTag
 
@@ -230,3 +232,53 @@ class Test_in_windows():
     def test_nan_is_outside(self):
         assert not in_windows(np.array([np.nan]), _scans([460, 470]))[0]
 
+
+@pytest.fixture
+def restore_mods():
+    """config.diann_mods as it was before the test (resolve_mod_edits adds to it)."""
+    saved = dict(config.diann_mods)
+    yield
+    config.diann_mods.clear()
+    config.diann_mods.update(saved)
+
+
+class TestParseModSpec:
+    def test_name_mass_and_sites(self):
+        assert parse_mod_spec("Dimethyl,28.0313,nK", "--add_fixed_mod") == ModSpec("Dimethyl", 28.0313, "nK")
+
+    def test_a_UniMod_mass_is_looked_up(self):
+        assert parse_mod_spec("UniMod:4,C", "--strip_mod") == ModSpec("UniMod:4", 57.021464, "C")
+
+    def test_UniMod_is_spelled_as_libraries_spell_it(self):
+        assert parse_mod_spec("unimod:4,C", "--strip_mod").name == "UniMod:4"
+
+    def test_a_known_modification_keeps_its_known_mass(self, app_log):
+        assert parse_mod_spec("UniMod:4,57.0215,C", "--add_fixed_mod").mass == 57.021464
+        assert not [r for r in app_log if r.levelname == "WARNING"]   # only rounded
+
+    def test_a_different_mass_for_a_known_modification_is_warned_about(self, app_log):
+        assert parse_mod_spec("UniMod:4,333,C", "--add_fixed_mod").mass == 57.021464
+        assert any(r.levelname == "WARNING" and "the 333 given is ignored" in r.getMessage()
+                   for r in app_log)
+
+    def test_an_unknown_modification_needs_a_mass(self):
+        with pytest.raises(JModError, match="give it as Dimethyl,MASS,nK"):
+            parse_mod_spec("Dimethyl,nK", "--add_fixed_mod")
+
+    @pytest.mark.parametrize("text", ["Dimethyl", "Dimethyl,28.0313,nK,x", "Dimethyl,heavy,nK",
+                                      "Dimethyl,28.0313,", "Dimethyl,28.0313,nB", "Di methyl,28.0313,n"])
+    def test_malformed_specs_raise(self, text):
+        with pytest.raises(JModError, match="--add_fixed_mod"):
+            parse_mod_spec(text, "--add_fixed_mod")
+
+
+class TestResolveModEdits:
+    def test_strips_and_adds_are_parsed_and_their_masses_known(self, restore_mods):
+        edits = resolve_mod_edits(["Label,8.0120,n"], "DimethylNter,28.0313,n")
+        assert edits.add == (ModSpec("Label", 8.0120, "n"),)
+        assert edits.strip == (ModSpec("DimethylNter", 28.0313, "n"),)
+        assert config.diann_mods["Label"] == 8.0120
+        assert config.diann_mods["DimethylNter"] == 28.0313
+
+    def test_none_is_no_edits(self, restore_mods):
+        assert not resolve_mod_edits(None, None)

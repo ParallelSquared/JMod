@@ -57,6 +57,33 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # Fixed modifications added to, or removed from, every library entry when
+    # the library is loaded: NAME,MASS,SITES or NAME,SITES (UniMod:N, or a
+    # modification JMod knows).  SITES: n for the N-terminus, plus residues
+    'add_fixed_mod': {
+        'flags': ('--add_fixed_mod',),
+        'default': None,
+        'takes_value': True,
+        'multiple': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
+    'strip_mod': {
+        'flags': ('--strip_mod',),
+        'default': None,
+        'takes_value': True,
+        'multiple': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'diaPASEF': {
         'flags': ('-d', '--diaPASEF'),
         'default': False,

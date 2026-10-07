@@ -27,6 +27,7 @@ import copy
 import src.config as config
 from src.logger import logger
 import re
+from dataclasses import dataclass
 import polars as pl
 from pyteomics import mass
 
@@ -375,6 +376,130 @@ def check_nterm_tags(modified_peptides, tag):
                         f"({tag.name}-0)PEPTIDEK({tag.name}-0)")
 
 
+# ---------------------------------------------------------------------------
+# --add_fixed_mod and --strip_mod: fixed modifications added to, or removed
+# from, every library entry when the library is loaded (loadSpecLib, through
+# SpectrumLibraryStore.edit_mods).  A modification is NAME,MASS,SITES, or
+# NAME,SITES when JMod knows its mass (UniMod:N, or one of config.diann_mods);
+# a known modification always keeps the mass JMod knows.  SITES is n for the
+# peptide N-terminus plus any residues, e.g. "nK".
+# ---------------------------------------------------------------------------
+
+_RESIDUES = "ACDEFGHIKLMNPQRSTVWY"
+
+
+@dataclass(frozen=True)
+class ModSpec:
+    """One modification: its name as the library writes it, e.g. "UniMod:4",
+    its mass, and its sites ("n" for the N-terminus, plus residues)."""
+    name: str
+    mass: float
+    sites: str
+
+    @property
+    def annotation(self):
+        return f"({self.name})"
+
+    @property
+    def nterm(self):
+        return "n" in self.sites
+
+    @property
+    def residues(self):
+        return self.sites.replace("n", "")
+
+    def __str__(self):
+        return f"{self.name} ({self.mass:+.6f} Da) at {self.sites}"
+
+
+@dataclass(frozen=True)
+class ModEdits:
+    """The modifications to strip from the library, then the ones to add."""
+    strip: tuple = ()
+    add: tuple = ()
+
+    def __bool__(self):
+        return bool(self.strip or self.add)
+
+
+def resolve_mod_edits(add_fixed_mod, strip_mod):
+    """The --add_fixed_mod and --strip_mod modifications (each a string, a list
+    of strings, or None), checked.  Their masses are added to
+    config.diann_mods, so that every modification in the edited library has
+    a mass."""
+    edits = ModEdits(
+        strip=tuple(parse_mod_spec(text, "--strip_mod") for text in _as_list(strip_mod)),
+        add=tuple(parse_mod_spec(text, "--add_fixed_mod") for text in _as_list(add_fixed_mod)),
+    )
+    for spec in edits.strip + edits.add:
+        config.diann_mods[spec.name] = spec.mass
+    for spec in edits.strip:
+        logger.info(f"Stripping from the library: {spec}")
+    for spec in edits.add:
+        logger.info(f"Adding to the library (fixed): {spec}")
+    return edits
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
+def parse_mod_spec(text, flag):
+    """A ModSpec from NAME,MASS,SITES or NAME,SITES.  Raises JModError.
+
+    A modification JMod knows (known_mod_mass) gets the known mass, whatever
+    MASS says: one name has one mass for the whole experiment."""
+    parts = [part.strip() for part in str(text).split(",")]
+    # Libraries spell UniMod names "UniMod:N"
+    parts[0] = re.sub(r"^unimod:", "UniMod:", parts[0], flags=re.IGNORECASE)
+    if len(parts) == 3:
+        name, mass_text, sites = parts
+        try:
+            mass = float(mass_text)
+        except ValueError:
+            raise JModError(f"{flag} {text}: the mass '{mass_text}' is not a number")
+        known = known_mod_mass(name)
+        if known is not None:
+            # A mass that only rounds the known one (57.0215 for 57.021464) is not worth a warning
+            if abs(known - mass) > 1e-4:
+                logger.warning(f"{flag} {text}: {name} is {known:.6f} Da; the {mass_text} given is ignored")
+            mass = known
+    elif len(parts) == 2:
+        name, sites = parts
+        mass = known_mod_mass(name)
+        if mass is None:
+            raise JModError(f"{flag} {text}: JMod has no mass for {name}; give it as "
+                            f"{name},MASS,{sites}")
+    else:
+        raise JModError(f"{flag} {text}: expected NAME,MASS,SITES or NAME,SITES, "
+                        f"e.g. UniMod:4,C or Dimethyl,28.0313,nK")
+
+    if not name or re.search(r"[()\[\]\s]", name):
+        raise JModError(f"{flag} {text}: '{name}' is not a modification name (no spaces or brackets)")
+    unknown_sites = sorted(set(sites) - set("n" + _RESIDUES))
+    if not sites or unknown_sites:
+        raise JModError(f"{flag} {text}: sites must be n (the N-terminus) and/or residues "
+                        f"({_RESIDUES}), e.g. nK; got '{sites}'")
+    return ModSpec(name=name, mass=mass, sites="".join(dict.fromkeys(sites)))
+
+
+def known_mod_mass(name):
+    """The mass of a modification JMod knows: one of config.diann_mods, or
+    UniMod:N.  None for any other name; an unknown UniMod number raises."""
+    if name in config.diann_mods:
+        return config.diann_mods[name]
+    unimod = re.fullmatch(r"UniMod:(\d+)", name, flags=re.IGNORECASE)
+    if unimod is None:
+        return None
+    from src.iso_functions import unimods
+    try:
+        return float(unimods.by_id(int(unimod.group(1)))["mono_mass"])
+    except KeyError:
+        raise JModError(f"{name} is not in UniMod")
+
+
 def in_windows(mz, ms2scans, margin_ppm=50.0):
     """Boolean mask of the m/z values that at least one isolation window of
     *ms2scans* covers.
@@ -402,7 +527,10 @@ def in_windows(mz, ms2scans, margin_ppm=50.0):
     return ok
 
 
-def loadSpecLib(lib_file):
+def loadSpecLib(lib_file, mod_edits=None):
+    """Load a spectral library (from its binary cache when there is one), with
+    the --strip_mod / --add_fixed_mod edits in *mod_edits* applied.  The cache
+    holds the library as the file has it."""
     from src.models.spec_lib.library_store import SpectrumLibraryStore, StaleStoreCacheError
 
     lib_ext = lib_file.rsplit(".")[-1]
@@ -429,6 +557,9 @@ def loadSpecLib(lib_file):
         else:
             raise ValueError(f"Unsupported spectral library format: .{lib_ext}")
         spec_lib.save(store_file)
+
+    if mod_edits:
+        spec_lib = spec_lib.edit_mods(mod_edits)
 
     source_channel_mass, library_tag_bool, library_tag_name = has_mass_tag(spec_lib.mod_seq, spec_lib.prec_mz, spec_lib.prec_z)
     if library_tag_bool:

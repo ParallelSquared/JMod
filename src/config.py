@@ -269,6 +269,11 @@ diann_mods = {
 "C13-6":6.0201290268
 };
 
+# diann_mods as shipped.  --add_fixed_mod / --strip_mod add their masses to
+# diann_mods for one experiment; setup() restores it first.  Modules import
+# the dict itself, so it is changed in place, never rebound
+_BUILTIN_DIANN_MODS = dict(diann_mods)
+
 
 # Held so the limiter is not garbage collected -- threadpoolctl restores the
 # original limits when the object is released, which would undo the cap.
@@ -352,6 +357,10 @@ def setup(GUI_config_json=None):
     # Load the JSON configuration, once.  A file that cannot be read raises.
     if args.config_json:
         load_config_from_json(args.config_json)
+
+    # A previous experiment in this process may have added modifications
+    diann_mods.clear()
+    diann_mods.update(_BUILTIN_DIANN_MODS)
 
     # A mass tag or a SILAC label in use means plexDIA: there are channels to
     # propagate IDs across.  No label may be None, empty, or "None" (the tag's default)

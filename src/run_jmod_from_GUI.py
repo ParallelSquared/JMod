@@ -49,6 +49,19 @@ from src.utils.gui_utils import load_settings, save_settings
 
 
 
+def command_line_args(key, value):
+    """The additional-commands text for a command-line-only option *key* set to
+    *value*: the flag alone for an on/off option, the flag and value
+    otherwise, and the flag once per value for a repeatable option given a
+    list (e.g. --strip_mod a --strip_mod b)."""
+    flag = default_dict[key]['flags'][0]
+    if default_dict[key]['takes_value'] is False:
+        return [flag]
+    if default_dict[key].get('multiple', False):
+        return [f'{flag} {shlex.quote(str(item))}' for item in (value if isinstance(value, list) else [value])]
+    return [f'{flag} {value}']
+
+
 def make_GUI(show=True):
     """
     Function to initialize and run the JMod GUI.
@@ -878,10 +891,7 @@ class JModGUI(ThemedTk):
                                 tk.messagebox.showerror("JSON Read Error", f"Error reading '{key}':\n\n {e}\n\nEnsure '{value}' can be converted to string")
                     elif default_dict[key]['in_GUI'] is False:  ##if key is only a command line key
                         if value != default_dict[key]['default']:  ##only add to command line interface if different from default
-                            if default_dict[key]['takes_value'] is False:
-                                args_list.append(default_dict[key]['flags'][0])
-                            else:
-                                args_list.append(f'{default_dict[key]["flags"][0]} {value}')
+                            args_list += command_line_args(key, value)
                 else:
                     tk.messagebox.showwarning("JSON Read Warning", f"Unknown configuration key in JSON: {key}")
 
