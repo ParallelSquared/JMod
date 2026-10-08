@@ -59,7 +59,9 @@ default_dict = {
     },
     # Fixed modifications added to, or removed from, every library entry when
     # the library is loaded: NAME,MASS,SITES or NAME,SITES (UniMod:N, or a
-    # modification JMod knows).  SITES: n for the N-terminus, plus residues
+    # modification JMod knows).  SITES: n for the N-terminus, plus residues.
+    # --add_fixed_mod skips sites that carry another modification, unless the
+    # spec ends in ,stack
     'add_fixed_mod': {
         'flags': ('--add_fixed_mod',),
         'default': None,

@@ -389,7 +389,9 @@ def _misplaced_nterm_tags(seqs, tag_pattern, rules):
 # SpectrumLibraryStore.edit_mods).  A modification is NAME,MASS,SITES, or
 # NAME,SITES when JMod knows its mass (UniMod:N, or one of config.diann_mods);
 # a known modification always keeps the mass JMod knows.  SITES is n for the
-# peptide N-terminus plus any residues, e.g. "nK".
+# peptide N-terminus plus any residues, e.g. "nK".  --add_fixed_mod skips a
+# site that already carries another modification (with a warning), unless
+# the spec ends in ",stack": --add_fixed_mod UniMod:121,K,stack.
 # ---------------------------------------------------------------------------
 
 _RESIDUES = "ACDEFGHIKLMNPQRSTVWY"
@@ -398,10 +400,13 @@ _RESIDUES = "ACDEFGHIKLMNPQRSTVWY"
 @dataclass(frozen=True)
 class ModSpec:
     """One modification: its name as the library writes it, e.g. "UniMod:4",
-    its mass, and its sites ("n" for the N-terminus, plus residues)."""
+    its mass, and its sites ("n" for the N-terminus, plus residues).  *stack*:
+    added to a site even when it already carries another modification
+    (--add_fixed_mod NAME,...,stack); otherwise such sites are skipped."""
     name: str
     mass: float
     sites: str
+    stack: bool = False
 
     @property
     def annotation(self):
@@ -416,7 +421,8 @@ class ModSpec:
         return self.sites.replace("n", "")
 
     def __str__(self):
-        return f"{self.name} ({self.mass:+.6f} Da) at {self.sites}"
+        stacked = ", stacked on other modifications" if self.stack else ""
+        return f"{self.name} ({self.mass:+.6f} Da) at {self.sites}{stacked}"
 
 
 @dataclass(frozen=True)
@@ -454,11 +460,17 @@ def _as_list(value):
 
 
 def parse_mod_spec(text, flag):
-    """A ModSpec from NAME,MASS,SITES or NAME,SITES.  Raises JModError.
+    """A ModSpec from NAME,MASS,SITES or NAME,SITES, either followed by
+    ",stack" for --add_fixed_mod.  Raises JModError.
 
     A modification JMod knows (known_mod_mass) gets the known mass, whatever
     MASS says: one name has one mass for the whole experiment."""
     parts = [part.strip() for part in str(text).split(",")]
+    stack = len(parts) > 1 and parts[-1].lower() == "stack"
+    if stack:
+        if flag != "--add_fixed_mod":
+            raise JModError(f"{flag} {text}: stack is only for --add_fixed_mod")
+        parts = parts[:-1]
     # Libraries spell UniMod names "UniMod:N"
     parts[0] = re.sub(r"^unimod:", "UniMod:", parts[0], flags=re.IGNORECASE)
     if len(parts) == 3:
@@ -480,8 +492,9 @@ def parse_mod_spec(text, flag):
             raise JModError(f"{flag} {text}: JMod has no mass for {name}; give it as "
                             f"{name},MASS,{sites}")
     else:
-        raise JModError(f"{flag} {text}: expected NAME,MASS,SITES or NAME,SITES, "
-                        f"e.g. UniMod:4,C or Dimethyl,28.0313,nK")
+        raise JModError(f"{flag} {text}: expected NAME,MASS,SITES or NAME,SITES (then ,stack "
+                        f"to add to sites that have another modification), e.g. UniMod:4,C or "
+                        f"Dimethyl,28.0313,nK")
 
     if not name or re.search(r"[()\[\]\s]", name):
         raise JModError(f"{flag} {text}: '{name}' is not a modification name (no spaces or brackets)")
@@ -489,7 +502,7 @@ def parse_mod_spec(text, flag):
     if not sites or unknown_sites:
         raise JModError(f"{flag} {text}: sites must be n (the N-terminus) and/or residues "
                         f"({_RESIDUES}), e.g. nK; got '{sites}'")
-    return ModSpec(name=name, mass=mass, sites="".join(dict.fromkeys(sites)))
+    return ModSpec(name=name, mass=mass, sites="".join(dict.fromkeys(sites)), stack=stack)
 
 
 def known_mod_mass(name):

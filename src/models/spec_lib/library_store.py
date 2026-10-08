@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import numpy as np
+from collections import Counter
 import os
 from src.utils.errors import JModError
 from src.utils.frag_encoding import encode_frag_name, encode_frag_names, encode_frag_columns, decode_frag_names
@@ -2822,7 +2823,9 @@ class SpectrumLibraryStore:
 
         A modification is stripped from each of its sites that carries it and
         added to each that does not, so a library that already has the change
-        stays as it is.  Entries that become identical (stripping a
+        stays as it is.  A site that carries another modification is skipped,
+        and the skipped sites logged as a warning, unless the spec stacks
+        (ModSpec.stack).  Entries that become identical (stripping a
         modification some copies of a peptide carried and others did not) are
         reduced to the first.  Returns the edited store, this one or a subset
         of it: the caller rebinds.
@@ -2852,6 +2855,11 @@ class SpectrumLibraryStore:
         stripped = [0] * len(edits.strip)
         added = [0] * len(edits.add)
         already = [0] * len(edits.add)   # sites that had it
+        # Sites skipped because another modification is there (not ,stack):
+        # how many, on how many precursors, and which (modification, site) blocked
+        skipped = [0] * len(edits.add)
+        skipped_precursors = [0] * len(edits.add)
+        blockers = [Counter() for _ in edits.add]
         n_changed = 0
         for i in tqdm.tqdm(range(len(self)), desc="Editing library modifications", miniters=100000):
             nterm, body = split_nterm(self.mod_seq[i])
@@ -2877,11 +2885,16 @@ class SpectrumLibraryStore:
 
             for a, spec in enumerate(edits.add):
                 mod = spec.annotation
-                ##TODO Decide whether an N-terminus that already carries another
-                ## N-terminal modification (e.g. protein N-terminal acetyl) is skipped
+                # A site that carries another modification is skipped unless the
+                # spec stacks: e.g. a protein N-terminal acetyl blocks an N-terminal label
+                skipped_here = False
                 if spec.nterm:
                     if mod in nterm:
                         already[a] += 1
+                    elif nterm and not spec.stack:
+                        skipped[a] += 1
+                        blockers[a].update((name, "n") for name in _MOD_NAME.findall(nterm))
+                        skipped_here = True
                     else:
                         nterm += mod
                         delta[0] += spec.mass
@@ -2891,11 +2904,16 @@ class SpectrumLibraryStore:
                     if token[0] in spec.residues:
                         if mod in token:
                             already[a] += 1
+                        elif len(token) > 1 and not spec.stack:
+                            skipped[a] += 1
+                            blockers[a].update((name, token[0]) for name in _MOD_NAME.findall(token))
+                            skipped_here = True
                         else:
                             tokens[j] = token + mod
                             delta[j] += spec.mass
                             added[a] += 1
                             changed = True
+                skipped_precursors[a] += skipped_here
 
             if not changed:
                 continue
@@ -2920,9 +2938,11 @@ class SpectrumLibraryStore:
 
         for spec, n in zip(edits.strip, stripped):
             logger.info(f"Stripped {spec.name} from {n:,} sites")
-        for spec, n, n_already in zip(edits.add, added, already):
-            note = f" ({n_already:,} sites already had it)" if n_already else ""
-            logger.info(f"Added {spec.name} to {n:,} sites{note}")
+        for a, spec in enumerate(edits.add):
+            note = f" ({already[a]:,} sites already had it)" if already[a] else ""
+            logger.info(f"Added {spec.name} to {added[a]:,} sites{note}")
+            if skipped[a]:
+                logger.warning(_skipped_sites_message(spec, skipped[a], skipped_precursors[a], blockers[a]))
         logger.info(f"Modifications edited on {n_changed:,} of {len(self):,} library precursors")
 
         keep = (pl.DataFrame({"mod_seq": pl.Series(self.mod_seq, dtype=pl.String),
@@ -2935,6 +2955,27 @@ class SpectrumLibraryStore:
             return self.subset_entries(keep)
         self.build_key_index()
         return self
+
+
+_MOD_NAME = re.compile(r"\(([^()]*)\)")
+
+
+def _skipped_sites_message(spec, n_sites, n_precursors, blockers):
+    """The warning for the sites --add_fixed_mod *spec* skipped because another
+    modification was there; *blockers* counts (modification, site) pairs."""
+    from src.models.spec_lib.spec_lib import known_mod_mass
+    by_mod = {}
+    for (name, site), n in blockers.most_common():
+        by_mod.setdefault(name, []).append(site)
+    shown = ", ".join(f"{name} ({''.join(sites)})" for name, sites in by_mod.items())
+    strips = " ".join(
+        f"--strip_mod {name},{''.join(sites)}" if known_mod_mass(name) is not None
+        else f"--strip_mod {name},MASS,{''.join(sites)}"
+        for name, sites in by_mod.items())
+    return (f"--add_fixed_mod {spec.name}: skipped {n_sites:,} sites on {n_precursors:,} precursors "
+            f"that already carry another modification there: {shown}. If that is fine, nothing "
+            f"needs to change. To add {spec.name} there instead, strip those first ({strips}), "
+            f"or add it alongside them (--add_fixed_mod {spec.name},{spec.mass},{spec.sites},stack)")
 
 
 class _EntryView:

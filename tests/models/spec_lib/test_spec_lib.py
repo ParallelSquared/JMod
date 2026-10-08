@@ -256,6 +256,14 @@ class TestParseModSpec:
     def test_UniMod_is_spelled_as_libraries_spell_it(self):
         assert parse_mod_spec("unimod:4,C", "--strip_mod").name == "UniMod:4"
 
+    def test_stack_is_read_from_the_end(self):
+        assert parse_mod_spec("UniMod:121,K,stack", "--add_fixed_mod") == ModSpec("UniMod:121", 114.042927, "K", True)
+        assert parse_mod_spec("Label,8.0,n,stack", "--add_fixed_mod") == ModSpec("Label", 8.0, "n", True)
+
+    def test_stack_is_only_for_adding(self):
+        with pytest.raises(JModError, match="stack is only for --add_fixed_mod"):
+            parse_mod_spec("UniMod:4,C,stack", "--strip_mod")
+
     def test_a_known_modification_keeps_its_known_mass(self, app_log):
         assert parse_mod_spec("UniMod:4,57.0215,C", "--add_fixed_mod").mass == 57.021464
         assert not [r for r in app_log if r.levelname == "WARNING"]   # only rounded

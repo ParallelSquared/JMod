@@ -302,6 +302,21 @@ class TestEditMods:
         assert "Stripped Label from 0 sites" in messages
         assert "Added Label to 2 sites" in messages
 
+    def test_sites_with_another_mod_are_skipped_with_a_warning(self, app_log):
+        store = _peptide_store("(UniMod:1)PEPTIDEK", "AAAAK")
+        store = store.edit_mods(self.ModEdits(add=(self.label,)))
+        assert list(store.mod_seq) == ["(UniMod:1)PEPTIDEK(Label)", "(Label)AAAAK(Label)"]
+        warnings = [r.getMessage() for r in app_log if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "skipped 1 sites on 1 precursors" in warnings[0] and "UniMod:1 (n)" in warnings[0]
+        assert "--strip_mod UniMod:1,n" in warnings[0] and "Label,8.0,nK,stack" in warnings[0]
+
+    def test_stack_adds_alongside_another_mod(self, app_log):
+        store = _peptide_store("(UniMod:1)PEPTIDEK")
+        store = store.edit_mods(self.ModEdits(add=(self.ModSpec("Label", 8.0, "nK", stack=True),)))
+        assert list(store.mod_seq) == ["(UniMod:1)(Label)PEPTIDEK(Label)"]
+        assert not [r for r in app_log if r.levelname == "WARNING"]
+
     def test_entries_made_identical_are_reduced_to_the_first(self):
         store = _peptide_store("PEPM(UniMod:35)K", "PEPMK")
         store = store.edit_mods(self.ModEdits(strip=(self.ModSpec("UniMod:35", 15.994915, "M"),)))
