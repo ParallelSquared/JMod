@@ -435,7 +435,9 @@ def spectral_angle_polars_udf(r: dict, fragment_library_map) -> float:
 
     # Union, not library-only: an observed ion absent from the library adds to
     # ||A|| but nothing to the dot product, so extra ions are penalized.
-    all_keys = set(observed_vec) | set(library_vec)
+    # sorted: set iteration order varies with PYTHONHASHSEED, and a different
+    # float summation order perturbs the score at the last bit.
+    all_keys = sorted(set(observed_vec) | set(library_vec))
     A_raw = np.array([observed_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
     B_raw = np.array([library_vec.get(k, 0.0) for k in all_keys], dtype=np.float32)
 
@@ -531,7 +533,9 @@ def scribe_score_polars_udf(r: dict, fragment_library_map: dict) -> float:
         return -999.0
     observed_vec, library_vec = aligned
 
-    keys = list(set(observed_vec) & set(library_vec))
+    # sorted: set iteration order varies with PYTHONHASHSEED, and a different
+    # float summation order perturbs the score at the last bit.
+    keys = sorted(set(observed_vec) & set(library_vec))
     if not keys:
         return -999.0
 

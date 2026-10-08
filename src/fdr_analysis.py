@@ -482,7 +482,7 @@ def estimate_pep(scores, is_decoy):
     Fits a non-decreasing decoy probability curve over the score distribution.
     PEP = decoy_prob / (1 - decoy_prob), clamped to [0, 1].
     """
-    order = np.argsort(-scores)  # descending
+    order = np.argsort(-scores, kind='stable')  # descending
     labels = is_decoy[order].astype(float)  # decoy=1, target=0
 
     ir = IsotonicRegression(y_min=0, y_max=1, increasing=True)
@@ -1023,7 +1023,7 @@ def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
     df_seqchargeqvals = df_seqchargeqvals.drop_duplicates(subset=["protein", "is_decoy"]).reset_index(drop=True)
 
     # Rank by descending maxPredval and compute accum_decoys & Protein_Qvalue
-    df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False).reset_index(drop=True)
+    df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False, kind="stable").reset_index(drop=True)
     df_seqchargeqvals["prot_rank"] = df_seqchargeqvals.index + 1  # Equivalent to row_number()
     df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["is_decoy"].cumsum()
     df_seqchargeqvals["Protein_Qvalue"] = (1 + df_seqchargeqvals["accum_decoys"]) / (~df_seqchargeqvals["is_decoy"]).cumsum() * target_decoy_ratio

@@ -1703,7 +1703,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     # elution_sd / vote_sigma are already fixed and unaffected by the choice.
     output_df = output_df.with_columns(
         pl.Series("apex_pc1", quality_pca.first_search_apex_pc1(output_df)))
-    output_df = output_df.sort("apex_pc1", descending=True).unique(subset=["seq", "z"], keep="first")
+    # maintain_order on both calls: polars' default sort is unstable and
+    # multithreaded, so apex_pc1 ties would pick a different scan per run.
+    output_df = (output_df.sort("apex_pc1", descending=True, maintain_order=True)
+                 .unique(subset=["seq", "z"], keep="first", maintain_order=True))
     output_df = output_df.filter(pl.col("cluster_size") >= 1)
 
     # Convert to pandas for downstream processing
@@ -2378,7 +2381,9 @@ def get_multiples(id_keys, output_df):
     multiples_zs = []
     
     searched = set()
-    for key in set(id_keys):
+    # sorted: set iteration order varies with PYTHONHASHSEED, and the list order
+    # built here sets the point order fed to the timeplex RT fits.
+    for key in sorted(set(id_keys)):
         # break
         # clean_key = (re.sub("\(tag6-\d\)","",key[0]),key[1])
         # orig_key= key
