@@ -148,7 +148,7 @@ class JModGUI(ThemedTk):
                     return
                 msg = self.format(record)
                 # Lines logged with extra={"highlight": True} (a new experiment, a new
-                # run) show blue; errors show red.
+                # run) show blue; errors show red, warnings orange.
                 highlight = getattr(record, "highlight", False)
                 self.text_widget.after(0, self.append, msg, record.levelno, highlight)
 
@@ -162,6 +162,9 @@ class JModGUI(ThemedTk):
                     self.text_widget.see(tk.END)
                 elif levelno >= logging.ERROR:
                     self.text_widget.insert(tk.END, msg + "\n", "red")
+                    self.text_widget.see(tk.END)
+                elif levelno >= logging.WARNING:
+                    self.text_widget.insert(tk.END, msg + "\n", "orange")
                     self.text_widget.see(tk.END)
                 else:
                     self.text_widget.insert(tk.END, msg + "\n")
@@ -177,6 +180,11 @@ class JModGUI(ThemedTk):
                 "red",
                 font=("Courier New", 10, "bold"),
                 foreground="#EB0A06"
+            )
+            self.text_widget.tag_config(
+                "orange",
+                font=("Courier New", 10, "bold"),
+                foreground="#E07000"
             )
 
         self.tk_handler = TkinterHandler(self.text_widget)
