@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 import pandas as pd
+import polars as pl
 import os
 import tempfile
 import csv
@@ -8,6 +9,9 @@ import types
 
 from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib, has_mass_tag, in_windows, check_nterm_tags
 from src.models.spec_lib.spec_lib import ModSpec, parse_mod_spec, resolve_mod_edits
+from src.models.spec_lib.spec_lib import inspect_library, format_library_report, _mod_site_counts
+from src.models.spec_lib.library_store import SpectrumLibraryStore
+from tests.models.spec_lib.test_library_snapshots import FIXTURE_DIR
 import src.config as config
 from src.utils.errors import JModError
 from src.mass_tags import massTag
@@ -282,3 +286,59 @@ class TestResolveModEdits:
 
     def test_none_is_no_edits(self, restore_mods):
         assert not resolve_mod_edits(None, None)
+
+
+class TestInspectLibrary:
+    """--inspect_library and the GUI's "i" button: a library's modifications, and the
+    problems loading it would raise."""
+    tag = massTag(rules="nK", base_mass=0.0, delta=[0.0], channel_names=["0"], name="mTRAQ")
+
+    @pytest.fixture
+    def edgecases(self, tmp_path):
+        """The edge-case library, copied where it has no binary cache."""
+        import shutil
+        path = tmp_path / "library_edgecases.tsv"
+        shutil.copy(os.path.join(FIXTURE_DIR, "library_edgecases.tsv"), path)
+        return str(path)
+
+    def test_mods_are_counted_per_site(self):
+        counts = _mod_site_counts(pl.Series(["(a)K(b)PEK(b)", "PEPC(c)K", "PEPK"]))
+        assert sorted(counts.iter_rows()) == [("a", "N-term", 1), ("b", "K", 1), ("c", "C", 1)]
+
+    def test_targets_and_their_mods_are_reported(self, edgecases):
+        report = inspect_library(edgecases)
+        assert report.n_precursors == 4   # the decoys and invalid residues are left out
+        assert report.source == "file"
+        rows = {(r.name, r.site): r for r in report.mods}
+        assert rows[("UniMod:4", "C")].mass == pytest.approx(57.021464)
+        assert rows[("tag", "N-term")].status.startswith("tag")
+
+    def test_the_binary_cache_gives_the_same_report(self, edgecases):
+        SpectrumLibraryStore.from_tsv(edgecases).save(edgecases + "_store.npz")
+        cached = inspect_library(edgecases)
+        assert cached.source == "binary cache"
+        assert cached.mods == inspect_library_from_file(edgecases).mods
+
+    def test_no_tag_selected_is_a_problem(self, edgecases):
+        assert any("no tag is selected" in p for p in inspect_library(edgecases).problems)
+
+    def test_with_a_tag_the_channel_is_named(self, edgecases):
+        report = inspect_library(edgecases, self.tag)
+        assert not report.problems
+        assert "-> mTRAQ-0" in {(r.name, r.site): r for r in report.mods}[("tag", "N-term")].status
+
+    def test_several_unknown_mods_are_a_problem(self, tmp_path):
+        path = str(tmp_path / "lib.parquet")
+        pl.DataFrame({"ModifiedPeptide": ["(foo)PEPTIDEK", "PEPTIDEK(bar)"],
+                      "PrecursorCharge": [2, 2], "PrecursorMz": [500.0, 500.0]}).write_parquet(path)
+        report = inspect_library(path)
+        assert any("bar, foo" in p for p in report.problems)
+        assert "Problems when loading:" in format_library_report(report)
+
+
+def inspect_library_from_file(path):
+    """inspect_library reading the file even when a binary cache is beside it."""
+    import shutil, tempfile
+    copy = os.path.join(tempfile.mkdtemp(), os.path.basename(path))
+    shutil.copy(path, copy)
+    return inspect_library(copy)

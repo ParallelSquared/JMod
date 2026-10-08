@@ -363,17 +363,24 @@ def check_nterm_tags(modified_peptides, tag):
     if "n" not in tag.rules:
         return
     seqs = pl.Series(modified_peptides, dtype=pl.String)
-    first_residue = seqs.str.extract(r"^([A-Z](?:\([^()]*\))*)", 1)
-    tag_copies = first_residue.str.count_matches(rf"\({re.escape(tag.name)}-[^()]*\)")
-    residue_tags = first_residue.str.slice(0, 1).is_in(list(tag.rules.replace("n", ""))).cast(pl.UInt32)
-    misplaced = (tag_copies > residue_tags).fill_null(False)
-    n_misplaced = int(misplaced.sum())
+    n_misplaced, example = _misplaced_nterm_tags(seqs, rf"\({re.escape(tag.name)}-[^()]*\)", tag.rules)
     if n_misplaced:
-        example = seqs.filter(misplaced)[0]
         raise JModError(f"{n_misplaced:,} spectral library precursors have their N-terminal tag "
                         f"behind the first residue (e.g. {example}), as older JMod versions wrote "
                         f"them. Write N-terminal tags in front of the first residue: "
                         f"({tag.name}-0)PEPTIDEK({tag.name}-0)")
+
+
+def _misplaced_nterm_tags(seqs, tag_pattern, rules):
+    """(how many, an example) of *seqs* whose first residue carries more copies
+    of the tag (the regex *tag_pattern*) than the tag's residue *rules* put
+    there: an N-terminal tag written behind the first residue."""
+    first_residue = seqs.str.extract(r"^([A-Z](?:\([^()]*\))*)", 1)
+    tag_copies = first_residue.str.count_matches(tag_pattern)
+    residue_tags = first_residue.str.slice(0, 1).is_in(list(rules.replace("n", ""))).cast(pl.UInt32)
+    misplaced = (tag_copies > residue_tags).fill_null(False)
+    n_misplaced = int(misplaced.sum())
+    return n_misplaced, (seqs.filter(misplaced)[0] if n_misplaced else None)
 
 
 # ---------------------------------------------------------------------------
@@ -498,6 +505,201 @@ def known_mod_mass(name):
         return float(unimods.by_id(int(unimod.group(1)))["mono_mass"])
     except KeyError:
         raise JModError(f"{name} is not in UniMod")
+
+
+# ---------------------------------------------------------------------------
+# --inspect_library (and the GUI's library "i" button): which modifications a
+# library has, where, and what JMod would make of them when loading it.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class LibraryModRow:
+    """One modification at one kind of site: N-term, or a residue letter."""
+    name: str
+    site: str
+    n_precursors: int
+    mass: float       # None when JMod has no mass for it
+    status: str
+
+
+@dataclass(frozen=True)
+class LibraryReport:
+    path: str
+    source: str           # "binary cache" or "file"
+    n_precursors: int
+    charges: tuple        # (lowest, highest)
+    mz_range: tuple       # (lowest, highest)
+    has_ion_mobility: bool
+    mods: tuple           # LibraryModRow, most precursors first
+    problems: tuple       # what loading the library would raise
+
+
+def inspect_library(lib_file, mass_tag=None):
+    """A LibraryReport for *lib_file*: its precursors' modifications, and the
+    problems JMod would raise when loading it with *mass_tag* (None for no
+    tag).  Reads only the precursor columns, from the binary cache when it is
+    current, otherwise from the file."""
+    if not os.path.exists(lib_file):
+        raise JModError(f"Spectral library not found: {lib_file}")
+    precursors, source = _library_precursors(lib_file)
+    seqs = precursors["mod_seq"]
+    counts = _mod_site_counts(seqs)
+
+    rows, unknown, problems = [], [], []
+    for name, site, n in counts.iter_rows():
+        try:
+            mass = known_mod_mass(name)
+            status = "known" if mass is not None else "unknown: no mass"
+        except JModError as e:
+            mass, status = None, str(e)
+        if mass is None and name not in unknown:
+            unknown.append(name)
+        rows.append([name, site, n, mass, status])
+
+    if len(unknown) == 1:
+        tag_name = unknown[0]
+        tag_mass, _, _ = has_mass_tag(seqs, precursors["prec_mz"], precursors["prec_z"])
+        if mass_tag is None:
+            status = f"tag ({tag_mass:.4f} Da)"
+            problems.append(f"{tag_name} is the library's tag (or a modification JMod has no mass "
+                            f"for), and no tag is selected: loading raises")
+        else:
+            channel = int(np.argmin(np.abs(mass_tag.channel_masses - tag_mass)))
+            delta = mass_tag.channel_masses[channel] - tag_mass
+            status = (f"tag ({tag_mass:.4f} Da) -> {mass_tag.name}-{mass_tag.channel_names[channel]} "
+                      f"(difference {delta:+.6f} Da)")
+            if "n" in mass_tag.rules:
+                n_old, example = _misplaced_nterm_tags(seqs, rf"\({re.escape(tag_name)}\)", mass_tag.rules)
+                if n_old:
+                    problems.append(f"{n_old:,} precursors have the N-terminal tag behind the first "
+                                    f"residue (e.g. {example}): loading raises")
+        for row in rows:
+            if row[0] == tag_name:
+                row[4] = status
+    elif len(unknown) > 1:
+        try:
+            has_mass_tag(seqs, precursors["prec_mz"], precursors["prec_z"])
+        except JModError as e:
+            problems.append(f"{e}: loading raises")
+
+    charges = precursors["prec_z"]
+    mz = precursors["prec_mz"]
+    return LibraryReport(
+        path=lib_file, source=source, n_precursors=len(precursors),
+        charges=(int(charges.min()), int(charges.max())) if len(precursors) else (0, 0),
+        mz_range=(float(mz.min()), float(mz.max())) if len(precursors) else (0.0, 0.0),
+        has_ion_mobility=bool(precursors["ion_mob"].is_not_nan().any()) if len(precursors) else False,
+        mods=tuple(LibraryModRow(*row) for row in rows),
+        problems=tuple(problems),
+    )
+
+
+def _library_precursors(lib_file):
+    """The library's target precursors (mod_seq, prec_z, prec_mz, ion_mob) and
+    where they were read from.  The binary cache's arrays when it is current
+    (np.load reads only the members asked for); otherwise the file's precursor
+    columns, read the way the parser reads them."""
+    from src.models.spec_lib.library_store import (
+        STORE_VERSION, _LIBRARY_COLUMN_ALIASES, _LIBRARY_READERS, _STANDARD_RESIDUES,
+    )
+    store_file = lib_file + "_store.npz"
+    if os.path.exists(store_file):
+        cache = np.load(store_file, allow_pickle=True)
+        if "store_version" in cache and int(cache["store_version"]) == STORE_VERSION:
+            frame = pl.DataFrame({
+                "mod_seq": pl.Series(cache["mod_seq"], dtype=pl.String),
+                "prec_z": cache["prec_z"].astype(np.float64),
+                "prec_mz": cache["prec_mz"].astype(np.float64),
+                "ion_mob": cache["ion_mob"].astype(np.float64),
+            })
+            return frame, "binary cache"
+
+    reader = _LIBRARY_READERS.get(lib_file.rsplit(".")[-1].lower())
+    if reader is None:
+        raise JModError(f"Cannot inspect a .{lib_file.rsplit('.')[-1]} library; use .tsv or .parquet")
+    scan = reader(lib_file)
+    present = scan.collect_schema().names()
+    columns = {}
+    for canonical in ("ModifiedPeptide", "PrecursorCharge", "PrecursorMz", "IonMobility", "Decoy"):
+        name = next((a for a in _LIBRARY_COLUMN_ALIASES[canonical] if a in present), None)
+        if name is not None:
+            columns[canonical] = pl.col(name)
+    if "ModifiedPeptide" not in columns or "PrecursorCharge" not in columns:
+        raise JModError(f"{lib_file} has no modified-sequence or precursor-charge column")
+    frame = scan.select(
+        columns["ModifiedPeptide"].cast(pl.String).str.strip_chars("_")
+        .str.replace_all("[", "(", literal=True).str.replace_all("]", ")", literal=True).alias("mod_seq"),
+        columns["PrecursorCharge"].cast(pl.Float64).alias("prec_z"),
+        (columns["PrecursorMz"].cast(pl.Float64) if "PrecursorMz" in columns
+         else pl.lit(np.nan)).alias("prec_mz"),
+        _ion_mobility(columns.get("IonMobility")).alias("ion_mob"),
+        (columns["Decoy"].cast(pl.String).str.strip_chars().is_in(["1", "1.0", "True", "true"])
+         if "Decoy" in columns else pl.lit(False)).alias("decoy"),
+    ).filter(
+        ~pl.col("decoy")
+        # The parser leaves out precursors with residues that have no mass (X, Z, ...)
+        & pl.col("mod_seq").str.replace_all(r"\([^()]*\)", "")
+          .str.contains("^[" + "".join(sorted(_STANDARD_RESIDUES)) + "]+$")
+    ).unique(["mod_seq", "prec_z"], keep="first").drop("decoy").collect()
+    return frame, "file"
+
+
+def _ion_mobility(column):
+    """1/K0 as a float, NaN where missing: empty, or 0.0 as some libraries write it."""
+    if column is None:
+        return pl.lit(np.nan, dtype=pl.Float64)
+    text = column.cast(pl.String).str.strip_chars()
+    im = pl.when(text == "").then(None).otherwise(text).cast(pl.Float64)
+    return pl.when(im == 0.0).then(None).otherwise(im).fill_null(np.nan)
+
+
+def _mod_site_counts(seqs):
+    """Per (modification, site): how many of *seqs* carry it.  The site is
+    "N-term" for a modification in front of the first residue, else the
+    residue it follows."""
+    groups = pl.DataFrame({"i": np.arange(len(seqs)),
+                           "group": seqs.str.extract_all(r"(?:^|[A-Z])(?:\([^()]*\))+")})
+    groups = groups.explode("group").drop_nulls("group")
+    parsed = []
+    for group in groups["group"].unique().to_list():
+        site = "N-term" if group.startswith("(") else group[0]
+        for name in re.findall(r"\(([^()]*)\)", group):
+            parsed.append((group, name.strip(), site))
+    parsed = pl.DataFrame(parsed, schema={"group": pl.String, "name": pl.String, "site": pl.String},
+                          orient="row")
+    return (groups.join(parsed, on="group")
+            .group_by("name", "site").agg(pl.col("i").n_unique().alias("n"))
+            .sort(["n", "name", "site"], descending=[True, False, False])
+            .select("name", "site", "n"))
+
+
+def format_library_report(report):
+    """*report* (a LibraryReport) as lines of text, for the log or a window."""
+    low_z, high_z = report.charges
+    low_mz, high_mz = report.mz_range
+    lines = [report.path,
+             f"{report.n_precursors:,} precursors, charge {low_z}-{high_z}, "
+             f"m/z {low_mz:.1f}-{high_mz:.1f}, ion mobility: {'yes' if report.has_ion_mobility else 'no'} "
+             f"(read from the {report.source})",
+             ""]
+    if report.mods:
+        table = [("Modification", "Where", "Precursors", "Mass (Da)", "Status")]
+        for row in report.mods:
+            table.append((row.name, row.site, f"{row.n_precursors:,}",
+                          f"{row.mass:+.6f}" if row.mass is not None else "-", row.status))
+        widths = [max(len(r[c]) for r in table) for c in range(4)]
+        for r in table:
+            lines.append("  ".join([r[0].ljust(widths[0]), r[1].ljust(widths[1]),
+                                    r[2].rjust(widths[2]), r[3].rjust(widths[3]), r[4]]).rstrip())
+    else:
+        lines.append("No modifications")
+    lines.append("")
+    if report.problems:
+        lines.append("Problems when loading:")
+        lines += [f"  - {p}" for p in report.problems]
+    else:
+        lines.append("No problems found when loading")
+    return lines
 
 
 def in_windows(mz, ms2scans, margin_ppm=50.0):

@@ -430,6 +430,19 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # A spectral library: report its modifications and the problems loading it
+    # would raise (with the --tag given), then stop.  Nothing is searched.
+    'inspect_library': {
+        'flags': ('--inspect_library',),
+        'default': None,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'combine_results': {
         'flags': ('--combine_results',),
         'default': None,

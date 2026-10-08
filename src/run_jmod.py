@@ -46,10 +46,13 @@ from src.logger import logger, set_log_filepath
 
 def main(GUI_config_json=None):
     """Run JMod on every mass spec file in the configuration, or with
-    --make_library only build an earlier experiment's MBR library, or with
-    --combine_results only combine its runs again."""
+    --make_library only build an earlier experiment's MBR library, with
+    --combine_results only combine its runs again, or with --inspect_library
+    only report a library's modifications."""
     try:
-        if config.args.make_library:
+        if config.args.inspect_library:
+            run_inspect_library(config.args.inspect_library)
+        elif config.args.make_library:
             run_make_library(config.args.make_library)
         elif config.args.combine_results:
             run_combine_results(config.args.combine_results)
@@ -223,6 +226,15 @@ def run_make_library(experiment_dir):
     write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits)
     logger.info("")
     logger.info(f"Search with it: -l {os.path.abspath(os.path.join(mbr_dir, 'mbrlib.parquet'))} --use_emp_rt")
+
+
+def run_inspect_library(lib_file):
+    """--inspect_library: log *lib_file*'s modifications, and the problems
+    loading it would raise with the --tag given.  Reads the library only; no
+    folder or log file is made."""
+    mass_tag, _ = resolve_tags()
+    for line in spec_lib.format_library_report(spec_lib.inspect_library(lib_file, mass_tag)):
+        logger.info(line)
 
 
 def run_combine_results(experiment_dir):

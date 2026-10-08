@@ -235,6 +235,10 @@ class JModGUI(ThemedTk):
         default_dict["speclib"]["tk_handle"] = self.tsv_entry
         self.tsv_button = ttk.Button(self.input_frame, text="Browse", style="Accent.TButton", command=self.select_tsv)
         self.tsv_button.grid(row=1, column=2, padx=10, pady=10)
+        # In the .d column, and no wider than .d
+        self.inspect_button = ttk.Button(self.input_frame, text="i", command=self.inspect_library)
+        self.inspect_button.grid(row=1, column=3, padx=(0, 10), pady=10, sticky="ew")
+        Hovertip(self.inspect_button, "Inspect the library: its modifications, and any problems loading it would raise ")
 
         ##### Presets Frame  ######
 
@@ -810,6 +814,60 @@ class JModGUI(ThemedTk):
             self.tsv_entry.delete(0, tk.END)
             self.tsv_entry.insert(0, file_path)
             self.last_opened_dir = os.path.dirname(file_path)
+
+
+    def inspect_library(self):
+        """
+        Show the spectral library's modifications, and the problems loading it with
+        the selected tag would raise (spec_lib.inspect_library), in a window of their
+        own.  The library is read in a background thread so the GUI stays responsive.
+        Button: "i" button for specLib
+        """
+        path = self.tsv_entry.get().strip()
+        if not path or not os.path.isfile(path):
+            tk.messagebox.showerror("No Spectral Library", "Select a spectral library file first.")
+            return
+        tag_name = self.tag_var.get()
+
+        window = tk.Toplevel(self)
+        window.title("Spectral Library")
+        text = tk.Text(window, width=110, height=18, wrap="none", font=("Consolas", 10))
+        scroll_y = ttk.Scrollbar(window, orient="vertical", command=text.yview)
+        scroll_x = ttk.Scrollbar(window, orient="horizontal", command=text.xview)
+        text.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        text.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(0, weight=1)
+        text.insert("end", f"Reading {path} ...")
+        text.configure(state="disabled")
+        center_on_parent(window, self)
+
+        result = {}
+
+        def read():
+            try:
+                from src.models.spec_lib import spec_lib
+                from src.mass_tags import refresh_tags
+                mass_tag = None if tag_name in ("", "None") else refresh_tags().get(tag_name)
+                result["lines"] = spec_lib.format_library_report(spec_lib.inspect_library(path, mass_tag))
+            except Exception as e:
+                result["lines"] = [f"Could not inspect {path}:", "", str(e)]
+
+        def show():
+            if not window.winfo_exists():
+                return
+            if "lines" not in result:
+                self.after(200, show)
+                return
+            text.configure(state="normal")
+            text.delete("1.0", "end")
+            text.insert("end", "\n".join(result["lines"]))
+            text.configure(state="disabled")
+
+        threading.Thread(target=read, daemon=True).start()
+        self.after(200, show)
 
 
 

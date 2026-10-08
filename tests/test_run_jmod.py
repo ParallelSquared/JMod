@@ -340,3 +340,15 @@ class TestLoadLibrary:
                             lambda lib_file, mod_edits: (None, True, 150.0, "Foo"))
         with pytest.raises(JModError, match=r"no mass for \(Foo\).*--add_fixed_mod Foo,MASS,SITES"):
             run_jmod.load_library("lib.tsv", None, None)
+
+
+class TestInspectLibrary:
+    def test_the_report_is_logged(self, monkeypatch, app_log):
+        from tests.models.spec_lib.test_library_snapshots import FIXTURE_DIR
+        monkeypatch.setattr(config.args, "inspect_library", os.path.join(FIXTURE_DIR, "library_edgecases.tsv"))
+        monkeypatch.setattr(config.args, "tag", "None")
+        monkeypatch.setattr(config.args, "SILAC", None)
+        run_jmod.main()
+        messages = [r.getMessage() for r in app_log]
+        assert any(m.startswith("Modification") for m in messages)
+        assert not _errors(app_log)
