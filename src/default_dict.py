@@ -134,28 +134,6 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
-    'use_rt': {
-        'flags': ('-r', '--use_rt'),
-        'default': True,
-        'takes_value': False,
-        'in_GUI': False,
-        'type': '',
-        'widget': '',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': 'any'
-    },
-    'use_features': {
-        'flags': ('-f', '--use_features'),
-        'default': True,
-        'takes_value': False,
-        'in_GUI': False,
-        'type': '',
-        'widget': '',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': 'any'
-    },
     'atleast_m': {
         'flags': ('-m','--atleast_m'),
         'default': 3,
@@ -313,17 +291,6 @@ default_dict = {
         'special_upload': False,
         'values': ['rev', 'rev_nc', 'shuffle']
     },
-    'mTRAQ': {
-        'flags': ('--mTRAQ',),
-        'default': False,
-        'takes_value': False,
-        'in_GUI': False,
-        'type': '',
-        'widget': '',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': 'any'
-    },
     'tag': {
         'flags': ('--tag',),
         'default': 'None',
@@ -345,28 +312,6 @@ default_dict = {
         'tk_handle': None,
         'special_upload': False,
         'values': '+'
-    },
-    'pp_file': {
-        'flags': ('--pp_file',),
-        'default': "",
-        'takes_value': True,
-        'in_GUI': False,
-        'type': 'str',
-        'widget': '',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': 'any'
-    },
-    'timspeak_file': {
-        'flags': ('--timspeak_file',),
-        'default': "",
-        'takes_value': True,
-        'in_GUI': False,
-        'type': 'str',
-        'widget': '',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': 'any'
     },
     'lib_frac': {
         'flags': ('--lib_frac',),
@@ -514,28 +459,6 @@ default_dict = {
         'tk_handle': None,
         'special_upload': lambda handle, handles: (float(handle.get()) if handles['user_rt_tol'].get() else 0.5),
         'values': '+'
-    },
-    'initial_percentile': {
-        'flags': ('--initial_percentile',),
-        'default': 50,
-        'takes_value': True,
-        'in_GUI': False,
-        'type': 'float',
-        'widget': '',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': '+<100'
-    },
-    'user_percentile': {
-        'flags': ('--user_percentile',),
-        'default': False,
-        'takes_value': False,
-        'in_GUI': False,
-        'type': '',
-        'widget': '',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': 'any'
     },
     'no_ms1_req': {
         'flags': ('--no_ms1_req',),

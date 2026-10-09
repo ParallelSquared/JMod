@@ -78,7 +78,7 @@ def test_add_median_based_features_basic():
 
     metric_columns = ["m1"]
 
-    out = add_median_based_features(df, metric_columns, verbose=False)
+    out = add_median_based_features(df, metric_columns)
 
     # basic: output must be DataFrame
     assert isinstance(out, pd.DataFrame)

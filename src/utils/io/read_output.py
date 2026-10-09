@@ -463,7 +463,9 @@ def get_large_prec(file,
     decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
         quality_pca.main_apex_pc1_expr(loadings, apex_group_cols).alias("apex_pc1"))
 
-    sorted_decoy_coeffs_lf = decoy_coeffs_lf.sort(by="apex_pc1")
+    # maintain_order: the default sort is unstable, so apex_pc1 ties would feed
+    # the unique() below in a different order per run.
+    sorted_decoy_coeffs_lf = decoy_coeffs_lf.sort(by="apex_pc1", maintain_order=True)
 
     # Polars equivalent of drop_duplicates(..., keep='last')
     if timeplex:

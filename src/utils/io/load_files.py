@@ -82,12 +82,12 @@ class Spectrum:
     def get_vals_raw(self, raw_scan):
         """Extract values from a Thermo RawFileReader scan (parallel to get_vals).
         Mirrors ProteoWizard's RawFile.cpp: reads MSOrder/MassAnalyzer/precursor info
-        from GetFilterForScanNumber(), not from GetScanEventForScanNumber().GetReaction().
+        from an IScanFilter (built via CreateFilterFromScanEvent on a bulk-fetched
+        scan event), not from GetScanEventForScanNumber().GetReaction().
         """
         from ThermoFisher.CommonCore.Data.Business import Scan  # type: ignore
         from ThermoFisher.CommonCore.Data.FilterEnums import MSOrderType, MassAnalyzerType  # type: ignore
 
-        raw_file = raw_scan["raw_file"]
         scan_number = raw_scan["scan_number"]
         scan_stats = raw_scan["scan_stats"]
         scan_filter = raw_scan["scan_filter"]
@@ -96,33 +96,7 @@ class Spectrum:
         self.id = f"scan={scan_number}"
         self.scan_num = scan_number
         self.level = 1 if ms_order == MSOrderType.Ms else 2
-        self.RT = raw_file.RetentionTimeFromScanNumber(scan_number)
-
-        trailer = raw_file.GetTrailerExtraInformation(scan_number)
-        self.injection_time = 1.0
-        for label, value in zip(trailer.Labels, trailer.Values):
-            if "Ion Injection Time" in label:
-                self.injection_time = float(value) / 1000  # assume milliseconds
-                break
-
-        # Centroiding: FTMS uses vendor centroid stream; everything else (including
-        # Astral) falls through to Scan.ToCentroid, exactly mirroring pwiz's getMassList.
-        is_ftms = scan_filter.MassAnalyzer == MassAnalyzerType.MassAnalyzerFTMS
-        centroid_stream = raw_file.GetCentroidStream(scan_number, True) if is_ftms else None
-
-        if centroid_stream is not None and centroid_stream.Length > 0:
-            self.mz = np.array(list(centroid_stream.Masses), dtype=PEAK_MZ_DTYPE)
-            self.intens = np.array(list(centroid_stream.Intensities), dtype=PEAK_INT_DTYPE)
-        else:
-            scan = Scan.FromFile(raw_file, scan_number)
-            # pwiz guard: degenerate scans get an empty spectrum, not an exception
-            if scan.SegmentedScanAccess.Positions.Length == 0 or scan.ScanStatistics.BasePeakIntensity == 0:
-                self.mz = np.array([], dtype=PEAK_MZ_DTYPE)
-                self.intens = np.array([], dtype=PEAK_INT_DTYPE)
-            else:
-                centroided = Scan.ToCentroid(scan)
-                self.mz = np.array(list(centroided.SegmentedScanAccess.Positions), dtype=PEAK_MZ_DTYPE)
-                self.intens = np.array(list(centroided.SegmentedScanAccess.Intensities), dtype=PEAK_INT_DTYPE)
+        self._is_ftms = scan_filter.MassAnalyzer == MassAnalyzerType.MassAnalyzerFTMS
 
         self.scanwindow = [scan_stats.LowMass, scan_stats.HighMass]
 
@@ -144,6 +118,43 @@ class Spectrum:
             ]
 
         self.TIC = scan_stats.TIC
+
+    def read_file_values_raw(self, raw_file):
+        """Per-scan file reads deferred from get_vals_raw: RT, injection time,
+        and peak arrays. Runs on a worker thread with its own reader instance —
+        peak data dominates .raw load time and pythonnet releases the GIL
+        during .NET calls, so N readers over disjoint scan ranges parallelize
+        the (network) I/O.
+        """
+        from ThermoFisher.CommonCore.Data.Business import Scan  # type: ignore
+
+        scan_number = self.scan_num
+        self.RT = raw_file.RetentionTimeFromScanNumber(scan_number)
+
+        trailer = raw_file.GetTrailerExtraInformation(scan_number)
+        self.injection_time = 1.0
+        for label, value in zip(trailer.Labels, trailer.Values):
+            if "Ion Injection Time" in label:
+                self.injection_time = float(value) / 1000  # assume milliseconds
+                break
+
+        # Centroiding: FTMS uses vendor centroid stream; everything else (including
+        # Astral) falls through to Scan.ToCentroid, exactly mirroring pwiz's getMassList.
+        centroid_stream = raw_file.GetCentroidStream(scan_number, True) if self._is_ftms else None
+
+        if centroid_stream is not None and centroid_stream.Length > 0:
+            self.mz = np.array(list(centroid_stream.Masses), dtype=PEAK_MZ_DTYPE)
+            self.intens = np.array(list(centroid_stream.Intensities), dtype=PEAK_INT_DTYPE)
+        else:
+            scan = Scan.FromFile(raw_file, scan_number)
+            # pwiz guard: degenerate scans get an empty spectrum, not an exception
+            if scan.SegmentedScanAccess.Positions.Length == 0 or scan.ScanStatistics.BasePeakIntensity == 0:
+                self.mz = np.array([], dtype=PEAK_MZ_DTYPE)
+                self.intens = np.array([], dtype=PEAK_INT_DTYPE)
+            else:
+                centroided = Scan.ToCentroid(scan)
+                self.mz = np.array(list(centroided.SegmentedScanAccess.Positions), dtype=PEAK_MZ_DTYPE)
+                self.intens = np.array(list(centroided.SegmentedScanAccess.Intensities), dtype=PEAK_INT_DTYPE)
 
     def closest_peak(self, target_mz):
         """
@@ -323,34 +334,91 @@ class SpectrumFile:
             first_scan = reader.RunHeaderEx.FirstSpectrum
             last_scan = reader.RunHeaderEx.LastSpectrum
 
-            for scan_number in range(first_scan, last_scan + 1):
-                scan_filter = reader.GetFilterForScanNumber(scan_number)
-                ms_order = scan_filter.MSOrder
-                if ms_order not in (MSOrderType.Ms, MSOrderType.Ms2):
-                    continue
+            # Scan events are fetched in bulk: GetFilterForScanNumber reads
+            # each scan-event record with one random file access, which on a
+            # network mount costs several ms per scan (~90% of load time for
+            # a large run). GetScanEvents reads the same records in one
+            # sequential pass; CreateFilterFromScanEvent is in-memory and
+            # yields the same IScanFilter.
+            chunk_size = 50000
+            for chunk_first in range(first_scan, last_scan + 1, chunk_size):
+                chunk_last = min(chunk_first + chunk_size - 1, last_scan)
+                events = reader.GetScanEvents(chunk_first, chunk_last)
+                n_expected = chunk_last - chunk_first + 1
+                if len(events) != n_expected:
+                    raise IOError(
+                        f"GetScanEvents({chunk_first}, {chunk_last}) returned "
+                        f"{len(events)} events, expected {n_expected}: scan "
+                        f"numbers would misalign")
 
-                raw_scan = {
-                    "raw_file": reader,
-                    "scan_number": scan_number,
-                    "scan_stats": reader.GetScanStatsForScanNumber(scan_number),
-                    "scan_filter": scan_filter,
-                    "ms_order": ms_order,
-                }
+                for i in range(n_expected):
+                    scan_number = chunk_first + i
+                    event = events[i]
+                    ms_order = event.MSOrder
+                    if ms_order not in (MSOrderType.Ms, MSOrderType.Ms2):
+                        continue
+                    scan_filter = reader.CreateFilterFromScanEvent(event)
 
-                if ms_order == MSOrderType.Ms:
-                    spec = Spectrum(raw_scan=raw_scan)
-                    idx = len(self.ms1scans)
-                    self.ms1scans.append(spec)
-                    self.ms1_by_id[spec.scan_num] = idx
-                    self.scan_pos[spec.scan_num] = [1, idx]
-                elif ms_order == MSOrderType.Ms2:
-                    spec = Spectrum(raw_scan=raw_scan)
-                    idx = len(self.ms2scans)
-                    self.ms2scans.append(spec)
-                    self.ms2_by_id[spec.scan_num] = idx
-                    self.scan_pos[spec.scan_num] = [2, idx]
+                    raw_scan = {
+                        "scan_number": scan_number,
+                        "scan_stats": reader.GetScanStatsForScanNumber(scan_number),
+                        "scan_filter": scan_filter,
+                        "ms_order": ms_order,
+                    }
+
+                    if ms_order == MSOrderType.Ms:
+                        spec = Spectrum(raw_scan=raw_scan)
+                        idx = len(self.ms1scans)
+                        self.ms1scans.append(spec)
+                        self.ms1_by_id[spec.scan_num] = idx
+                        self.scan_pos[spec.scan_num] = [1, idx]
+                    elif ms_order == MSOrderType.Ms2:
+                        spec = Spectrum(raw_scan=raw_scan)
+                        idx = len(self.ms2scans)
+                        self.ms2scans.append(spec)
+                        self.ms2_by_id[spec.scan_num] = idx
+                        self.scan_pos[spec.scan_num] = [2, idx]
         finally:
             reader.Dispose()
+
+        # Phase 2: RT / injection time / peak arrays, read in parallel. Peak
+        # data dominates load time; pythonnet releases the GIL during .NET
+        # calls, so worker threads with one reader instance each overlap the
+        # per-scan I/O (measured ~3x on a network mount, more on local disk).
+        import threading
+        from tqdm import tqdm
+
+        all_specs = sorted(self.ms1scans + self.ms2scans, key=lambda s: s.scan_num)
+        n_workers = min(12, os.cpu_count() or 4, max(1, len(all_specs)))
+        progress = tqdm(total=len(all_specs), desc="Reading spectra", unit="scan",
+                        leave=False, miniters=1000)
+        errors = []
+
+        def _read_range(specs):
+            worker_reader = RawFileReaderAdapter.FileFactory(raw_file)
+            try:
+                worker_reader.SelectInstrument(Device.MS, 1)
+                for spec in specs:
+                    spec.read_file_values_raw(worker_reader)
+                    progress.update(1)
+            except Exception as e:  # noqa: BLE001 - propagated after join
+                errors.append(e)
+            finally:
+                worker_reader.Dispose()
+
+        # Contiguous scan ranges per worker keep each reader's access sequential
+        bounds = np.linspace(0, len(all_specs), n_workers + 1, dtype=int)
+        threads = [
+            threading.Thread(target=_read_range, args=(all_specs[bounds[i]:bounds[i + 1]],))
+            for i in range(n_workers)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        progress.close()
+        if errors:
+            raise errors[0]
 
         self.build_ms2_to_ms1_map()
 
