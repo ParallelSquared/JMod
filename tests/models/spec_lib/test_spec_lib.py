@@ -8,7 +8,7 @@ import csv
 import types
 
 from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib, has_mass_tag, in_windows, check_nterm_tags
-from src.models.spec_lib.spec_lib import ModSpec, parse_mod_spec, resolve_mod_edits
+from src.models.spec_lib.spec_lib import ModSpec, parse_mod_spec, resolve_mod_edits, parse_mod_edits, match_library_spelling, loadSpecLib
 from src.models.spec_lib.spec_lib import inspect_library, format_library_report, _mod_site_counts
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from tests.models.spec_lib.test_library_snapshots import FIXTURE_DIR
@@ -186,10 +186,48 @@ class Test_has_mass_tag():
         with pytest.raises(JModError, match="Multi-channel libraries are not supported"):
             has_mass_tag(peptides, [600.0, 500.0], [2, 2])
 
+    def test_names_with_a_dash_but_no_channel_number_are_not_channels(self):
+        peptides = ["(Dimethyl-Nter)PEPTIDEK(Dimethyl-Lys)"]
+        with pytest.raises(JModError, match="2 modifications JMod has no mass for: Dimethyl-Lys, Dimethyl-Nter"):
+            has_mass_tag(peptides, [600.0], [2])
+
     def test_several_unknown_modifications_raise(self):
         peptides = ["(PSMtag-0)PEPTIDEK(PSMtag-0)", "(DimethylNter)ELVISK"]
         with pytest.raises(JModError, match="DimethylNter, PSMtag-0"):
             has_mass_tag(peptides, [600.0, 500.0], [2, 2])
+
+
+class TestMatchTagChannel:
+    from src.models.spec_lib.spec_lib import match_tag_channel
+    match = staticmethod(match_tag_channel)
+    tag = massTag(rules="nK", base_mass=100.0, delta=[0.0, 4.0], channel_names=["0", "4"], name="T")
+
+    def test_a_close_mass_matches_without_a_warning(self):
+        assert self.match(self.tag, "tag", 104.001) == ("T-4", pytest.approx(-0.001), None)
+
+    def test_a_few_mDa_off_is_a_warning(self):
+        channel, _, warning = self.match(self.tag, "tag", 100.005)
+        assert channel == "T-0" and "is 0.0050 Da from T-0" in warning
+
+    def test_more_than_10_mDa_off_is_an_error(self):
+        # SILAC +8 against dimethyl +8 is 0.030 Da
+        with pytest.raises(JModError, match="it is not this tag"):
+            self.match(self.tag, "tag", 100.03)
+
+    def test_the_tag_mass_is_the_median_of_its_precursors(self):
+        from pyteomics import mass as pyteomics_mass
+        mz = lambda seq, tag_mass: (pyteomics_mass.fast_mass(seq) + tag_mass + 2 * 1.00727647) / 2
+        peptides = ["(t)PEPTIDEK", "(t)ELVISK", "(t)AAAAK"]
+        prec_mz = [mz("PEPTIDEK", 100.0), mz("ELVISK", 100.0), mz("AAAAK", 150.0)]   # one badly written
+        tag_mass, found, name = has_mass_tag(peptides, prec_mz, [2, 2, 2])
+        assert found and name == "t" and tag_mass == pytest.approx(100.0, abs=1e-6)
+
+
+class TestTagMassNotWorkedOut:
+    def test_a_tag_mass_that_cannot_be_worked_out_raises(self):
+        # No precursor m/z to work the mass out from
+        with pytest.raises(JModError, match="could not be worked out"):
+            has_mass_tag(["(t)PEPTIDEK"], [float("nan")], [2])
 
 
 class Test_check_nterm_tags():
@@ -256,6 +294,25 @@ class TestParseModSpec:
     def test_UniMod_is_spelled_as_libraries_spell_it(self):
         assert parse_mod_spec("unimod:4,C", "--strip_mod").name == "UniMod:4"
 
+    def test_strip_by_name_alone_is_every_site(self):
+        spec = parse_mod_spec("UniMod:36", "--strip_mod")
+        assert spec.name == "UniMod:36" and spec.mass == pytest.approx(28.0313, abs=1e-4)
+        assert spec.nterm and spec.residues == "ACDEFGHIJKLMNOPQRSTUVWY"   # every residue the parser accepts
+        assert parse_mod_spec("DimethylNter,28.0313", "--strip_mod").sites == spec.sites
+
+    def test_strip_by_an_unknown_name_alone_asks_for_its_mass(self):
+        with pytest.raises(JModError, match="give it as DimethylNter,MASS$"):
+            parse_mod_spec("DimethylNter", "--strip_mod")
+
+    def test_adding_still_needs_sites(self):
+        with pytest.raises(JModError, match="expected NAME,MASS,SITES or NAME,SITES"):
+            parse_mod_spec("UniMod:36", "--add_fixed_mod")
+
+    def test_names_and_sites_are_not_case_sensitive(self):
+        assert parse_mod_spec("lys8,k", "--add_fixed_mod") == ModSpec("Lys8", 8.014199, "K")
+        assert parse_mod_spec("X,1.0,nk", "--add_fixed_mod").sites == "nK"
+        assert parse_mod_spec("X,1.0,N", "--add_fixed_mod").sites == "N"   # uppercase N is asparagine
+
     def test_stack_is_read_from_the_end(self):
         assert parse_mod_spec("UniMod:121,K,stack", "--add_fixed_mod") == ModSpec("UniMod:121", 114.042927, "K", True)
         assert parse_mod_spec("Label,8.0,n,stack", "--add_fixed_mod") == ModSpec("Label", 8.0, "n", True)
@@ -302,6 +359,39 @@ class TestResolveModEdits:
         with pytest.raises(JModError, match="--max_variable_mods"):
             resolve_mod_edits(None, None, ["UniMod:35,M"], bad)
 
+    def test_one_name_with_two_masses_raises(self, restore_mods):
+        with pytest.raises(JModError, match="SILAC is given two masses: 8.01419867 in --add_fixed_mod "
+                                            "SILAC,8.01419867,K,stack, and 3.9881396 in --add_fixed_mod"):
+            resolve_mod_edits(["SILAC,8.01419867,K,stack", "SILAC,3.9881396,R"], None)
+
+    def test_one_name_with_one_mass_at_several_sites_is_fine(self, restore_mods):
+        edits = resolve_mod_edits(["Label,8.0,K", "Label,8.0,R"], "Label,8.0")
+        assert [spec.sites for spec in edits.add] == ["K", "R"]
+
+    def test_one_name_whatever_the_case_has_one_mass(self, restore_mods):
+        with pytest.raises(JModError, match="SILAC is given two masses"):
+            resolve_mod_edits(["silac,8.0,K", "SILAC,4.0,R"], None)
+
+    def test_names_take_the_librarys_spelling(self, restore_mods):
+        edits = match_library_spelling(parse_mod_edits(None, ["dimethyl-lys,28.0313"]), {"Dimethyl-Lys"})
+        assert edits.strip[0].name == "Dimethyl-Lys"
+        assert config.diann_mods["Dimethyl-Lys"] == 28.0313
+
+    def test_a_name_two_library_spellings_could_mean_raises(self, restore_mods):
+        with pytest.raises(JModError, match="differ only in case"):
+            match_library_spelling(parse_mod_edits(None, ["dimethyl-lys,28.0313"]),
+                                   {"Dimethyl-Lys", "DIMETHYL-LYS"})
+
+    def test_loading_strips_a_name_in_any_case(self, tmp_path, restore_mods):
+        path = str(tmp_path / "lib.parquet")
+        pl.DataFrame({"ModifiedPeptide": ["PEPC(Dimethyl-Lys)K"], "StrippedPeptide": ["PEPCK"],
+                      "PrecursorCharge": [2], "PrecursorMz": [300.0], "Tr_recalibrated": [10.0],
+                      "FragmentType": ["y"], "FragmentNumber": [2], "FragmentCharge": [1],
+                      "FragmentLossType": ["noloss"], "FragmentMz": [250.0],
+                      "RelativeIntensity": [1.0]}).write_parquet(path)
+        store, *_ = loadSpecLib(path, parse_mod_edits(None, ["dimethyl-lys,28.0313"]))
+        assert list(store.mod_seq) == ["PEPCK"]
+
     def test_none_is_no_edits(self, restore_mods):
         assert not resolve_mod_edits(None, None)
 
@@ -340,8 +430,16 @@ class TestInspectLibrary:
     def test_no_tag_selected_is_a_problem(self, edgecases):
         assert any("no tag is selected" in p for p in inspect_library(edgecases).problems)
 
+    @staticmethod
+    def _tag_for(path):
+        """An mTRAQ-named tag whose one channel is the library's own tag mass."""
+        from src.models.spec_lib.spec_lib import _library_precursors
+        precursors, _ = _library_precursors(path)
+        tag_mass, _, _ = has_mass_tag(precursors["mod_seq"], precursors["prec_mz"], precursors["prec_z"])
+        return massTag(rules="nK", base_mass=tag_mass, delta=[0.0], channel_names=["0"], name="mTRAQ")
+
     def test_with_a_tag_the_channel_is_named(self, edgecases):
-        report = inspect_library(edgecases, self.tag)
+        report = inspect_library(edgecases, self._tag_for(edgecases))
         assert not report.problems
         assert "-> mTRAQ-0" in {(r.name, r.site): r for r in report.mods}[("tag", "N-term")].status
 
@@ -351,7 +449,62 @@ class TestInspectLibrary:
                       "PrecursorCharge": [2, 2], "PrecursorMz": [500.0, 500.0]}).write_parquet(path)
         report = inspect_library(path)
         assert any("bar, foo" in p for p in report.problems)
-        assert "Problems when loading:" in format_library_report(report)
+        assert "JMod will stop with an error when it loads this library:" in format_library_report(report)
+
+    def test_edits_are_applied_as_a_run_would(self, tmp_path, restore_mods):
+        path = str(tmp_path / "lib.parquet")
+        pl.DataFrame({"ModifiedPeptide": ["P(Dimethyl-Nter)EPTIDEK(Dimethyl-Lys)", "AAAK(Dimethyl-Lys)"],
+                      "PrecursorCharge": [2, 2], "PrecursorMz": [500.0, 300.0]}).write_parquet(path)
+        edits = parse_mod_edits(["UniMod:36,nK"], ["Dimethyl-Nter,28.0313", "Dimethyl-Lys,28.0313"])
+        report = inspect_library(path, None, edits)
+        assert not report.problems   # every mod now has a mass
+        assert {(r.name, r.site, r.n_precursors) for r in report.edited_mods} == {
+            ("UniMod:36", "N-term", 2), ("UniMod:36", "K", 2)}
+        assert ("Stripped Dimethyl-Nter from 1 sites" in
+                [message for _, message in report.edit_lines])
+        text = format_library_report(report)
+        assert "What the edits do:" in text and "JMod can load this library with these edits" in text
+
+    def test_the_tag_keeps_its_status_after_the_edits(self, tmp_path, restore_mods):
+        path = str(tmp_path / "lib.parquet")
+        pl.DataFrame({"ModifiedPeptide": ["(mTRAQ-0)PEPTIDEK(mTRAQ-0)"], "PrecursorCharge": [2],
+                      "PrecursorMz": [500.0]}).write_parquet(path)
+        report = inspect_library(path, self._tag_for(path), parse_mod_edits(["Label,8.0,R"], None))
+        before = {r.name: r.status for r in report.mods}
+        after = {r.name: r.status for r in report.edited_mods}
+        assert after["mTRAQ-0"] == before["mTRAQ-0"] and "-> mTRAQ-0" in after["mTRAQ-0"]
+
+    def test_a_strip_that_misses_sites_is_reported(self, tmp_path, restore_mods):
+        path = str(tmp_path / "lib.parquet")
+        pl.DataFrame({"ModifiedPeptide": ["P(Dimethyl-Nter)EPTIDEK", "A(Dimethyl-Nter)AAK"],
+                      "PrecursorCharge": [2, 2], "PrecursorMz": [500.0, 300.0]}).write_parquet(path)
+        report = inspect_library(path, None, parse_mod_edits(None, ["Dimethyl-Nter,28.0313,n"]))
+        assert len(report.leftovers) == 1
+        assert "leaves Dimethyl-Nter on 2 other sites (precursors): A (1), P (1)" in report.leftovers[0]
+        assert report.leftovers[0].endswith("--strip_mod Dimethyl-Nter,28.0313")
+
+    def test_a_large_library_is_edited_in_a_sample(self, tmp_path, restore_mods):
+        path = str(tmp_path / "lib.parquet")
+        pl.DataFrame({"ModifiedPeptide": ["PEPTIDEK", "AAAK", "ELVISK"], "PrecursorCharge": [2, 2, 2],
+                      "PrecursorMz": [500.0, 300.0, 400.0]}).write_parquet(path)
+        edits = parse_mod_edits(["Label,8.0,K"], None)
+        report = inspect_library(path, None, edits, sample_size=2, sample_above=2)
+        assert report.sample_size == 2 and report.n_after == 3
+        assert "in a random sample of 2 precursors" in "\n".join(format_library_report(report))
+
+    def test_a_library_up_to_the_threshold_is_edited_in_full(self, tmp_path, restore_mods):
+        path = str(tmp_path / "lib.parquet")
+        pl.DataFrame({"ModifiedPeptide": ["PEPTIDEK", "AAAK", "ELVISK"], "PrecursorCharge": [2, 2, 2],
+                      "PrecursorMz": [500.0, 300.0, 400.0]}).write_parquet(path)
+        edits = parse_mod_edits(["Label,8.0,K"], None)
+        assert inspect_library(path, None, edits, sample_size=2, sample_above=3).sample_size == 3
+
+    def test_inspecting_with_edits_changes_no_masses(self, tmp_path, restore_mods):
+        path = str(tmp_path / "lib.parquet")
+        pl.DataFrame({"ModifiedPeptide": ["PEPTIDEK"], "PrecursorCharge": [2],
+                      "PrecursorMz": [500.0]}).write_parquet(path)
+        inspect_library(path, None, parse_mod_edits(["Label,8.0,K"], None))
+        assert "Label" not in config.diann_mods
 
 
 def inspect_library_from_file(path):

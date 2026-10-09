@@ -2827,19 +2827,16 @@ class SpectrumLibraryStore:
 
     def edit_mods(self, edits):
         """Strip, then add, the fixed modifications in *edits*
-        (spec_lib.ModEdits) on every entry, shifting precursor and
-        fragment m/z to match.
+        (spec_lib.ModEdits) on every entry, then make the variable
+        modifications' copies, shifting precursor and fragment m/z to match.
 
-        A modification is stripped from each of its sites that carries it and
-        added to each that does not, so a library that already has the change
-        stays as it is.  A site that carries another modification is skipped,
-        and the skipped sites logged as a warning, unless the spec stacks
-        (ModSpec.stack).  Entries that become identical (stripping a
-        modification some copies of a peptide carried and others did not) are
-        reduced to the first.  Returns the edited store, this one or a subset
-        of it: the caller rebinds.
+        The rules are _edit_sequence's and _variable_copies'; what they did is
+        logged (_edit_summary).  Entries that become identical (stripping a
+        modification some copies of a peptide carried and others did not, or a
+        copy the library already had) are reduced to the first, the library's
+        own.  Returns the edited store, this one or a new one: the caller
+        rebinds.
         """
-        from src.utils.parse_peptides import parse_peptide, split_nterm
         from src.logger import logger
         import polars as pl
         import tqdm
@@ -2858,100 +2855,36 @@ class SpectrumLibraryStore:
             if not getattr(self, field).flags.writeable:
                 setattr(self, field, getattr(self, field).copy())
 
-        # Sites changed, per --strip_mod and per --add_fixed_mod, by position: the
-        # same modification may be both stripped and added
-        stripped = [0] * len(edits.strip)
-        added = [0] * len(edits.add)
-        already = [0] * len(edits.add)   # sites that had it
-        # Sites skipped because another modification is there (not ,stack):
-        # how many, on how many precursors, and which (modification, site) blocked
-        skipped = [0] * len(edits.add)
-        skipped_precursors = [0] * len(edits.add)
-        blockers = [Counter() for _ in edits.add]
-        n_changed = 0
-        # Only variable modifications: nothing to strip or add first
-        entries = range(len(self)) if (edits.strip or edits.add) else range(0)
-        for i in tqdm.tqdm(entries, desc="Editing library modifications", miniters=100000):
-            nterm, body = split_nterm(self.mod_seq[i])
-            tokens = parse_peptide(body)
-            if not tokens:
-                continue
-            delta = np.zeros(len(tokens))   # mass change at each residue
-            changed = False
-
-            for s, spec in enumerate(edits.strip):
-                mod = spec.annotation
-                if spec.nterm and mod in nterm:
-                    nterm = nterm.replace(mod, "", 1)
-                    delta[0] -= spec.mass
-                    stripped[s] += 1
-                    changed = True
-                for j, token in enumerate(tokens):
-                    if token[0] in spec.residues and mod in token:
-                        tokens[j] = token.replace(mod, "", 1)
-                        delta[j] -= spec.mass
-                        stripped[s] += 1
-                        changed = True
-
-            for a, spec in enumerate(edits.add):
-                mod = spec.annotation
-                # A site that carries another modification is skipped unless the
-                # spec stacks: e.g. a protein N-terminal acetyl blocks an N-terminal label
-                skipped_here = False
-                if spec.nterm:
-                    if mod in nterm:
-                        already[a] += 1
-                    elif nterm and not spec.stack:
-                        skipped[a] += 1
-                        blockers[a].update((name, "n") for name in _MOD_NAME.findall(nterm))
-                        skipped_here = True
-                    else:
-                        nterm += mod
-                        delta[0] += spec.mass
-                        added[a] += 1
-                        changed = True
-                for j, token in enumerate(tokens):
-                    if token[0] in spec.residues:
-                        if mod in token:
-                            already[a] += 1
-                        elif len(token) > 1 and not spec.stack:
-                            skipped[a] += 1
-                            blockers[a].update((name, token[0]) for name in _MOD_NAME.findall(token))
-                            skipped_here = True
-                        else:
-                            tokens[j] = token + mod
-                            delta[j] += spec.mass
-                            added[a] += 1
-                            changed = True
-                skipped_precursors[a] += skipped_here
-
-            if not changed:
-                continue
-            n_changed += 1
-            self.mod_seq[i] = nterm + "".join(tokens)
-            self._shift_masses(i, delta)
-
-        for spec, n in zip(edits.strip, stripped):
-            logger.info(f"Stripped {spec.name} from {n:,} sites")
-        for a, spec in enumerate(edits.add):
-            note = f" ({already[a]:,} sites already had it)" if already[a] else ""
-            logger.info(f"Added {spec.name} to {added[a]:,} sites{note}")
-            if skipped[a]:
-                logger.warning(_skipped_sites_message("--add_fixed_mod", spec, skipped[a],
-                                                      skipped_precursors[a], blockers[a]))
+        counts = _EditCounts(edits)
+        n_before = len(self)
         if edits.strip or edits.add:
-            logger.info(f"Modifications edited on {n_changed:,} of {len(self):,} library precursors")
+            for i in tqdm.tqdm(range(n_before), desc="Editing library modifications", miniters=100000):
+                edited = _edit_sequence(self.mod_seq[i], edits, counts)
+                if edited is not None:
+                    self.mod_seq[i], delta = edited
+                    self._shift_masses(i, delta)
 
-        store = self._with_variable_copies(edits.variable, edits.max_variable) if edits.variable else self
+        store = self
+        if edits.variable:
+            parents, copies = [], []
+            for i in tqdm.tqdm(range(n_before), desc="Variable modifications", miniters=100000):
+                for copy in _variable_copies(self.mod_seq[i], edits.variable, edits.max_variable, counts):
+                    parents.append(i)
+                    copies.append(copy)
+            if parents:
+                store = self.take_entries(np.concatenate([np.arange(n_before), parents]))
+                for c, (seq, delta) in enumerate(copies):
+                    store.mod_seq[n_before + c] = seq
+                    store._shift_masses(n_before + c, delta)
 
         # The library's own entries come first, so they are the ones kept
         keep = (pl.DataFrame({"mod_seq": pl.Series(store.mod_seq, dtype=pl.String),
                               "prec_z": store.prec_z})
                 .select(pl.struct(pl.all()).is_first_distinct()).to_series().to_numpy())
         n_duplicates = int((~keep).sum())
+        for level, message in _edit_summary(edits, counts, n_before, n_duplicates):
+            logger.log(level, message)
         if n_duplicates:
-            logger.info(f"{n_duplicates:,} library precursors became identical to another "
-                        f"one after the modification edits and were removed")
             return store.subset_entries(keep)
         store.build_key_index()
         return store
@@ -2979,98 +2912,197 @@ class SpectrumLibraryStore:
         self.frag_mz[foff:foff + flen] = new_mz
         self.spectrum_perm[foff:foff + flen] = np.argsort(new_mz, kind="stable")
 
-    def _with_variable_copies(self, specs, max_mods):
-        """This store's entries, then for each one a copy for every combination
-        of 1 to *max_mods* of its sites for the variable modifications *specs*:
-        every position, one variable modification per site.  A copy has its
-        parent's spectrum, RT and ion mobility, with its m/z shifted.
-
-        A site that already carries the modification is not a site for it; one
-        that carries another is skipped, with a warning, unless the spec stacks.
-        """
-        from itertools import combinations, product
-        from src.utils.parse_peptides import parse_peptide, split_nterm
-        from src.logger import logger
-        import tqdm
-
-        parents, copy_seqs, copy_deltas = [], [], []
-        copies_with = [0] * len(specs)
-        skipped = [0] * len(specs)
-        skipped_precursors = [0] * len(specs)
-        blockers = [Counter() for _ in specs]
-        n = len(self)
-        for i in tqdm.tqdm(range(n), desc="Variable modifications", miniters=100000):
-            nterm, body = split_nterm(self.mod_seq[i])
-            tokens = parse_peptide(body)
-            if not tokens:
-                continue
-            # site -> the specs that can go there; site -1 is the N-terminus
-            options = {}
-            for v, spec in enumerate(specs):
-                mod = spec.annotation
-                skipped_here = False
-                if spec.nterm and mod not in nterm:
-                    if nterm and not spec.stack:
-                        skipped[v] += 1
-                        blockers[v].update((name, "n") for name in _MOD_NAME.findall(nterm))
-                        skipped_here = True
-                    else:
-                        options.setdefault(-1, []).append(v)
-                for j, token in enumerate(tokens):
-                    if token[0] in spec.residues and mod not in token:
-                        if len(token) > 1 and not spec.stack:
-                            skipped[v] += 1
-                            blockers[v].update((name, token[0]) for name in _MOD_NAME.findall(token))
-                            skipped_here = True
-                        else:
-                            options.setdefault(j, []).append(v)
-                skipped_precursors[v] += skipped_here
-
-            sites = sorted(options)
-            for n_mods in range(1, min(max_mods, len(sites)) + 1):
-                for chosen in combinations(sites, n_mods):
-                    for picks in product(*(options[site] for site in chosen)):
-                        new_nterm, new_tokens = nterm, list(tokens)
-                        delta = np.zeros(len(tokens))
-                        for site, v in zip(chosen, picks):
-                            if site == -1:
-                                new_nterm += specs[v].annotation
-                                delta[0] += specs[v].mass
-                            else:
-                                new_tokens[site] += specs[v].annotation
-                                delta[site] += specs[v].mass
-                        for v in set(picks):
-                            copies_with[v] += 1
-                        parents.append(i)
-                        copy_seqs.append(new_nterm + "".join(new_tokens))
-                        copy_deltas.append(delta)
-
-        for v, spec in enumerate(specs):
-            if skipped[v]:
-                logger.warning(_skipped_sites_message("--add_variable_mod", spec, skipped[v],
-                                                      skipped_precursors[v], blockers[v]))
-        if not parents:
-            logger.info("Variable modifications: no precursor has a site for them")
-            return self
-
-        store = self.take_entries(np.concatenate([np.arange(n), parents]))
-        for c, (seq, delta) in enumerate(zip(copy_seqs, copy_deltas)):
-            store.mod_seq[n + c] = seq
-            store._shift_masses(n + c, delta)
-
-        growth = len(store) / n
-        logger.info(f"Variable modifications: {len(parents):,} copies of {len(set(parents)):,} "
-                    f"precursors; the library grows from {n:,} to {len(store):,} precursors "
-                    f"({growth:.2f}x)")
-        for spec, n_copies in zip(specs, copies_with):
-            logger.info(f"  {spec.name} is on {n_copies:,} of the copies")
-        if growth > 3:
-            logger.warning(f"Variable modifications grew the library {growth:.1f}x, to {len(store):,} "
-                           f"precursors; fewer sites or a lower --max_variable_mods would make it smaller")
-        return store
-
 
 _MOD_NAME = re.compile(r"\(([^()]*)\)")
+
+
+class _EditCounts:
+    """What _edit_sequence and _variable_copies did, per modification, by
+    position in its list (one modification may be both stripped and added)."""
+
+    def __init__(self, edits):
+        self.stripped = [0] * len(edits.strip)
+        self.added = [0] * len(edits.add)
+        self.already = [0] * len(edits.add)   # sites that had it
+        # Sites skipped because another modification is there (no ,stack): how
+        # many, on how many precursors, and which (modification, site) blocked them
+        self.skipped = {kind: [0] * len(specs) for kind, specs in (("add", edits.add), ("variable", edits.variable))}
+        self.skipped_precursors = {kind: [0] * len(v) for kind, v in self.skipped.items()}
+        self.blockers = {kind: [Counter() for _ in v] for kind, v in self.skipped.items()}
+        self.copies_with = [0] * len(edits.variable)
+        self.n_changed = 0      # precursors the strips and fixed adds changed
+        self.n_copies = 0
+        self.n_parents = 0      # precursors with at least one variable copy
+
+    def skip(self, kind, index, token, site):
+        self.skipped[kind][index] += 1
+        self.blockers[kind][index].update((name, site) for name in _MOD_NAME.findall(token))
+
+
+def _edit_sequence(seq, edits, counts):
+    """*seq* after the strips and fixed adds of *edits*, as (new sequence,
+    mass change at each residue); None when nothing changes.  *counts*
+    (_EditCounts) records what was done.
+
+    A modification is stripped from each of its sites that carries it, and
+    added to each that does not.  A site that carries another modification is
+    skipped unless the spec stacks: e.g. a protein N-terminal acetyl blocks an
+    N-terminal label.  The N-terminus counts as the first residue's mass.
+    """
+    from src.utils.parse_peptides import parse_peptide, split_nterm
+
+    nterm, body = split_nterm(seq)
+    tokens = parse_peptide(body)
+    if not tokens:
+        return None
+    delta = np.zeros(len(tokens))
+    changed = False
+
+    for s, spec in enumerate(edits.strip):
+        mod = spec.annotation
+        if spec.nterm and mod in nterm:
+            nterm = nterm.replace(mod, "", 1)
+            delta[0] -= spec.mass
+            counts.stripped[s] += 1
+            changed = True
+        for j, token in enumerate(tokens):
+            if token[0] in spec.residues and mod in token:
+                tokens[j] = token.replace(mod, "", 1)
+                delta[j] -= spec.mass
+                counts.stripped[s] += 1
+                changed = True
+
+    for a, spec in enumerate(edits.add):
+        mod = spec.annotation
+        skipped_here = False
+        if spec.nterm:
+            if mod in nterm:
+                counts.already[a] += 1
+            elif nterm and not spec.stack:
+                counts.skip("add", a, nterm, "n")
+                skipped_here = True
+            else:
+                nterm += mod
+                delta[0] += spec.mass
+                counts.added[a] += 1
+                changed = True
+        for j, token in enumerate(tokens):
+            if token[0] in spec.residues:
+                if mod in token:
+                    counts.already[a] += 1
+                elif len(token) > 1 and not spec.stack:
+                    counts.skip("add", a, token, token[0])
+                    skipped_here = True
+                else:
+                    tokens[j] = token + mod
+                    delta[j] += spec.mass
+                    counts.added[a] += 1
+                    changed = True
+        counts.skipped_precursors["add"][a] += skipped_here
+
+    if not changed:
+        return None
+    counts.n_changed += 1
+    return nterm + "".join(tokens), delta
+
+
+def _variable_copies(seq, specs, max_mods, counts):
+    """*seq*'s copies for the variable modifications *specs*, as [(sequence,
+    mass change at each residue)]: one for every combination of 1 to
+    *max_mods* of its sites, every position, one variable modification per
+    site.  A site that already carries the modification is not a site for it;
+    one that carries another is skipped unless the spec stacks."""
+    from itertools import combinations, product
+    from src.utils.parse_peptides import parse_peptide, split_nterm
+
+    nterm, body = split_nterm(seq)
+    tokens = parse_peptide(body)
+    if not tokens:
+        return []
+    # site -> the specs that can go there; site -1 is the N-terminus
+    options = {}
+    for v, spec in enumerate(specs):
+        mod = spec.annotation
+        skipped_here = False
+        if spec.nterm and mod not in nterm:
+            if nterm and not spec.stack:
+                counts.skip("variable", v, nterm, "n")
+                skipped_here = True
+            else:
+                options.setdefault(-1, []).append(v)
+        for j, token in enumerate(tokens):
+            if token[0] in spec.residues and mod not in token:
+                if len(token) > 1 and not spec.stack:
+                    counts.skip("variable", v, token, token[0])
+                    skipped_here = True
+                else:
+                    options.setdefault(j, []).append(v)
+        counts.skipped_precursors["variable"][v] += skipped_here
+
+    copies = []
+    sites = sorted(options)
+    for n_mods in range(1, min(max_mods, len(sites)) + 1):
+        for chosen in combinations(sites, n_mods):
+            for picks in product(*(options[site] for site in chosen)):
+                new_nterm, new_tokens = nterm, list(tokens)
+                delta = np.zeros(len(tokens))
+                for site, v in zip(chosen, picks):
+                    if site == -1:
+                        new_nterm += specs[v].annotation
+                        delta[0] += specs[v].mass
+                    else:
+                        new_tokens[site] += specs[v].annotation
+                        delta[site] += specs[v].mass
+                for v in set(picks):
+                    counts.copies_with[v] += 1
+                copies.append((new_nterm + "".join(new_tokens), delta))
+    counts.n_copies += len(copies)
+    counts.n_parents += bool(copies)
+    return copies
+
+
+def _edit_summary(edits, counts, n_before, n_duplicates):
+    """What the edits did, as [(logging level, message)], for the log and the
+    --inspect_library report.  *n_before*: precursors before the edits."""
+    import logging
+
+    lines = []
+    for spec, n in zip(edits.strip, counts.stripped):
+        lines.append((logging.INFO, f"Stripped {spec.name} from {n:,} sites"))
+    for a, spec in enumerate(edits.add):
+        note = f" ({counts.already[a]:,} sites already had it)" if counts.already[a] else ""
+        lines.append((logging.INFO, f"Added {spec.name} to {counts.added[a]:,} sites{note}"))
+        if counts.skipped["add"][a]:
+            lines.append((logging.WARNING, _skipped_sites_message(
+                "--add_fixed_mod", spec, counts.skipped["add"][a],
+                counts.skipped_precursors["add"][a], counts.blockers["add"][a])))
+    if edits.strip or edits.add:
+        lines.append((logging.INFO, f"Modifications edited on {counts.n_changed:,} of {n_before:,} "
+                                    f"library precursors"))
+    if edits.variable:
+        for v, spec in enumerate(edits.variable):
+            if counts.skipped["variable"][v]:
+                lines.append((logging.WARNING, _skipped_sites_message(
+                    "--add_variable_mod", spec, counts.skipped["variable"][v],
+                    counts.skipped_precursors["variable"][v], counts.blockers["variable"][v])))
+        if not counts.n_copies:
+            lines.append((logging.INFO, "Variable modifications: no precursor has a site for them"))
+        else:
+            n_after = n_before + counts.n_copies
+            growth = n_after / n_before
+            lines.append((logging.INFO, f"Variable modifications: {counts.n_copies:,} copies of "
+                                        f"{counts.n_parents:,} precursors; the library grows from "
+                                        f"{n_before:,} to {n_after:,} precursors ({growth:.2f}x)"))
+            for spec, n_copies in zip(edits.variable, counts.copies_with):
+                lines.append((logging.INFO, f"  {spec.name} is on {n_copies:,} of the copies"))
+            if growth > 3:
+                lines.append((logging.WARNING, f"Variable modifications grew the library {growth:.1f}x, "
+                                               f"to {n_after:,} precursors; fewer sites or a lower "
+                                               f"--max_variable_mods would make it smaller"))
+    if n_duplicates:
+        lines.append((logging.INFO, f"{n_duplicates:,} library precursors became identical to another "
+                                    f"one after the modification edits and were removed"))
+    return lines
 
 
 def _skipped_sites_message(flag, spec, n_sites, n_precursors, blockers):

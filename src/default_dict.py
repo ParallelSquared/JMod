@@ -61,7 +61,7 @@ default_dict = {
     # the library is loaded: NAME,MASS,SITES or NAME,SITES (UniMod:N, or a
     # modification JMod knows).  SITES: n for the N-terminus, plus residues.
     # --add_fixed_mod skips sites that carry another modification, unless the
-    # spec ends in ,stack
+    # spec ends in ,stack.  --strip_mod NAME (or NAME,MASS) strips it everywhere
     'add_fixed_mod': {
         'flags': ('--add_fixed_mod',),
         'default': None,

@@ -231,11 +231,14 @@ def run_make_library(experiment_dir):
 
 
 def run_inspect_library(lib_file):
-    """--inspect_library: log *lib_file*'s modifications, and the problems
-    loading it would raise with the --tag given.  Reads the library only; no
-    folder or log file is made."""
+    """--inspect_library: log *lib_file*'s modifications, what the
+    --strip_mod / --add_fixed_mod / --add_variable_mod given would do to them,
+    and what would stop JMod loading it with the --tag given.  Reads the
+    library only; no folder or log file is made."""
     mass_tag, _ = resolve_tags()
-    for line in spec_lib.format_library_report(spec_lib.inspect_library(lib_file, mass_tag)):
+    edits = spec_lib.parse_mod_edits(config.args.add_fixed_mod, config.args.strip_mod,
+                                     config.args.add_variable_mod, config.args.max_variable_mods)
+    for line in spec_lib.format_library_report(spec_lib.inspect_library(lib_file, mass_tag, edits)):
         logger.info(line)
 
 
@@ -689,13 +692,11 @@ def load_library(lib_file, mass_tag, mod_edits):
 
     # A pre-tagged library: its tag becomes the closest channel of mass_tag
     if mass_tag and library_tag_bool:
-        diffs = np.abs(mass_tag.channel_masses - source_channel_mass)
-        closest_idx = int(np.argmin(diffs))
-        closest_channel_name = mass_tag.channel_names[closest_idx]
-        closest_channel_mass = mass_tag.channel_masses[closest_idx]
-        mass_diff = closest_channel_mass - source_channel_mass
-        source_channel = mass_tag.name + "-" + str(closest_channel_name)
+        source_channel, mass_diff, warning = spec_lib.match_tag_channel(
+            mass_tag, library_tag_name, source_channel_mass)
         logger.info(f"Tag found in library: {source_channel}. (mass difference: {mass_diff:.6f} Da)")
+        if warning:
+            logger.warning(warning)
         spectrumLibrary.relabel_tag(library_tag_name, source_channel)
         spec_lib.check_nterm_tags(spectrumLibrary.mod_seq, mass_tag)
     else:

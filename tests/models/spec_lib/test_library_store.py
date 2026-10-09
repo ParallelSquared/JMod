@@ -317,6 +317,13 @@ class TestEditMods:
         assert list(store.mod_seq) == ["(UniMod:1)(Label)PEPTIDEK(Label)"]
         assert not [r for r in app_log if r.levelname == "WARNING"]
 
+    def test_strip_by_name_removes_it_from_every_site(self):
+        from src.models.spec_lib.spec_lib import parse_mod_spec
+        spec = parse_mod_spec("Label,8.0", "--strip_mod")
+        store = _peptide_store("PEPTIDEK").edit_mods(self.ModEdits(add=(self.label,)))
+        store = store.edit_mods(self.ModEdits(strip=(spec,)))
+        assert list(store.mod_seq) == ["PEPTIDEK"]
+
     def test_entries_made_identical_are_reduced_to_the_first(self):
         store = _peptide_store("PEPM(UniMod:35)K", "PEPMK")
         store = store.edit_mods(self.ModEdits(strip=(self.ModSpec("UniMod:35", 15.994915, "M"),)))

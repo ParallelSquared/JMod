@@ -826,9 +826,11 @@ class JModGUI(ThemedTk):
 
     def inspect_library(self):
         """
-        Show the spectral library's modifications, and the problems loading it with
-        the selected tag would raise (spec_lib.inspect_library), in a window of their
-        own.  The library is read in a background thread so the GUI stays responsive.
+        Show the spectral library's modifications, what the --strip_mod /
+        --add_fixed_mod / --add_variable_mod in the additional commands would do to
+        them, and what would stop JMod loading it with the selected tag
+        (spec_lib.inspect_library), in a window of their own.  The library is read
+        in a background thread so the GUI stays responsive.
         Button: "i" button for specLib
         """
         path = self.tsv_entry.get().strip()
@@ -836,6 +838,7 @@ class JModGUI(ThemedTk):
             tk.messagebox.showerror("No Spectral Library", "Select a spectral library file first.")
             return
         tag_name = self.tag_var.get()
+        additional_commands = self.additional_text.get("1.0", tk.END)
 
         window = tk.Toplevel(self)
         window.title("Spectral Library")
@@ -859,8 +862,13 @@ class JModGUI(ThemedTk):
                 from src.models.spec_lib import spec_lib
                 from src.mass_tags import refresh_tags
                 mass_tag = None if tag_name in ("", "None") else refresh_tags().get(tag_name)
-                result["lines"] = spec_lib.format_library_report(spec_lib.inspect_library(path, mass_tag))
-            except Exception as e:
+                # The mod edits in the additional commands, as a run would apply them
+                args, _ = parser.parse_known_args(shlex.split(additional_commands))
+                edits = spec_lib.parse_mod_edits(args.add_fixed_mod, args.strip_mod,
+                                                 args.add_variable_mod, args.max_variable_mods)
+                result["lines"] = spec_lib.format_library_report(spec_lib.inspect_library(path, mass_tag, edits))
+            # SystemExit: argparse exits on a malformed command
+            except (Exception, SystemExit) as e:
                 result["lines"] = [f"Could not inspect {path}:", "", str(e)]
 
         def show():
