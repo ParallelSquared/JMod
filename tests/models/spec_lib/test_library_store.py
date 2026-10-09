@@ -340,6 +340,60 @@ class TestEditMods:
         assert np.all(np.diff(spectrum[:, 0]) >= 0)
 
 
+class TestVariableMods:
+    from src.models.spec_lib.spec_lib import ModEdits, ModSpec
+    ox = ModSpec("UniMod:35", 15.994915, "M")
+    phospho = ModSpec("UniMod:21", 79.966331, "ST")
+
+    def _variable(self, store, *specs, max_mods=2, **fixed):
+        return store.edit_mods(self.ModEdits(variable=specs, max_variable=max_mods, **fixed))
+
+    def test_every_combination_up_to_the_maximum(self):
+        store = self._variable(_peptide_store("PEMSTK"), self.ox, self.phospho)
+        assert set(store.mod_seq) == {
+            "PEMSTK", "PEM(UniMod:35)STK", "PEMS(UniMod:21)TK", "PEMST(UniMod:21)K",
+            "PEM(UniMod:35)S(UniMod:21)TK", "PEM(UniMod:35)ST(UniMod:21)K", "PEMS(UniMod:21)T(UniMod:21)K"}
+
+    def test_the_maximum_counts_all_variable_mods_together(self):
+        store = self._variable(_peptide_store("PEMSTK"), self.ox, self.phospho, max_mods=1)
+        assert len(store) == 4   # the original and one copy per site
+
+    def test_a_copy_has_its_parents_spectrum_shifted(self):
+        store = _peptide_store("PEMSTK")
+        prec_mz, b3, y3 = (store.prec_mz[0], store["PEMSTK", 2.0]['frags']['b3_1'][0],
+                           store["PEMSTK", 2.0]['frags']['y3_1'][0])
+        copy = self._variable(store, self.ox)["PEM(UniMod:35)STK", 2.0]
+        assert copy['prec_mz'] == pytest.approx(prec_mz + 15.994915 / 2)
+        assert copy['frags']['b3_1'][0] == pytest.approx(b3 + 15.994915, abs=1e-3)   # PEM
+        assert copy['frags']['y3_1'][0] == pytest.approx(y3, abs=1e-3)              # STK
+        assert copy['iRT'] == store["PEMSTK", 2.0]['iRT']
+
+    def test_a_copy_the_library_already_has_is_dropped(self):
+        store = self._variable(_peptide_store("PEMK", "PEM(UniMod:35)K"), self.ox)
+        assert list(store.mod_seq) == ["PEMK", "PEM(UniMod:35)K"]
+
+    def test_an_occupied_site_is_skipped_unless_stacked(self, app_log):
+        assert len(self._variable(_peptide_store("PEM(UniMod:4)K"), self.ox)) == 1
+        assert any(r.levelname == "WARNING" and "--add_variable_mod UniMod:35: skipped 1 sites" in r.getMessage()
+                   for r in app_log)
+        stacked = self.ModSpec("UniMod:35", 15.994915, "M", stack=True)
+        assert "PEM(UniMod:4)(UniMod:35)K" in set(self._variable(_peptide_store("PEM(UniMod:4)K"), stacked).mod_seq)
+
+    def test_copies_are_made_after_the_fixed_mods(self):
+        label = self.ModSpec("Label", 8.0, "n")
+        store = self._variable(_peptide_store("PEMK"), self.ox, add=(label,))
+        assert list(store.mod_seq) == ["(Label)PEMK", "(Label)PEM(UniMod:35)K"]
+
+
+class TestTakeEntries:
+    def test_entries_can_repeat(self):
+        store = SpectrumLibraryStore.from_dict(_make_sample_dict())
+        taken = store.take_entries([1, 0, 1])
+        assert list(taken.mod_seq) == [store.mod_seq[1], store.mod_seq[0], store.mod_seq[1]]
+        assert np.array_equal(taken.frag_mz[:taken.frag_lengths[0]],
+                              store.frag_mz[store.frag_offsets[1]:store.frag_offsets[1] + store.frag_lengths[1]])
+
+
 class TestSerialization:
     def test_save_load_roundtrip(self, tmp_path):
         d = _make_sample_dict()

@@ -261,7 +261,7 @@ class TestParseModSpec:
         assert parse_mod_spec("Label,8.0,n,stack", "--add_fixed_mod") == ModSpec("Label", 8.0, "n", True)
 
     def test_stack_is_only_for_adding(self):
-        with pytest.raises(JModError, match="stack is only for --add_fixed_mod"):
+        with pytest.raises(JModError, match="stack is only for --add_fixed_mod and --add_variable_mod"):
             parse_mod_spec("UniMod:4,C,stack", "--strip_mod")
 
     def test_a_known_modification_keeps_its_known_mass(self, app_log):
@@ -291,6 +291,16 @@ class TestResolveModEdits:
         assert edits.strip == (ModSpec("DimethylNter", 28.0313, "n"),)
         assert config.diann_mods["Label"] == 8.0120
         assert config.diann_mods["DimethylNter"] == 28.0313
+
+    def test_variable_mods_and_their_maximum(self, restore_mods):
+        edits = resolve_mod_edits(None, None, ["UniMod:35,M"], 3)
+        assert edits.variable == (ModSpec("UniMod:35", 15.994915, "M"),)
+        assert edits.max_variable == 3 and edits
+
+    @pytest.mark.parametrize("bad", [0, "two"])
+    def test_max_variable_mods_must_be_a_positive_whole_number(self, restore_mods, bad):
+        with pytest.raises(JModError, match="--max_variable_mods"):
+            resolve_mod_edits(None, None, ["UniMod:35,M"], bad)
 
     def test_none_is_no_edits(self, restore_mods):
         assert not resolve_mod_edits(None, None)

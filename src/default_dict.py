@@ -74,6 +74,32 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # Variable modifications: every precursor also gets a copy for every
+    # combination of 1 to --max_variable_mods of these sites (NAME,MASS,SITES
+    # or NAME,SITES, then ,stack as for --add_fixed_mod)
+    'add_variable_mod': {
+        'flags': ('--add_variable_mod',),
+        'default': None,
+        'takes_value': True,
+        'multiple': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
+    'max_variable_mods': {
+        'flags': ('--max_variable_mods',),
+        'default': 1,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
+    },
     'strip_mod': {
         'flags': ('--strip_mod',),
         'default': None,

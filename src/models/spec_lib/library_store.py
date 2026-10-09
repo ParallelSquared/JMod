@@ -739,8 +739,17 @@ class SpectrumLibraryStore:
         mask = np.asarray(mask, dtype=bool)
         if mask.all():
             return self
-        assert self.n_decoys == 0, "subset_entries is a pre-decoy operation"
-        kept = np.flatnonzero(mask)
+        return self.take_entries(np.flatnonzero(mask))
+
+    def take_entries(self, kept):
+        """Return a new store of the entries at the indices *kept*, in that
+        order; an index may repeat (each repeat is a separate entry).
+
+        Pre-decoy use only (asserts no decoys).  The key index is rebuilt from
+        the new arrays.
+        """
+        assert self.n_decoys == 0, "take_entries is a pre-decoy operation"
+        kept = np.asarray(kept, dtype=np.intp)
         frag_counts = self.frag_lengths[kept].astype(np.int64)
         gather = np.repeat(self.frag_offsets[kept], frag_counts)
         if len(gather):
@@ -2831,7 +2840,6 @@ class SpectrumLibraryStore:
         of it: the caller rebinds.
         """
         from src.utils.parse_peptides import parse_peptide, split_nterm
-        from src.utils.frag_encoding import get_ion_type, get_index, get_charge
         from src.logger import logger
         import polars as pl
         import tqdm
@@ -2861,7 +2869,9 @@ class SpectrumLibraryStore:
         skipped_precursors = [0] * len(edits.add)
         blockers = [Counter() for _ in edits.add]
         n_changed = 0
-        for i in tqdm.tqdm(range(len(self)), desc="Editing library modifications", miniters=100000):
+        # Only variable modifications: nothing to strip or add first
+        entries = range(len(self)) if (edits.strip or edits.add) else range(0)
+        for i in tqdm.tqdm(entries, desc="Editing library modifications", miniters=100000):
             nterm, body = split_nterm(self.mod_seq[i])
             tokens = parse_peptide(body)
             if not tokens:
@@ -2919,22 +2929,7 @@ class SpectrumLibraryStore:
                 continue
             n_changed += 1
             self.mod_seq[i] = nterm + "".join(tokens)
-            if not delta.any():
-                continue
-            self.prec_mz[i] += delta.sum() / self.prec_z[i]
-            foff, flen = int(self.frag_offsets[i]), int(self.frag_lengths[i])
-            if flen == 0:
-                continue
-            # A b ion (or a/c) holds the first k residues, a y ion (or x/z) the last k
-            codes = self.frag_keys_data[foff:foff + flen]
-            ion_types = get_ion_type(codes)
-            k = get_index(codes).astype(np.int64) - 1
-            n_term_ion = (ion_types == 0) | (ion_types == 2) | (ion_types == 3)
-            shift = np.where(n_term_ion, np.cumsum(delta)[k], np.cumsum(delta[::-1])[k])
-            new_mz = (self.frag_mz[foff:foff + flen].astype(np.float64)
-                      + shift / get_charge(codes)).astype(np.float32)
-            self.frag_mz[foff:foff + flen] = new_mz
-            self.spectrum_perm[foff:foff + flen] = np.argsort(new_mz, kind="stable")
+            self._shift_masses(i, delta)
 
         for spec, n in zip(edits.strip, stripped):
             logger.info(f"Stripped {spec.name} from {n:,} sites")
@@ -2942,27 +2937,146 @@ class SpectrumLibraryStore:
             note = f" ({already[a]:,} sites already had it)" if already[a] else ""
             logger.info(f"Added {spec.name} to {added[a]:,} sites{note}")
             if skipped[a]:
-                logger.warning(_skipped_sites_message(spec, skipped[a], skipped_precursors[a], blockers[a]))
-        logger.info(f"Modifications edited on {n_changed:,} of {len(self):,} library precursors")
+                logger.warning(_skipped_sites_message("--add_fixed_mod", spec, skipped[a],
+                                                      skipped_precursors[a], blockers[a]))
+        if edits.strip or edits.add:
+            logger.info(f"Modifications edited on {n_changed:,} of {len(self):,} library precursors")
 
-        keep = (pl.DataFrame({"mod_seq": pl.Series(self.mod_seq, dtype=pl.String),
-                              "prec_z": self.prec_z})
+        store = self._with_variable_copies(edits.variable, edits.max_variable) if edits.variable else self
+
+        # The library's own entries come first, so they are the ones kept
+        keep = (pl.DataFrame({"mod_seq": pl.Series(store.mod_seq, dtype=pl.String),
+                              "prec_z": store.prec_z})
                 .select(pl.struct(pl.all()).is_first_distinct()).to_series().to_numpy())
         n_duplicates = int((~keep).sum())
         if n_duplicates:
             logger.info(f"{n_duplicates:,} library precursors became identical to another "
                         f"one after the modification edits and were removed")
-            return self.subset_entries(keep)
-        self.build_key_index()
-        return self
+            return store.subset_entries(keep)
+        store.build_key_index()
+        return store
+
+    def _shift_masses(self, i, delta):
+        """Shift entry *i*'s precursor and fragment m/z by *delta*, the mass
+        change at each residue (the N-terminus counts as the first residue),
+        and re-sort its spectrum.  A b ion (or a/c) of index k holds the first
+        k residues, a y ion (or x/z) the last k."""
+        from src.utils.frag_encoding import get_ion_type, get_index, get_charge
+
+        if not delta.any():
+            return
+        self.prec_mz[i] += delta.sum() / self.prec_z[i]
+        foff, flen = int(self.frag_offsets[i]), int(self.frag_lengths[i])
+        if flen == 0:
+            return
+        codes = self.frag_keys_data[foff:foff + flen]
+        ion_types = get_ion_type(codes)
+        k = get_index(codes).astype(np.int64) - 1
+        n_term_ion = (ion_types == 0) | (ion_types == 2) | (ion_types == 3)
+        shift = np.where(n_term_ion, np.cumsum(delta)[k], np.cumsum(delta[::-1])[k])
+        new_mz = (self.frag_mz[foff:foff + flen].astype(np.float64)
+                  + shift / get_charge(codes)).astype(np.float32)
+        self.frag_mz[foff:foff + flen] = new_mz
+        self.spectrum_perm[foff:foff + flen] = np.argsort(new_mz, kind="stable")
+
+    def _with_variable_copies(self, specs, max_mods):
+        """This store's entries, then for each one a copy for every combination
+        of 1 to *max_mods* of its sites for the variable modifications *specs*:
+        every position, one variable modification per site.  A copy has its
+        parent's spectrum, RT and ion mobility, with its m/z shifted.
+
+        A site that already carries the modification is not a site for it; one
+        that carries another is skipped, with a warning, unless the spec stacks.
+        """
+        from itertools import combinations, product
+        from src.utils.parse_peptides import parse_peptide, split_nterm
+        from src.logger import logger
+        import tqdm
+
+        parents, copy_seqs, copy_deltas = [], [], []
+        copies_with = [0] * len(specs)
+        skipped = [0] * len(specs)
+        skipped_precursors = [0] * len(specs)
+        blockers = [Counter() for _ in specs]
+        n = len(self)
+        for i in tqdm.tqdm(range(n), desc="Variable modifications", miniters=100000):
+            nterm, body = split_nterm(self.mod_seq[i])
+            tokens = parse_peptide(body)
+            if not tokens:
+                continue
+            # site -> the specs that can go there; site -1 is the N-terminus
+            options = {}
+            for v, spec in enumerate(specs):
+                mod = spec.annotation
+                skipped_here = False
+                if spec.nterm and mod not in nterm:
+                    if nterm and not spec.stack:
+                        skipped[v] += 1
+                        blockers[v].update((name, "n") for name in _MOD_NAME.findall(nterm))
+                        skipped_here = True
+                    else:
+                        options.setdefault(-1, []).append(v)
+                for j, token in enumerate(tokens):
+                    if token[0] in spec.residues and mod not in token:
+                        if len(token) > 1 and not spec.stack:
+                            skipped[v] += 1
+                            blockers[v].update((name, token[0]) for name in _MOD_NAME.findall(token))
+                            skipped_here = True
+                        else:
+                            options.setdefault(j, []).append(v)
+                skipped_precursors[v] += skipped_here
+
+            sites = sorted(options)
+            for n_mods in range(1, min(max_mods, len(sites)) + 1):
+                for chosen in combinations(sites, n_mods):
+                    for picks in product(*(options[site] for site in chosen)):
+                        new_nterm, new_tokens = nterm, list(tokens)
+                        delta = np.zeros(len(tokens))
+                        for site, v in zip(chosen, picks):
+                            if site == -1:
+                                new_nterm += specs[v].annotation
+                                delta[0] += specs[v].mass
+                            else:
+                                new_tokens[site] += specs[v].annotation
+                                delta[site] += specs[v].mass
+                        for v in set(picks):
+                            copies_with[v] += 1
+                        parents.append(i)
+                        copy_seqs.append(new_nterm + "".join(new_tokens))
+                        copy_deltas.append(delta)
+
+        for v, spec in enumerate(specs):
+            if skipped[v]:
+                logger.warning(_skipped_sites_message("--add_variable_mod", spec, skipped[v],
+                                                      skipped_precursors[v], blockers[v]))
+        if not parents:
+            logger.info("Variable modifications: no precursor has a site for them")
+            return self
+
+        store = self.take_entries(np.concatenate([np.arange(n), parents]))
+        for c, (seq, delta) in enumerate(zip(copy_seqs, copy_deltas)):
+            store.mod_seq[n + c] = seq
+            store._shift_masses(n + c, delta)
+
+        growth = len(store) / n
+        logger.info(f"Variable modifications: {len(parents):,} copies of {len(set(parents)):,} "
+                    f"precursors; the library grows from {n:,} to {len(store):,} precursors "
+                    f"({growth:.2f}x)")
+        for spec, n_copies in zip(specs, copies_with):
+            logger.info(f"  {spec.name} is on {n_copies:,} of the copies")
+        if growth > 3:
+            logger.warning(f"Variable modifications grew the library {growth:.1f}x, to {len(store):,} "
+                           f"precursors; fewer sites or a lower --max_variable_mods would make it smaller")
+        return store
 
 
 _MOD_NAME = re.compile(r"\(([^()]*)\)")
 
 
-def _skipped_sites_message(spec, n_sites, n_precursors, blockers):
-    """The warning for the sites --add_fixed_mod *spec* skipped because another
-    modification was there; *blockers* counts (modification, site) pairs."""
+def _skipped_sites_message(flag, spec, n_sites, n_precursors, blockers):
+    """The warning for the sites *flag* (--add_fixed_mod or --add_variable_mod)
+    *spec* skipped because another modification was there; *blockers* counts
+    (modification, site) pairs."""
     from src.models.spec_lib.spec_lib import known_mod_mass
     by_mod = {}
     for (name, site), n in blockers.most_common():
@@ -2972,10 +3086,10 @@ def _skipped_sites_message(spec, n_sites, n_precursors, blockers):
         f"--strip_mod {name},{''.join(sites)}" if known_mod_mass(name) is not None
         else f"--strip_mod {name},MASS,{''.join(sites)}"
         for name, sites in by_mod.items())
-    return (f"--add_fixed_mod {spec.name}: skipped {n_sites:,} sites on {n_precursors:,} precursors "
+    return (f"{flag} {spec.name}: skipped {n_sites:,} sites on {n_precursors:,} precursors "
             f"that already carry another modification there: {shown}. If that is fine, nothing "
             f"needs to change. To add {spec.name} there instead, strip those first ({strips}), "
-            f"or add it alongside them (--add_fixed_mod {spec.name},{spec.mass},{spec.sites},stack)")
+            f"or add it alongside them ({flag} {spec.name},{spec.mass},{spec.sites},stack)")
 
 
 class _EntryView:

@@ -77,7 +77,8 @@ def run_experiment(GUI_config_json=None):
     bruker_sdk_path = _prepare_readers(run_files)
     set_seeds(config.RANDOM_SEED)
     mass_tag, SILAC = resolve_tags()
-    mod_edits = spec_lib.resolve_mod_edits(config.args.add_fixed_mod, config.args.strip_mod)
+    mod_edits = spec_lib.resolve_mod_edits(config.args.add_fixed_mod, config.args.strip_mod,
+                                           config.args.add_variable_mod, config.args.max_variable_mods)
     mbr = _use_mbr(run_files)
     # With MBR the first pass is not the final result, so it goes in first_pass/
     first_pass_dir = os.path.join(experiment_dir, "first_pass") if mbr else None
@@ -221,7 +222,8 @@ def run_make_library(experiment_dir):
     logger.info(f"{len(run_folders)} completed run(s)")
 
     mass_tag, SILAC = resolve_tags()
-    mod_edits = spec_lib.resolve_mod_edits(config.args.add_fixed_mod, config.args.strip_mod)
+    mod_edits = spec_lib.resolve_mod_edits(config.args.add_fixed_mod, config.args.strip_mod,
+                                           config.args.add_variable_mod, config.args.max_variable_mods)
     combined_ids = _experiment_ids(experiment_dir, run_folders)
     write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits)
     logger.info("")

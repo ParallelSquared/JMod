@@ -427,29 +427,43 @@ class ModSpec:
 
 @dataclass(frozen=True)
 class ModEdits:
-    """The modifications to strip from the library, then the ones to add."""
+    """The modifications to strip from the library, then the fixed ones to
+    add, then the variable ones: each precursor also gets a copy for every
+    combination of 1 to *max_variable* of their sites."""
     strip: tuple = ()
     add: tuple = ()
+    variable: tuple = ()
+    max_variable: int = 2
 
     def __bool__(self):
-        return bool(self.strip or self.add)
+        return bool(self.strip or self.add or self.variable)
 
 
-def resolve_mod_edits(add_fixed_mod, strip_mod):
-    """The --add_fixed_mod and --strip_mod modifications (each a string, a list
-    of strings, or None), checked.  Their masses are added to
-    config.diann_mods, so that every modification in the edited library has
-    a mass."""
+def resolve_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variable_mods=2):
+    """The --add_fixed_mod, --strip_mod and --add_variable_mod modifications
+    (each a string, a list of strings, or None), checked, with
+    --max_variable_mods.  Their masses are added to config.diann_mods, so that
+    every modification in the edited library has a mass."""
+    try:
+        max_variable_mods = int(max_variable_mods)
+    except (TypeError, ValueError):
+        raise JModError(f"--max_variable_mods must be a whole number, not {max_variable_mods}")
+    if max_variable_mods < 1:
+        raise JModError(f"--max_variable_mods must be at least 1, not {max_variable_mods}")
     edits = ModEdits(
         strip=tuple(parse_mod_spec(text, "--strip_mod") for text in _as_list(strip_mod)),
         add=tuple(parse_mod_spec(text, "--add_fixed_mod") for text in _as_list(add_fixed_mod)),
+        variable=tuple(parse_mod_spec(text, "--add_variable_mod") for text in _as_list(add_variable_mod)),
+        max_variable=max_variable_mods,
     )
-    for spec in edits.strip + edits.add:
+    for spec in edits.strip + edits.add + edits.variable:
         config.diann_mods[spec.name] = spec.mass
     for spec in edits.strip:
         logger.info(f"Stripping from the library: {spec}")
     for spec in edits.add:
         logger.info(f"Adding to the library (fixed): {spec}")
+    for spec in edits.variable:
+        logger.info(f"Adding to the library (variable, up to {edits.max_variable} per precursor): {spec}")
     return edits
 
 
@@ -461,15 +475,15 @@ def _as_list(value):
 
 def parse_mod_spec(text, flag):
     """A ModSpec from NAME,MASS,SITES or NAME,SITES, either followed by
-    ",stack" for --add_fixed_mod.  Raises JModError.
+    ",stack" for --add_fixed_mod or --add_variable_mod.  Raises JModError.
 
     A modification JMod knows (known_mod_mass) gets the known mass, whatever
     MASS says: one name has one mass for the whole experiment."""
     parts = [part.strip() for part in str(text).split(",")]
     stack = len(parts) > 1 and parts[-1].lower() == "stack"
     if stack:
-        if flag != "--add_fixed_mod":
-            raise JModError(f"{flag} {text}: stack is only for --add_fixed_mod")
+        if flag not in ("--add_fixed_mod", "--add_variable_mod"):
+            raise JModError(f"{flag} {text}: stack is only for --add_fixed_mod and --add_variable_mod")
         parts = parts[:-1]
     # Libraries spell UniMod names "UniMod:N"
     parts[0] = re.sub(r"^unimod:", "UniMod:", parts[0], flags=re.IGNORECASE)
