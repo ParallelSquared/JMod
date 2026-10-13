@@ -121,3 +121,28 @@ class TestFineTuneRT:
 
         with pytest.raises(JModError, match="Unknown label"):
             fine_tune_rt(sample_df, qc_plots=False, tag=Tag())
+
+
+class TestSaveModel:
+    """The fine-tuned models are saved locally, then copied into place."""
+
+    def test_the_model_is_saved_as_a_savedmodel_folder(self, tmp_path):
+        import tensorflow as tf
+        from src.finetune_funs import save_model
+        model = tf.keras.Sequential([tf.keras.layers.Input((3,)), tf.keras.layers.Dense(1)])
+        path = tmp_path / "fine_tuning" / "iRT_updated_model0"
+        path.parent.mkdir()
+        save_model(model, str(path))
+        assert (path / "saved_model.pb").is_file()
+
+    def test_a_failed_save_is_a_warning_not_an_error(self, tmp_path, app_log):
+        from src.finetune_funs import save_model
+
+        class Unsaveable:
+            def save(self, path):
+                raise OSError("no such share")
+
+        save_model(Unsaveable(), str(tmp_path / "iRT_updated_model0"))
+        warnings = [r.getMessage() for r in app_log if r.levelname == "WARNING"]
+        assert any("Could not save the fine-tuned model" in w and "OSError: no such share" in w
+                   for w in warnings)

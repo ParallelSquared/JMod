@@ -30,6 +30,8 @@ from src.utils.errors import JModError
 import src.config as config
 from tensorflow import keras
 import os
+import shutil
+import tempfile
 from src.logger import logger
 
 pd.options.display.max_columns = 1000
@@ -214,6 +216,24 @@ def load_existing_models(model_path):
     logger.debug(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
     return models
 
+def save_model(model, path):
+    """Save *model* as a SavedModel folder at *path*.
+
+    TensorFlow's own file layer cannot write to a network share on Windows
+    (a UNC path, //server/share), so the model is saved to a local temporary folder and
+    copied into place with Python's file copy, which can; the same works on
+    macOS and Linux.  Nothing reads the saved model back, so a failure is a
+    warning, not the end of the run.
+    """
+    try:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as local_dir:
+            local_path = os.path.join(local_dir, os.path.basename(path))
+            model.save(local_path)
+            shutil.copytree(local_path, path, dirs_exist_ok=True)
+    except Exception as e:
+        logger.warning(f"Could not save the fine-tuned model to {path}: {type(e).__name__}: {e}")
+
+
 def train_models(models,train_data,results_folder=None):
         
     X_train, Y_train = train_data
@@ -227,11 +247,8 @@ def train_models(models,train_data,results_folder=None):
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4), loss='mae')
         history = model.fit(np.array(X_train), Y_train, epochs=50, batch_size=24, validation_split=0.1, callbacks=[early_stopping],verbose=1)
         all_history.append(history)
-        if results_folder:        
-            try:
-                model.save(results_folder+f'/first_search/fine_tuning/iRT_updated_model{i}')
-            except:
-                raise JModError("Path Length Error. To enable long paths, use win+R and type regedit. Navigate to HKEY_LOCAL_MACHINE\ SYSTEM\CurrentControlSet\Control\FileSystem. Set LongPathsEnabled to 1 and restart computer.")
+        if results_folder:
+            save_model(model, os.path.join(results_folder, "first_search", "fine_tuning", f"iRT_updated_model{i}"))
     logger.debug(f"Returning {len(models)} models of types: {[type(m).__name__ for m in models]}")
     return models, all_history
 
