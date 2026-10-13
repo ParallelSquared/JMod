@@ -49,6 +49,12 @@ from src.utils.gui_utils import load_settings, save_settings
 
 
 
+# Options removed from JMod (aa82426) that config JSONs written before then still list:
+# loading such a JSON ignores them without a warning
+REMOVED_OPTIONS = {"use_rt", "use_features", "mTRAQ", "pp_file", "timspeak_file",
+                   "initial_percentile", "user_percentile"}
+
+
 def command_line_args(key, value):
     """The additional-commands text for a command-line-only option *key* set to
     *value*: the flag alone for an on/off option, the flag and value
@@ -966,6 +972,8 @@ class JModGUI(ThemedTk):
                     elif default_dict[key]['in_GUI'] is False:  ##if key is only a command line key
                         if value != default_dict[key]['default']:  ##only add to command line interface if different from default
                             args_list += command_line_args(key, value)
+                elif key in REMOVED_OPTIONS:  ##options JMod no longer has, still listed in older JSONs
+                    continue
                 else:
                     tk.messagebox.showwarning("JSON Read Warning", f"Unknown configuration key in JSON: {key}")
 

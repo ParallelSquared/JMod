@@ -192,3 +192,18 @@ class TestCommandLineArgs:
         from src.run_jmod_from_GUI import command_line_args
         text = " ".join(command_line_args("add_fixed_mod", ["Label,8.0120,n", "UniMod:4,C"]))
         assert parser.parse_args(shlex.split(text)).add_fixed_mod == ["Label,8.0120,n", "UniMod:4,C"]
+
+
+@pytest.mark.skipif(not _tkinter_available, reason="Tkinter not available")
+class TestLoadingAnOlderJson:
+    def test_removed_options_are_ignored_without_a_warning(self, tmp_path):
+        import json
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"mTRAQ": False, "use_rt": True, "made_up_key": 1}))
+        gui = make_GUI(show=False)
+        try:
+            with patch("tkinter.messagebox.showwarning") as warn:
+                gui.import_json(str(path))
+        finally:
+            gui.destroy()
+        assert [c.args[1] for c in warn.call_args_list] == ["Unknown configuration key in JSON: made_up_key"]
