@@ -238,10 +238,6 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --mbr
   Match between runs. Requires two or more files.
   default = False
---make_library
-  Build the match between runs library from a finished search's results folder, without searching.
---combine_results
-  Combine the results of a finished search's results folder again, without searching.
 --dummy_value
   Append string to end of folder name
   default = None
@@ -250,6 +246,42 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --bruker_sdk_path
   Path to the Bruker tdf-sdk if using .d timsTOF files
   ```
+
+</details>
+
+<details>
+<summary><strong> Library Modifications </strong></summary>
+
+Modifications can be added to, or removed from, precursors in the library when it is loaded. The library file itself is not changed.
+
+```
+--add_fixed_mod NAME,SITES  or  NAME,MASS,SITES
+  Add a modification to every one of SITES: n for the peptide N-terminus, plus any residues, e.g. nK.
+  If the mod is not in UniMod, MASS is required.
+  A mod is never added to a site twice, so this can also give an existing fixed mod its mass.
+  A site that already carries another modification is skipped, with a warning.
+  End with ,stack to add it alongside the other modification instead.
+--add_variable_mod NAME,SITES  or  NAME,MASS,SITES
+  Also make a copy of each precursor for every combination of these sites (every position).
+  Copies keep their parent's retention time, ion mobility and fragment intensities. Can end with ,stack.
+--max_variable_mods
+  Most variable modifications on one precursor, counted across all of them.
+  default = 1
+--strip_mod NAME  or  NAME,MASS  or  NAME,SITES  or  NAME,MASS,SITES
+  Remove a modification: from every site, or only from SITES.
+  If the mod is not in UniMod, MASS is required.
+```
+
+- Use UniMod names (e.g. `UniMod:4`) whenever the modification is in UniMod. JMod then looks up its mass and its isotopic composition. Give MASS for a modification UniMod does not have.
+- Each option can be repeated. Strips are applied first, then fixed modifications, then variable copies.
+- Check what the options will do before searching with `--inspect_library` or the 'i' button in the GUI next to the library loader.
+- In the GUI, add these options in the Additional Commands box.
+
+For example, to remove carbamidomethylation from cysteines, add heavy lysine (SILAC Lys8, single channel) to every lysine, and allow oxidation of methionine as a variable modification:
+
+```
+--strip_mod UniMod:4,C --add_fixed_mod UniMod:259,K,stack --add_variable_mod UniMod:35,M
+```
 
 </details>
 
@@ -273,6 +305,31 @@ We have provided a small .mzML file and a small library to run a quick JMod sear
 cd path/to/JMod-Main
 
 uv run python run_jmod.py -i data/test_mode_filtered.mzML -l data/filtered_library.tsv
+```
+
+</details>
+
+
+<details>
+<summary><strong> Standalone Commands </strong></summary>
+
+These commands run on their own, without a search.
+
+```
+--inspect_library path/to/library
+  Report the library's modifications, what any --strip_mod, --add_fixed_mod and --add_variable_mod
+  given would do to them, and whether JMod can load it (with the --tag given, if any).
+  The "i" button next to the spectral library in the GUI shows the same report.
+--make_library path/to/JMod_Results
+  Build the match between runs library from a finished search's results folder.
+--combine_results path/to/JMod_Results
+  Combine the results of a finished search's results folder again.
+```
+
+For example:
+
+```
+uv run python path/to/run_jmod.py --inspect_library path/to/library.parquet --tag PSMtag_5plex
 ```
 
 </details>

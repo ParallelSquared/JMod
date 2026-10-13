@@ -484,13 +484,13 @@ class ModEdits:
     strip: tuple = ()
     add: tuple = ()
     variable: tuple = ()
-    max_variable: int = 2
+    max_variable: int = 1
 
     def __bool__(self):
         return bool(self.strip or self.add or self.variable)
 
 
-def resolve_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variable_mods=2):
+def resolve_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variable_mods=1):
     """parse_mod_edits, with the modifications' masses added to
     config.diann_mods, so that every modification in the edited library has a
     mass, and logged."""
@@ -506,7 +506,7 @@ def resolve_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_varia
     return edits
 
 
-def parse_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variable_mods=2):
+def parse_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variable_mods=1):
     """The --add_fixed_mod, --strip_mod and --add_variable_mod modifications
     (each a string, a list of strings, or None), checked, with
     --max_variable_mods, as a ModEdits.  Changes nothing: resolve_mod_edits
