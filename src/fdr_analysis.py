@@ -1571,6 +1571,14 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
             plot_path=_plot,
         )
 
+    # --ms1_fwhm: two extra columns (MS1_FWHM, minutes, and its fit R2 MS1_FWHM_R2),
+    # added last so that nothing upstream -- scoring, FDR, protein rollup, quant,
+    # normalization -- ever sees them.
+    if getattr(config.args, "ms1_fwhm", False):
+        from src.ms1_fwhm import add_ms1_fwhm
+        fdx_quant = add_ms1_fwhm(fdx_quant, spectra, mz_ppm, mass_tag=mass_tag,
+                                 SILAC=SILAC, timeplex=timeplex,
+                                 vote_sigma=vote_sigma, elution_fwhm=elution_fwhm)
 
     logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
@@ -1605,7 +1613,8 @@ def process_data(file,spectra,library,mass_tag=None,timeplex=False,SILAC=None,el
                        'plex_Area_rtnorm', 'MS1_Area_rtnorm',
                        'coeff_rtnorm',
                        'coeff_ChannelUnique_rtnorm',
-                       'rtnorm_factor_MS1', 'rtnorm_factor_MS2', 'time_channel']
+                       'rtnorm_factor_MS1', 'rtnorm_factor_MS2', 'time_channel',
+                       'MS1_FWHM', 'MS1_FWHM_R2']   # only present under --ms1_fwhm
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")
 

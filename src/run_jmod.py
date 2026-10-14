@@ -278,6 +278,14 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     target_view = spectrumLibrary.target_view()
 
+    if config.args.reqminTimeOffset and not (config.args.timeplex
+                                             and config.args.num_timeplex >= 2):
+        logger.warning("--reqminTimeOffset only applies to timePlex runs "
+                       "(--timeplex --num_timeplex >= 2); ignored")
+    elif not config.args.reqminTimeOffset and config.args.minTimeOffset != 0.5:
+        logger.warning(f"--minTimeOffset {config.args.minTimeOffset} is ignored without "
+                       f"--reqminTimeOffset")
+
     if config.args.timeplex:
         funcs, updated_targets, elution_fwhm = MZRTfit_timeplex(
             DIAspectra, target_view, (config.args.ppm * 1e-6),
@@ -335,6 +343,19 @@ def main(GUI_config_json=None, GUI_result_queue=None):
                 parent = spectrumLibrary.parent_idx[i]
                 if parent >= 0:
                     per_ch[i] = per_ch[parent]
+
+        # --reqminTimeOffset: hold every entry's channels >= minTimeOffset apart. The
+        # empirical curves are already separated in MZRTfit_timeplex; this also covers
+        # channels that chose the fine-tuned {seq: RT} model.
+        from src.rt_alignment import min_time_offset, enforce_min_channel_offset_matrix
+        _mto = min_time_offset()
+        if _mto is not None:
+            _irt = np.asarray([spectrumLibrary.iRT[i] for i in range(n_lib)], dtype=float)
+            per_ch, _n_fixed = enforce_min_channel_offset_matrix(
+                _irt, per_ch, _mto, trend_rows=slice(0, spectrumLibrary.n_targets))
+            logger.info(f"minTimeOffset {_mto:g} min: search RTs moved per channel "
+                        f"{_n_fixed} of {n_lib:,} entries; min adjacent gap now "
+                        f"{np.nanmin(np.diff(per_ch, axis=1)):.3f} min")
 
         plex_lib = {}
         rt_mz = []
