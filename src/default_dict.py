@@ -569,6 +569,44 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    # Require a peptide's time channels to sit at least --minTimeOffset minutes
+    # apart (first-search hits, fitted RT curves and the per-channel search RTs).
+    # Off unless --reqminTimeOffset is given; --minTimeOffset alone does nothing.
+    'reqminTimeOffset': {
+        'flags': ('--reqminTimeOffset',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': False,
+        'type': '',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
+    'minTimeOffset': {
+        'flags': ('--minTimeOffset',),
+        'default': 0.5,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'float',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
+    },
+    # Add MS1_FWHM (minutes) and MS1_FWHM_R2 columns: Gaussian fit to each confident
+    # precursor's plex-fit MS1 elution profile. Computed after scoring/quant; changes nothing else.
+    'ms1_fwhm': {
+        'flags': ('--ms1_fwhm',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': False,
+        'type': '',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'iso': {
         'flags': ('--iso',),
         'default': False,

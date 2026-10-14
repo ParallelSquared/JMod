@@ -2307,6 +2307,183 @@ def timeplex_pair_nn_gate(apex_df, n_timeplex, n_sigma=2.0):
     return mask
 
 
+# ---------------------------------------------------------------------------
+# Minimum time offset between timePlex channels (--reqminTimeOffset)
+#
+# Channels are assigned by RT RANK among a peptide's hits, which is only right
+# when every channel is really there. When a later-injected channel loses its
+# early (hydrophilic) peptides, the "second hit" of those peptides is a random
+# off-RT match; whenever it falls earlier than the real elution, the real
+# channel-0 peak is labelled channel 1, and channel 1's modal fit then lies on
+# top of channel 0. The option below forbids that geometry: a peptide's hits,
+# the fitted curves and the per-channel search RTs must all keep adjacent
+# channels at least --minTimeOffset minutes apart.
+#
+# Channel 0 is the anchor and LATER channels are the ones moved. That matches how
+# timePlex fails: it is the later injection that misses the early peptides.
+# ---------------------------------------------------------------------------
+
+def min_time_offset():
+    """The required channel separation in minutes, or None when the option is off."""
+    if not getattr(config.args, "reqminTimeOffset", False):
+        return None
+    x = float(getattr(config.args, "minTimeOffset", 0.5))
+    if not np.isfinite(x) or x <= 0:
+        raise ValueError(f"--minTimeOffset must be > 0 minutes (got {x})")
+    return x
+
+
+def drop_close_channel_hits(apex_df, min_offset, min_peptides=50):
+    """Keep mask that tosses every peptide with two time-channel hits closer than
+    ``min_offset`` minutes (all of the peptide's rows go, as in the triplet-toss gate).
+    """
+    df = apex_df.reset_index(drop=True)
+    s = df.sort_values(["stripped_seq", "rt"])
+    gap = s.groupby("stripped_seq")["rt"].diff()
+    bad = set(s.loc[gap < min_offset, "stripped_seq"])
+    mask = ~df["stripped_seq"].isin(bad).to_numpy()
+    n_pep = df["stripped_seq"].nunique()
+    n_left = df.loc[mask, "stripped_seq"].nunique()
+    logger.info(f"minTimeOffset {min_offset:g} min: dropped {len(bad):,}/{n_pep:,} "
+                f"peptides with channel hits closer than that; {n_left:,} left")
+    if n_left < min_peptides:
+        med = float(np.nanmedian(gap)) if gap.notna().any() else float("nan")
+        raise RuntimeError(
+            f"--minTimeOffset {min_offset:g} left only {n_left} peptides for timePlex RT "
+            f"alignment. The median gap between a peptide's channel hits in this run is "
+            f"{med:.2f} min; set --minTimeOffset below the real channel spacing.")
+    return mask
+
+
+def _gap_trend(x, gap, min_offset, n_bins=40):
+    """Knots (x, gap) of the channel gap measured where it is >= ``min_offset``.
+
+    Binned medians over x-quantiles, so a few stray wiggles of the curve do not set
+    the fill. Returns (None, None) when the separation never holds.
+    """
+    ok = np.isfinite(x) & np.isfinite(gap) & (gap >= min_offset)
+    if ok.sum() < 3:
+        return None, None
+    xs, gs = x[ok], gap[ok]
+    edges = np.unique(np.quantile(xs, np.linspace(0, 1, n_bins + 1)))
+    if edges.size < 2:
+        return np.array([np.median(xs)]), np.array([np.median(gs)])
+    b = np.clip(np.searchsorted(edges, xs, side="right") - 1, 0, edges.size - 2)
+    kx, ky = [], []
+    for i in range(edges.size - 1):
+        sel = b == i
+        if sel.any():
+            kx.append(np.median(xs[sel]))
+            ky.append(np.median(gs[sel]))
+    return _collapse_ties(np.asarray(kx), np.asarray(ky))
+
+
+def _gap_fill(x, gap_x, gap_y, min_offset):
+    """Gap to impose at x: the measured gap trend, never below ``min_offset``."""
+    x = np.asarray(x, dtype=float)
+    if gap_x is None:
+        return np.full(x.shape, min_offset)
+    return np.maximum(min_offset, np.interp(x, gap_x, gap_y))
+
+
+class MinOffsetChannel:
+    """iRT -> RT curve of a later time channel held at least ``min_offset`` minutes
+    after the (already separated) earlier channel ``prev``.
+
+    Where the channel's own curve keeps that distance it is returned unchanged;
+    where it does not, it is replaced by prev + the channel gap measured where the
+    separation DID hold (interpolated over iRT, never less than ``min_offset``).
+    """
+
+    def __init__(self, base, prev, min_offset, gap_x, gap_y):
+        self.base = base
+        self.prev = prev
+        self.min_offset = float(min_offset)
+        self.gap_x = gap_x
+        self.gap_y = gap_y
+
+    def __call__(self, v):
+        x = np.asarray(v, dtype=float)
+        own = np.asarray(self.base(x), dtype=float)
+        prev = np.asarray(self.prev(x), dtype=float)
+        fill = _gap_fill(x, self.gap_x, self.gap_y, self.min_offset)
+        out = np.where(own - prev >= self.min_offset, own, prev + fill)
+        return float(out) if out.ndim == 0 else out
+
+
+def separate_channel_curves(curves, irt, min_offset):
+    """Return K iRT->RT callables in which channel k sits at least ``min_offset``
+    minutes after channel k-1 at every iRT (channel 0 unchanged).
+
+    ``irt`` is where the separation is checked and the gap trend measured (the
+    library's iRTs, so the fill follows where precursors actually are).
+    """
+    irt = np.asarray(irt, dtype=float)
+    irt = irt[np.isfinite(irt)]
+    out = [curves[0]]
+    for k in range(1, len(curves)):
+        own = np.asarray(curves[k](irt), dtype=float)
+        prev = np.asarray(out[k - 1](irt), dtype=float)
+        gap = own - prev
+        close = ~(gap >= min_offset)
+        if not close.any():
+            out.append(curves[k])
+            logger.info(f"  minTimeOffset: channel {k} already >= {min_offset:g} min "
+                        f"after channel {k-1} everywhere (min gap {np.nanmin(gap):.2f})")
+            continue
+        gx, gy = _gap_trend(irt, gap, min_offset)
+        fill = _gap_fill(irt[close], gx, gy, min_offset)
+        out.append(MinOffsetChannel(curves[k], out[k - 1], min_offset, gx, gy))
+        logger.info(f"  minTimeOffset: channel {k} was closer than {min_offset:g} min to "
+                    f"channel {k-1} for {close.mean():.1%} of library iRTs (min gap "
+                    f"{np.nanmin(gap):.2f}); moved there to channel {k-1} + measured gap "
+                    f"(median fill {np.median(fill):.2f} min"
+                    f"{'' if gx is not None else ', no separated region: using the minimum'})")
+    return out
+
+
+def drop_off_channel_hits(apex_df, curves):
+    """Keep mask that tosses every peptide with a hit lying closer to ANOTHER
+    channel's curve than to its own (i.e. a hit whose channel label is wrong).
+    """
+    df = apex_df.reset_index(drop=True)
+    lib = df["lib_rt"].to_numpy(dtype=float)
+    rt = df["rt"].to_numpy(dtype=float)
+    ch = df["channel"].to_numpy(dtype=int)
+    pred = np.column_stack([np.asarray(c(lib), dtype=float) for c in curves])
+    off = np.argmin(np.abs(rt[:, None] - pred), axis=1) != ch
+    bad = set(df.loc[off, "stripped_seq"])
+    mask = ~df["stripped_seq"].isin(bad).to_numpy()
+    logger.info(f"  minTimeOffset: {int(off.sum()):,} hits sit nearer another channel's "
+                f"separated curve than their own; dropped those {len(bad):,} peptides "
+                f"({int(mask.sum()):,}/{len(mask):,} hits left)")
+    return mask
+
+
+def enforce_min_channel_offset_matrix(irt, rt_matrix, min_offset, trend_rows=None):
+    """Per-entry version for the search RTs: column k of ``rt_matrix`` (entries x K)
+    is kept at least ``min_offset`` after column k-1, filling violations with the
+    gap trend (over iRT) of the entries that do keep it. Covers every model type
+    (empirical curves, fine-tuned {seq: RT} dicts, or a mix).
+
+    Returns the repaired matrix and the number of entries changed per channel.
+    """
+    irt = np.asarray(irt, dtype=float)
+    m = np.array(rt_matrix, dtype=float, copy=True)
+    rows = slice(None) if trend_rows is None else trend_rows
+    n_fixed = [0]
+    for k in range(1, m.shape[1]):
+        gap = m[:, k] - m[:, k - 1]
+        # tiny slack so values already placed at exactly prev + min_offset pass
+        bad = ~(gap >= min_offset - 1e-9)
+        n_fixed.append(int(bad.sum()))
+        if not bad.any():
+            continue
+        gx, gy = _gap_trend(irt[rows], gap[rows], min_offset)
+        m[bad, k] = m[bad, k - 1] + _gap_fill(irt[bad], gx, gy, min_offset)
+    return m, n_fixed
+
+
 def fit_timeplex_channels(output_df, n_timeplex, results_folder=None):
     """
     Align timeplex channels by fitting each channel's iRT->RT curve INDEPENDENTLY,
@@ -2509,6 +2686,13 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     if results_folder is not None:
         output_df.to_csv(results_folder+"/first_search/firstSearch.tsv", index=False, sep='\t')
 
+    # --reqminTimeOffset, step 1: a peptide's channel hits must be >= minTimeOffset apart.
+    min_off = min_time_offset()
+    if min_off is not None:
+        logger.info(f"--reqminTimeOffset ON: adjacent time channels kept >= "
+                    f"{min_off:g} min apart")
+        output_df = output_df[drop_close_channel_hits(output_df, min_off)].reset_index(drop=True)
+
     updatedLibrary = copy.deepcopy(librarySpectra)
 
     # --- Phase 2: fit-independent cross-channel gate ---------------------------
@@ -2524,6 +2708,43 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     # of the per-channel offsets, the channel gap d, and the alignment-plot shape.
     rt_spls, emp_shape, offsets, d, filtered_output, residuals = \
         fit_timeplex_channels(gated_df, n_timeplex, results_folder)
+
+    if min_off is not None:
+        # step 2: separate the fitted curves, then drop peptides whose hits sit nearer
+        # another channel's separated curve than their own (mislabelled by RT rank)
+        # and refit on what is left, so the fit, the fine-tune training set and the
+        # residual sigmas all come from correctly labelled hits.
+        lib_irt = np.array([librarySpectra[k]["iRT"] for k in librarySpectra], dtype=float)
+        sep = separate_channel_curves(rt_spls, lib_irt, min_off)
+        keep = drop_off_channel_hits(output_df, sep)
+        if not keep.all():
+            try:
+                _out = output_df[keep].reset_index(drop=True)
+                _gated = _out[timeplex_two_stage_gate(_out, n_timeplex)].reset_index(drop=True)
+                rt_spls, emp_shape, offsets, d, filtered_output, residuals = \
+                    fit_timeplex_channels(_gated, n_timeplex, results_folder)
+                output_df = _out
+            except Exception as _e:
+                logger.warning(f"  minTimeOffset: refit without the mislabelled hits "
+                               f"failed ({_e}); keeping the first fit")
+        # step 3: the curves actually used are the separated ones
+        rt_spls = separate_channel_curves(rt_spls, lib_irt, min_off)
+        _ch = filtered_output["channel"].to_numpy(dtype=int)
+        _lib = filtered_output["lib_rt"].to_numpy(dtype=float)
+        _pred = np.empty(len(filtered_output))
+        for k in range(n_timeplex):
+            _pred[_ch == k] = rt_spls[k](_lib[_ch == k])
+        residuals = filtered_output["rt"].to_numpy(dtype=float) - _pred
+        _grid = np.linspace(np.percentile(_lib, 2), np.percentile(_lib, 98), 400)
+        offsets = np.median(np.vstack([np.asarray(rt_spls[k](_grid)) for k in range(n_timeplex)]),
+                            axis=1)
+        d = float(np.median(np.diff(np.sort(offsets))))
+        id_keys = list(zip(output_df["seq"], output_df["z"]))
+        logger.info(f"  minTimeOffset: separated offsets={np.round(offsets, 4)}, "
+                    f"channel gap d={d:.4f}; {len(output_df):,} alignment hits kept")
+        if results_folder is not None:
+            output_df.to_csv(results_folder + "/first_search/firstSearch_minTimeOffset.tsv",
+                             index=False, sep='\t')
 
     channel = filtered_output["channel"].to_numpy()
     filtered_output["updated_lib_rt"] = filtered_output["lib_rt"]   # x-axis = library iRT
