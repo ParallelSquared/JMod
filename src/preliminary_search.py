@@ -205,7 +205,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
     # 2. Theoretical m/z from calcmass, the neutral mass Sage already computed.
     # m/z = (M + z*proton) / z, and the z cancels to M/z + proton.
-    logger.info("Calculating theoretical m/z")
     df = df.with_columns(
         (pl.col("calcmass").cast(pl.Float64) / pl.col("charge") + 1.00727647)
         .alias("mz")
