@@ -554,12 +554,25 @@ def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
     # accumulated across row groups, then IM-band segmented in a post-pass.
     ms2_groups = {}
 
-    pf = pq.ParquetFile(peaks_path)
-    n_row_groups = pf.metadata.num_row_groups
-    logger.info(f"Processing {n_row_groups} row groups from {peaks_path}")
+    # Batched read with column pruning and prefetch. peaks.parquet files from
+    # older centroid_d builds carry tens of thousands of tiny row groups (one
+    # per frame); reading them one group at a time costs one network round
+    # trip each (~10 min over SMB for a 7 GB file). iter_batches with
+    # pre_buffer coalesces the small column chunks into large sequential
+    # reads, and the 4 unused columns (tof/rt/isolation_window_*: RT is
+    # rebuilt from analysis.tdf) are ~44% of the bytes.
+    columns = ["frame", "scan", "mz", "im", "apex_intensity"]
+    pf = pq.ParquetFile(peaks_path, pre_buffer=True)
+    n_rows = pf.metadata.num_rows
+    batch_size = 2_000_000  # ~70 MB working set over the 5 columns
+    logger.info(f"Processing {n_rows:,} peaks from {peaks_path}")
 
-    for rg_idx in range(n_row_groups):
-        table = pf.read_row_group(rg_idx)
+    import pyarrow as pa
+    for batch in pf.iter_batches(batch_size=batch_size, columns=columns,
+                                 use_threads=True):
+        # zero-copy wrap: Table.column(...).to_numpy() handles nullable
+        # columns, RecordBatch.column(...).to_numpy() does not
+        table = pa.Table.from_batches([batch])
         frames = table.column("frame").to_numpy()
         scans = table.column("scan").to_numpy()
         mz_arr = table.column("mz").to_numpy().astype(PEAK_MZ_DTYPE, copy=False)
@@ -577,6 +590,11 @@ def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
 
         # MS1 peaks — accumulate raw peaks per frame (one spectrum per RT),
         # keeping per-peak mobility (1/K0). No IM binning.
+        # One stable argsort + boundary split per batch instead of an
+        # equality mask per unique RT: a batch holds ~200 frames, so repeated
+        # full-batch masks are O(rows x frames) and dominated the local-disk
+        # runtime. Stable sort keeps within-frame row order, so output is
+        # unchanged.
         ms1_mask = level_arr == 1 if include_ms1 else None
         if include_ms1 and ms1_mask.any():
             ms1_mz = mz_arr[ms1_mask]
@@ -584,16 +602,18 @@ def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
             ms1_mob = mob_arr[ms1_mask]
             ms1_rt = rt_arr[ms1_mask]
 
-            for rt in np.unique(ms1_rt):
-                sel = ms1_rt == rt
-                key = float(rt)
+            order = np.argsort(ms1_rt, kind="stable")
+            sorted_rt = ms1_rt[order]
+            bounds = np.flatnonzero(np.diff(sorted_rt)) + 1
+            for sel in np.split(order, bounds):
+                key = float(ms1_rt[sel[0]])
                 if key not in ms1_groups:
                     ms1_groups[key] = ([], [], [])
                 ms1_groups[key][0].append(ms1_mz[sel])
                 ms1_groups[key][1].append(ms1_intens[sel])
                 ms1_groups[key][2].append(ms1_mob[sel])
 
-        # MS2 peaks: assign to DIA windows
+        # MS2 peaks: assign to DIA windows (same sort-and-split pattern)
         ms2_mask = level_arr == 2
         if ms2_mask.any():
             ms2_frames = frames[ms2_mask]
@@ -603,17 +623,19 @@ def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
             ms2_mob = mob_arr[ms2_mask]
             ms2_rt = rt_arr[ms2_mask]
 
-            unique_frames = np.unique(ms2_frames)
-            for frame_id in unique_frames:
+            order = np.argsort(ms2_frames, kind="stable")
+            sorted_frames = ms2_frames[order]
+            bounds = np.flatnonzero(np.diff(sorted_frames)) + 1
+            for sel in np.split(order, bounds):
+                frame_id = ms2_frames[sel[0]]
                 windows = dia_dict.get(int(frame_id))
                 if windows is None:
                     continue
-                frame_mask = ms2_frames == frame_id
-                f_scans = ms2_scans[frame_mask]
-                f_mz = ms2_mz[frame_mask]
-                f_intens = ms2_intens[frame_mask]
-                f_mob = ms2_mob[frame_mask]
-                f_rt = float(ms2_rt[frame_mask][0])
+                f_scans = ms2_scans[sel]
+                f_mz = ms2_mz[sel]
+                f_intens = ms2_intens[sel]
+                f_mob = ms2_mob[sel]
+                f_rt = float(ms2_rt[sel[0]])
 
                 for scan_begin, scan_end, prec_mz, iso_width, ce in windows:
                     win_mask = (f_scans >= scan_begin) & (f_scans < scan_end)
