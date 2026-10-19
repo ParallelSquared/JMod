@@ -103,9 +103,9 @@ _ID_LEVELS = [
     _IdLevel(None, "BestChannel Qvalue", "light"),
 ]
 
-# plot_proteins_lost_by_precursor_count's last column holds this many
-# precursors and more, so a long tail of large proteins stays readable
-_MAX_PRECURSOR_COLUMN = 10
+# The proteins' plot_lost_to_global_q stacks each column by 1, 2, 3 and this
+# many or more precursors, light to dark
+_PRECURSOR_STACK_COLORS = [_BLUE_RAMP[1], _BLUE_RAMP[2], _BLUE_RAMP[4], _BLUE_RAMP[6]]
 
 
 def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_threshold):
@@ -153,8 +153,8 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
         plot_run_correlation(precursors, units, results_dir)
     if units.n_units >= 2:
         plot_lost_to_global_q(precursors, _PRECURSOR_LEVEL, units, fdr_threshold, results_dir)
-        plot_lost_to_global_q(proteins, _PROTEIN_LEVEL, units, fdr_threshold, results_dir)
-        plot_proteins_lost_by_precursor_count(df, units, fdr_threshold, results_dir)
+        plot_lost_to_global_q(proteins, _PROTEIN_LEVEL, units, fdr_threshold, results_dir,
+                              precursors_per_protein(df, fdr_threshold))
     # Not made for now (10-12): summed intensity, and which run the best scores came from
     # plot_summed_intensity_per_run(precursors, units, results_dir)
     # if units.n_units >= 2:
@@ -330,6 +330,17 @@ def proteins_per_run(df, units, fdr_threshold):
         .group_by("run_idx", *units.columns, "protein")
         .agg((pl.col("Protein_Global_Qvalue").first() < fdr_threshold).alias("retained"),
              (pl.col("Qvalue") < fdr_threshold).any().alias("qvalue_pass"))
+    )
+
+
+def precursors_per_protein(df, fdr_threshold):
+    """Each protein at the run-level protein q-value in some run, with how many
+    untagged precursors identify it (``n_precursors``): those that pass their
+    own channel's Qvalue in some run."""
+    return (
+        df.filter(pl.col("Protein_Qvalue") < fdr_threshold)
+        .group_by("protein")
+        .agg(pl.col("untag_prec").filter(pl.col("Qvalue") < fdr_threshold).n_unique().alias("n_precursors"))
     )
 
 
@@ -607,10 +618,11 @@ def plot_intensity_per_run(precursors, units, results_dir):
     _save(fig, results_dir, "05_intensity_per_run.png")
 
 
-def plot_lost_to_global_q(per_run, level, units, fdr_threshold, results_dir):
+def plot_lost_to_global_q(per_run, level, units, fdr_threshold, results_dir, n_precursors=None):
     """Columns: the precursors (or proteins, per *level*) the global q-value
     removes, by the number of (run, channel) units they pass their own
-    channel's Qvalue in.
+    channel's Qvalue in.  With *n_precursors* (precursors_per_protein's
+    table), each column is stacked by the proteins' precursors: 1, 2, 3, 4+.
 
     Counted on each channel's own Qvalue, not its best channel's, which would
     count every channel of a run as soon as one passes.  *per_run* is
@@ -622,14 +634,28 @@ def plot_lost_to_global_q(per_run, level, units, fdr_threshold, results_dir):
              pl.col("retained").first())
     )
     lost = per_key.filter(~pl.col("retained"))
-    lost_by_n_units = dict(lost.group_by("n_units").len().iter_rows())
+    if n_precursors is None:
+        stacks = [(None, lost, _BLUE)]
+    else:
+        lost = lost.join(n_precursors, on=level.key, how="left")
+        n_stacks = len(_PRECURSOR_STACK_COLORS)
+        stack = pl.col("n_precursors").clip(upper_bound=n_stacks)
+        stacks = [(f"{n}+ precursors" if n == n_stacks else f"{n} precursor{'s' if n > 1 else ''}",
+                   lost.filter(stack == n), color)
+                  for n, color in enumerate(_PRECURSOR_STACK_COLORS, start=1)]
 
     x = np.arange(1, units.n_units + 1)
-    counts = np.array([lost_by_n_units.get(n, 0) for n in x])
-
     fig, ax = plt.subplots(figsize=(_figure_width(units.n_units), 4))
-    ax.bar(x, counts, width=_bar_width(fig, units.n_units), color=_BLUE)
+    counts = np.zeros(len(x), dtype=int)
+    for label, part, color in stacks:
+        by_n_units = dict(part.group_by("n_units").len().iter_rows())
+        stack_counts = np.array([by_n_units.get(n, 0) for n in x])
+        ax.bar(x, stack_counts, bottom=counts, width=_bar_width(fig, units.n_units), color=color,
+               edgecolor=_SURFACE_COLOR, linewidth=0.8, label=label)
+        counts += stack_counts
     _label_columns(ax, x, counts, "{:,}")
+    if n_precursors is not None:
+        _legend(ax, below=True)
     _style_axes(ax, x)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     if not counts.any():
@@ -705,44 +731,6 @@ def plot_data_completeness(per_run, level, units, fdr_threshold, results_dir):
     ax.set_title(f"{noun} Data Completeness", loc="center", color=_TEXT_COLOR)
     _legend(ax, below=True)
     _save(fig, results_dir, level.completeness_file)
-
-
-def plot_proteins_lost_by_precursor_count(df, units, fdr_threshold, results_dir):
-    """Columns: the proteins the global protein q-value removes, by how many
-    untagged precursors identify them at their own channel's Qvalue.
-
-    Over the proteins at the run-level protein q-value in some run, counting
-    each one's untagged precursors that pass their own channel's Qvalue in some
-    run.  From _MAX_PRECURSOR_COLUMN on, the counts share one column.
-    """
-    per_protein = (
-        df.filter(pl.col("Protein_Qvalue") < fdr_threshold)
-        .group_by("protein")
-        .agg(pl.col("untag_prec").filter(pl.col("Qvalue") < fdr_threshold).n_unique().alias("n_precursors"),
-             (pl.col("Protein_Global_Qvalue").first() < fdr_threshold).alias("retained"))
-    )
-    lost = per_protein.filter(~pl.col("retained"))
-    lost_by_count = dict(lost.group_by(pl.col("n_precursors").clip(upper_bound=_MAX_PRECURSOR_COLUMN))
-                         .len().iter_rows())
-
-    x = np.arange(1, _MAX_PRECURSOR_COLUMN + 1)
-    counts = np.array([lost_by_count.get(n, 0) for n in x])
-
-    fig, ax = plt.subplots(figsize=(_figure_width(len(x)), 4))
-    ax.bar(x, counts, width=_bar_width(fig, len(x)), color=_BLUE)
-    _label_columns(ax, x, counts, "{:,}")
-    _style_axes(ax, x)
-    ax.set_xticks(x, [str(n) for n in x[:-1]] + [f"{x[-1]}+"])
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    if not counts.any():
-        ax.set_ylim(0, 1)
-        ax.text(0.5, 0.5, "None", transform=ax.transAxes, ha="center", va="center", color=_MUTED_COLOR)
-    ax.set_xlabel(f"Number of Untag Precs with Qvalue < {fdr_threshold:g}", color=_MUTED_COLOR)
-    ax.set_ylabel("Proteins", color=_MUTED_COLOR)
-    ax.set_title(f"Proteins failing the global protein q-value ({fdr_threshold:g}): "
-                 f"{lost.height:,} of {per_protein.height:,}",
-                 loc="left", color=_TEXT_COLOR)
-    _save(fig, results_dir, "09_proteins_lost_by_precursor_count.png")
 
 
 def plot_run_correlation(precursors, units, results_dir):

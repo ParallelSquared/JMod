@@ -1,12 +1,13 @@
 import os
+from unittest.mock import patch
 
 import polars as pl
 import pytest
 
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
-from src.multi_run import (_Units, collect_results, combine_runs, mbr_library_rts, mbr_targets,
-                           precursors_per_run)
+from src.multi_run import (_PROTEIN_LEVEL, _Units, collect_results, combine_runs, mbr_library_rts, mbr_targets,
+                           plot_lost_to_global_q, precursors_per_protein, precursors_per_run, proteins_per_run)
 from tests.models.spec_lib.test_decoy_differential import _entry
 
 
@@ -99,6 +100,28 @@ class TestPrecursorsPerRun:
             (0, 3.0, False), (1, 2.0, True), (3, 1.0, True)]
 
 
+class TestProteinsLostToGlobalQ:
+    def test_columns_are_stacked_by_precursor_count(self):
+        # P1: 1 precursor, in both runs.  P2: 5 precursors, in run 1.  Both fail
+        # the global protein q-value; P3 passes it and is not counted
+        rows = ([(1, "P1", "A_2"), (2, "P1", "A_2")] + [(1, "P2", f"B{i}_2") for i in range(5)]
+                + [(1, "P3", "C_2")])
+        run_idx, protein, untag_prec = zip(*rows)
+        df = pl.DataFrame({"run_idx": run_idx, "channel": [0] * len(rows), "protein": protein,
+                           "untag_prec": untag_prec, "Qvalue": [0.001] * len(rows),
+                           "Protein_Qvalue": [0.001] * len(rows),
+                           "Protein_Global_Qvalue": [0.5 if p != "P3" else 0.001 for p in protein]})
+        units = _Units(df, [1, 2])
+        with patch("src.multi_run._save") as save:
+            plot_lost_to_global_q(proteins_per_run(df, units, 0.01), _PROTEIN_LEVEL, units, 0.01, "out",
+                                  precursors_per_protein(df, 0.01))
+        ax = save.call_args.args[0].axes[0]
+        # One stack per precursor count, each over the columns for 1 and 2 runs
+        assert [[bar.get_height() for bar in stack] for stack in ax.containers] == [
+            [0, 1], [0, 0], [0, 0], [1, 0]]
+        assert "2 of 3" in ax.get_title()
+
+
 def _first_pass_ids(rows):
     """A combined first-pass table of (run_idx, untag_prec, rt, PredVal) rows, all
     target IDs passing the run-level FDR."""
@@ -171,7 +194,7 @@ class TestGroupedResults:
             "01_precursors_per_run.png", "02_proteins_per_run.png", "03_precursor_data_completeness.png",
             "04_protein_data_completeness.png", "05_intensity_per_run.png", "06_run_correlation.png",
             "07_precursors_lost_to_global_q.png", "08_proteins_lost_to_global_q.png",
-            "09_proteins_lost_by_precursor_count.png", "run_index.txt"]
+            "run_index.txt"]
         assert (experiment_dir / "combined_filtered_IDs.parquet").is_file()
 
     def test_channels_make_one_run_comparable(self, tmp_path):
