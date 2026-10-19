@@ -2045,9 +2045,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
             out.append(dev)
         return np.concatenate(out) if out else np.empty(0, dtype=float)
 
-    if {"frag_ion_mobility", "precursor_mobility"}.issubset(output_df.columns):
+    if {"frag_mobilities", "precursor_mobility"}.issubset(output_df.columns):
         frag_median = np.array([_median_skipnull(v)
-                                for v in output_df["frag_ion_mobility"]])
+                                for v in output_df["frag_mobilities"]])
         precursor = pd.to_numeric(output_df["precursor_mobility"],
                                   errors="coerce").to_numpy(dtype=float)
         has_frag = np.isfinite(frag_median).any()
@@ -2058,10 +2058,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
                         f"{runState.opt_im_precision}")
         elif has_frag != has_prec:
             raise ValueError(
-                "Inconsistent ion mobility data: one of frag_ion_mobility / "
+                "Inconsistent ion mobility data: one of frag_mobilities / "
                 "precursor_mobility is populated while the other is missing.")
         else:
-            frag_lists = output_df["frag_ion_mobility"].to_numpy()[cor_filter]
+            frag_lists = output_df["frag_mobilities"].to_numpy()[cor_filter]
 
             # Precision: spread of each PSM's fragments about their own median --
             # the quantity _match_mz_im gates on.
