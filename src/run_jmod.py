@@ -435,8 +435,26 @@ def _write_experiment_config(experiment_dir):
     """
     json_path = datestamped(os.path.join(experiment_dir, "JMod_config.json"))
     with open(json_path, "w") as f:
-        json.dump(dict(vars(config.args), mzml_folder=None), f, indent=4)
+        json.dump(_config_record(), f, indent=4)
     logger.info(f"Configuration written to {os.path.abspath(json_path)}")
+
+
+# The options naming files or folders, made absolute in the configs JMod writes
+_PATH_OPTIONS = ("mzml", "speclib", "output_folder", "rawfilereader_path", "bruker_sdk_path", "config_json")
+
+
+def _config_record(**changes):
+    """config.args with *changes* and no --mzml_folder, for a config JSON: its
+    paths absolute (against the working directory, as the run used them) and
+    with forward slashes, so the JSON reruns from anywhere."""
+    record = dict(vars(config.args), mzml_folder=None, **changes)
+    absolute = lambda path: os.path.abspath(path).replace("\\", "/")
+    for key in _PATH_OPTIONS:
+        if isinstance(record.get(key), list):
+            record[key] = [absolute(p) for p in record[key]]
+        elif record.get(key):
+            record[key] = absolute(record[key])
+    return record
 
 
 def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, results_parent):
@@ -548,10 +566,9 @@ def _create_results_folder(mzml_file, results_parent):
 def _write_run_config(runState):
     # This run's record of the configuration, naming only its own data file
     # (and no --mzml_folder, whose files mzml already lists)
-    args_dict = dict(vars(config.args), mzml=runState.file_name, mzml_folder=None)
     json_path = os.path.join(runState.results_folder, "outputs/config.json")
     with open(json_path, "w") as f:
-        json.dump(args_dict, f, indent=4)
+        json.dump(_config_record(mzml=runState.file_name), f, indent=4)
 
 
 def _load_spectra(mzml_file, bruker_sdk_path):

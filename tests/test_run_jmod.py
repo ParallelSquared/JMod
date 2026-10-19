@@ -151,11 +151,25 @@ class TestExperimentFolder:
 
 
 class TestExperimentConfig:
-    def test_config_lists_every_data_file(self, experiment, monkeypatch, tmp_path):
+    def test_config_lists_every_data_file_by_its_absolute_path(self, experiment, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: _finish(runState))
         experiment.main()
         written = json.loads((tmp_path / "JMod_Results" / "JMod_config.json").read_text())
-        assert written["mzml"] == ["a.mzML", "b.mzML"]
+        here = tmp_path.as_posix()
+        assert written["mzml"] == [f"{here}/a.mzML", f"{here}/b.mzML"]
+        assert written["speclib"] == f"{here}/lib.tsv"
+        assert config.args.mzml == ["a.mzML", "b.mzML"]  # the run itself uses them as given
+
+    def test_each_runs_config_names_its_file_by_its_absolute_path(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "outputs").mkdir()
+        monkeypatch.setattr(config.args, "speclib", "../lib.tsv")
+        runState = SimpleNamespace(file_name="a.mzML", results_folder=str(tmp_path))
+        run_jmod._write_run_config(runState)
+        written = json.loads((tmp_path / "outputs" / "config.json").read_text())
+        assert written["mzml"] == f"{tmp_path.as_posix()}/a.mzML"
+        assert written["speclib"] == f"{tmp_path.parent.as_posix()}/lib.tsv"
 
     def test_folder_is_recorded_as_its_files(self, experiment, monkeypatch, tmp_path):
         folder = tmp_path / "data"
@@ -165,7 +179,7 @@ class TestExperimentConfig:
         monkeypatch.setattr(experiment, "process_run", lambda runState, *rest: _finish(runState))
         experiment.main()
         written = json.loads((tmp_path / "JMod_Results" / "JMod_config.json").read_text())
-        assert written["mzml"] == ["a.mzML", "b.mzML", f"{folder}/c.mzML"]
+        assert written["mzml"][2] == f"{folder.as_posix()}/c.mzML"
         assert written["mzml_folder"] is None
 
 
