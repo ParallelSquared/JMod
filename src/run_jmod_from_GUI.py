@@ -729,21 +729,20 @@ class JModGUI(ThemedTk):
         """
         files = filedialog.askopenfilenames(title="Select .mzML or .raw Files", filetypes=[("Mass Spec Files", "*.mzML *.raw"), ("mzML files", "*.mzML"), ("Thermo Raw files", "*.raw")], initialdir=self.last_opened_dir)
         if files:
-            for file in files:
-                self._add_mzml_or_raw(file)
+            self._add_mzml_or_raw(files)
 
-    def _add_mzml_or_raw(self, file):
+    def _add_mzml_or_raw(self, files):
         """
-        Add one .mzML or .raw file to the file list, unless it is already there.
-        A .raw needs Thermo's RawFileReader: if its path is not set, ask for it,
-        and leave the file out if there is still none.
+        Add .mzML and .raw files to the file list, skipping any already there.
+        A .raw needs Thermo's RawFileReader: if its path is not set, ask for it
+        once, and leave all the .raw files out if there is still none.
         Called by: select_mzml, _offer_json_data_files
         """
-        if file in self.file_dropdown.files:
-            return
+        files = [f for f in files if f not in self.file_dropdown.files]
+        raw = [f for f in files if os.path.splitext(f)[1].lower() == ".raw"]
 
         #check if user has path for RawFileReader
-        if os.path.splitext(file)[1].lower() in [".raw"]:
+        if raw:
             settings = load_settings()
             if not settings["rawfilereader_path"] or not self._rawfilereader_path_valid(settings["rawfilereader_path"]):
                 new_path = self.locate_raw_path()
@@ -757,11 +756,12 @@ class JModGUI(ThemedTk):
                 save_settings(settings)
 
             if not settings["rawfilereader_path"]:
-                tk.messagebox.showinfo("File not added", f"Raw file could not be added due to absence of RawFileReader:\n\n{file}")
-                return
+                tk.messagebox.showinfo("Files not added", f"{len(raw)} raw file(s) could not be added due to absence of RawFileReader" + (":\n\n" + "\n".join(raw) if len(raw) < 5 else ""))
+                files = [f for f in files if f not in raw]
 
-        self.file_dropdown.add_files([file])
-        self.last_opened_dir = os.path.dirname(file)
+        if files:
+            self.file_dropdown.add_files(files)
+            self.last_opened_dir = os.path.dirname(files[-1])
 
     def select_d_folder(self):
         """
@@ -840,8 +840,11 @@ class JModGUI(ThemedTk):
         Button: "i" button for specLib
         """
         path = self.tsv_entry.get().strip()
-        if not path or not os.path.isfile(path):
+        if not path:
             tk.messagebox.showerror("No Spectral Library", "Select a spectral library file first.")
+            return
+        if not os.path.isfile(path):
+            tk.messagebox.showerror("Spectral Library Not Found", f"File not found:\n{path}")
             return
         tag_name = self.tag_var.get()
         additional_commands = self.additional_text.get("1.0", tk.END)
@@ -1019,7 +1022,7 @@ class JModGUI(ThemedTk):
         if not add:
             return
 
-        missing = []
+        missing, ms_files = [], []
         for path in paths:
             if extension(path) not in counts:
                 continue
@@ -1028,7 +1031,8 @@ class JModGUI(ThemedTk):
             elif extension(path) == ".d":
                 self._add_d_folder(path.rstrip("/\\"))
             else:
-                self._add_mzml_or_raw(path)
+                ms_files.append(path)
+        self._add_mzml_or_raw(ms_files)
         if missing:
             shown = "\n".join(missing[:10]) + (f"\n... and {len(missing) - 10} more" if len(missing) > 10 else "")
             tk.messagebox.showwarning("Files Not Found",
