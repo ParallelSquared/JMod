@@ -233,36 +233,111 @@ def get_seq_comp(split_seq,ion_type,neutral_loss=None):
 #     sorted_frags = new_frags[np.argsort(new_frags[:,0])]
 #     return sorted_frags/[1,np.max(np.array(new_frags)[:,1])]
 
+## Fragment compositions, built from each peptide's residues once instead of
+## parsing every fragment's sequence: a fragment's composition is its
+## residues' (with their UniMod mods and tags, as get_seq_comp and the tag
+## channels count them) plus what its ion type and neutral loss add.  The
+## caches below hold what repeats across peptides, per process.
+
+_split_frag_name = functools.cache(split_frag_name)  # "b3_1", "y4-H2O_2", ... repeat in every peptide
+_BRACKETS = re.compile(r"\(.*?\)")
+
+
+@functools.cache
+def _ion_comp(ion_type, loss):
+    """What a fragment of *ion_type*, less neutral *loss*, adds to its residues' composition."""
+    comp = mass.Composition(sequence="G", ion_type=ion_type) - mass.std_aa_comp["G"]
+    if loss:
+        comp -= mass.Composition(loss)
+    return dict(comp)
+
+
+@functools.cache
+def _residue_comp(residue, tag_name, channel_comps):
+    """A parsed residue's composition, e.g. "C(UniMod:4)" or "K(mTRAQ-4)": its
+    amino acid, its UniMod mods, and its tags' channel compositions
+    (*channel_comps*: _hashable_channel_comps of the tag's channel_comp)."""
+    comp = mass.Composition(mass.std_aa_comp[residue[0]])
+    if len(residue) > 1:
+        for unimod_idx in mod_pattern.findall(residue):
+            comp += unimods().by_id(int(unimod_idx))["composition"]
+        if channel_comps is not None:
+            for t in re.findall(rf"\(({tag_name}.*?)\)", residue):
+                comp += dict(dict(channel_comps)[re.findall(rf"{tag_name}-(\d+)", t)[0]])
+    return dict(comp)
+
+
+def _hashable_channel_comps(tag):
+    # The tag's channel compositions as a cache key: the residue cache outlives
+    # the tag object, which a worker unpickles afresh with every chunk
+    if tag is None or tag.channel_comp is None:
+        return None
+    return tuple((channel, tuple(comp.items())) for channel, comp in tag.channel_comp.items())
+
+
+# Each fragment's isotope envelope by (n_iso, charge, composition): its peaks'
+# m/z offsets from the monoisotopic peak and intensities relative to it, as
+# brainpy gives them.  Cleared when full, which bounds a worker's memory
+# (about 110 MB at 2 isotopes) while the fragments every peptide shares stay cached
+_ENVELOPES = {}
+_MAX_ENVELOPES = 2 ** 18
+
+
+def _envelope(n_iso, frag_z, comp):
+    key = (n_iso, frag_z, "".join(f"{e}{n}" for e, n in comp))
+    envelope = _ENVELOPES.get(key)
+    if envelope is None:
+        isotopes = isotopic_variants(dict(comp), npeaks=n_iso, charge=frag_z)
+        mono = isotopes[0]
+        envelope = tuple((iso.mz - mono.mz, iso.intensity / mono.intensity) for iso in isotopes)
+        if len(_ENVELOPES) >= _MAX_ENVELOPES:
+            _ENVELOPES.clear()
+        _ENVELOPES[key] = envelope
+    return envelope
+
+
 def gen_isotopes_dict(seq,frags, tag, n_iso):
+    seq = "".join(seq)
+    residues = parse_peptide(seq)
+    n_stripped = len(_BRACKETS.sub("", seq))
+    names = [_split_frag_name(frag) for frag in frags]
+    channel_comps = _hashable_channel_comps(tag)
+    residue_comps = [_residue_comp(r, tag.name if tag else None, channel_comps) for r in residues]
+    ion_comps = {(t, loss): _ion_comp(t, loss) for t, _, loss, _ in names}
+
+    # Element counts: prefix[k] is the first k residues' composition
+    elements = sorted({e for c in residue_comps for e in c} | {e for c in ion_comps.values() for e in c})
+    column = {e: i for i, e in enumerate(elements)}
+    counts = np.zeros((len(residues) + 1, len(elements)), dtype=np.int64)
+    for i, comp in enumerate(residue_comps, start=1):
+        for e, n in comp.items():
+            counts[i, column[e]] = n
+    prefix = np.cumsum(counts, axis=0)
+    ion_counts = {}
+    for ion, comp in ion_comps.items():
+        ion_counts[ion] = np.zeros(len(elements), dtype=np.int64)
+        for e, n in comp.items():
+            ion_counts[ion][column[e]] = n
+
     new_frags = {}
-    for frag in frags:
+    for frag, (frag_type, frag_idx, loss, frag_z) in zip(frags, names):
         mz,intensity = frags[frag]
-        split_frag_seq,frag_info = fragment_seq(seq,frag)
-        frag_comp = get_seq_comp(split_frag_seq, frag_info[0], neutral_loss=frag_info[2])
-        frag_z = int(frag_info[3])
-        
-        
-        if tag:
-            tags = [t for aa in split_frag_seq for t in re.findall(f"\(({tag.name}.*?)\)",aa)]
-            tag_mz = np.sum([tag.mass_dict[t] for t  in tags])/frag_z
-            if tag.channel_comp is not None and len(tags)>0:
-                tag_comp = reduce(lambda x, y: x + y, [tag.channel_comp[re.findall(f"{tag.name}-(\d+)",t)[0]] for t in tags])
-                frag_comp+=tag_comp
+        k = int(frag_idx)
+        assert k < n_stripped
+        # The residues fragment_seq takes: residues[:k], or residues[-k:]
+        if frag_type in 'abc':
+            frag_counts = prefix[min(k, len(residues))]
+        elif frag_type in 'xyz':
+            frag_counts = prefix[-1] - prefix[max(len(residues) - k, 0) if k else 0]
         else:
-            tag_mz = 0
-        
-        isotopes = isotopic_variants(frag_comp,
-                                     npeaks=n_iso,
-                                     charge = frag_z)
-        mono_iso_peak = isotopes[0]
-        for iso_idx,iso in enumerate(isotopes):
-            new_intensity = intensity*(iso.intensity/mono_iso_peak.intensity)
-            if True:#new_intensity > config.min_iso_intensity:
-                frag_iso = "" if iso_idx==0 else "_iso"+str(iso_idx)
-                # new_frags[frag+frag_iso] = [mz+iso_diff+tag_mz,new_intensity]
-                iso_diff = iso.mz - mono_iso_peak.mz
-                new_frags[frag+frag_iso] = [mz+iso_diff,new_intensity]
-                
+            raise(ValueError("Invalid ion type"))
+        frag_counts = (frag_counts + ion_counts[(frag_type, loss)]).tolist()
+        comp = [(e, n) for e, n in zip(elements, frag_counts) if n]
+
+        for iso_idx, (iso_diff, iso_ratio) in enumerate(_envelope(n_iso, int(frag_z), comp)):
+            frag_iso = "" if iso_idx==0 else "_iso"+str(iso_idx)
+            new_frags[frag+frag_iso] = [mz+iso_diff, intensity*iso_ratio]
+
     return frag_to_peak(new_frags,return_frags=True)
 
 

@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 
 from src.iso_functions import get_seq_comp, precursor_isotopes, fragment_seq, gen_isotopes_dict, iso_library, iso_library_multi
+from brainpy import isotopic_variants
 from brainpy._c.isotopic_distribution import TheoreticalPeak as Peak
 from src.mass_tags import massTag, read_json_to_massTag
 from src.models.spec_lib.library_store import SpectrumLibraryStore
@@ -58,6 +59,90 @@ class TestUnimod:
             iso.unimods.cache_clear()  # later tests read it afresh, with the network back
         assert carbamidomethyl["composition"] == mass.Composition(formula="C2H3NO")
         assert carbamidomethyl["mono_mass"] == pytest.approx(57.021464)
+
+
+class TestIsotopeEnvelopeCache:
+    def test_the_cache_never_changes_the_result(self, monkeypatch):
+        tag = read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")
+        seq = "(PSMtag_5plex-4)PEPC(UniMod:4)TIDEK(PSMtag_5plex-4)"
+        frags = {"y1_1": [200.0, 0.5], "y3-H2O_2": [300.0, 0.6], "b2_1": [250.0, 1.0], "b4_2": [400.0, 0.4]}
+        iso._ENVELOPES.clear()
+        cold = gen_isotopes_dict(seq, frags, tag, 3)
+        warm = gen_isotopes_dict(seq, frags, tag, 3)
+        monkeypatch.setattr(iso, "_MAX_ENVELOPES", 2)  # fills and clears within one peptide
+        iso._ENVELOPES.clear()
+        clearing = gen_isotopes_dict(seq, frags, tag, 3)
+        for spectrum, names in (warm, clearing):
+            assert np.array_equal(spectrum, cold[0]) and np.array_equal(names, cold[1])
+        assert len(iso._ENVELOPES) <= 2
+
+
+# Fragment compositions written out by hand: residues (amino acid less water),
+# modifications, and what each ion type adds to its residues (pyteomics'
+# conventions, which JMod uses)
+_RESIDUES = {"P": {"C": 5, "H": 7, "N": 1, "O": 1}, "E": {"C": 5, "H": 7, "N": 1, "O": 3},
+             "T": {"C": 4, "H": 7, "N": 1, "O": 2}, "I": {"C": 6, "H": 11, "N": 1, "O": 1},
+             "D": {"C": 4, "H": 5, "N": 1, "O": 3}, "K": {"C": 6, "H": 12, "N": 2, "O": 1},
+             "C": {"C": 3, "H": 5, "N": 1, "O": 1, "S": 1}}
+_CARBAMIDOMETHYL = {"C": 2, "H": 3, "N": 1, "O": 1}  # UniMod:4
+_PSMTAG_5PLEX_4 = {"C": 16, "H": 16, "N": 2, "O": 2, "C[13]": 2, "O[18]": 1}  # tests/MassTags/PSMtag_5plex.json
+_ION = {"a": {"C": -1, "O": -1}, "b": {}, "c": {"H": 3, "N": 1},
+        "x": {"C": 1, "O": 2}, "y": {"H": 2, "O": 1}, "z": {"H": -1, "N": -1, "O": 1}}
+_NH3_LOSS = {"N": -1, "H": -3}
+
+
+def _composition(residues, *extra):
+    """The summed composition of *residues* (one letter each) and *extra* compositions."""
+    total = {}
+    for comp in [_RESIDUES[r] for r in residues] + list(extra):
+        for element, n in comp.items():
+            total[element] = total.get(element, 0) + n
+    return {element: n for element, n in total.items() if n}
+
+
+def _assert_fragment_envelope(seq, frag, comp, tag=None, n_iso=3):
+    """gen_isotopes_dict's peaks for fragment *frag* of *seq* (at m/z 500,
+    intensity 1) are brainpy's isotope envelope of composition *comp*."""
+    charge = int(frag.rsplit("_", 1)[1])
+    spectrum, names = gen_isotopes_dict(seq, {frag: [500.0, 1.0]}, tag, n_iso)
+    isotopes = isotopic_variants(comp, npeaks=n_iso, charge=charge)
+    expected = [[500.0 + i.mz - isotopes[0].mz, i.intensity / isotopes[0].intensity] for i in isotopes]
+    assert np.allclose(spectrum, expected, rtol=1e-9, atol=0)
+    assert list(names) == [frag] + [f"{frag}_iso{i}" for i in range(1, n_iso)]
+
+
+class TestFragmentCompositions:
+    @pytest.mark.parametrize("frag, residues", [
+        ("a3_1", "PEP"), ("b3_1", "PEP"), ("c3_1", "PEP"), ("c3_2", "PEP"),
+        ("x2_1", "EK"), ("y2_1", "EK"), ("z2_1", "EK"), ("z2_2", "EK")])
+    def test_each_ion_type(self, frag, residues):
+        _assert_fragment_envelope("PEPTIDEK", frag, _composition(residues, _ION[frag[0]]))
+
+    def test_an_nh3_loss(self):
+        _assert_fragment_envelope("PEPTIDEK", "y3-NH3_1", _composition("DEK", _ION["y"], _NH3_LOSS))
+
+    @pytest.mark.parametrize("frag, residues, carbamidomethyl", [
+        ("b4_1", "PEPC", True), ("b3_1", "PEP", False), ("y6_1", "CTIDEK", True), ("y5_2", "TIDEK", False)])
+    def test_carbamidomethylation_counts_only_in_fragments_with_its_residue(self, frag, residues, carbamidomethyl):
+        extra = [_CARBAMIDOMETHYL] if carbamidomethyl else []
+        _assert_fragment_envelope("PEPC(UniMod:4)TIDEK", frag, _composition(residues, _ION[frag[0]], *extra))
+
+    @pytest.mark.parametrize("seq", ["PEPC(UniMod:4)(PSMtag_5plex-4)TIDEK", "PEPC(PSMtag_5plex-4)(UniMod:4)TIDEK"])
+    @pytest.mark.parametrize("frag, residues, on_residue", [
+        ("y6_2", "CTIDEK", True), ("b4_1", "PEPC", True), ("b3_1", "PEP", False)])
+    def test_unimod_4_and_a_tag_on_the_same_residue(self, seq, frag, residues, on_residue):
+        tag = read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")
+        extra = [_CARBAMIDOMETHYL, _PSMTAG_5PLEX_4] if on_residue else []
+        _assert_fragment_envelope(seq, frag, _composition(residues, _ION[frag[0]], *extra), tag=tag)
+
+    @pytest.mark.parametrize("frag, residues", [("b7_1", "PEPTIDE"), ("y7_1", "EPTIDEK")])
+    def test_the_longest_fragment_is_one_residue_short(self, frag, residues):
+        _assert_fragment_envelope("PEPTIDEK", frag, _composition(residues, _ION[frag[0]]))
+
+    @pytest.mark.parametrize("frag", ["b8_1", "y8_1", "y9_1", "c12_2"])
+    def test_a_fragment_index_at_or_past_the_peptides_length_raises(self, frag):
+        with pytest.raises(AssertionError):
+            gen_isotopes_dict("PEPTIDEK", {frag: [500.0, 1.0]}, None, 2)
 
 
 class Test_get_seq_comp():
