@@ -43,6 +43,23 @@ import copy
 
 
 
+class TestUnimod:
+    def test_the_bundled_copy_is_read_without_the_network(self, monkeypatch):
+        import socket
+
+        def no_network(*args, **kwargs):
+            raise AssertionError("Unimod tried to use the network")
+
+        monkeypatch.setattr(socket.socket, "connect", no_network)
+        iso.unimods.cache_clear()
+        try:
+            carbamidomethyl = iso.unimods().by_id(4)
+        finally:
+            iso.unimods.cache_clear()  # later tests read it afresh, with the network back
+        assert carbamidomethyl["composition"] == mass.Composition(formula="C2H3NO")
+        assert carbamidomethyl["mono_mass"] == pytest.approx(57.021464)
+
+
 class Test_get_seq_comp():
 
     ##Tags are ignored by get_seq_comp. They are handled by precursor_isotopes downstream, but maybe not all things that call it?

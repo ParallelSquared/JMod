@@ -25,8 +25,8 @@ import src.config as config
 import tqdm
 import os
 import copy
+import functools
 from functools import reduce
-import copy
 import numpy as np
 
 from src.utils.parse_peptides import parse_peptide, split_frag_name
@@ -147,8 +147,15 @@ def fragment_seq(peptide, ion_type):
     
 #     return re.findall("([A-Z](?:\(.*?\))?)",peptide)
 
-### all unimod modifications are stored here
-unimods = mass.Unimod()
+### all unimod modifications are stored here: the copy JMod ships, so no
+### network is needed (scripts/update_unimod.py refreshes it)
+UNIMOD_XML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "unimod.xml")
+
+
+@functools.cache
+def unimods():
+    """Unimod's modifications, read from UNIMOD_XML the first time a process needs them."""
+    return mass.Unimod(UNIMOD_XML)
 
 # [i["title"] for i in unimods.mods[:10]]
 
@@ -186,7 +193,7 @@ def get_seq_comp(split_seq,ion_type,neutral_loss=None):
     if neutral_loss:
         seq_comp -= mass.Composition(neutral_loss)
     for unimod_idx in mods:
-        seq_comp += unimods.by_id(unimod_idx)["composition"]
+        seq_comp += unimods().by_id(unimod_idx)["composition"]
     return seq_comp
 
 

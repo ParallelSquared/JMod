@@ -655,7 +655,7 @@ def known_mod_mass(name):
         return None
     from src.iso_functions import unimods
     try:
-        return float(unimods.by_id(int(unimod.group(1)))["mono_mass"])
+        return float(unimods().by_id(int(unimod.group(1)))["mono_mass"])
     except KeyError:
         raise JModError(f"{name} is not in UniMod")
 

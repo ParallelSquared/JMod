@@ -16,6 +16,7 @@ Kevin McDonnell, Daniel J. Geiszler, Nathan Wamsley, Jason Derks, Sarah Sipe, Za
   - [Windows Setup](#windows-setup)
   - [Linux/MacOS Setup](#linuxmacos-setup)
   - [Thermo Raw File Support](#thermo-raw-file-support)
+  - [Unimod](#unimod)
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
   - [Library Structure](#library-structure)
@@ -94,6 +95,10 @@ If homebrew is not installed, it can be installed with the following command:
 Thermo RawFileReader is developed and distributed by Pacific Northwest National Laboratory (PNNL) and Thermo Fisher Scientific and is licensed and distributed separately from JMod.
 
 </details>
+
+### Unimod
+
+JMod ships a copy of the [Unimod](https://www.unimod.org) modification database, `data/unimod.xml`, so a search needs no network. Unimod is copyright 2002-2006 Unimod and distributed under the Design Science License, in `data/unimod.xml.LICENSE`. To update the copy to the latest from unimod.org, run `uv run python scripts/update_unimod.py`.
 
 ###
 ## Running a Search

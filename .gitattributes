@@ -7,3 +7,7 @@
 # Zip and tarball downloads (GitHub's included) get the commit they were made
 # from written into this file, for the log when there is no git checkout
 src/_version.py export-subst
+
+# Unimod's file and its licence, kept byte for byte as unimod.org publishes them
+data/unimod.xml -text
+data/unimod.xml.LICENSE -text
