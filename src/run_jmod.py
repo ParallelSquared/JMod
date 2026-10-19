@@ -22,7 +22,9 @@ import tqdm
 import pandas as pd
 import json
 import gc
+import subprocess
 
+from src import _version
 from src.utils.io import file_reader
 from src.utils.set_seeds import set_seeds
 from src.models.spec_lib import spec_lib
@@ -406,6 +408,7 @@ def _start_experiment_log():
 
     logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
     set_log_filepath(logfile_path)
+    _log_jmod_version(experiment_dir)
 
     if config.ran_from_GUI:
         logger.info(f"Loaded configuration from GUI")
@@ -424,6 +427,56 @@ def _start_experiment_log():
     logger.info(f"{len(config.args.mzml)} file(s) to run")
     logger.info(f"Log writing to {os.path.abspath(logfile_path)}")
     return experiment_dir
+
+
+# JMod's own checkout, where git is asked which JMod this is
+_JMOD_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Written by the GUI as it is used, not code: not an uncommitted change
+_NOT_CODE = ":(exclude)data/settings.json"
+
+
+def _git(*args):
+    """git *args*'s output in JMod's checkout, or None without git or a checkout."""
+    try:
+        done = subprocess.run(["git", *args], cwd=_JMOD_DIR, capture_output=True,
+                              encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _log_jmod_version(experiment_dir):
+    """Log which JMod this is: git describe's version, the branch and the commit.
+    With uncommitted changes, the version ends -dirty, the changed files are
+    listed, and the diff from the commit is saved as JMod_uncommitted.diff in
+    *experiment_dir* (git apply it to the commit for this code).  Untracked
+    files are listed but not in the diff.
+
+    Without a git checkout of JMod itself (a zip download, perhaps unzipped
+    inside some other repository), the commit a GitHub download was made from
+    (src/_version.py), or else unknown."""
+    top_level = _git("rev-parse", "--show-toplevel")
+    same_dir = lambda path: os.path.normcase(os.path.abspath(path))
+    if top_level is None or same_dir(top_level.strip()) != same_dir(_JMOD_DIR):
+        if _version.COMMIT.startswith("$Format"):
+            logger.info("JMod version unknown (not a git checkout or a GitHub download)")
+        else:
+            described = "" if _version.DESCRIBE.startswith("$Format") else _version.DESCRIBE.strip()
+            logger.info(f"JMod {described or _version.COMMIT[:7]} (commit {_version.COMMIT}, "
+                        f"downloaded: local changes cannot be checked)")
+        return
+    commit = _git("rev-parse", "HEAD") or "unknown"
+    changed = _git("status", "--porcelain", "--", ".", _NOT_CODE) or ""
+    version = (_git("describe", "--tags", "--always") or "").strip() + ("-dirty" if changed.strip() else "")
+    branch = (_git("rev-parse", "--abbrev-ref", "HEAD") or "unknown").strip()
+    logger.info(f"JMod {version} (branch {branch}, commit {commit.strip()})")
+    if not changed.strip():
+        return
+    logger.info(f"Uncommitted changes: {', '.join(line[3:] for line in changed.splitlines())}")
+    diff_path = datestamped(os.path.join(experiment_dir, "JMod_uncommitted.diff"))
+    with open(diff_path, "w", encoding="utf-8", newline="") as f:
+        f.write(_git("diff", "HEAD", "--binary", "--", ".", _NOT_CODE) or "")
+    logger.info(f"Their diff from commit {commit.strip()[:7]} written to {os.path.abspath(diff_path)}")
 
 
 def _write_experiment_config(experiment_dir):
@@ -514,7 +567,6 @@ def _load_features(mzml_file):
     feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv" #TODO this breaks if you run from cd
     if not os.path.exists(feature_path):
         logger.info("Dinosaur feature file not found, running biosaur2")
-        import subprocess
         subprocess.run(["biosaur2", mzml_file], check=True)
     logger.info("Loading Dinosaur features")
     return pd.read_csv(feature_path,delimiter="\t")

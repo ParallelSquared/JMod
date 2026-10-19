@@ -3,3 +3,7 @@
 **/*.d/** binary
 *.parquet binary
 *.tdf binary
+
+# Zip and tarball downloads (GitHub's included) get the commit they were made
+# from written into this file, for the log when there is no git checkout
+src/_version.py export-subst

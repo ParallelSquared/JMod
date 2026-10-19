@@ -23,6 +23,7 @@ def experiment(monkeypatch, tmp_path, combined):
     monkeypatch.setattr(config.args, "config_json", None)
     monkeypatch.setattr(config.args, "plexDIA", config.args.plexDIA)  # main may set it
     monkeypatch.setattr(run_jmod, "set_log_filepath", lambda path: None)
+    monkeypatch.setattr(run_jmod, "_log_jmod_version", lambda experiment_dir: None)
     monkeypatch.setattr(run_jmod, "resolve_tags", lambda: (None, None))
     monkeypatch.setattr(run_jmod, "build_library",
                         lambda *args: SimpleNamespace(target_decoy_ratio=1.0))
@@ -183,6 +184,51 @@ class TestExperimentConfig:
         assert written["mzml_folder"] is None
 
 
+class TestJModVersion:
+    @staticmethod
+    def _git(answers, top_level=run_jmod._JMOD_DIR):
+        # A stand-in for git in a checkout at *top_level*: each command's output
+        # by its first argument (or first two), None as without git
+        answers = {"rev-parse --show-toplevel": top_level, "rev-parse HEAD": "abc1234def\n",
+                   "rev-parse --abbrev-ref": "Multi-Run\n", **answers}
+        return lambda *args: answers.get(" ".join(args[:2]), answers.get(args[0]))
+
+    @staticmethod
+    def _messages(app_log):
+        return [r.getMessage() for r in app_log]
+
+    def test_without_git_or_a_download_the_version_is_unknown(self, monkeypatch, tmp_path, app_log):
+        monkeypatch.setattr(run_jmod, "_git", lambda *args: None)
+        monkeypatch.setattr(run_jmod, "_version", SimpleNamespace(COMMIT="$Format:%H$", DESCRIBE="$Format:%(describe:tags)$"))
+        run_jmod._log_jmod_version(str(tmp_path))
+        assert any("JMod version unknown" in m for m in self._messages(app_log))
+
+    def test_a_download_inside_another_repository_logs_its_own_commit(self, monkeypatch, tmp_path, app_log):
+        # git answers for the outer repository, which is not JMod's
+        monkeypatch.setattr(run_jmod, "_git", self._git({"status": " M analysis.py\n"}, top_level=str(tmp_path)))
+        monkeypatch.setattr(run_jmod, "_version", SimpleNamespace(COMMIT="f00d" * 10, DESCRIBE="v2.0.0-5-gf00df00"))
+        run_jmod._log_jmod_version(str(tmp_path))
+        assert any(f"JMod v2.0.0-5-gf00df00 (commit {'f00d' * 10}, downloaded" in m for m in self._messages(app_log))
+        assert list(tmp_path.iterdir()) == []  # no diff of the outer repository
+
+    def test_a_clean_checkout_logs_its_version_and_writes_no_diff(self, monkeypatch, tmp_path, app_log):
+        monkeypatch.setattr(run_jmod, "_git", self._git({"status": "", "describe": "v2.0.0-3-gabc1234\n"}))
+        run_jmod._log_jmod_version(str(tmp_path))
+        assert any("JMod v2.0.0-3-gabc1234 (branch Multi-Run, commit abc1234def)" in m
+                   for m in self._messages(app_log))
+        assert list(tmp_path.iterdir()) == []
+
+    def test_uncommitted_changes_are_listed_and_their_diff_saved(self, monkeypatch, tmp_path, app_log):
+        monkeypatch.setattr(run_jmod, "_git", self._git({
+            "status": " M src/a.py\n?? src/new.py\n", "describe": "v2.0.0\n",
+            "diff": "diff --git a/src/a.py b/src/a.py\n"}))
+        run_jmod._log_jmod_version(str(tmp_path))
+        messages = [r.getMessage() for r in app_log]
+        assert any("JMod v2.0.0-dirty" in m for m in messages)
+        assert any("Uncommitted changes: src/a.py, src/new.py" in m for m in messages)
+        assert (tmp_path / "JMod_uncommitted.diff").read_text() == "diff --git a/src/a.py b/src/a.py\n"
+
+
 class TestCombinedResults:
     def test_completed_runs_are_combined(self, experiment, monkeypatch, combined):
         def process_run(runState, *rest):
@@ -253,6 +299,7 @@ def finished(monkeypatch, tmp_path, combined):
         monkeypatch.setattr(config.args, name, getattr(config.args, name))  # restored after
     monkeypatch.setattr(config, "cli_args", {})
     monkeypatch.setattr(run_jmod, "set_log_filepath", lambda path: None)
+    monkeypatch.setattr(run_jmod, "_log_jmod_version", lambda experiment_dir: None)
     monkeypatch.setattr(run_jmod, "resolve_tags", lambda: (None, None))
     library_inputs = []
     monkeypatch.setattr(run_jmod, "write_mbr_library",
