@@ -16,6 +16,7 @@ import pytest
 import sys
 import os
 from src.mass_tags import massTag, read_json_to_massTag, refresh_tags, set_config_tag, tag_library
+from src.utils.errors import JModError
 import json
 import numpy as np
 from pathlib import Path
@@ -90,19 +91,11 @@ class Test_read_json_to_massTag():
         output_tag = read_json_to_massTag("tests/MassTags", "test_one_channel.json")
         assert output_tag.delta == [0.0]
 
-    def test_subset(self):
-        output_tag = read_json_to_massTag("tests/MassTags/Subsets", "test_subset.json")
-        assert output_tag.name == "test_subset"
-        assert output_tag.rules == "nK"
-        assert output_tag.mass == 78.03437413308
-        assert output_tag.delta == [0.0, 2.006709675600007]
-        assert output_tag.channel_names == ["0", "2"]
-
 class Test_refresh_tags():
 
     def test_refresh_tags(self):
         available_tags = refresh_tags(Path("tests/MassTags"))
-        assert set(available_tags.keys()) == set(["test_basic", "test_one_channel", "test_subset", "PSMtag_5plex"])
+        assert set(available_tags.keys()) == set(["test_basic", "test_one_channel", "PSMtag_5plex"])
         assert all([type(x) == massTag for x in available_tags.values()])
 
 class Test_set_config_tag():
@@ -120,6 +113,17 @@ class Test_set_config_tag():
     def test_unavailable_tag(self):
         with pytest.raises(Exception) as exc_info:
             tag = set_config_tag(self.available_tags, "test_no_comps")
+
+    def test_channels_select_some_of_the_tag(self):
+        tag = set_config_tag(self.available_tags, "PSMtag_5plex", "0,8")
+        assert tag.name == "PSMtag_5plex" and tag.channel_names == ["0", "8"]
+        assert list(tag.channel_comp) == ["0", "8"]
+        assert np.allclose(tag.channel_masses, self.available_tags["PSMtag_5plex"].channel_masses[[0, 2]])
+        assert tag.mass_dict == self.available_tags["PSMtag_5plex"].mass_dict  # every channel, searched or not
+
+    def test_a_channel_the_tag_does_not_have_raises(self):
+        with pytest.raises(JModError, match="not channels of PSMtag_5plex"):
+            set_config_tag(self.available_tags, "PSMtag_5plex", ["0", "5"])
 
 class Test_mass_tag_class():
 

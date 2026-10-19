@@ -381,9 +381,9 @@ def match_tag_channel(mass_tag, tag_name, tag_mass):
     back-calculated mass *tag_mass*), as (channel name, its mass minus
     *tag_mass*, warning or None).  Raises a JModError when the closest
     channel is more than TAG_MASS_ERROR away."""
-    index = int(np.argmin(np.abs(mass_tag.channel_masses - tag_mass)))
-    channel = f"{mass_tag.name}-{mass_tag.channel_names[index]}"
-    channel_mass = float(mass_tag.channel_masses[index])
+    # Every channel the tag defines, searched or not (mass_dict, see massTag.select_channels)
+    channel, channel_mass = min(mass_tag.mass_dict.items(), key=lambda item: abs(item[1] - tag_mass))
+    channel_mass = float(channel_mass)
     difference = channel_mass - tag_mass
     if abs(difference) > TAG_MASS_ERROR:
         raise JModError(f"The library's tag ({tag_name}, {tag_mass:.4f} Da) is {abs(difference):.4f} Da "

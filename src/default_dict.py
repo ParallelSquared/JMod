@@ -302,6 +302,17 @@ default_dict = {
         'special_upload': False,
         'values': None ## this will be set dynamically when the taglist is read into run_jmod_from_GUI. values does not affect command line reading
     },
+    'channels': {  ## the tag's channels to search, e.g. 0,4 (all if not given). The GUI's tag channel checkboxes
+        'flags': ('--channels',),
+        'default': None,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'num_iso': {
         'flags': ('--num_iso',),
         'default': 2,

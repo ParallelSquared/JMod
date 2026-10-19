@@ -224,6 +224,9 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --tag
   Tag used in the experiment, if any. See mass_tags.py for details.
   default = None
+--channels
+  Comma-separated channels of --tag to search (e.g. --tag dimethyl --channels 0,4). 
+  default = None (all channels)
 --SILAC
   Adds stable isotope label
   default = False

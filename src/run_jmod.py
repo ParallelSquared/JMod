@@ -33,7 +33,7 @@ import polars as pl
 import pyarrow.parquet as pq
 from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
-from src.mass_tags import tag_library, available_tags
+from src.mass_tags import tag_library, available_tags, set_config_tag
 from src.fdr_analysis import process_data
 from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
@@ -598,21 +598,9 @@ def resolve_tags():
         SILAC = None
         config.SILAC = None
 
-    if config.args.tag:
-        # Find the tag object based on the tag name
-        if config.args.tag in available_tags:
-            config.tag = available_tags[config.args.tag]
-            logger.info(f"Using tag: {config.tag.name} - {config.tag.n_channels} channels")
-            mass_tag = config.tag
-        else:
-            if config.args.tag != "None":
-                raise JModError(f"Tag '{config.args.tag}' not found in available tags: "
-                                f"{list(available_tags.keys())}")
-            mass_tag = None
-            config.tag = None
-    else:
-        mass_tag = None
-        config.tag = None
+    mass_tag = config.tag = set_config_tag(available_tags, config.args.tag, config.args.channels)
+    if mass_tag:
+        logger.info(f"Using tag: {mass_tag.name} - channels {', '.join(mass_tag.channel_names)}")
 
     return mass_tag, SILAC
 
@@ -733,6 +721,9 @@ def prepare_library(spectrumLibrary, work_dir, mass_tag, SILAC, library_tag_bool
         spectrumLibrary = tag_library(spectrumLibrary, mass_tag, source_channel=source_channel)
     if SILAC:
         spectrumLibrary = tag_library(spectrumLibrary, SILAC)
+    if mass_tag or SILAC:
+        logger.info(f"Tagged library: {spectrumLibrary.n_targets} targets, "
+                    f"{spectrumLibrary.n_decoys} decoys")
 
     ######################################################
     #### Isotopes (after tagging: the tag changes each fragment's composition)

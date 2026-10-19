@@ -104,6 +104,19 @@ class massTag():
     def __getitem__(self,item):
         return getattr(self,item)
 
+    def select_channels(self, channels):
+        """This tag searching only *channels* (names), under the same name.
+        mass_dict keeps every channel's mass, so a library tagged in a channel
+        not searched is still recognised and retagged."""
+        unknown = [c for c in channels if c not in self.channel_names]
+        if unknown or not channels:
+            raise JModError(f"Channels {channels} are not channels of {self.name}: {self.channel_names}")
+        keep = [i for i, c in enumerate(self.channel_names) if c in channels]
+        tag = massTag(self.rules, self.mass, [float(self.channel_masses[i] - self.mass) for i in keep],
+                      [self.channel_names[i] for i in keep], self.name, compositions=self.channel_comp)
+        tag.mass_dict = self.mass_dict
+        return tag
+
 
 def read_json_to_massTag(mass_tags_dir,filename):
     mass_tag_JSON = os.path.join(mass_tags_dir,filename)
@@ -224,28 +237,27 @@ def refresh_tags(mass_tags_dir=None): #set mass tags dir to none for testing pur
     available_tags = {}
     if mass_tags_dir is None:
         mass_tags_dir = Path(__file__).parent / "MassTags"
-    subset_dir = mass_tags_dir / "Subsets"
-    for directory in (mass_tags_dir, subset_dir):
-        for filename in os.listdir(directory):
-            if os.path.splitext(filename)[1].lower() == ".json":
-                mass_tag = read_json_to_massTag(directory, filename)
-                if type(mass_tag) == str:
-                    logging.getLogger("GUI").warning(f"Unable to load mass tag from {filename}\n")
-                elif mass_tag:
-                    available_tags[mass_tag.name] = mass_tag
+    for filename in os.listdir(mass_tags_dir):
+        if os.path.splitext(filename)[1].lower() == ".json":
+            mass_tag = read_json_to_massTag(mass_tags_dir, filename)
+            if type(mass_tag) == str:
+                logging.getLogger("GUI").warning(f"Unable to load mass tag from {filename}\n")
+            elif mass_tag:
+                available_tags[mass_tag.name] = mass_tag
     return available_tags
 
 available_tags = refresh_tags()
 
 
-
-def set_config_tag(available_tags, config_args_tag):
-    if config_args_tag in available_tags:
-        return available_tags[config_args_tag]
-    elif config_args_tag == "None":
+def set_config_tag(available_tags, config_args_tag, channels=None):
+    """The tag named *config_args_tag*, searching only *channels* ("0,4" or a list; None for all)"""
+    if not config_args_tag or config_args_tag == "None":
         return None
-    else:
+    if config_args_tag not in available_tags:
         raise JModError(f"Tag '{config_args_tag}' not in available tags:\n{list(available_tags.keys())}")
+    if channels is None:
+        return available_tags[config_args_tag]
+    return available_tags[config_args_tag].select_channels(channels.split(",") if isinstance(channels, str) else [str(c) for c in channels])
 
 
-config.tag = set_config_tag(available_tags, config.args.tag)
+config.tag = set_config_tag(available_tags, config.args.tag, config.args.channels)
