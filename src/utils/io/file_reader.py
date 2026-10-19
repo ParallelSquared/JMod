@@ -23,7 +23,7 @@ import polars as pl
 
 from src.utils.errors import JModError
 from src.utils.io.load_files import (
-    Spectrum, SpectrumFile, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
+    Spectrum, SpectrumFile, PEAK_MZ_DTYPE, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
 )
 from src.utils.io.tdf_bin import TdfBinReader, frame_peak_counts
 from src.logger import logger
@@ -562,7 +562,7 @@ def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
         table = pf.read_row_group(rg_idx)
         frames = table.column("frame").to_numpy()
         scans = table.column("scan").to_numpy()
-        mz_arr = table.column("mz").to_numpy()
+        mz_arr = table.column("mz").to_numpy().astype(PEAK_MZ_DTYPE, copy=False)
         # Intensity and mobility are stored as float32 on Spectrum (see PEAK_INT_DTYPE
         # / PEAK_MOB_DTYPE): 1/K0 spans ~0.7-1.3, where float32 resolution (~1e-7) is
         # orders of magnitude below any IM tolerance, and intensities only need

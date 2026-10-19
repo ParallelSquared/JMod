@@ -34,12 +34,26 @@ _STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
 
 # Version stamp for the .npz binary cache. Bump whenever parsing semantics
 # change so stale caches are re-parsed instead of silently loaded.
-STORE_VERSION = 4
+STORE_VERSION = 5
 
 
 class StaleStoreCacheError(ValueError):
     """Raised by :meth:`SpectrumLibraryStore.load` when the .npz cache was
     written by a different (or unstamped) parser version."""
+
+
+def _charges_to_uint8(values):
+    """Validate precursor charges and narrow to the store's uint8 dtype.
+
+    Any non-integral or out-of-range value is a hard error — malformed input
+    must never be silently truncated into a uint8.
+    """
+    arr = np.asarray(values, dtype=np.float64)
+    ok = (arr == np.floor(arr)) & (arr >= 1) & (arr <= 255)
+    if not np.all(ok):
+        raise ValueError(
+            f"PrecursorCharge must be an integer in [1, 255]; found {arr[~ok][0]}")
+    return arr.astype(np.uint8)
 
 _ALL_KNOWN_FIELDS = _ALL_SCALAR_FIELDS | frozenset({
     'spectrum', 'ordered_frags', 'ordered_frag_codes', 'frag_intensities',
@@ -463,11 +477,21 @@ class SpectrumLibraryStore:
     the original fragment dict data.
     """
 
+    # Dtype contract (enforced by tests/models/spec_lib/test_library_snapshots
+    # TestArrayDtypes; bump STORE_VERSION when changing):
+    #   prec_z uint8 | prec_mz, ion_mob float32 | iRT float64
+    #   frag_mz, frag_int, spectrum_mz, spectrum_int float32
+    #   frag_keys_data, frag_names_data, *_lengths, top_n_data int32
+    #   *_offsets, parent_idx int64 | spectrum_perm uint16
+    # f32 m/z is deliberate: 24-bit mantissa = 0.06 ppm, 100-300x finer than
+    # matching tolerances, and peppy_sage's Rust index is f32 internally.
+    # Offsets stay int64: isotope expansion multiplies totals by n_iso and
+    # int32 wraps silently past 2^31.
     __slots__ = (
         'key_to_idx',
         # scalar columns – strings (object arrays)
         'mod_seq', 'seq', 'protein_group', 'protein_name', 'genes', 'uniprot_id',
-        # scalar columns – float64
+        # scalar columns – numeric (see dtype contract above)
         'prec_mz', 'prec_z', 'iRT', 'ion_mob',
         # concatenated variable-length spectrum data (may include isotopes)
         'spectrum_mz', 'spectrum_int', 'spectrum_offsets', 'spectrum_lengths',
@@ -1145,10 +1169,17 @@ class SpectrumLibraryStore:
 
         for field in _SCALAR_FLOAT_FIELDS:
             arr = self._float_array_for(field)
-            new_arr = np.empty(idx + 1, dtype=np.float64)
+            # Preserve the column dtype (prec_z is uint8, prec_mz/ion_mob
+            # float32); growing as float64 would silently re-widen the store
+            new_arr = np.empty(idx + 1, dtype=arr.dtype)
             new_arr[:idx] = arr
             val = entry_dict.get(field)
-            new_arr[idx] = np.nan if val is None else float(val)
+            if field == 'prec_z':
+                if val is None:
+                    raise ValueError("prec_z is required when appending an entry")
+                new_arr[idx] = _charges_to_uint8([val])[0]
+            else:
+                new_arr[idx] = np.nan if val is None else float(val)
             self._set_float_array(field, new_arr)
 
         # parent_idx
@@ -1593,10 +1624,10 @@ class SpectrumLibraryStore:
             key_to_idx=key_to_idx,
             mod_seq=np.array(mod_seq_list, dtype=object),
             seq=np.array(seq_list, dtype=object),
-            prec_mz=np.array(prec_mz_list, dtype=np.float64),
-            prec_z=np.array(prec_z_list, dtype=np.float64),
+            prec_mz=np.array(prec_mz_list, dtype=np.float32),
+            prec_z=_charges_to_uint8(np.array(prec_z_list, dtype=np.float64)),
             iRT=np.array(iRT_list, dtype=np.float64),
-            ion_mob=np.array(ion_mob_list, dtype=np.float64),
+            ion_mob=np.array(ion_mob_list, dtype=np.float32),
             protein_group=np.array(protein_group_list, dtype=object),
             protein_name=np.array(protein_name_list, dtype=object),
             genes=np.array(genes_list, dtype=object),
@@ -1799,6 +1830,10 @@ class SpectrumLibraryStore:
         tok_idx = decoys.token_offsets[frag_prec] + (get_index(codes).astype(np.int64) - 1)
         tok_idx[~is_b] += len(decoys.prefix_aa)
 
+        # TODO(f64-intermediates): decoy/tag m/z shifts compute in f64 and
+        # store f32. Either justify the round-trip quantitatively (accumulated
+        # rounding across token-mass sums) or compute natively in f32; changing
+        # it re-baselines test_decoy_differential (pinned to f64 fast_mass).
         z = get_charge(codes).astype(np.float64)
         m = np.concatenate([decoys.prefix_aa, decoys.suffix_aa])[tok_idx]
         m += H2O
@@ -2166,9 +2201,12 @@ class SpectrumLibraryStore:
         out_prec_z = target_store.prec_z[valid_i]
         out_iRT = target_store.iRT[valid_i]
         out_ion_mob = target_store.ion_mob[valid_i]
-        out_prec_mz = (target_store.prec_mz[valid_i]
+        # f64 intermediates for the tag-mass shift, stored back at the store's
+        # f32 (see TODO(f64-intermediates) at _decoy_fragment_mz)
+        out_prec_mz = (target_store.prec_mz[valid_i].astype(np.float64)
                        + (channel_masses[valid_c] - source_channel_mass)
-                       * n_tag_sites[valid_i] / out_prec_z)
+                       * n_tag_sites[valid_i] / out_prec_z
+                       ).astype(np.float32)
         out_protein_group = PooledStringColumn(
             target_store.protein_group.codes[valid_i], target_store.protein_group.pool)
         out_protein_name = PooledStringColumn(
@@ -2234,6 +2272,7 @@ class SpectrumLibraryStore:
                 tag_mass = channel_masses[valid_c[out_idx]]
                 # compute in f64, store f32; sort on the stored f32 values so
                 # stored order is self-consistent
+                # TODO(f64-intermediates): see _decoy_fragment_mz
                 new_mz = (src_mz.astype(np.float64)
                           + ((tag_mass - source_channel_mass) * local_n_tags / local_charges)
                           ).astype(np.float32)
@@ -2339,8 +2378,10 @@ class SpectrumLibraryStore:
         gather_idx = offsets_expanded + within_group
 
         # -- Fragment-level columns from frag_data / frag_keys_data --
-        frag_mz = self.frag_mz[gather_idx].astype(np.float64)
-        frag_int = self.frag_int[gather_idx].astype(np.float64)
+        # Emitted as float32: peppy_sage's index stores fragment m/z and
+        # intensity as f32 internally, so f64 here is a pure 2x memory cost
+        frag_mz = self.frag_mz[gather_idx]
+        frag_int = self.frag_int[gather_idx]
         codes = self.frag_keys_data[gather_idx]
 
         # Decode packed int32 codes into separate fields
@@ -2458,9 +2499,9 @@ class SpectrumLibraryStore:
         # fragment-row table is never resident. Ordering is made explicit via
         # a row index (_ridx) instead of maintain_order, which the streaming
         # engine may not honor without falling back to in-memory execution.
-        # TODO(dtypes): _prec_z/_frag_idx/_frag_z keep their historical wide
-        # types (f64/i64) because charge-as-float is baked into store keys;
-        # slimming them is a separate change.
+        # Lazy-frame internals stay f64 (_prec_z is a group key); the store's
+        # narrow dtypes (see the contract at __slots__) are applied at the
+        # numpy conversion after collect.
         lf = lf.with_row_index("_ridx")
 
         # ModifiedPeptide with wrapping underscores stripped; decoy/invalid
@@ -2676,11 +2717,14 @@ class SpectrumLibraryStore:
 
         mod_seq_arr = np.array(mod_seq_list, dtype=object)
         seq_arr = np.array(prec_df["_seq"].to_list(), dtype=object)
-        prec_mz_arr = prec_df["_prec_mz"].to_numpy().astype(np.float64, copy=False)
-        prec_z_arr = prec_df["_prec_z"].to_numpy().astype(np.float64, copy=False)
+        prec_mz_arr = prec_df["_prec_mz"].to_numpy().astype(np.float32)
+        try:
+            prec_z_arr = _charges_to_uint8(prec_df["_prec_z"].to_numpy())
+        except ValueError as e:
+            _raise(str(e))
         iRT_arr = prec_df["_iRT"].to_numpy().astype(np.float64, copy=False)
         # nulls (no IM) become NaN
-        ion_mob_arr = prec_df["_ion_mob"].to_numpy().astype(np.float64, copy=False)
+        ion_mob_arr = prec_df["_ion_mob"].to_numpy().astype(np.float32)
         protein_group_arr = np.array(prec_df["_protein_group"].to_list(), dtype=object)
         protein_name_arr = np.array(prec_df["_protein_name"].to_list(), dtype=object)
         genes_arr = np.array(prec_df["_genes"].to_list(), dtype=object)
@@ -2812,10 +2856,10 @@ class SpectrumLibraryStore:
             key_to_idx=None,
             mod_seq=np.empty(n, dtype=object),
             seq=np.empty(n, dtype=object),
-            prec_mz=np.empty(n, dtype=np.float64),
-            prec_z=np.empty(n, dtype=np.float64),
+            prec_mz=np.empty(n, dtype=np.float32),
+            prec_z=np.empty(n, dtype=np.uint8),
             iRT=np.empty(n, dtype=np.float64),
-            ion_mob=np.empty(n, dtype=np.float64),
+            ion_mob=np.empty(n, dtype=np.float32),
             protein_group=np.empty(n, dtype=object),
             protein_name=np.empty(n, dtype=object),
             genes=np.empty(n, dtype=object),
@@ -2973,7 +3017,8 @@ class _EntryView:
             store.prec_mz[idx] = float(value)
             return
         if field == 'prec_z':
-            store.prec_z[idx] = float(value)
+            # uint8 column: validate rather than let numpy truncate silently
+            store.prec_z[idx] = _charges_to_uint8([value])[0]
             return
         if field == 'iRT':
             store.iRT[idx] = np.nan if value is None else float(value)

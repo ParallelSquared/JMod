@@ -123,7 +123,8 @@ class TestParsingSemantics:
         assert np.isnan(edgecases.ion_mob[idx[("C(UniMod:4)(tag)SQAPVYGR", 2.0)]])
         assert np.isnan(edgecases.ion_mob[idx[("LIONELK", 1.0)]])
         assert np.isnan(edgecases.ion_mob[idx[("SEVENPEPK", 2.0)]])
-        assert edgecases.ion_mob[idx[("PEPTIDEK", 2.0)]] == 0.95
+        # ion_mob is stored float32; compare at f32 resolution
+        assert edgecases.ion_mob[idx[("PEPTIDEK", 2.0)]] == np.float32(0.95)
 
     def test_empty_genes_becomes_quoted_empty(self, edgecases):
         idx = edgecases.key_to_idx[("C(UniMod:4)(tag)SQAPVYGR", 2.0)]
@@ -166,10 +167,11 @@ class TestArrayDtypes:
         "mod_seq": np.object_, "seq": np.object_,
         "protein_group": np.object_, "protein_name": np.object_,
         "genes": np.object_, "uniprot_id": np.object_,
-        "prec_mz": np.float64, "prec_z": np.float64,
-        "iRT": np.float64, "ion_mob": np.float64,
-        # fragment-level values are float32 by design (~30 ppb quantization,
-        # far below ppm tolerances); precursor-level scalars stay float64
+        # m/z, intensity and IM are float32 by design (~0.06 ppm quantization,
+        # far below ppm tolerances; peppy_sage's Rust index is f32 internally);
+        # charge is uint8 (validated 1-255 at parse); iRT stays float64
+        "prec_mz": np.float32, "prec_z": np.uint8,
+        "iRT": np.float64, "ion_mob": np.float32,
         "frag_mz": np.float32, "frag_int": np.float32,
         "frag_offsets": np.int64,
         "top_n_offsets": np.int64, "parent_idx": np.int64,
@@ -206,6 +208,22 @@ class TestArrayDtypes:
         for mod_pep, charge in store.key_to_idx:
             assert type(mod_pep) is str and type(charge) is float
             break
+
+    HEADER = ("ModifiedPeptide\tStrippedPeptide\tPrecursorCharge\tPrecursorMz"
+              "\tTr_recalibrated\tFragmentType\tFragmentNumber\tFragmentCharge"
+              "\tFragmentLossType\tFragmentMz\tRelativeIntensity\n")
+
+    @pytest.mark.parametrize("bad_z", ["0", "256", "2.5", "-1"])
+    def test_invalid_precursor_charge_raises(self, tmp_path, bad_z):
+        """prec_z is stored uint8; any non-integral or out-of-range charge is
+        a hard parse error, never a silent truncation."""
+        from src.utils.errors import JModError
+        path = tmp_path / "bad_charge.tsv"
+        path.write_text(
+            self.HEADER
+            + f"PEPTIDEK\tPEPTIDEK\t{bad_z}\t464.75\t25.5\ty\t4\t1\tnoloss\t502.29\t0.8\n")
+        with pytest.raises(JModError, match="PrecursorCharge"):
+            SpectrumLibraryStore.from_tsv(str(path))
 
 
 class TestFinalizeBitIdentity:
