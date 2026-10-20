@@ -155,7 +155,8 @@ UNIMOD_XML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 @functools.cache
 def unimods():
     """Unimod's modifications, read from UNIMOD_XML the first time a process needs them."""
-    return mass.Unimod(UNIMOD_XML)
+    with open(UNIMOD_XML, "rb") as f:
+        return mass.Unimod(f)
 
 # [i["title"] for i in unimods.mods[:10]]
 

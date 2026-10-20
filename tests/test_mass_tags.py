@@ -220,7 +220,7 @@ class Test_tag_library():
         key = final_dict[("(test_one_channel-0)PEPTIDEK(test_one_channel-0)", 2.0)]
         assert key['mod_seq'] == "(test_one_channel-0)PEPTIDEK(test_one_channel-0)"
         assert key['seq'] == "PEPTIDEK"
-        assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
+        assert key['prec_mz'] == np.float32(464.727463520355 + (2*tag.mass)/2)
         assert key['prec_z'] == 2
         assert key['iRT'] == 0.57
         assert_frags_approx(key['frags'], {
@@ -274,7 +274,7 @@ class Test_tag_library():
         key = final_dict[("(test_one_channel-0)PEPTIDER", 3.0)]
         assert key['mod_seq'] == "(test_one_channel-0)PEPTIDER"
         assert key['seq'] == "PEPTIDER"
-        assert key['prec_mz'] == 319.48702501677 + (1*tag.mass)/3
+        assert key['prec_mz'] == np.float32(319.48702501677 + (1*tag.mass)/3)
         assert key['prec_z'] == 3
         assert key['iRT'] == 0.57
         assert_frags_approx(key['frags'], {
@@ -329,7 +329,7 @@ class Test_tag_library():
         key = final_dict[("(test_one_channel-0)PEPT(Unimod:21)IDER", 3.0)]
         assert key['mod_seq'] == "(test_one_channel-0)PEPT(Unimod:21)IDER"
         assert key['seq'] == "PEPTIDER"
-        assert key['prec_mz'] == 319.48702501677 + phospho_mass + (1*tag.mass)/3
+        assert key['prec_mz'] == np.float32(319.48702501677 + phospho_mass + (1*tag.mass)/3)
         assert key['prec_z'] == 3
         assert key['iRT'] == 0.57
         assert_frags_approx(key['frags'], {
@@ -388,7 +388,7 @@ class Test_tag_library():
 
             assert key['seq'] == "PEPTIDEK"
 
-            assert key['prec_mz'] == 464.727463520355 + (2*(tag.mass+tag.delta[i]))/2
+            assert key['prec_mz'] == np.float32(464.727463520355 + (2*(tag.mass+tag.delta[i]))/2)
 
             assert key['prec_z'] == 2
 
@@ -488,7 +488,7 @@ class Test_tag_library():
         key = final_dict[("(test_one_channel-0)PEPTIDEK(test_one_channel-0)", 2.0)]
         assert key['mod_seq'] == "(test_one_channel-0)PEPTIDEK(test_one_channel-0)"
         assert key['seq'] == "PEPTIDEK"
-        assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
+        assert key['prec_mz'] == np.float32(464.727463520355 + (2*tag.mass)/2)
         assert key['prec_z'] == 2
         assert key['iRT'] == 0.57
         assert_frags_approx(key['frags'], {

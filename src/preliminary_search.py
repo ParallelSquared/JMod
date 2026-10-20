@@ -85,29 +85,31 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # Add all of the other supported modifications
     mod_dict.update(diann_mods)
 
-    # Construct polars df from python lib
-    pl_lib = library_spectra.to_diann_df()
+    # The store is already columnar, and peppy_sage reads it in that form. Going
+    # via to_diann_df would repeat every precursor field across all of that
+    # precursor's fragments, and that long-form intermediate -- not the ingest --
+    # is the peak-memory event on a large library.
+    n = library_spectra.n_targets
+    mod_seqs = library_spectra.mod_seq[:n]
 
-    # Add modification array to the polars dataframe
-    # Deduplicate: compute on unique ModifiedPeptide values, then join back
-    unique_peps = pl_lib.select("ModifiedPeptide").unique()
-    unique_peps = unique_peps.with_columns(
-        pl.col("ModifiedPeptide")
-        .map_elements(lambda p: peptide_to_mod_array(p, mod_dict),
-                      return_dtype=pl.List(pl.Float32))
-        .alias("Modifications")
-    )
-    pl_lib = pl_lib.join(unique_peps, on="ModifiedPeptide", how="left")
+    # Modifications are a function of the modified peptide, so compute once per
+    # unique one. Doubles as the unique-peptide set `observed_mods` needs.
+    _mods_by_pep: dict[str, np.ndarray] = {}
+    for ms in mod_seqs:
+        if ms not in _mods_by_pep:
+            _mods_by_pep[ms] = np.asarray(peptide_to_mod_array(ms, mod_dict),
+                                          dtype=np.float32)
 
-    # Build mod_array lookup from the unique peptides we already computed
-    _mod_array_map = dict(zip(
-        unique_peps["ModifiedPeptide"].to_list(),
-        unique_peps["Modifications"].to_list(),
-    ))
+    # CSR: entry i's mod masses are mods_values[mods_offsets[i]:mods_offsets[i+1]]
+    mods_offsets = np.zeros(n + 1, dtype=np.int64)
+    np.cumsum([len(_mods_by_pep[ms]) for ms in mod_seqs], out=mods_offsets[1:])
+    mods_values = np.empty(int(mods_offsets[-1]), dtype=np.float32)
+    for i, ms in enumerate(mod_seqs):
+        mods_values[mods_offsets[i]:mods_offsets[i + 1]] = _mods_by_pep[ms]
 
     # observed_mods only needs unique mod_seqs
     observed_mods: set[str] = set()
-    for ms in _mod_array_map:
+    for ms in _mods_by_pep:
         observed_mods.update(extract_mod_names(ms))
     rev_map = {}
     for m in observed_mods:
@@ -118,8 +120,18 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
             mass = mod_dict[m]
         rev_map[round(mass, 4)] = m
 
-    db = ps.IndexedDatabase.from_library(
-        library=pl_lib,
+    # frag_* are passed whole; frag_offsets/frag_lengths are sliced to targets, so
+    # only target fragments are read and the big arrays are never copied.
+    db = ps.IndexedDatabase.from_columnar(
+        seq=library_spectra.seq[:n],
+        mod_seq=mod_seqs,
+        mods_values=mods_values,
+        mods_offsets=mods_offsets,
+        frag_mz=library_spectra.frag_mz,
+        frag_intensity=library_spectra.frag_int,
+        frag_codes=library_spectra.frag_keys_data,
+        frag_offsets=library_spectra.frag_offsets[:n],
+        frag_lengths=library_spectra.frag_lengths[:n],
         bucket_size=4096,
         ion_kinds=["b", "y"],
         min_ion_index=2,
@@ -128,6 +140,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         peptide_min_mass=0.0,
         peptide_max_mass=5000.0,
     )
+    del _mods_by_pep, mods_values, mods_offsets
 
     # Create scorer
     # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are annotated as
@@ -205,7 +218,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
 
     # 2. Theoretical m/z from calcmass, the neutral mass Sage already computed.
     # m/z = (M + z*proton) / z, and the z cancels to M/z + proton.
-    logger.info("Calculating theoretical m/z")
     df = df.with_columns(
         (pl.col("calcmass").cast(pl.Float64) / pl.col("charge") + 1.00727647)
         .alias("mz")
@@ -220,14 +232,6 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # Add the MS1 data columns back to the main DataFrame
     # Since the data was iterated in order, we can just horizontally stack (hstack)
     df = df.hstack(ms1_df)
-
-    # Per-fragment ion mobility: join each matched fragment's experimental m/z
-    # back to its MS2 band spectrum to read the observed peak's 1/K0.
-    if dia_spectra.has_ion_mobility:
-        logger.info("Looking up per-fragment ion mobilities")
-        df = df.with_columns(
-            pl.Series("frag_ion_mobility", lookup_fragment_mobilities(df, dia_spectra))
-        )
 
     # 4. Vectorized Error Calculations (Polars Expressions)
     df = df.with_columns([
@@ -283,6 +287,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
             'frag_kinds',
             'frag_fragment_ordinals',
             'frag_intensities',
+            'frag_losses',
             'seq',
             'z'
         ])
@@ -302,6 +307,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
                 'frag_kinds',
                 'frag_fragment_ordinals',
                 'frag_intensities',
+                'frag_losses',
                 'seq',
                 'z',
             ])
@@ -319,6 +325,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
             'frag_kinds',
             'frag_fragment_ordinals',
             'frag_intensities',
+            'frag_losses',
             'seq',
             'z',
         ])
@@ -360,6 +367,11 @@ def library_entries_for(library_spectra, mod_seqs):
     return [library_spectra[(library_mod_seq[i], float(prec_z[i]))] for i in np.flatnonzero(is_hit)]
 
 
+# Neutral loss name -> code, matching peppy_sage's `loss_code` and the packed
+# encoding in src/utils/frag_encoding.py. `None` is the regex's no-loss group.
+LOSS_NAME_TO_CODE = {None: 0, '': 0, 'H2O': 1, 'NH3': 2, 'H3PO4': 3}
+
+
 def create_fragment_library_map(library_entries):
     """
     Converts the library entries (dict-like, e.g. library_spectra.values()) into a
@@ -394,25 +406,21 @@ def create_fragment_library_map(library_entries):
             frag_name = parts[0].upper()  # e.g., "B3" or "Y7-H2O"
             frag_z = int(parts[1])  # e.g., 1
 
-            # Extract type and ordinal, ignoring loss notation for this key
-            match = re.match(r'([BY])(\d+)', frag_name)
+            match = re.match(r'([BY])(\d+)(?:-(H2O|NH3|H3PO4))?$', frag_name)
             if not match:
                 continue
 
             frag_type = match.group(1)  # B or Y
             frag_ordinal = int(match.group(2))  # 3, 7, etc.
+            frag_loss = LOSS_NAME_TO_CODE[match.group(3)]
 
             intensity = mz_int_list[1]  # Relative Intensity is the second element
 
-            # Key for alignment: (IonType, Ordinal, Charge)
-            # TODO(bug): the key drops the loss annotation (see the regex above),
-            # so "Y7-H2O" and "Y7" collide and this assignment lets whichever
-            # comes last in ``library_frags`` silently overwrite the other. The
-            # surviving intensity is then dict-order-dependent, not a sum and not
-            # a skip. Only bites for libraries that carry loss ions -- decide
-            # whether to sum them into the backbone ion or exclude them, then
-            # make it explicit.
-            key = (frag_type, frag_ordinal, frag_z)
+            # Key for alignment: (IonType, Ordinal, Charge, Loss). Loss is part of
+            # a fragment's identity -- "Y7" and "Y7-H2O" are ~18 Da apart and are
+            # separate entries in peppy_sage's library index, so collapsing them
+            # here would align an observed ion against the wrong intensity.
+            key = (frag_type, frag_ordinal, frag_z, frag_loss)
             peptide_map[key] = intensity
 
         if peptide_map:
@@ -461,8 +469,9 @@ def _align_to_library(r: dict, fragment_library_map: dict, label: str):
     """
     Parse a PSM row's matched fragments and fetch its library vector.
 
-    Returns (observed_vec, library_vec) keyed on (ion_kind, ordinal, charge), or None
-    when the row cannot be scored. Shared by the two spectral-difference scores below.
+    Returns (observed_vec, library_vec) keyed on (ion_kind, ordinal, charge, loss),
+    or None when the row cannot be scored. Shared by the two spectral-difference
+    scores below.
     """
     seq, z = r['seq'], r['z']
     if seq is None or z is None:
@@ -476,13 +485,18 @@ def _align_to_library(r: dict, fragment_library_map: dict, label: str):
 
     charges, kinds = r['frag_charges'], r['frag_kinds']
     ordinals, intensities = r['frag_fragment_ordinals'], r['frag_intensities']
-    if not (len(charges) == len(kinds) == len(ordinals) == len(intensities)):
+    # Libraries with no loss ions still report a zero per fragment; tolerate the
+    # column being absent so an older search result stays scorable.
+    losses = r.get('frag_losses') or [0] * len(charges)
+    if not (len(charges) == len(kinds) == len(ordinals) == len(intensities)
+            == len(losses)):
         logger.error(f"Fragment array length mismatch for seq {seq}. Lengths: "
-                     f"{len(charges)}, {len(kinds)}, {len(ordinals)}, {len(intensities)}")
+                     f"{len(charges)}, {len(kinds)}, {len(ordinals)}, "
+                     f"{len(intensities)}, {len(losses)}")
         return None
 
-    observed_vec = {(k.upper(), o, c): i
-                    for c, k, o, i in zip(charges, kinds, ordinals, intensities)}
+    observed_vec = {(k.upper(), o, c, l): i
+                    for c, k, o, i, l in zip(charges, kinds, ordinals, intensities, losses)}
     return observed_vec, library_vec
 
 
@@ -614,41 +628,6 @@ def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
             })
 
     return ms1_data
-
-
-def lookup_fragment_mobilities(df: pl.DataFrame, dia_spectra):
-    """Attach the observed ion mobility (1/K0) of each matched fragment.
-
-    For every hit, each matched fragment's experimental m/z is joined back to
-    its searched MS2 band spectrum (same spec_id) to read the parallel per-peak
-    mobility. Fragments with no observed peak (experimental m/z <= 0) get None.
-    A matched fragment whose experimental m/z has no corresponding peak in the
-    spectrum is a genuine error and raises.
-    """
-    spec_ids = df['spec_id'].to_list()
-    frag_exp_mzs = df['frag_mz_experimental'].to_list()
-
-    out = []
-    for spec_id, exp_mzs in zip(spec_ids, frag_exp_mzs):
-        scan_num = spec_id if isinstance(spec_id, int) else Spectrum.extract_scannum(spec_id)
-        spec = dia_spectra.get_by_idx(scan_num)
-        mz = spec.mz
-        mob = spec.mobility
-        row = []
-        for fmz in exp_mzs:
-            if fmz is None or fmz <= 0.0:
-                row.append(None)  # library fragment with no observed peak
-                continue
-            idx = int(np.searchsorted(mz, fmz))
-            j = min((i for i in (idx - 1, idx) if 0 <= i < len(mz)),
-                    key=lambda i: abs(mz[i] - fmz))
-            if abs(mz[j] - fmz) > 1e-4:
-                raise ValueError(
-                    f"Spectrum {spec_id}: matched fragment m/z {fmz} has no peak "
-                    f"(closest {mz[j]}, |diff|={abs(mz[j] - fmz):.6f})")
-            row.append(float(mob[j]))
-        out.append(row)
-    return out
 
 
 def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict,

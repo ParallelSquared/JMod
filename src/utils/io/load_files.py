@@ -23,14 +23,16 @@ import pickle
 from src.logger import logger
 import peppy_sage as ps
 
-# Peak-array dtypes for Spectrum. m/z stays float64 — ppm-level matching needs the
-# mantissa. Intensity and mobility are float32: a timsTOF .d run can hold >1e9 peak
-# entries after IM-band denormalization, where each float64 array costs ~9 GB, and
-# neither quantity needs more than float32's ~1e-7 relative precision (1/K0 spans
-# ~0.7-1.3 against IM tolerances of ~1e-2; intensities are used relatively).
-# Sum intensities with ``dtype=np.float64`` to keep float32 accumulation error out
-# of TIC-style reductions.
-PEAK_MZ_DTYPE = np.float64
+# Peak-array dtypes for Spectrum, all float32. m/z at f32 carries 0.06 ppm
+# quantization (24-bit mantissa), 100-300x finer than the 3-20 ppm matching
+# tolerances, and matches peppy_sage's Rust index (f32 internally) so
+# ps.core.Spectrum borrows the buffers zero-copy instead of copying every
+# scan. Intensity and mobility likewise: a timsTOF .d run can hold >1e9 peak
+# entries after IM-band denormalization, where each float64 array costs ~9 GB
+# (1/K0 spans ~0.7-1.3 against IM tolerances of ~1e-2; intensities are used
+# relatively). Sum intensities with ``dtype=np.float64`` to keep float32
+# accumulation error out of TIC-style reductions.
+PEAK_MZ_DTYPE = np.float32
 PEAK_INT_DTYPE = np.float32
 PEAK_MOB_DTYPE = np.float32
 
@@ -209,7 +211,10 @@ class Spectrum:
                                                     self.isolation_window['isolation window upper offset'])
                                                     )
                                   ],
-                              total_ion_current=self.TIC
+                              total_ion_current=self.TIC,
+                              # None for data with no mobility dimension (e.g. mzML);
+                              # peppy_sage treats that as the no-mobility case.
+                              mobility_array=self.mobility,
                               )
         return rs
 
