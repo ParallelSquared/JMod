@@ -25,6 +25,7 @@ from src.utils.io.load_files import SpectrumFile
 from src.models.spec_lib.spec_lib import loadSpecLib, create_decoy_lib
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.preliminary_search import (
+    create_fragment_library_map,
     fit_with_features,
     hellinger_score_polars_udf,
     library_entries_for,
@@ -174,12 +175,17 @@ class TestLibraryEntriesFor:
 LIB_KEY = ("PEPTIDEK", 2)
 
 
-def _lib(intensities):
-    """A library map of y-ions, charge 1, ordinals 1..n."""
-    return {LIB_KEY: {("Y", i + 1, 1): v for i, v in enumerate(intensities)}}
+def _lib(intensities, losses=None):
+    """A library map of y-ions, charge 1, ordinals 1..n.
+
+    Keys are (ion, ordinal, charge, loss); loss defaults to 0 (no loss).
+    """
+    losses = losses if losses is not None else [0] * len(intensities)
+    return {LIB_KEY: {("Y", i + 1, 1, losses[i]): v
+                      for i, v in enumerate(intensities)}}
 
 
-def _row(intensities, ordinals=None):
+def _row(intensities, ordinals=None, losses=None):
     """An observed row shaped like the polars struct the UDFs receive."""
     n = len(intensities)
     return {
@@ -189,7 +195,32 @@ def _row(intensities, ordinals=None):
         "frag_kinds": ["y"] * n,
         "frag_fragment_ordinals": ordinals or list(range(1, n + 1)),
         "frag_intensities": list(intensities),
+        "frag_losses": list(losses) if losses is not None else [0] * n,
     }
+
+
+class TestLossIsPartOfFragmentIdentity:
+    """A neutral loss makes a different ion: y7 and y7-H2O sit ~18 Da apart, so
+    they must not align against each other. peppy_sage indexes them separately;
+    these pin the Python side to the same rule."""
+
+    def test_loss_variants_do_not_collide_in_the_library_map(self):
+        entry = {
+            'mod_seq': LIB_KEY[0], 'prec_z': LIB_KEY[1],
+            'frags': {'y7_1': (800.0, 100.0), 'y7-H2O_1': (782.0, 30.0)},
+        }
+        peptide_map = create_fragment_library_map([entry])[LIB_KEY]
+        # One key each, not one key overwritten by the other.
+        assert peptide_map == {("Y", 7, 1, 0): 100.0, ("Y", 7, 1, 1): 30.0}
+
+    def test_observed_loss_ion_does_not_match_the_backbone_ion(self):
+        # Library holds only y1 (no loss); the observed y1 carries an H2O loss.
+        # They are different ions, so this must not score as a match.
+        lib = _lib([100.0])
+        same = scribe_score_polars_udf(_row([100.0]), lib)
+        lossy = scribe_score_polars_udf(_row([100.0], losses=[1]), lib)
+        assert same == 25.0
+        assert lossy != same
 
 
 class TestScribeAndHellScores:
