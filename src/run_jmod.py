@@ -446,15 +446,16 @@ def _git(*args):
 
 
 def _log_jmod_version(experiment_dir):
-    """Log which JMod this is: git describe's version, the branch and the commit.
-    With uncommitted changes, the version ends -dirty, the changed files are
-    listed, and the diff from the commit is saved as JMod_uncommitted.diff in
-    *experiment_dir* (git apply it to the commit for this code).  Untracked
-    files are listed but not in the diff.
+    """Log which JMod this is: git describe's version first, then, off main, the
+    branch and the commit.  With uncommitted changes, the version ends -dirty,
+    the changed files are listed, and the diff from the commit is saved as
+    JMod_uncommitted.diff in *experiment_dir* (git apply it to the commit for
+    this code).  Untracked files are listed but not in the diff.
 
     Without a git checkout of JMod itself (a zip download, perhaps unzipped
-    inside some other repository), the commit a GitHub download was made from
-    (src/_version.py), or else unknown."""
+    inside some other repository), the version and commit a GitHub download was
+    made from (src/_version.py; a download doesn't record its branch), or else
+    unknown."""
     top_level = _git("rev-parse", "--show-toplevel")
     same_dir = lambda path: os.path.normcase(os.path.abspath(path))
     if top_level is None or same_dir(top_level.strip()) != same_dir(_JMOD_DIR):
@@ -462,14 +463,16 @@ def _log_jmod_version(experiment_dir):
             logger.info("JMod version unknown (not a git checkout or a GitHub download)")
         else:
             described = "" if _version.DESCRIBE.startswith("$Format") else _version.DESCRIBE.strip()
-            logger.info(f"JMod {described or _version.COMMIT[:7]} (commit {_version.COMMIT}, "
-                        f"downloaded: local changes cannot be checked)")
+            logger.info(f"JMod {described or _version.COMMIT[:7]}")
+            logger.info(f"Downloaded copy of commit {_version.COMMIT}: local changes cannot be checked")
         return
     commit = _git("rev-parse", "HEAD") or "unknown"
     changed = _git("status", "--porcelain", "--", ".", _NOT_CODE) or ""
     version = (_git("describe", "--tags", "--always") or "").strip() + ("-dirty" if changed.strip() else "")
     branch = (_git("rev-parse", "--abbrev-ref", "HEAD") or "unknown").strip()
-    logger.info(f"JMod {version} (branch {branch}, commit {commit.strip()})")
+    logger.info(f"JMod {version}")
+    if branch != "main":
+        logger.info(f"Branch {branch}, commit {commit.strip()}")
     if not changed.strip():
         return
     logger.info(f"Uncommitted changes: {', '.join(line[3:] for line in changed.splitlines())}")

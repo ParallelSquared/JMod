@@ -208,15 +208,23 @@ class TestJModVersion:
         monkeypatch.setattr(run_jmod, "_git", self._git({"status": " M analysis.py\n"}, top_level=str(tmp_path)))
         monkeypatch.setattr(run_jmod, "_version", SimpleNamespace(COMMIT="f00d" * 10, DESCRIBE="v2.0.0-5-gf00df00"))
         run_jmod._log_jmod_version(str(tmp_path))
-        assert any(f"JMod v2.0.0-5-gf00df00 (commit {'f00d' * 10}, downloaded" in m for m in self._messages(app_log))
+        assert self._messages(app_log)[-2:] == ["JMod v2.0.0-5-gf00df00",
+                                                f"Downloaded copy of commit {'f00d' * 10}: local changes cannot be checked"]
         assert list(tmp_path.iterdir()) == []  # no diff of the outer repository
 
-    def test_a_clean_checkout_logs_its_version_and_writes_no_diff(self, monkeypatch, tmp_path, app_log):
+    def test_off_main_the_version_comes_first_then_the_branch_and_commit(self, monkeypatch, tmp_path, app_log):
         monkeypatch.setattr(run_jmod, "_git", self._git({"status": "", "describe": "v2.0.0-3-gabc1234\n"}))
         run_jmod._log_jmod_version(str(tmp_path))
-        assert any("JMod v2.0.0-3-gabc1234 (branch Multi-Run, commit abc1234def)" in m
-                   for m in self._messages(app_log))
-        assert list(tmp_path.iterdir()) == []
+        assert self._messages(app_log)[-2:] == ["JMod v2.0.0-3-gabc1234", "Branch Multi-Run, commit abc1234def"]
+        assert list(tmp_path.iterdir()) == []   # clean: no diff
+
+    def test_on_main_only_the_version_is_logged(self, monkeypatch, tmp_path, app_log):
+        monkeypatch.setattr(run_jmod, "_git", self._git({"status": "", "describe": "v2.1.0\n",
+                                                         "rev-parse --abbrev-ref": "main\n"}))
+        run_jmod._log_jmod_version(str(tmp_path))
+        messages = self._messages(app_log)
+        assert messages[-1] == "JMod v2.1.0"
+        assert not any("commit" in m.lower() for m in messages)
 
     def test_uncommitted_changes_are_listed_and_their_diff_saved(self, monkeypatch, tmp_path, app_log):
         monkeypatch.setattr(run_jmod, "_git", self._git({
