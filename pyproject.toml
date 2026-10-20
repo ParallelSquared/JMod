@@ -30,7 +30,7 @@ deps = [
   "lxml",
   "regex",
   "tqdm",
-  "peppy_sage",
+  "peppy_sage>=0.2.0",
 
   # Visualization
   "matplotlib",
