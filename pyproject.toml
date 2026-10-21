@@ -41,8 +41,8 @@ deps = [
   "pillow",
 
   # Data engineering / IO
-  "pyarrow",
-  "polars",
+  "pyarrow<26.0.0",
+  "polars<2.0.0",
 
   # Classical ML / stats
   "scikit-learn",
