@@ -905,11 +905,9 @@ def _library_precursors(lib_file):
         columns["ModifiedPeptide"].cast(pl.String).str.strip_chars("_")
         .str.replace_all("[", "(", literal=True).str.replace_all("]", ")", literal=True).alias("mod_seq"),
         columns["PrecursorCharge"].cast(pl.Float64).alias("prec_z"),
-        # through float32, as the store keeps them: the binary cache and the file
-        # then give the same numbers (e.g. the tag mass back-calculated from m/z)
-        (columns["PrecursorMz"].cast(pl.Float64).cast(pl.Float32).cast(pl.Float64) if "PrecursorMz" in columns
-         else pl.lit(np.nan)).alias("prec_mz"),
-        _ion_mobility(columns.get("IonMobility")).cast(pl.Float32).cast(pl.Float64).alias("ion_mob"),
+        (columns["PrecursorMz"].cast(pl.Float64).cast(pl.Float32).cast(pl.Float64)
+         if "PrecursorMz" in columns else pl.lit(np.nan)).alias("prec_mz"),
+        _ion_mobility(columns.get("IonMobility")).alias("ion_mob"),
         (columns["Decoy"].cast(pl.String).str.strip_chars().is_in(["1", "1.0", "True", "true"])
          if "Decoy" in columns else pl.lit(False)).alias("decoy"),
     ).filter(
