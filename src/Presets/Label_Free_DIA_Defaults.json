@@ -15,7 +15,6 @@
     "tag": "None",
     "num_iso": 2,
     "lib_frac": 0.5,
-    "dummy_value": null,
     "plexDIA": false,
     "use_emp_rt": false,
     "predict_decoys": false,

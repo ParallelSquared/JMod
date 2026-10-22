@@ -22,6 +22,7 @@ import tqdm
 import pandas as pd
 import json
 import gc
+import glob
 import subprocess
 
 from src import _version
@@ -388,27 +389,48 @@ def _prepare_readers(run_files):
     return None
 
 
+def _is_empty_or_missing(folder):
+    return not os.path.exists(folder) or (os.path.isdir(folder) and not os.listdir(folder))
+
+
+def experiment_folder(wanted):
+    """Where an experiment given the output folder *wanted* goes, and why if not there:
+      - *wanted* missing or empty: *wanted* itself (a folder named for the experiment);
+      - holding a previous JMod experiment (its log or config): a datestamped sibling,
+        <wanted>_<datestamp>, so experiments never mix;
+      - holding anything else (Downloads, the data's folder): <wanted>/JMod_Results,
+        datestamped if that already holds something.
+    Returns (folder, reason or None)."""
+    if _is_empty_or_missing(wanted):
+        return wanted, None
+    previous = [os.path.join(glob.escape(wanted), name) for name in ("JMod_log*.log", "JMod_config*.json")]
+    if any(glob.glob(pattern) for pattern in previous):
+        return datestamped(wanted), f"{wanted} holds a previous experiment"
+    inside = os.path.join(wanted, "JMod_Results")
+    return (inside if _is_empty_or_missing(inside) else datestamped(inside)), f"{wanted} already holds other files"
+
+
 def _start_experiment_log():
     """Create the experiment folder, open the log there, and record the configuration.
 
-    Everything the experiment makes goes in one new folder, JMod_Results (or
-    JMod_Results_<--dummy_value>), datestamped if the name is taken: the log,
-    the configuration, the runs' results folders, experiment_results/ and, as
-    needed, first_pass/, mbr_library/ and a memory-mapped library.  It is made
-    in the output folder, or next to the first data file when there is none.
-    Returns it.
+    Everything the experiment makes goes in one folder: the log, the
+    configuration, the runs' results folders, experiment_results/ and, as
+    needed, first_pass/, mbr_library/ and a memory-mapped library.  Where, from
+    the output folder (-o, or the GUI's), or the first data file's folder when
+    there is none: see experiment_folder.  Returns it.
     """
     if config.args.output_folder is not None:
-        parent_dir = config.args.output_folder
+        wanted = config.args.output_folder
     else:
-        parent_dir = os.path.dirname(config.args.mzml[0].replace("\\","/")) or "."
-    name = "JMod_Results" + (f"_{config.args.dummy_value}" if config.args.dummy_value else "")
-    experiment_dir = datestamped(os.path.join(parent_dir, name))
-    os.makedirs(experiment_dir)
+        wanted = os.path.dirname(config.args.mzml[0].replace("\\","/")) or "."
+    experiment_dir, why = experiment_folder(os.path.abspath(wanted))
+    os.makedirs(experiment_dir, exist_ok=True)
 
     logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
     set_log_filepath(logfile_path)
     _log_jmod_version(experiment_dir)
+    if why:
+        logger.info(f"{why}: this experiment goes in {experiment_dir}")
 
     if config.ran_from_GUI:
         logger.info(f"Loaded configuration from GUI")

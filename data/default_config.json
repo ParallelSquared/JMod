@@ -19,7 +19,6 @@
     "pp_file": "",
     "timspeak_file": "",
     "lib_frac": 0.5,
-    "dummy_value": null,
     "plexDIA": false,
     "use_emp_rt": false,
     "unfiltered_quant": true,

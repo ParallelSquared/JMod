@@ -52,7 +52,15 @@ from src.utils.gui_utils import load_settings, save_settings
 # Options removed from JMod (aa82426) that config JSONs written before then still list:
 # loading such a JSON ignores them without a warning
 REMOVED_OPTIONS = {"use_rt", "use_features", "mTRAQ", "pp_file", "timspeak_file",
-                   "initial_percentile", "user_percentile"}
+                   "initial_percentile", "user_percentile", "dummy_value"}
+
+
+
+def show_end(entry):
+    """Scroll a text entry to the end of its text (for a long path, the file or folder
+    name), with the cursor there. After the pending redraw, so a just-set value counts."""
+    entry.icursor(tk.END)
+    entry.after_idle(lambda: entry.xview_moveto(1.0))
 
 
 def command_line_args(key, value):
@@ -467,7 +475,7 @@ class JModGUI(ThemedTk):
         # Output Folder Label + Entry + Select Button
         self.output_folder_label = ttk.Label(self.output_frame, text="Output Folder:")
         self.output_folder_label.grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        Hovertip(self.output_folder_label, "Select the folder to make the experiment's JMod_Results folder in")
+        Hovertip(self.output_folder_label, "The experiment's folder: a new or empty folder is used as it is; any other folder gets a JMod_Results folder inside it")
 
         self.output_folder_var = tk.StringVar()
         self.output_folder_entry = ttk.Entry(self.output_frame, textvariable=self.output_folder_var, width=50)
@@ -505,7 +513,6 @@ class JModGUI(ThemedTk):
         ######    QUEUE Frame   ########
         #this is defined in a function. See Queue funcs
         self.run_queue_number = 1
-        self.has_shown_no_dummy_val = False
 
 
         ## On Startup ##
@@ -827,6 +834,7 @@ class JModGUI(ThemedTk):
         if file_path:
             self.tsv_entry.delete(0, tk.END)
             self.tsv_entry.insert(0, file_path)
+            show_end(self.tsv_entry)
             self.last_opened_dir = os.path.dirname(file_path)
 
 
@@ -970,6 +978,7 @@ class JModGUI(ThemedTk):
                             try:
                                 default_dict[key]['tk_handle'].delete(0, tk.END)
                                 default_dict[key]['tk_handle'].insert(0, str(value))
+                                show_end(default_dict[key]['tk_handle'])
                             except Exception as e:
                                 tk.messagebox.showerror("JSON Read Error", f"Error reading '{key}':\n\n {e}\n\nEnsure '{value}' can be converted to string")
                     elif default_dict[key]['in_GUI'] is False:  ##if key is only a command line key
@@ -1554,6 +1563,7 @@ class JModGUI(ThemedTk):
         folder_selected = filedialog.askdirectory(initialdir=self.last_opened_dir)
         if folder_selected:
             self.output_folder_var.set(folder_selected)
+            show_end(self.output_folder_entry)
             self.last_opened_folder = folder_selected
 
     def disable_buttons(self):
@@ -1736,10 +1746,13 @@ class JModGUI(ThemedTk):
         if os.path.splitext(tsv_path)[1].lower() not in speclib_filetypes:
             tk.messagebox.showerror("Speclib Type Error", f"Speclib filetype type ({os.path.splitext(tsv_path)[1].lower()}) not in supported filetypes: {speclib_filetypes}")
             return False
-        if self.output_folder_var.get() == "":
+        if self.output_folder_var.get().strip() == "":
             tk.messagebox.showerror("Output Folder Error", "Output Folder Error: Please Specify an Output Folder")
             return False
-        if not os.path.isdir(self.output_folder_var.get()):
+        # The run makes the folder if it is new (see run_jmod.experiment_folder): the
+        # folder it goes in must exist, which catches a mistyped path
+        chosen = os.path.abspath(self.output_folder_var.get().strip())
+        if not (os.path.isdir(chosen) or os.path.isdir(os.path.dirname(chosen))):
             tk.messagebox.showerror("Output Folder Error", "Output Folder Error: Please make sure output folder exists")
             return False
         return True
@@ -1935,11 +1948,9 @@ class JModGUI(ThemedTk):
             mzml_paths = cfg["mzml"]
             first_file = os.path.basename(mzml_paths[0])
             files_label = first_file if len(mzml_paths) == 1 else f"{first_file} + {len(mzml_paths) - 1} more"
-            mzml_display_name = files_label + "   " + (cfg.get("dummy_value") or "")
-            if cfg.get("dummy_value") is None and self.has_shown_no_dummy_val is False:
-                self.has_shown_no_dummy_val = True
-                tk.messagebox.showinfo("Queue Information", "Tip: You can use '-z your_text_here' in the additional commands frame to name the experiment's results folder (JMod_Results_your_text_here)")
-            display_name = f"Queue {run_queue_number} - {mzml_display_name}"
+            # named by where it goes: the output folder's last two parts, e.g. results/my_exp
+            output = "/".join((cfg.get("output_folder") or "").replace("\\", "/").rstrip("/").split("/")[-2:])
+            display_name = f"Queue {run_queue_number} - {files_label}   -> {output}"
             self.queue_data.append((display_name, tmp_filename))
             self.queue_listbox.insert(tk.END, display_name)
         self.queue_listbox.see(tk.END)

@@ -335,17 +335,6 @@ default_dict = {
         'special_upload': False,
         'values': '+<1'
     },
-    'dummy_value': {
-        'flags': ('-z', '--dummy_value'),
-        'default': None,
-        'takes_value': True,
-        'in_GUI': False,
-        'type': 'str',
-        'widget': '',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': 'any'
-    },
     'plexDIA': { ##plexDIA has some hard coded elements in GUI because it is determined indirectly
         'flags': ('--plexDIA',),
         'default': False,
