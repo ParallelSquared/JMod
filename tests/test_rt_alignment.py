@@ -27,8 +27,10 @@ import os
 # Import the functions we want to test
 from src.rt_alignment import (
     twostepfit, lowess_fit, closest_spec, gaussian, fit_errors, cdf_plots, alignment_plots, cdf_data, get_multiples, empirical_fit, filter_rts_by_dense, MZRTfit,
-    timeplex_pair_nn_gate, _hwhm_mode_sigma
+    timeplex_pair_nn_gate, _hwhm_mode_sigma,
+    fit_intensity_mz_error, intensity_mz_error, correct_ms1_peaks_by_intensity
 )
+from src.utils.io.load_files import Spectrum
 
 from tests.fixtures.test_data import SAMPLE_LIBRARY_ENTRY, SAMPLE_MS2_SPECTRUM, SAMPLE_FEATURE
 
@@ -414,3 +416,79 @@ class TestFilterRtsByDense:
         assert isinstance(mask, np.ndarray)
         assert mask.dtype == bool
         assert len(mask) == len(rts)
+
+
+def _ppm_trend(log_int):
+    # synthetic error: +1 ppm per decade above 1e5
+    return (log_int - 5) * 1e-6
+
+
+class TestFitIntensityMzError:
+    def test_recovers_trend(self):
+        rng = np.random.default_rng(0)
+        intens = 10 ** rng.uniform(4, 9, 2000)
+        resid = _ppm_trend(np.log10(intens)) + rng.normal(0, 0.2e-6, intens.size)
+        int_fit = fit_intensity_mz_error(resid, intens)
+        test_int = np.array([1e5, 1e6, 1e8])
+        np.testing.assert_allclose(intensity_mz_error(int_fit, test_int),
+                                   _ppm_trend(np.log10(test_int)), atol=0.3e-6)
+
+    def test_too_few_points_returns_none(self):
+        assert fit_intensity_mz_error(np.zeros(10), np.ones(10) * 1e6) is None
+
+    def test_ignores_nonpositive_and_nan(self):
+        rng = np.random.default_rng(1)
+        intens = 10 ** rng.uniform(4, 9, 500)
+        resid = _ppm_trend(np.log10(intens))
+        intens[:50] = 0
+        resid[50:100] = np.nan
+        assert fit_intensity_mz_error(resid, intens) is not None
+
+
+class TestCorrectMs1PeaksByIntensity:
+    def _fit(self):
+        rng = np.random.default_rng(2)
+        intens = 10 ** rng.uniform(5, 8, 2000)
+        return fit_intensity_mz_error(_ppm_trend(np.log10(intens)), intens)
+
+    def _scan(self, true_mz, intens, mobility=None):
+        spec = Spectrum()
+        spec.mz = true_mz * (1 + _ppm_trend(np.log10(intens)))
+        spec.intens = intens
+        spec.mobility = mobility
+        return spec
+
+    def test_removes_error_and_keeps_sorted(self):
+        int_fit = self._fit()
+        true_mz = np.array([500.0, 600.0, 700.0])
+        intens = np.array([1e6, 1e7, 1e5])
+        spec = self._scan(true_mz, intens)
+        correct_ms1_peaks_by_intensity([spec], int_fit)
+        assert np.all(np.diff(spec.mz) >= 0)
+        np.testing.assert_allclose(spec.mz, true_mz, rtol=0.3e-6)
+
+    def test_reorders_intens_and_mobility_with_mz(self):
+        int_fit = self._fit()
+        # two peaks 2 ppm apart; the intense one reads 3 ppm high so they swap
+        true_mz = np.array([500.0, 500.0 * (1 + 2e-6)])
+        intens = np.array([1e8, 1e5])
+        mobility = np.array([0.9, 1.1])
+        spec = self._scan(true_mz, intens, mobility)
+        assert spec.mz[0] > spec.mz[1]
+        correct_ms1_peaks_by_intensity([spec], int_fit)
+        assert np.all(np.diff(spec.mz) >= 0)
+        np.testing.assert_array_equal(spec.intens, [1e8, 1e5])
+        np.testing.assert_array_equal(spec.mobility, [0.9, 1.1])
+
+    def test_flat_outside_fitted_range(self):
+        int_fit = self._fit()
+        lo, hi = 10 ** int_fit.x_[0], 10 ** int_fit.x_[-1]
+        np.testing.assert_allclose(intensity_mz_error(int_fit, [10.0, 1e12]),
+                                   intensity_mz_error(int_fit, [lo, hi]))
+
+    def test_skips_empty_scans(self):
+        spec = Spectrum()
+        spec.mz = np.array([])
+        spec.intens = np.array([])
+        correct_ms1_peaks_by_intensity([spec, Spectrum()], self._fit())
+        assert spec.mz.size == 0

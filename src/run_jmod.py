@@ -471,6 +471,11 @@ def main(GUI_config_json=None, GUI_result_queue=None):
 
     del target_view
 
+    ## Remove intensity-dependent m/z error from observed MS1 peaks
+    if funcs[2] is not None:
+        from src.rt_alignment import correct_ms1_peaks_by_intensity
+        correct_ms1_peaks_by_intensity(DIAspectra.ms1scans, funcs[2])
+
     ## Merge peaks in spectra (MS2 only; MS1 peaks are summed within
     ## tolerance during matrix construction in fit_channel_isotopes_numba)
     for spec in DIAspectra.ms2scans:

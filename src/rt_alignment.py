@@ -423,6 +423,48 @@ def fast_modal_lowess(x, y,
     return fit
 
 
+def fit_intensity_mz_error(residuals, intensities, min_points=100):
+    """
+    Fit the MS1 relative m/z error left after the RT and m/z corrections
+    against log10 MS1 peak intensity. Returns a ModalLowessFit, or None if
+    there are too few usable points.
+    """
+    residuals = np.asarray(residuals, dtype=float)
+    intensities = np.asarray(intensities, dtype=float)
+    ok = np.isfinite(residuals) & np.isfinite(intensities) & (intensities > 0)
+    if ok.sum() < min_points:
+        logger.info(f"Skipping intensity m/z correction: only {ok.sum()} usable IDs")
+        return None
+    int_fit = fast_modal_lowess(np.log10(intensities[ok]), residuals[ok])
+    logger.info(f"Intensity m/z correction: {np.min(int_fit.y_)*1e6:.2f} to "
+                f"{np.max(int_fit.y_)*1e6:.2f} ppm over log10 intensity "
+                f"{int_fit.x_[0]:.2f} to {int_fit.x_[-1]:.2f}")
+    return int_fit
+
+
+def intensity_mz_error(int_fit, intensities):
+    """Relative m/z error at each intensity, held flat outside the fitted range."""
+    li = np.log10(np.maximum(np.asarray(intensities, dtype=float), 1.0))
+    return int_fit(np.clip(li, int_fit.x_[0], int_fit.x_[-1]))
+
+
+def correct_ms1_peaks_by_intensity(ms1scans, int_fit):
+    """
+    Remove the intensity-dependent m/z error from every observed MS1 peak, in
+    place. Errors are (obs - theo)/theo, so theo = obs / (1 + err). Peaks are
+    re-sorted by m/z since neighbouring peaks can shift by different amounts.
+    """
+    for spec in ms1scans:
+        if spec.mz is None or len(spec.mz) == 0:
+            continue
+        new_mz = np.asarray(spec.mz, dtype=float) / (1 + intensity_mz_error(int_fit, spec.intens))
+        order = np.argsort(new_mz, kind="stable")
+        spec.mz = new_mz[order]
+        spec.intens = np.asarray(spec.intens)[order]
+        if spec.mobility is not None:
+            spec.mobility = np.asarray(spec.mobility)[order]
+
+
 def _collapse_ties(x, y):
     """Average y over repeated x so the knots are strictly increasing."""
     ux, inv = np.unique(x, return_inverse=True)
@@ -1547,7 +1589,15 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     # orig_mzs = id_mzs+(diffs*np.array(id_mzs))
     # plt.hist(((mz_func(id_mzs,rts)-orig_mzs)/id_mzs)[rt_filter_bool],100)
     
-    corrected_mz_diffs = (diffs-(f_rt_mz(new_lib_rt)+mz_spl(output_df.mz)))[cor_filter]
+    corrected_mz_diffs = diffs-(f_rt_mz(new_lib_rt)+mz_spl(output_df.mz))
+
+    # intensity-dependent m/z error, fit on what the RT and m/z corrections leave
+    ms1_intensity = output_df["closest_peak_intensity_ms1"].to_numpy()
+    int_mz_fit = fit_intensity_mz_error(corrected_mz_diffs[cor_filter], ms1_intensity[cor_filter])
+    if int_mz_fit is not None:
+        corrected_mz_diffs = corrected_mz_diffs - intensity_mz_error(int_mz_fit, ms1_intensity)
+    corrected_mz_diffs = corrected_mz_diffs[cor_filter]
+
     mz_weights, mz_sigmas = fit_zero_mean_gmm_1d(corrected_mz_diffs, n_components=2)
     mz_order = np.argsort(mz_sigmas)
     mz_sigmas = mz_sigmas[mz_order]
@@ -1612,6 +1662,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
             
         with open(results_folder+"/first_search/mz_func","wb") as dill_file:
             dill.dump(mz_func,dill_file)
+
+        with open(results_folder+"/first_search/int_mz_fit","wb") as dill_file:
+            dill.dump(int_mz_fit,dill_file)
         
         # if ms2:
         #     with open(results_folder+"/ms2_func","wb") as dill_file:
@@ -1777,8 +1830,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,ms1=False,results_fo
     #     return (rt_spl, mz_func, ms2_func), updatedLibrary
     # else:
     if return_rt_models and not config.args.use_emp_rt:
-        return (rt_spl, mz_func), updatedLibrary, (models, convertor), fwhm, vote_sigma
-    return (rt_spl, mz_func), updatedLibrary, None, fwhm, vote_sigma
+        return (rt_spl, mz_func, int_mz_fit), updatedLibrary, (models, convertor), fwhm, vote_sigma
+    return (rt_spl, mz_func, int_mz_fit), updatedLibrary, None, fwhm, vote_sigma
 
 ###################################################################################################
 ###################################################################################################
@@ -3223,7 +3276,15 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     # orig_mzs = id_mzs+(diffs*np.array(id_mzs))
     # plt.hist(((mz_func(id_mzs,rts)-orig_mzs)/id_mzs)[rt_filter_bool],100)
     
-    corrected_mz_diffs = (diffs-(f_rt_mz(rts)+mz_spl(output_df.mz)))[rt_mz_filter_bool]
+    corrected_mz_diffs = diffs-(f_rt_mz(rts)+mz_spl(output_df.mz))
+
+    # intensity-dependent m/z error, fit on what the RT and m/z corrections leave
+    ms1_intensity = output_df["closest_peak_intensity_ms1"].to_numpy()
+    int_mz_fit = fit_intensity_mz_error(corrected_mz_diffs[rt_mz_filter_bool], ms1_intensity[rt_mz_filter_bool])
+    if int_mz_fit is not None:
+        corrected_mz_diffs = corrected_mz_diffs - intensity_mz_error(int_mz_fit, ms1_intensity)
+    corrected_mz_diffs = corrected_mz_diffs[rt_mz_filter_bool]
+
     mz_amplitude, mz_mean, mz_stddev = fit_gaussian(corrected_mz_diffs)
     
     # plt.hist(np.array(diffs)[rt_mz_filter_bool],100,density=True)
@@ -3308,6 +3369,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
             
         with open(results_folder+"/mz_func","wb") as dill_file:
             dill.dump(mz_func,dill_file)
+
+        with open(results_folder+"/int_mz_fit","wb") as dill_file:
+            dill.dump(int_mz_fit,dill_file)
         
         # if ms2:
         #     with open(results_folder+"/ms2_func","wb") as dill_file:
@@ -3396,7 +3460,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,mz_tol,ms1=False,results_folder=
     # Return the measured elution FWHM (third slot) so downstream fragment-ion
     # correlation features can be computed; returning None here makes
     # compute_fragment_correlations bail out to all-NaN for every row.
-    return (rt_spls, mz_func), updatedLibrary, _fwhm
+    return (rt_spls, mz_func, int_mz_fit), updatedLibrary, _fwhm
 
 
 
