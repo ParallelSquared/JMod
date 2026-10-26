@@ -52,7 +52,7 @@ If you would like to set up the UV environment with the command line, please fol
 <summary><strong> Setup Steps </strong>
 </summary>
 
-1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
+1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v2.0.0)
 
 
 2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, run the following command:
