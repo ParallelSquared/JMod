@@ -98,7 +98,7 @@ Thermo RawFileReader is developed and distributed by Pacific Northwest National 
 
 ### Unimod
 
-JMod ships a copy of the [Unimod](https://www.unimod.org) modification database, `data/unimod.xml`, so a search needs no network. Unimod is copyright 2002-2006 Unimod and distributed under the Design Science License, in `data/unimod.xml.LICENSE`. To update the copy to the latest from unimod.org, run `uv run python scripts/update_unimod.py`.
+JMod ships a copy of the [Unimod](https://www.unimod.org) modification database, `data/unimod.xml`. Unimod is copyright 2002-2006 Unimod and distributed under the Design Science License, in `data/unimod.xml.LICENSE`. To update the copy to the latest from unimod.org, run `uv run python scripts/update_unimod.py`.
 
 ###
 ## Running a Search
@@ -246,9 +246,6 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --mbr
   Match between runs. Requires two or more files.
   default = False
---dummy_value
-  Append string to end of folder name
-  default = None
 --rawfilereader_path
   Path to the ThermoRawFileParser if using .raw files
 --bruker_sdk_path
@@ -328,10 +325,10 @@ These commands run on their own, without a search.
   Report the library's modifications, what any --strip_mod, --add_fixed_mod and --add_variable_mod
   given would do to them, and whether JMod can load it (with the --tag given, if any).
   The "i" button next to the spectral library in the GUI shows the same report.
---make_library path/to/JMod_Results
-  Build the match between runs library from a finished search's results folder.
---combine_results path/to/JMod_Results
-  Combine the results of a finished search's results folder again.
+--make_library path/to/experiment_folder
+  Build the match between runs library from a finished search's experiment folder.
+--combine_results path/to/experiment_folder
+  Combine the results of a finished search's experiment folder again.
 ```
 
 For example:
@@ -347,7 +344,7 @@ uv run python path/to/run_jmod.py --inspect_library path/to/library.parquet --ta
 ## Output Files
 
 
-JMod produces multiple output files. Each search writes them to a new `JMod_Results` folder in the output folder (`JMod_Results_<text>` with `-z <text>`), with one results folder per searched file. Below is a brief description of the main outputs alongside an example directory structure. A more comprehensive description of each output file can be found [here.](/Help/outputs.pdf)
+JMod produces multiple output files. Each search writes them to a folder determined by -o or 'Output Folder' in the GUI, with one results folder per searched file. Below is a brief description of the main outputs alongside an example directory structure. A more comprehensive description of each output file can be found [here.](/Help/outputs.pdf)
 
 - ```combined_filtered_IDs.parquet```: IDs from all searched files filtered at 1% FDR, with global q-values
 - ```experiment_results/```: Plots comparing the searched files
@@ -475,7 +472,7 @@ A comprehensive list of all output columns and descriptions for each one can be 
 ### Structure of Results Directory:
 
 ```text
-JMod_Results
+experiment_folder (-o, or 'Output Folder' entry in GUI)
 
 ├── combined_filtered_IDs.parquet
 ├── JMod_config.json

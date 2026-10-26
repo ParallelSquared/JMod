@@ -15,7 +15,6 @@
     "tag": "PSMtag",
     "num_iso": 2,
     "lib_frac": 0.5,
-    "dummy_value": null,
     "plexDIA": true,
     "use_emp_rt": false,
     "predict_decoys": false,
