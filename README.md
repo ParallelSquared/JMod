@@ -63,7 +63,7 @@ If you would like to set up the UV environment with the command line, please fol
 
 3. Open a new terminal and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: 
 
-    ```uv sync --python 3.11```
+    ```uv sync```
 
 4. You can now launch the JMod GUI with ```uv run python run_jmod_from_GUI.py``` or run a search using the command line with ```uv run python run_jmod.py <args>```.
 
