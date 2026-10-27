@@ -18,7 +18,6 @@ import polars as pl
 import re
 from functools import partial
 from tqdm.auto import tqdm
-from time import perf_counter
 from numpy import linalg as la
 
 from src.config import diann_mods
@@ -175,36 +174,13 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     chunk_size = 1000
     ms2scans = dia_spectra.ms2scans
     hit_frames = []
-    # Split the per-chunk wall clock three ways so it is visible whether the
-    # bottleneck is the Python->Rust spectrum copy, the Rust search itself, or
-    # the Rust->Python hits copy. These are sequential within the loop, so they
-    # sum to the loop's wall time.
-    t_convert = t_search = t_topolars = 0.0
     for i in tqdm(range(0, len(ms2scans), chunk_size)):
-        _t = perf_counter()
         chunk = [spec.to_rust_spectrum() for spec in ms2scans[i:i + chunk_size]]
-        t_convert += perf_counter() - _t
-
-        _t = perf_counter()
         batch_hits = scorer.score_many(db, chunk)
-        t_search += perf_counter() - _t
-
         # to_polars() per chunk: the Rust hits for this chunk are released here rather
         # than at the end of the whole search.
-        _t = perf_counter()
         hit_frames.append(batch_hits.to_polars())
-        t_topolars += perf_counter() - _t
         del batch_hits, chunk
-
-    t_loop = t_convert + t_search + t_topolars
-    if t_loop > 0:
-        logger.info(
-            f"Preliminary search timing over {len(ms2scans)} MS2 spectra "
-            f"({t_loop:.1f}s total): "
-            f"to_rust_spectrum {t_convert:.1f}s ({100*t_convert/t_loop:.0f}%), "
-            f"score_many {t_search:.1f}s ({100*t_search/t_loop:.0f}%), "
-            f"to_polars {t_topolars:.1f}s ({100*t_topolars/t_loop:.0f}%)"
-        )
 
     # Reconcile per-chunk dtypes before concatenating
     hit_frames = _reconcile_chunk_schemas(hit_frames)
