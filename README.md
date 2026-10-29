@@ -220,6 +220,9 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --additional_scans
   If free-apex; Each channel apex is selected within this number of scans from the plex group center. 
   default = 0
+--plex_area_scan_radius
+  Number of MS1 scans on either side of the apex summed for plex_Area.
+  default = 1
 --timeplex
   Use timePlex mode for search
   default = False

@@ -178,6 +178,18 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    # plex_Area: the MS1 scans summed on either side of the apex
+    'plex_area_scan_radius': {
+        'flags': ('--plex_area_scan_radius',),
+        'default': 1,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': 'dropdown',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
+    },
     # Worker processes for isotope generation (--iso).  Each is a separate
     # process with its own memory; capped at the number of CPUs.
     'iso_workers': {

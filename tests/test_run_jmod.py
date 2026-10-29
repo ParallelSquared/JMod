@@ -157,7 +157,7 @@ class TestExperimentFolder:
         assert (tmp_path / "experiment" / "JMod_config.json").read_text() == "earlier experiment"
         (sibling,) = tmp_path.glob("experiment_*")  # datestamped
         assert (sibling / "JMod_config.json").is_file()
-        assert any(f"holds a previous experiment: this experiment goes in {sibling}" in r.getMessage()
+        assert any(f"holds a previous experiment: this experiment writing to {sibling}" in r.getMessage()
                    for r in app_log)
 
     def test_a_folder_with_other_files_gets_jmod_results_inside(self, experiment, monkeypatch, tmp_path):

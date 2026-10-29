@@ -180,33 +180,33 @@ def _compute_med_frag_error_from_polars(fdc_list_cols):
     ).to_pandas()
 
 
-def area(x, apex_idx):
-    top_3 = x[max(0, apex_idx-1):apex_idx+2]
-    return np.sum(top_3)
+def area(x, apex_idx, area_radius=1):
+    """Sum of ``x`` over the apex and ``area_radius`` scans on either side"""
+    return np.sum(x[max(0, apex_idx-area_radius):apex_idx+area_radius+1])
 
 
-def argmax_within_radius(fitted, start_pos, radius=None):
+def argmax_within_radius(fitted, start_pos, radius=None, area_radius=1):
     """Pick the index with the highest ``fitted`` value within
-    ``start_pos ± radius`` cycles, capped one position in from either edge so
-    ``area`` always has both neighbors for the top-3 sum. When ``radius`` is
+    ``start_pos ± radius`` cycles, capped ``area_radius`` positions in from
+    either edge so ``area`` always has its full window. When ``radius`` is
     ``None`` the cap is the full interior of ``fitted``.
     """
     n = len(fitted)
-    if n < 3:
+    if n < 2 * area_radius + 1:
         return start_pos
-    lo = 1
-    hi = n - 2
+    lo = area_radius
+    hi = n - 1 - area_radius
     if radius is not None:
         lo = max(lo, start_pos - radius)
         hi = min(hi, start_pos + radius)
     return lo + int(np.argmax(fitted[lo:hi + 1]))
 
 
-def walk_to_local_max(fitted, start_pos, apex_jitter=None):
+def walk_to_local_max(fitted, start_pos, apex_jitter=None, area_radius=1):
     """Slide the apex from ``start_pos`` toward a local maximum, one cycle at a
-    time, while strictly increasing. Capped one position in from either edge so
-    the picked apex always has both neighbors available for ``area`` to sum the
-    top-3 window. When ``apex_jitter`` is given, the walk additionally stops
+    time, while strictly increasing. Capped ``area_radius`` positions in from
+    either edge so the picked apex always has the full window for ``area`` to
+    sum. When ``apex_jitter`` is given, the walk additionally stops
     once it has moved ``apex_jitter`` cycles from ``start_pos`` in either
     direction.
 
@@ -214,10 +214,10 @@ def walk_to_local_max(fitted, start_pos, apex_jitter=None):
     is already a local maximum.
     """
     n = len(fitted)
-    if n < 3:
+    if n < 2 * area_radius + 1:
         return start_pos
-    lo_cap = 1
-    hi_cap = n - 2
+    lo_cap = area_radius
+    hi_cap = n - 1 - area_radius
     if apex_jitter is not None:
         lo_cap = max(lo_cap, start_pos - apex_jitter)
         hi_cap = min(hi_cap, start_pos + apex_jitter)
@@ -399,8 +399,9 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     # ms1_cor_channels fit a ±fit_radius window around the group's voted apex.
     # The voted apex is at the center of fitted/specs. Each channel can drift
     # away from that center monotonically (only while values are strictly
-    # increasing), capped one position in from the edge so area() always has
-    # both neighbors for its top-3 sum.
+    # increasing), capped plex_area_scan_radius positions in from the edge so
+    # area() always has its full window.
+    area_radius = int(config.args.plex_area_scan_radius)
     plex_areas = []
     apex_scans = []
     for idx in range(len(fdc)):
@@ -413,11 +414,11 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         # independent — apex_jitter still matters when free_apex is on, and
         # vice versa.
         if config.args.free_apex:
-            seed = argmax_within_radius(fitted, center, radius=int(config.args.additional_scans))
+            seed = argmax_within_radius(fitted, center, radius=int(config.args.additional_scans), area_radius=area_radius)
         else:
             seed = center
-        apex_pos = walk_to_local_max(fitted, seed, apex_jitter=int(config.args.apex_jitter))
-        plex_areas.append(area(fitted, apex_pos))
+        apex_pos = walk_to_local_max(fitted, seed, apex_jitter=int(config.args.apex_jitter), area_radius=area_radius)
+        plex_areas.append(area(fitted, apex_pos, area_radius))
         apex_scans.append(int(specs[apex_pos]))
     fdc["plex_Area"] = plex_areas
     fdc["ms1_apex_scan"] = apex_scans

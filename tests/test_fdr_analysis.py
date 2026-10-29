@@ -20,7 +20,8 @@ import pytest
 
 from src.utils.errors import JModError
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
-                               compute_protein_FDR, log_df, untag_prec_qvalues)
+                               compute_protein_FDR, log_df, untag_prec_qvalues,
+                               area, walk_to_local_max)
 
 def test_score_model_minimal_fixed():
     # 12 samples, 2 classes
@@ -214,3 +215,11 @@ def test_log_df_multiple_files():
 
     # Should handle multiple unique file prefixes
     log_df(df)
+
+
+def test_plex_area_sums_the_scan_radius_on_either_side_of_the_apex():
+    x = np.array([1, 2, 5, 9, 4, 3, 1.])
+    assert area(x, 3) == 5 + 9 + 4
+    assert area(x, 3, area_radius=2) == 2 + 5 + 9 + 4 + 3
+    # The apex stays area_radius scans in from the edges
+    assert walk_to_local_max(np.array([9, 5, 4, 3, 2.]), 2, area_radius=2) == 2
