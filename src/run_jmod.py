@@ -38,7 +38,6 @@ from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags, set_config_tag
 from src.fdr_analysis import process_data
-from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
 from src.models.run_state import RunState
 from src.utils.errors import JModError, report_error, mark_run_failed
@@ -960,14 +959,17 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         del plex_lib
 
     else:
-        # Predict independent RTs for decoy sequences using CNN
+        # Predict independent RTs for decoy sequences.  These must be the
+        # modified sequences: targets above are scored on mod_seq, and scoring
+        # decoys on the stripped sequence instead would shift them as a group
+        # and bias the FDR estimate.
         if config.args.predict_decoys and rt_models_data is not None:
-            models, convertor = rt_models_data
-            decoy_seqs = [spectrumLibrary.seq[i] for i in range(n_targets, n_entries)]
-            predicted_rts = predict_decoy_rts(decoy_seqs, models, convertor)
+            decoy_seqs = [spectrumLibrary.mod_seq[i] for i in range(n_targets, n_entries)]
+            logger.info(f"Predicting RTs for {len(decoy_seqs)} decoy sequences")
+            predicted_rts = rt_models_data.predict_seqs(decoy_seqs)
             if predicted_rts is not None:
                 iRT[n_targets:n_targets + len(predicted_rts)] = predicted_rts
-            del models, convertor
+            del rt_models_data
         elif config.args.predict_decoys:
             logger.warning("Decoy RT prediction requested but no RT models available (using empirical RT?)")
 

@@ -201,52 +201,42 @@ def _entrapment_worker(args):
 
 # ── Retention time prediction ─────────────────────────────────────────────────
 
-_AA_STR = "ACDEFGHIKLMNPQRSTVWY"
-_MAX_SEQ_LEN = 30
-_NUM_AA = 20
-_AA_TO_IDX = {aa: i for i, aa in enumerate(_AA_STR)}
-
-# Model base paths relative to rt_models/ dir, keyed by tag name fragment
-_MODEL_PATHS = {
-    "LF":      "iRT_CNN_model_LF_09182024_",
-    "mTRAQ":   "iRT_CNN_model_mTRAQ_09182024_",
-    "diethyl": "iRT_CNN_model_DiEthyl_11052024_",
-    "PSMtag":  "iRT_TransferLearning_Tag6_updated_05072025_",
-}
+# Tags this script will predict for.  "LF" is label-free; the rest name a
+# mass tag in src/MassTags/ and are resolved to a massTag object so modified
+# sequences translate correctly.
+_RT_TAGS = ["LF", "mTRAQ", "diethyl", "dimethyl", "PSMtag"]
 
 
-def _one_hot_encode(sequence: str) -> np.ndarray:
-    """One-hot encode a stripped peptide sequence to (30, 20) array."""
-    enc = np.zeros((_MAX_SEQ_LEN, _NUM_AA), dtype=np.float32)
-    for i, aa in enumerate(sequence[:_MAX_SEQ_LEN]):
-        idx = _AA_TO_IDX.get(aa.upper())
-        if idx is not None:
-            enc[i, idx] = 1.0
-    return enc
+def _resolve_tag(tag: str):
+    """A massTag for *tag*, or None for label-free."""
+    if tag == "LF":
+        return None
+    from src.mass_tags import available_tags
+
+    match = next((t for name, t in available_tags.items() if tag in name), None)
+    if match is None:
+        raise ValueError(f"No mass tag matching '{tag}' in src/MassTags/")
+    return match
 
 
 def predict_irts(sequences: list[str], tag: str = "LF") -> np.ndarray:
-    """Predict iRT values for a list of stripped peptide sequences.
+    """Predict iRT values for a list of modified peptide sequences.
 
-    Uses the pre-trained CNN ensemble (3 models, averaged).
+    These are uncalibrated predictions from the pretrained base model, so
+    they come out on its own z-scored scale rather than in any run's RT
+    units.  That is what an entrapment library wants: a consistent ordering
+    shared by targets and entrapments, not an experiment's minutes.
     """
-    import tensorflow as tf
-    tf.get_logger().setLevel("ERROR")
+    from jrif import RTPredictor
 
-    rt_models_dir = os.path.join(os.path.dirname(__file__), "..", "rt_models")
-    base = _MODEL_PATHS.get(tag)
-    if base is None:
-        raise ValueError(f"Unknown tag '{tag}', choose from: {list(_MODEL_PATHS)}")
-    model_path = os.path.join(rt_models_dir, base)
+    from src.rt_predictor import JmodRTPredictor, checkpoint_for_tag
 
-    models = []
-    for i in range(3):
-        model = tf.keras.models.load_model(model_path + str(i), compile=False)
-        models.append(model)
+    mass_tag = _resolve_tag(tag)
+    ckpt, name = checkpoint_for_tag(mass_tag)
+    print(f"  RT model: {name}")
 
-    X = np.array([_one_hot_encode(seq) for seq in sequences])
-    predictions = np.mean([m.predict(X, batch_size=4096, verbose=0) for m in models], axis=0).flatten()
-    return predictions
+    handle = JmodRTPredictor(RTPredictor.from_checkpoint(ckpt), tag=mass_tag)
+    return handle.predict_seqs(sequences)
 
 
 # ── Library I/O ──────────────────────────────────────────────────────────────
@@ -386,7 +376,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="Random seed (default: 0)")
     parser.add_argument("-j", "--jobs", type=int, default=None,
                         help="Number of parallel workers (default: all CPUs)")
-    parser.add_argument("--tag", choices=list(_MODEL_PATHS), default="LF",
+    parser.add_argument("--tag", choices=_RT_TAGS, default="LF",
                         help="RT model tag (default: LF)")
     parser.add_argument("--keep-rt", action="store_true",
                         help="Keep original iRT values instead of predicting new ones")
@@ -462,14 +452,17 @@ def main():
         # Entrapment entries already have the target's iRT from the worker
     else:
         print(f"Predicting iRTs (model={args.tag})...")
-        unique_seqs = list({entry["seq"] for entry in library} |
-                           {entry["seq"] for entry in entrapment})
+        # Predict on the modified sequence: the model reads modifications, so
+        # a labeled peptide and its unlabeled counterpart are no longer the
+        # same input.
+        unique_seqs = list({entry["mod_seq"] for entry in library} |
+                           {entry["mod_seq"] for entry in entrapment})
         predicted = predict_irts(unique_seqs, tag=args.tag)
         seq_to_irt = dict(zip(unique_seqs, predicted))
         for entry in library:
-            entry["iRT"] = float(seq_to_irt[entry["seq"]])
+            entry["iRT"] = float(seq_to_irt[entry["mod_seq"]])
         for entry in entrapment:
-            entry["iRT"] = float(seq_to_irt[entry["seq"]])
+            entry["iRT"] = float(seq_to_irt[entry["mod_seq"]])
 
     # Assign EntrapmentGroupId and PrecursorIdx
     N = len(library)

@@ -38,3 +38,30 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "1")
 # reads its own variable and ignores the other.
 os.environ.setdefault("_RJEM_MALLOC_CONF", "dirty_decay_ms:0,muzzy_decay_ms:0")
 os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
+
+# Not an environment variable, but the same kind of constraint: it has to
+# happen before anything else, and this module runs first.
+#
+# torch MUST be imported before xgboost.  Both use OpenMP; on macOS/arm64
+# xgboost resolves @rpath/libomp.dylib to Homebrew's copy, and if it gets
+# there first, torch loading its own bundled copy afterwards puts two OpenMP
+# runtimes in the process and the next threaded call dies with a bare SIGSEGV
+# -- no Python traceback.  jmod imports xgboost early (fdr_analysis), and the
+# RT model pulls in torch much later during alignment, which is exactly the
+# losing order.  See pytorch/pytorch#155201 and #121101.
+#
+# This works only together with the torch<2.11 pin in pyproject.toml: up to
+# 2.10 torch's bundled libomp has install name
+# /opt/homebrew/opt/libomp/lib/libomp.dylib, identical to Homebrew's, so dyld
+# loads one image.  From 2.11 it became /opt/llvm-openmp/lib/libomp.dylib and
+# dyld treats it as a second library -- then NO import order is safe.
+#
+# Rejected alternatives, all measured on this machine: KMP_DUPLICATE_LIB_OK=TRUE
+# (no effect -- this is not the usual duplicate-libomp abort), OMP_NUM_THREADS
+# at 2/4/8 (still crashes; only 1 is safe, which serializes scoring), and
+# torch.set_num_threads(1) (still crashes -- loading the second runtime is what
+# matters, not how many threads use it).  DYLD_LIBRARY_PATH works but has to be
+# set before the process starts, so it cannot live in Python.
+#
+# No-op on Linux and Windows, where both libraries share one OpenMP runtime.
+import torch  # noqa: E402,F401  (ordering side effect, not an API)

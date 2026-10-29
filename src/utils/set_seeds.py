@@ -14,7 +14,7 @@
 
 import numpy as np
 import random
-import tensorflow as tf
+import torch
 
 def set_seeds(seed):
     """
@@ -36,4 +36,4 @@ def set_seeds(seed):
 
     np.random.seed(seed)
     random.seed(seed)
-    tf.random.set_seed(seed)
+    torch.manual_seed(seed)

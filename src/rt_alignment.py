@@ -48,7 +48,7 @@ from src.utils.misc_functions import within_tol,moving_average, \
     closest_ms1spec, closest_peak_diff, unstring_floats, fragment_cor
 
 
-from src.finetune_funs import fine_tune_rt, one_hot_encode_sequence
+from src.rt_predictor import JmodRTPredictor
 from src.utils.io.read_output import names, dtypes
 
 from src.logger import logger
@@ -1765,40 +1765,46 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         ## filter for only a single channel for each
         logger.info("")
         logger.info("Trying RT Prediction")
+        # Group by modified sequence: the RT model sees the modifications, so
+        # labeled channels of one peptide are separate entries rather than
+        # being averaged together.  The library key is already the modified
+        # sequence, so s[0] is it.
         seq_rt = {}
         for s,rt in zip(np.array(id_keys)[cor_filter],np.array(output_df.rt)[cor_filter]):
-            key=librarySpectra[(s[0],float(s[1]))]["seq"]
+            key=s[0]
             seq_rt.setdefault(key,[])
             seq_rt[key].append(rt)
-        # exclude those with ambiguity (differences between channels/charge states)
+        # exclude those with ambiguity (differences between charge states)
         filtered_seq_rt = {s:np.median(seq_rt[s]) for s in seq_rt if np.ptp(seq_rt[s])<1}
-            
-        ## use observed rt for fine_tuning
-        # grouped_df = pd.DataFrame({'Stripped.Sequence':[librarySpectra[(i[0],float(i[1]))]["seq"] for i in id_keys],"RT":[i for i in np.array(dia_rt)]})[cor_filter]
-        grouped_df =  pd.DataFrame({'Stripped.Sequence':[s for s in filtered_seq_rt],"RT":[filtered_seq_rt[s] for s in filtered_seq_rt]})
-        data_split, models, convertor = fine_tune_rt(grouped_df,qc_plots=True,results_path=results_folder)
-        
-        
+
+        ## use observed rt for calibration
+        grouped_df =  pd.DataFrame({'mod_seq':[s for s in filtered_seq_rt],"RT":[filtered_seq_rt[s] for s in filtered_seq_rt]})
+        rt_model, holdout = JmodRTPredictor.calibrate(grouped_df, tag=mass_tag)
+        rt_model.qc_plot(holdout, results_folder)
+
+
         all_emp_diffs = (emp_rt_spl(output_df.lib_rt)-np.array(output_df.rt))[cor_filter]
-        
-        
-        lib_seqs = [one_hot_encode_sequence(librarySpectra[key]["seq"]) for key in id_keys]
-        predicted_rts = convertor(np.mean([model.predict(np.array(lib_seqs)) for model in models],axis=0).flatten())
-    
-        validation_rts = convertor(np.mean([model.predict(np.array(data_split[1])) for model in models],axis=0).flatten())
-        validation_rt_diffs = data_split[3]-validation_rts
-        
-        pred_rt_spl = fast_modal_lowess(predicted_rts[cor_filter],
-                               np.array(output_df.rt)[cor_filter],
+
+
+        predicted_rts = rt_model.predict_seqs([key[0] for key in id_keys])
+
+        # Scored on rows held out of calibration, so the comparison against the
+        # empirical alignment below is not reading back the training data.
+        validation_rts = rt_model.predict_seqs(holdout['mod_seq'].tolist())
+        validation_rt_diffs = holdout['RT'].to_numpy() - validation_rts
+        # NaN: peptides the RT model cannot represent (predict_seqs logged them)
+        validation_rt_diffs = validation_rt_diffs[np.isfinite(validation_rt_diffs)]
+
+        pred_fit = np.logical_and(cor_filter, np.isfinite(predicted_rts))
+        pred_rt_spl = fast_modal_lowess(predicted_rts[pred_fit],
+                               np.array(output_df.rt)[pred_fit],
                                local_frac=.01,
                                anchors=1000,
                                grid_size=1000,
                                post_smooth_frac=0.01)
-        
-        all_pred_diffs = (pred_rt_spl(predicted_rts) - np.array(output_df.rt))[cor_filter]
-        
+
         all_pred_diffs = validation_rt_diffs
-        
+
         emp_data, emp_p, emp_cdf_auc = cdf_data(all_emp_diffs,limit=limit)
         pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs,limit=limit)
 
@@ -1830,14 +1836,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
             # Combine elution width and GMM sigma, take 4th standard deviation
             boundary = 4 * sigmas[0] + 8 * elution_sd
             rt_spl = pred_rt_spl
-            # Deduplicate sequences to avoid redundant predictions
-            unique_seqs = list(set(updatedLibrary[key]["seq"] for key in all_lib_keys))
-            unique_encoded = np.array([one_hot_encode_sequence(s) for s in unique_seqs], dtype=np.float32)
-            unique_rts = convertor(np.mean([model.predict(unique_encoded, batch_size=4096) for model in models], axis=0).flatten())
-            seq_to_rt = dict(zip(unique_seqs, unique_rts))
+            lib_mod_seqs = [updatedLibrary[key]["mod_seq"] for key in all_lib_keys]
+            seq_to_rt = dict(zip(lib_mod_seqs, rt_model.predict_seqs(lib_mod_seqs)))
 
             for key in all_lib_keys:
-                updatedLibrary[key]["iRT"] = seq_to_rt[updatedLibrary[key]["seq"]]
+                updatedLibrary[key]["iRT"] = seq_to_rt[updatedLibrary[key]["mod_seq"]]
 
         else:
             logger.info("Empirical Library Chosen")
@@ -2332,7 +2335,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     #     return (rt_spl, mz_func, ms2_func), updatedLibrary
     # else:
     if return_rt_models and not config.args.use_emp_rt:
-        return (rt_spl, mz_func), updatedLibrary, (models, convertor), fwhm, vote_sigma, im_spl
+        return (rt_spl, mz_func), updatedLibrary, rt_model, fwhm, vote_sigma, im_spl
     return (rt_spl, mz_func), updatedLibrary, None, fwhm, vote_sigma, im_spl
 
 ###################################################################################################
@@ -2357,7 +2360,9 @@ def filter_rts_by_dense(rts,n_bins=20):
 
     """
 
-    hist,bins = np.histogram(rts,n_bins)
+    rts = np.asarray(rts)
+    # NaN (no predicted RT) is never in the dense region: comparisons below are False
+    hist,bins = np.histogram(rts[np.isfinite(rts)],n_bins)
     med = np.mean(hist[hist!=0])
     where_larger = np.where(hist>med/2)[0]
     smallest,largest = (bins[where_larger[0]],bins[min(where_larger[-1]+1,len(bins)-1)])
@@ -2847,19 +2852,21 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     if not config.args.use_emp_rt:
             
             
-        ## use observed rt for fine_tuning
-        grouped_df = pd.DataFrame({'Stripped.Sequence':[librarySpectra[(i[0],float(i[1]))]["seq"] for i in t_seqs[0]],"RT":[i[0] for i in t_vals[0]]})[diff_bool]
-        data_split, models, convertor = fine_tune_rt(grouped_df,qc_plots=True,results_path=results_folder)
+        ## use observed rt for calibration.  The library key is already the
+        ## modified sequence, so i[0] is it.
+        grouped_df = pd.DataFrame({'mod_seq':[i[0] for i in t_seqs[0]],"RT":[i[0] for i in t_vals[0]]})[diff_bool]
+        rt_model, holdout = JmodRTPredictor.calibrate(grouped_df, tag=config.tag)
+        rt_model.qc_plot(holdout, results_folder)
 
-        
+
         ### recalculate RT_spls...
         keys = [(i,float(j)) for i,j in t_seqs[0]]
-        
-        lib_seqs = [one_hot_encode_sequence(librarySpectra[key]["seq"]) for key in keys]
-        new_lib_rts = convertor(np.mean([model.predict(np.array(lib_seqs)) for model in models],axis=0).flatten())
-        
+
+        new_lib_rts = rt_model.predict_seqs([key[0] for key in keys])
+
         t0_rts = new_lib_rts
         ## exclude regions where there are no IDs
+        # excludes NaN: peptides the RT model cannot represent (predict_seqs logged them)
         rt_filter_bool = filter_rts_by_dense(t0_rts,30)
         rt_spls = []
         for idx in range(n_timeplex):
@@ -2897,9 +2904,10 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     
             boundary = fit_errors(all_pred_diffs,limit,percentile)
     
-            all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
-            all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
-            
+            all_lib_mod_seqs = [updatedLibrary[key]["mod_seq"] for key in all_lib_keys]
+            all_new_lib_rts = rt_model.predict_seqs(all_lib_mod_seqs)
+
+
             for key,rt in zip(all_lib_keys,all_new_lib_rts):
                 updatedLibrary[key]["iRT"] = rt
                 

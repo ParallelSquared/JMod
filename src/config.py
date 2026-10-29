@@ -135,9 +135,6 @@ max_num_prelim_search = 1e5
 protein_column = 'protein_group'
 
 
-### the minimum number of IDs necessary for fine-tuning
-FT_minimum = 1e3
-
 ### minimum ms1 tolerance; set to 0 to ignore
 min_ms1_tol = 0#3e-6
 

@@ -69,24 +69,15 @@ deps = [
   "pywin32; platform_system == 'Windows'",
   "pythonnet",
 
-  # TensorFlow per platform
-  # Mac
-  "tensorflow==2.15.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
-  "tensorflow-metal==1.2.*; platform_system == 'Darwin' and platform_machine == 'arm64'",
-
-  # Windows
-  "tensorflow-intel==2.15.1; sys_platform == 'win32' and platform_machine == 'AMD64'",
-
-  # Linux
-  "tensorflow==2.15.1; platform_system == 'Linux'",
-
-  # Important: keep TF-Keras (2.15) and block standalone Keras 3
-  "keras==2.15.*",
-
-  # Shared TF tooling
-  "tensorboard",
-  "tensorboard-data-server",
-  "tensorflow-io-gcs-filesystem",
+  # Retention-time prediction
+  "jrif>=0.2.0",
+  # torch<2.11: from 2.11 torch's bundled libomp has install name
+  # /opt/llvm-openmp/lib/libomp.dylib instead of Homebrew's path, so on
+  # macOS/arm64 dyld loads it as a SECOND OpenMP runtime alongside the one
+  # xgboost uses and the next threaded call segfaults.  With <2.11 the install
+  # names match and dyld loads one image.  See src/__init__.py and
+  # pytorch/pytorch#155201.
+  "torch<2.11",
 
   # Testing
   "pytest",
