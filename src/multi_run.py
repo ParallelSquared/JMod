@@ -189,16 +189,17 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
 
     # Kept when the runs' results carry them: timeplex runs have each ID's time
     # channel, and coeff, prec_im and untag_prec_Qvalue are there when the
-    # results were written with them
+    # results were written with them, as is MS1_quality
     available = df.collect_schema().names()
-    time_channel, coeff, prec_im, untag_prec_q = ([c] if c in available else []
-                                                  for c in ("time_channel", "coeff", "prec_im", "untag_prec_Qvalue"))
+    time_channel, coeff, prec_im, untag_prec_q, ms1_quality = (
+        [c] if c in available else []
+        for c in ("time_channel", "coeff", "prec_im", "untag_prec_Qvalue", "MS1_quality"))
     df = (
         df
         .select(["run_idx", "file_name", "protein", "seq", "z", "channel", "silac_channel",
                  *time_channel,
                  "PredVal", "Qvalue", "BestChannel_Qvalue", *untag_prec_q, "Protein_Qvalue",
-                 "plex_Area", *coeff, "stripped_seq", "untag_seq", "untag_prec",
+                 "plex_Area", *coeff, *ms1_quality, "stripped_seq", "untag_seq", "untag_prec",
                  "mz", "rt", *prec_im, "is_decoy"])
         .with_columns(
             (pl.col("seq") + pl.lit("_") + pl.col("z").cast(pl.Int16).cast(pl.String)).alias("Prec")

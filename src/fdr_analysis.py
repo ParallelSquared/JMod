@@ -238,6 +238,117 @@ def walk_to_local_max(fitted, start_pos, apex_jitter=None, area_radius=1):
             i += 1
 
 
+# MS1_quality: how far to trust each ID's MS1 quant (plex_Area).
+# gauss_r2_joint: one Gaussian elution peak fit to the ID's MS1 and MS2
+# coefficient traces together (shared center and sigma, each trace its own
+# amplitude and counted equally), by grid search over center and sigma; the mean
+# over the two traces of the uncentered R^2 (cos^2 of trace and Gaussian). The
+# MS1 trace is plexfittrace_all over the MS1 fit window, the MS2 trace the run's
+# MS2 coefficients of the same precursor on those MS1 scans (matched on
+# Ms1_spec_id, 0 where there is none).
+# MS1_quality = sqrt(pct(PredVal) x pct(gauss_r2_joint)), percentiles within
+# the run's filtered IDs, a missing Gaussian fit counting as 0; x 0.01 when
+# plex_Area == 0, which puts IDs without an MS1 quant at the bottom.
+SIGMA_GRID = np.geomspace(0.3, 6.0, 40)   # Gaussian sigmas tried, in MS1 scans
+SHIFT_GRID = np.linspace(-2.0, 2.0, 41)   # centers tried, in scans from the MS1 apex
+NO_MS1_QUANT_FACTOR = 0.01                # MS1_quality factor when plex_Area == 0
+_CHUNK = 10000  # rows scored at once, against the 1,640 Gaussians of the grid
+
+
+def gauss_r2_joint(ids, dc, timeplex=False):
+    """gauss_r2_joint of every row of ``ids`` (pandas, with plexfittrace_spec_all,
+    plexfittrace_all and ms1_apex_scan), NaN where there is no fit: no MS1 fit
+    window, or fewer than 3 scans of signal across the two traces with at least
+    one in each. ``dc`` is the run's MS2 coefficients (polars: seq, z,
+    Ms1_spec_id, coeff, and time_channel when ``timeplex``)."""
+    out = np.full(len(ids), np.nan)
+    if dc is None:
+        return out
+    # IDs without an MS1 quant have 0 here (ms1_quant's fillna)
+    has_window = ids["plexfittrace_spec_all"].map(lambda s: isinstance(s, str) and s != "").to_numpy()
+    if not has_window.any():
+        return out
+    df = ids[has_window]
+    lens = df["plexfittrace_spec_all"].str.count(";").to_numpy() + 1
+    width = int(lens.max())
+    rows = np.repeat(np.arange(len(lens)), lens)
+    pos = np.arange(lens.sum()) - np.repeat(np.cumsum(lens) - lens, lens)
+    valid = np.arange(width)[None, :] < lens[:, None]
+
+    def padded(col):
+        values = np.full((len(lens), width), np.nan)
+        values[rows, pos] = np.array(";".join(df[col]).split(";"), dtype=float)
+        return values
+
+    specs = padded("plexfittrace_spec_all")
+    c = np.nan_to_num(padded("plexfittrace_all"))
+    c2 = _ms2_trace(df, dc, specs, rows, pos, ["seq", "z"] + (["time_channel"] if timeplex else []))
+
+    apex = df["ms1_apex_scan"].to_numpy(dtype=float)
+    at_apex = specs == apex[:, None]
+    p = np.where(at_apex.any(1), np.argmax(at_apex, 1), np.nan)
+
+    ms1_scans, ms2_scans = (valid & (c > 0)).sum(1), (valid & (c2 > 0)).sum(1)
+    enough = (ms1_scans >= 1) & (ms2_scans >= 1) & (ms1_scans + ms2_scans >= 3)
+    out[has_window] = np.where(enough, _gaussian_fit_r2([c, c2], lens, p), np.nan)
+    return out
+
+
+def _ms2_trace(df, dc, specs, rows, pos, keys):
+    """The MS2 coefficients of each row's precursor on its fit-window MS1 scans
+    (``specs``), 0 where there is none. An MS1 scan can get two MS2 scans of the
+    same window, as MS1 scans come a little over one DIA cycle apart; those are
+    averaged."""
+    schema = dc.collect_schema()
+    cells = pl.DataFrame({
+        "row": rows, "pos": pos,
+        **{k: df[k].to_numpy()[rows] for k in keys},
+        "Ms1_spec_id": specs[rows, pos].astype(np.int64),
+    }, strict=False).with_columns(pl.col(k).cast(schema[k]) for k in keys + ["Ms1_spec_id"])
+    hits = (cells.join(dc.select(keys + ["Ms1_spec_id", "coeff"]), on=keys + ["Ms1_spec_id"], how="inner")
+                 .group_by("row", "pos").agg(pl.col("coeff").cast(pl.Float64).mean()))
+    out = np.zeros(specs.shape)
+    out[hits["row"].to_numpy(), hits["pos"].to_numpy()] = hits["coeff"].to_numpy()
+    return out
+
+
+def _gaussian_fit_r2(traces, lens, center):
+    """Fit one Gaussian to the (n, width) ``traces`` (each row's first ``lens``
+    scans) by grid search over center (``center`` + SHIFT_GRID, in scans) and
+    SIGMA_GRID, each trace with its own non-negative amplitude. With the
+    amplitude solved in closed form, least squares on a trace scaled to unit
+    norm is maximizing cos^2(Gaussian, trace), so the traces count equally.
+    Returns the best mean cos^2 per row, NaN where ``center`` is NaN.
+
+    The grid of Gaussians depends only on the center and the window length,
+    so the rows sharing both are scored against it at once."""
+    n, width = traces[0].shape
+    scan = np.arange(width, dtype=float)
+    best = np.full(n, -np.inf)
+    ok = np.isfinite(center)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        for p, length in set(zip(center[ok], lens[ok])):
+            mu = p + SHIFT_GRID
+            g = np.exp(-0.5 * ((scan[None, None, :] - mu[None, :, None]) / SIGMA_GRID[:, None, None]) ** 2)
+            g = (g * (scan < length)).reshape(-1, width)  # (sigma x center, scan)
+            g_norm2 = (g ** 2).sum(1)
+            group = np.flatnonzero(ok & (center == p) & (lens == length))
+            for start in range(0, len(group), _CHUNK):
+                rows = group[start:start + _CHUNK]
+                score = sum(np.maximum(t[rows] @ g.T, 0.0) ** 2 / (g_norm2[None, :] * (t[rows] ** 2).sum(1)[:, None])
+                            for t in traces)
+                best[rows] = np.nan_to_num(score, nan=-np.inf).max(1)
+    return np.where(ok & np.isfinite(best), best / len(traces), np.nan)
+
+
+def ms1_quality(ids):
+    """MS1_quality of every row of ``ids``, one run's filtered IDs (pandas,
+    with PredVal, gauss_r2_joint and plex_Area)."""
+    def pct(values):  # percentile within the run; NaN stays NaN
+        return values.rank(method="average") / values.count()
+    score = np.sqrt(pct(ids["PredVal"]) * pct(ids["gauss_r2_joint"]).fillna(0.0)).to_numpy()
+    return np.where(ids["plex_Area"].to_numpy() == 0, score * NO_MS1_QUANT_FACTOR, score)
+
 
 # lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=bool(params["timeplex"]))
 
@@ -1318,11 +1429,16 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     if "__fdc_idx" in fdx_quant.columns:
         fdx_quant = fdx_quant.drop(columns=["__fdc_idx"])
 
+    fdx_quant["gauss_r2_joint"] = gauss_r2_joint(fdx_quant, dc, timeplex)
+
     logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
     fdx_quant.to_csv(results_folder+"/outputs/all_IDs.csv",index=False)
     filtered = fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold)].copy()
+    filtered["MS1_quality"] = ms1_quality(filtered)
+    # For the parquets (all_IDs.csv is written): NaN outside the filtered IDs
+    fdx_quant["MS1_quality"] = filtered["MS1_quality"]
 
     # Decode packed int32 frag codes into "y5_1" / "b3-H2O_2" strings, only for
     # the FDR-passing rows since decoding is expensive. In-place reassignment
@@ -1341,7 +1457,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
-                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'plex_Area', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")

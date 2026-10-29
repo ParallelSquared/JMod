@@ -14,6 +14,7 @@
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import os
 import types
 import pytest
@@ -21,7 +22,7 @@ import pytest
 from src.utils.errors import JModError
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
                                compute_protein_FDR, log_df, untag_prec_qvalues,
-                               area, walk_to_local_max)
+                               area, walk_to_local_max, gauss_r2_joint, ms1_quality)
 
 def test_score_model_minimal_fixed():
     # 12 samples, 2 classes
@@ -130,7 +131,7 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                         ))
 
     monkeypatch.setattr("src.fdr_analysis.ms1_quant",
-                        lambda *args, **kwargs: args[0])
+                        lambda *args, **kwargs: args[0].assign(plex_Area=[100.0, 0.0]))
 
     monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
                         lambda df, results_folder=None, **kwargs: df.assign(
@@ -157,6 +158,11 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
     # Label-free: each untagged precursor is one row, so its q-value is the row's
     written = pd.read_parquet(tmp_path.parent / "outputs/all_IDs_filtered.parquet")
     assert written["untag_prec_Qvalue"].tolist() == written["Qvalue"].tolist()
+    # gauss_r2_joint in all_IDs.csv; MS1_quality only with the filtered IDs
+    assert "gauss_r2_joint" in pd.read_csv(tmp_path.parent / "outputs/all_IDs.csv").columns
+    assert "MS1_quality" not in pd.read_csv(tmp_path.parent / "outputs/all_IDs.csv").columns
+    assert "MS1_quality" in pd.read_csv(tmp_path.parent / "filtered_IDs.csv").columns
+    assert "MS1_quality" in pd.read_parquet(tmp_path.parent / "filtered_IDs.parquet").columns
 
 
 def test_untag_prec_qvalues_rank_each_plex_set_by_its_best_channel():
@@ -223,3 +229,46 @@ def test_plex_area_sums_the_scan_radius_on_either_side_of_the_apex():
     assert area(x, 3, area_radius=2) == 2 + 5 + 9 + 4 + 3
     # The apex stays area_radius scans in from the edges
     assert walk_to_local_max(np.array([9, 5, 4, 3, 2.]), 2, area_radius=2) == 2
+
+
+SCANS = np.arange(100, 109)
+
+
+def _ids(ms1_traces, apexes):
+    return pd.DataFrame({
+        "seq": [f"PEP{i}K" for i in range(len(ms1_traces))],
+        "z": 2.0,
+        "plexfittrace_spec_all": [";".join(map(str, SCANS)) if t is not None else 0 for t in ms1_traces],
+        "plexfittrace_all": [";".join(map(str, t)) if t is not None else 0 for t in ms1_traces],
+        "ms1_apex_scan": apexes,
+    })
+
+
+def _ms2(seq, trace):
+    return pl.DataFrame({"seq": seq, "z": 2.0, "Ms1_spec_id": SCANS, "coeff": trace}).filter(pl.col("coeff") > 0)
+
+
+def test_gaussian_traces_fit_and_ragged_ones_fit_worse():
+    peak = 1000 * np.exp(-0.5 * ((SCANS - 104) / 1.5) ** 2)
+    ragged = np.array([0, 900, 0, 700, 50, 800, 0, 600, 0.])
+    ids = _ids([peak, ragged, None], [104, 104, 0])
+    dc = pl.concat([_ms2("PEP0K", peak / 10), _ms2("PEP1K", peak / 10)])
+    r2 = gauss_r2_joint(ids, dc)
+    assert r2[0] > 0.999
+    assert r2[1] < 0.8
+    assert np.isnan(r2[2])  # no MS1 fit window
+
+
+def test_no_ms2_coefficients_means_no_fit():
+    peak = 1000 * np.exp(-0.5 * ((SCANS - 104) / 1.5) ** 2)
+    r2 = gauss_r2_joint(_ids([peak], [104]), _ms2("OTHERK", peak))
+    assert np.isnan(r2[0])
+
+
+def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
+    ids = pd.DataFrame({"PredVal": [0.9, 0.95, 0.99, 0.99],
+                        "gauss_r2_joint": [0.5, 0.9, np.nan, 0.7],
+                        "plex_Area": [10.0, 10.0, 10.0, 0.0]})
+    qq = ms1_quality(ids)
+    # percentiles: PredVal 1/4, 2/4, 3.5/4, 3.5/4; gauss_r2_joint 1/3, 3/3, missing = 0, 2/3
+    assert np.allclose(qq, [np.sqrt(1 / 4 * 1 / 3), np.sqrt(2 / 4), 0.0, 0.01 * np.sqrt(3.5 / 4 * 2 / 3)])
