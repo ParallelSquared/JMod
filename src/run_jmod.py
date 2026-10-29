@@ -430,7 +430,7 @@ def _start_experiment_log():
     set_log_filepath(logfile_path)
     _log_jmod_version(experiment_dir)
     if why:
-        logger.info(f"{why}: this experiment goes in {experiment_dir}")
+        logger.info(f"{why}: this experiment writing to {experiment_dir}")
 
     if config.ran_from_GUI:
         logger.info(f"Loaded configuration from GUI")

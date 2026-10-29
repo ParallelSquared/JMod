@@ -145,6 +145,14 @@ def read_json_to_massTag(mass_tags_dir,filename):
                 logging.getLogger("GUI").warning(f"File name: {os.path.splitext(filename)[0]}")
                 logging.getLogger("GUI").warning("Tag name does not match filename")
                 return(mass_tag_data['name'])
+            rules_error = tag_rules_error(mass_tag_data['rules'])
+            if rules_error:
+                logging.getLogger("GUI").warning(rules_error)
+                return mass_tag_data['name']
+            # The search reads channels back out of sequences with f"{tag.name}-(\d+)"
+            if not all(channel.isdigit() for channel in mass_tag_data['channel_names']):
+                logging.getLogger("GUI").warning(f"Channel names must be numbers: {mass_tag_data['channel_names']}")
+                return mass_tag_data['name']
             mass_tag = massTag(rules=mass_tag_data['rules'],
                         base_mass=mass_tag_data['base_mass'],
                         delta=mass_tag_data['delta'],
@@ -200,6 +208,13 @@ def get_tag_pos(AA_seq,rules):
         additional_tag_masses[tag_pos]+=1
 
     return all_tag_pos, additional_tag_masses
+
+def tag_rules_error(rules):
+    """An error message if *rules* is not "n" (N-terminus) and/or one-letter
+    amino acid codes, each once (e.g. "nK", "STY"), else None"""
+    if not rules or any(r not in "nACDEFGHIKLMNPQRSTVWY" for r in rules) or len(set(rules)) != len(rules):
+        return f"Invalid tag rules '{rules}': use n for the N-terminus and/or one-letter amino acid codes, each once (e.g. nK, R, STY)"
+    return None
 
 mTRAQ = massTag(rules = "nK",
                 base_mass=140.0949630177,

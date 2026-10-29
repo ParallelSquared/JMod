@@ -1230,9 +1230,10 @@ class JModGUI(ThemedTk):
         self.tag_saveas_entry = tk.Entry(self.tag_saveas_frame)
         self.tag_saveas_entry.grid(row=0, column=1, padx=5, pady=5)
         tk.Label(self.tag_saveas_frame, text="Rules:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
-        self.tag_rules_dropdown = ttk.Combobox(self.tag_saveas_frame, values=["nK", "R"], state="readonly", width=10)
-        self.tag_rules_dropdown.grid(row=1, column=1, padx=5, pady=5)
-        self.tag_rules_dropdown.set("nK")
+        self.tag_rules_entry = tk.Entry(self.tag_saveas_frame, width=10)
+        self.tag_rules_entry.grid(row=1, column=1, padx=5, pady=5)
+        self.tag_rules_entry.insert(0, "nK")
+        Hovertip(self.tag_rules_entry,"n: N-terminus, capital letters: amino acids (e.g. nK, R, STY)")
         massTag_save_button = ttk.Button(self.tag_saveas_frame, text="Save Mass Tag", command=self.save_masstag, style="Accent.TButton")
         massTag_save_button.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
 
@@ -1241,7 +1242,13 @@ class JModGUI(ThemedTk):
         From the second masstag window, save the masstag to a JSON and update the massTag in the dropdown
         Button: Save Mass Tag Button in second create mass tag popup
         """
-        from src.mass_tags import refresh_tags
+        from src.mass_tags import refresh_tags, tag_rules_error
+        rules = self.tag_rules_entry.get().strip()
+        rules_error = tag_rules_error(rules)
+        if rules_error:
+            tk.messagebox.showerror("Tag Rules Error", rules_error)
+            self.second_window.focus()
+            return
         base_composition = {}
         for element in list(self.iso_pairs.keys()) + list(self.rev_iso_pairs.keys()):
             base_composition[element] = int(self.frame_dict_entryvars[1][element].get())
@@ -1259,11 +1266,11 @@ class JModGUI(ThemedTk):
                 tk.messagebox.showerror("Duplicate Channel Error", f"Duplicate Channel Error: Tab {i} has the same channel name as another channel")
                 self.second_window.focus()
                 return
-            # TODO: validate that channel_name is all digits. The search parses the
-            # channel back out of tagged sequences with f"{tag.name}-(\d+)" (see
-            # iso_functions.py:237/434, ms1_cor_channels.py:1187, fdr_analysis.py:1218),
-            # so a non-numeric name like "d0" saves fine here and then fails with an
-            # IndexError partway through isotope generation.
+            # The search reads channels back out of sequences with f"{tag.name}-(\d+)"
+            if not channel_name.isdigit():
+                tk.messagebox.showerror("Channel Name Error", f"Channel Name Error: In tab {i} the channel name '{channel_name}' is not a number.")
+                self.second_window.focus()
+                return
             compositions[channel_name] = {}
             for element in list(self.iso_pairs.keys()) + list(self.rev_iso_pairs.keys()):
                 compositions[channel_name][element] = int(self.frame_dict_entryvars[i][element].get())
@@ -1290,7 +1297,7 @@ class JModGUI(ThemedTk):
                 return
 
         mass_tag_dict = {
-            "rules": self.tag_rules_dropdown.get(),
+            "rules": rules,
             "base_mass": base_mass,
             "delta": delta,
             "channel_names": list(compositions.keys()),
@@ -1336,8 +1343,10 @@ class JModGUI(ThemedTk):
             if mass_tag_json:
                 with open(mass_tag_json, 'r') as f:
                     mass_tag_data = json.load(f)
-                if mass_tag_data['rules'] not in ["nK", "R"]:
-                    tk.messagebox.showerror("Mass Tag Error", f"Invalid mass tag rules in file '{filename}'.\n\n {mass_tag_data['rules']} not in {['nK', 'R']}")
+                from src.mass_tags import tag_rules_error
+                rules_error = tag_rules_error(mass_tag_data['rules'])
+                if rules_error:
+                    tk.messagebox.showerror("Mass Tag Error", f"Invalid mass tag rules in file '{filename}'.\n\n {rules_error}")
                     default_dict['tag']['tk_handle'].set("None")
                     self.update_mass_tag_viewer([], [], None, None, None)
                     return
@@ -1419,14 +1428,7 @@ class JModGUI(ThemedTk):
         if rules:
             self.rules_Label = tk.Label(self.inner_frame, text="Rules: " + rules)
             self.rules_Label.grid(row=0, column=0, sticky='nsew')
-            if rules != "":
-                if rules == "nK":
-                    rule_tip = "Tag on N-term and Lys"
-                elif rules == "R":
-                    rule_tip = "Tag on Arg"
-                else:
-                    rule_tip = "Unknown Tagging Rule"
-            Hovertip(self.rules_Label, rule_tip)
+            Hovertip(self.rules_Label, "n: N-terminus, capital letters: amino acids")
         if base_mass:
             self.base_mass_Label = tk.Label(self.inner_frame, text='  Base Mass: ' + format(round(base_mass, 8), ".8f") if base_mass else '')
             self.base_mass_Label.grid(row=0, column=1, sticky='nsew')

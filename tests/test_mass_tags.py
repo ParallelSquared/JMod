@@ -511,3 +511,31 @@ class Test_tag_library():
         #         ]), atol=1e-6)
         assert key['spec_frags'] is None
 
+
+class Test_tag_rules():
+
+    @pytest.mark.parametrize("rules", ["nK", "R", "K", "STY", "nSTY", "Kn", "n"])
+    def test_valid_rules(self, rules):
+        from src.mass_tags import tag_rules_error
+        assert tag_rules_error(rules) is None
+
+    @pytest.mark.parametrize("rules", ["", None, "nk", "c", "n K", "KX", "nKK"])
+    def test_invalid_rules(self, rules):
+        from src.mass_tags import tag_rules_error
+        assert tag_rules_error(rules) is not None
+
+    def test_tag_json_with_bad_rules_does_not_load(self, tmp_path):
+        tag_json = json.loads(Path("tests/MassTags/test_one_channel.json").read_text())
+        tag_json["rules"] = "nKK"
+        (tmp_path / "test_one_channel.json").write_text(json.dumps(tag_json))
+        assert read_json_to_massTag(tmp_path, "test_one_channel.json") == "test_one_channel"
+        tag_json["rules"] = "nSTY"
+        (tmp_path / "test_one_channel.json").write_text(json.dumps(tag_json))
+        assert read_json_to_massTag(tmp_path, "test_one_channel.json").rules == "nSTY"
+
+    def test_tag_json_with_letter_channels_does_not_load(self, tmp_path):
+        tag_json = json.loads(Path("tests/MassTags/test_one_channel.json").read_text())
+        tag_json["channel_names"] = ["a"]
+        tag_json["compositions"] = {"a": tag_json["compositions"]["0"]}
+        (tmp_path / "test_one_channel.json").write_text(json.dumps(tag_json))
+        assert read_json_to_massTag(tmp_path, "test_one_channel.json") == "test_one_channel"
