@@ -167,21 +167,22 @@ class JModGUI(ThemedTk):
                 self.text_widget.after(0, self.append, msg, record.levelno, highlight)
 
             def append(self, msg, levelno=logging.INFO, highlight=False):
+                # Only auto-scroll when the view is already at the bottom, so
+                # scrolling up to read old output isn't yanked back down by
+                # every new line.
+                at_bottom = self.text_widget.yview()[1] >= 1.0
                 self.text_widget.config(state="normal")
                 if "- INFO -" in msg and (msg.split("- INFO -")[1] == "" or msg.split("- INFO -")[1] == " "): #if log.info("") make an empty line in the GUI logger
                     self.text_widget.insert(tk.END, "\n")
-                    self.text_widget.see(tk.END)
                 elif highlight:
                     self.text_widget.insert(tk.END, msg + "\n", "blue")
-                    self.text_widget.see(tk.END)
                 elif levelno >= logging.ERROR:
                     self.text_widget.insert(tk.END, msg + "\n", "red")
-                    self.text_widget.see(tk.END)
                 elif levelno >= logging.WARNING:
                     self.text_widget.insert(tk.END, msg + "\n", "orange")
-                    self.text_widget.see(tk.END)
                 else:
                     self.text_widget.insert(tk.END, msg + "\n")
+                if at_bottom:
                     self.text_widget.see(tk.END)
                 self.text_widget.config(state="disabled")
 

@@ -1028,6 +1028,9 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     in batches, and merges the batch parquets into
     ``outputs/decoylibsearch_coeffs.parquet``.  Returns that path.
     """
+    logger.info("")
+    logger.info("Starting Main Search")
+
     spectra_to_fit = DIAspectra.ms2scans
     all_keys = list(spectrumLibrary)
 
@@ -1065,8 +1068,6 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     
     ######################################################
     ### Start the search
-    logger.info("")
-    logger.info("Starting Main Search")
     # write dia spectra meta data
     ms2scans_info = [[i.prec_mz,i.RT,i.scan_num,*i.ms1window] for i in spectra_to_fit]
     # ms2_info_path = results_folder_path+"/ms2scans.csv"
@@ -1229,6 +1230,7 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
 def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
                      mass_tag, SILAC, elution_fwhm, vote_sigma, runState):
     """Select apex scans, score and FDR-filter, quantify, and write the reports."""
+    logger.info("")
     logger.info("Selecting apex scans and scoring")
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,

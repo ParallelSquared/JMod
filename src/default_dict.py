@@ -474,7 +474,7 @@ default_dict = {
     },
     'no_ms1_req': {
         'flags': ('--no_ms1_req',),
-        'default': True,
+        'default': False,
         'takes_value': False,
         'in_GUI': False,
         'type': '',
