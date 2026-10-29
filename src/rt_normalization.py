@@ -89,22 +89,22 @@ def apply_correction(quant, corr):
     return quant * np.exp2(-corr)
 
 
-def rt_normalize(df, quant_col, steps, rt_col, *, frac, it=3, min_points=50,
+def rt_normalize(df, quant_col, steps, rt_col, *, sample_frac=None, run_frac=None, it=3, min_points=50,
                  sample_cols=None, run_cols=None, pair_cols=None):
     """The total log2 correction of running *steps* in order, each on the
     quant as corrected by those before it.  A step is "sample"
-    (lowess_rt_correction, needs *sample_cols*) or "run"
-    (paired_rt_correction, needs *run_cols* and *pair_cols*)."""
+    (lowess_rt_correction, needs *sample_frac* and *sample_cols*) or "run"
+    (paired_rt_correction, needs *run_frac*, *run_cols* and *pair_cols*)."""
     total = pl.Series("rt_correction", np.zeros(df.height))
     for step in steps:
-        if step == "sample" and sample_cols is not None:
+        if step == "sample" and sample_frac is not None and sample_cols is not None:
             corr = lowess_rt_correction(df, quant_col, sample_cols, rt_col,
-                                        frac=frac, it=it, min_points=min_points)
-        elif step == "run" and run_cols is not None and pair_cols is not None:
+                                        frac=sample_frac, it=it, min_points=min_points)
+        elif step == "run" and run_frac is not None and run_cols is not None and pair_cols is not None:
             corr = paired_rt_correction(df, quant_col, run_cols, pair_cols, rt_col,
-                                        frac=frac, it=it, min_points=min_points)
+                                        frac=run_frac, it=it, min_points=min_points)
         else:
-            raise ValueError(f"RT normalization step {step!r} is unknown or its columns weren't given")
+            raise ValueError(f"RT normalization step {step!r} is unknown, or its frac or columns weren't given")
         total = total + corr
         df = df.with_columns(apply_correction(df[quant_col], corr).alias(quant_col))
     return total

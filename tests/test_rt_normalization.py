@@ -74,10 +74,10 @@ def test_selection_bias_trend_is_undone_by_run_stage():
     # RT, which the run stage flattens; the level it leaves is not the run
     # stage's to change
     df = _runs(keep=lambda rt, abundance: (rt < 50) | (abundance > 20))
-    sample_only = rt_normalize(df, "quant", ("sample",), "rt", frac=FRAC, sample_cols=["run"])
+    sample_only = rt_normalize(df, "quant", ("sample",), "rt", sample_frac=FRAC, sample_cols=["run"])
     false_trend = np.ptp(_ratio_by_rt(df, sample_only))
     assert false_trend > 1
-    both = rt_normalize(df, "quant", ("sample", "run"), "rt", frac=FRAC,
+    both = rt_normalize(df, "quant", ("sample", "run"), "rt", sample_frac=FRAC, run_frac=FRAC,
                         sample_cols=["run"], run_cols=["run"], pair_cols=["prec"])
     # Not flat to fit noise like a smooth trend: LOWESS rounds off the step at RT 50
     assert np.ptp(_ratio_by_rt(df, both)) < 0.2 * false_trend
@@ -91,24 +91,28 @@ def test_collapse_takes_median_of_log2():
     assert collapsed["__rt"][0] == pytest.approx(2.0)
 
 
-def test_steps_compose_in_either_order():
+def test_steps_compose_in_either_order_each_with_its_own_frac():
     df = _runs(gain=lambda rt: (rt - 50) / 50)
-    kwargs = dict(frac=FRAC, sample_cols=["run"], run_cols=["run"], pair_cols=["prec"])
+    kwargs = dict(sample_frac=FRAC, run_frac=0.1, sample_cols=["run"], run_cols=["run"], pair_cols=["prec"])
     for steps in (("sample", "run"), ("run", "sample")):
         corr = rt_normalize(df, "quant", steps, "rt", **kwargs)
         assert corr.len() == df.height and corr.is_finite().all()
     assert rt_normalize(df, "quant", ("sample",), "rt", **kwargs).equals(
         lowess_rt_correction(df, "quant", ["run"], "rt", frac=FRAC), check_names=False)
     assert rt_normalize(df, "quant", ("run",), "rt", **kwargs).equals(
-        paired_rt_correction(df, "quant", ["run"], ["prec"], "rt", frac=FRAC), check_names=False)
+        paired_rt_correction(df, "quant", ["run"], ["prec"], "rt", frac=0.1), check_names=False)
 
 
-def test_step_without_its_columns_raises():
+def test_step_without_its_frac_or_columns_raises():
     df = _runs()
     with pytest.raises(ValueError):
-        rt_normalize(df, "quant", ("sample",), "rt", frac=FRAC, run_cols=["run"], pair_cols=["prec"])
+        rt_normalize(df, "quant", ("sample",), "rt", sample_frac=FRAC, run_cols=["run"], pair_cols=["prec"])
     with pytest.raises(ValueError):
-        rt_normalize(df, "quant", ("run",), "rt", frac=FRAC, run_cols=["run"])
+        rt_normalize(df, "quant", ("sample",), "rt", run_frac=FRAC, sample_cols=["run"])
+    with pytest.raises(ValueError):
+        rt_normalize(df, "quant", ("run",), "rt", run_frac=FRAC, run_cols=["run"])
+    with pytest.raises(ValueError):
+        rt_normalize(df, "quant", ("run",), "rt", sample_frac=FRAC, run_cols=["run"], pair_cols=["prec"])
 
 
 def test_curve_held_flat_beyond_fitted_rt_and_unfitted_rows_corrected():
@@ -138,7 +142,7 @@ def test_small_group_left_uncorrected_with_warning():
 def test_correction_follows_row_order_and_leaves_df_unchanged():
     df = _runs(gain=lambda rt: (rt - 50) / 50)
     before = df.clone()
-    kwargs = dict(frac=FRAC, sample_cols=["run"], run_cols=["run"], pair_cols=["prec"])
+    kwargs = dict(sample_frac=FRAC, run_frac=FRAC, sample_cols=["run"], run_cols=["run"], pair_cols=["prec"])
     corr = rt_normalize(df, "quant", ("sample", "run"), "rt", **kwargs)
     assert df.equals(before)
     order = np.random.default_rng(1).permutation(df.height)
