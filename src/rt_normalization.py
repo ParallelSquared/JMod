@@ -89,12 +89,13 @@ def apply_correction(quant, corr):
     return quant * np.exp2(-corr)
 
 
-def rt_normalize(df, quant_col, steps, rt_col, *, sample_frac=None, run_frac=None, it=3, min_points=50,
+def rt_normalize(df, quant_col, steps, rt_col, *, sample_frac=0.2, run_frac=0.05, it=3, min_points=50,
                  sample_cols=None, run_cols=None, pair_cols=None):
     """The total log2 correction of running *steps* in order, each on the
     quant as corrected by those before it.  A step is "sample"
-    (lowess_rt_correction, needs *sample_frac* and *sample_cols*) or "run"
-    (paired_rt_correction, needs *run_frac*, *run_cols* and *pair_cols*)."""
+    (lowess_rt_correction over *sample_cols*, span *sample_frac*) or "run"
+    (paired_rt_correction over *run_cols* and *pair_cols*, span *run_frac*);
+    a step whose columns or span aren't given raises."""
     total = pl.Series("rt_correction", np.zeros(df.height))
     for step in steps:
         if step == "sample" and sample_frac is not None and sample_cols is not None:

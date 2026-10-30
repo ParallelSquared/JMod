@@ -122,8 +122,8 @@ def _median_trend(df, group_cols):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate RT normalization on combined_filtered_IDs.parquet")
     parser.add_argument("ids", help="path to combined_filtered_IDs.parquet")
-    parser.add_argument("--sample-frac", type=float, default=0.3, help="sample stage LOWESS span (default 0.3)")
-    parser.add_argument("--run-frac", type=float, default=0.3, help="run stage LOWESS span (default 0.3)")
+    parser.add_argument("--sample-frac", type=float, default=0.2, help="sample stage LOWESS span (default 0.2)")
+    parser.add_argument("--run-frac", type=float, default=0.05, help="run stage LOWESS span (default 0.05)")
     parser.add_argument("--it", type=int, default=3, help="LOWESS robustness iterations (default 3)")
     parser.add_argument("--min-points", type=int, default=50, help="fewest points to fit (default 50)")
     args = parser.parse_args()

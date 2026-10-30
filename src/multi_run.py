@@ -15,6 +15,7 @@
 import math
 import os
 from typing import NamedTuple
+import warnings
 
 import matplotlib
 matplotlib.use("Agg")
@@ -28,6 +29,7 @@ import polars as pl
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from src.logger import logger
+from src.rt_normalization import apply_correction, rt_normalize
 from src.utils.parse_peptides import untag_sequences
 from src.utils.errors import JModError
 from src.utils.misc_functions import datestamped
@@ -108,22 +110,24 @@ _ID_LEVELS = [
 _MAX_PRECURSOR_COLUMN = 10
 
 
-def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_threshold):
+def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_threshold, rt_norm="none"):
     """Combine the completed runs into one table, and plot it.
 
     *completed_run_folders* maps each completed run's index to its results
     folder.  Writes combined_filtered_IDs.parquet in *experiment_dir*: every
     run's IDs that pass the run-level FDR, with a global q-value per untagged
     precursor and per protein.  Nothing is filtered on the global q-values;
-    that is left to the user.  The plots and run_index.txt go in an
-    experiment_results folder beside it; those that compare runs only when
-    there are enough runs to compare.  Each is datestamped if its name is
-    taken.  Returns the combined table.
+    that is left to the user.  With two or more runs, *rt_norm* other than
+    "none" adds norm_factor and plex_Area_norm (normalize_rt).  The plots and
+    run_index.txt go in an experiment_results folder beside it; those that
+    compare runs only when there are enough runs to compare.  Each is
+    datestamped if its name is taken.  Returns the combined table.
     """
     logger.info("")
     logger.info(f"Combining the results of {len(completed_run_folders)} run(s)")
     df, untag_prec_global_qs, protein_global_qs = collect_results(completed_run_folders, target_decoy_ratio,
                                                                   fdr_threshold)
+    df = normalize_rt(df, rt_norm)
 
     combined_path = datestamped(os.path.join(experiment_dir, "combined_filtered_IDs.parquet"))
     df.write_parquet(combined_path)
@@ -161,6 +165,37 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     #     plot_best_score_run(untag_prec_global_qs, _PRECURSOR_LEVEL, units, results_dir)
     #     plot_best_score_run(protein_global_qs, _PROTEIN_LEVEL, units, results_dir)
     return df
+
+
+def normalize_rt(df, rt_norm):
+    """The combined IDs with RT-dependent trends in plex_Area normalized out
+    (src/rt_normalization.py).
+
+    *rt_norm* is the stages in order: "run", "sample", "sample>run" or
+    "run>sample"; "none" returns *df* as it is, and so does a single run.
+    Adds norm_factor, the factor each row's plex_Area is multiplied by, and
+    plex_Area_norm, the product.  A sample is a run's channel; a run, and a
+    precursor's pairing across runs, is per time channel on timeplex.
+    """
+    if rt_norm == "none":
+        return df
+    if df["run_idx"].n_unique() < 2:
+        logger.info(f"RT normalization ({rt_norm}) needs two or more runs with IDs; skipped")
+        return df
+    time_channel = ["time_channel"] if "time_channel" in df.columns else []
+    # The fits too small to make are reported as warnings: they go to the log
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        corr = rt_normalize(df, "plex_Area", tuple(rt_norm.split(">")), "rt",
+                            sample_cols=["run_idx", "channel"],
+                            run_cols=["run_idx", *time_channel], pair_cols=["untag_prec", *time_channel])
+    for warning in caught:
+        logger.warning(str(warning.message))
+    logger.info(f"RT normalization ({rt_norm}) of plex_Area: norm_factor and plex_Area_norm added")
+    return df.with_columns(
+        pl.Series("norm_factor", np.exp2(-corr.to_numpy())),
+        apply_correction(df["plex_Area"].cast(pl.Float64), corr).alias("plex_Area_norm"),
+    )
 
 
 def write_run_index(df, completed_run_folders, results_dir):

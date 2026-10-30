@@ -92,6 +92,20 @@ class TestSetup:
         config.setup()
         assert config.args.plexDIA is False
 
+    def test_rt_norm_defaults_to_run(self):
+        assert config.parser.parse_args([]).rt_norm == "run"
+
+    @pytest.mark.parametrize("rt_norm", ["none", "run", "sample>run", "sample", "run>sample"])
+    def test_known_rt_norm_is_accepted(self, inputs, monkeypatch, rt_norm):
+        monkeypatch.setattr(config.args, "rt_norm", rt_norm)
+        config.setup()
+
+    @pytest.mark.parametrize("rt_norm", ["Run", "sample,run", ["run"]])
+    def test_unknown_rt_norm_raises_listing_the_allowed(self, inputs, monkeypatch, rt_norm):
+        monkeypatch.setattr(config.args, "rt_norm", rt_norm)
+        with pytest.raises(JModError, match="none, run, sample>run, sample, run>sample"):
+            config.setup()
+
 
 class TestDataFolder:
     @pytest.fixture

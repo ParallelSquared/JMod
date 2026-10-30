@@ -427,6 +427,17 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    'rt_norm': {  ## RT normalization of plex_Area when the runs are combined (src/rt_normalization.py); the stages in order
+        'flags': ('--rt_norm',),
+        'default': 'run',
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': ['none', 'run', 'sample>run', 'sample', 'run>sample']
+    },
     'unfiltered_quant': {
         'flags': ('--unfiltered_quant',),
         'default': True,

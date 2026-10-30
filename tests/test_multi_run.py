@@ -1,12 +1,15 @@
+import logging
 import os
 
+import numpy as np
 import polars as pl
 import pytest
 
+import src.multi_run as multi_run
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.multi_run import (_Units, collect_results, combine_runs, mbr_library_rts, mbr_targets,
-                           precursors_per_run)
+                           normalize_rt, precursors_per_run)
 from tests.models.spec_lib.test_decoy_differential import _entry
 
 
@@ -203,3 +206,93 @@ class TestGroupedResults:
         # Both datestamped
         assert len(list(experiment_dir.glob("combined_filtered_IDs_*.parquet"))) == 1
         assert len(list(experiment_dir.glob("experiment_results_*"))) == 1
+
+
+def _combined(n_runs=2, n=300, seed=0):
+    """A combined table of *n_runs* runs of the same *n* precursors (RT 0-60),
+    label-free; run 2's plex_Area has an RT-dependent gain of 1 (log2) across
+    the gradient."""
+    rng = np.random.default_rng(seed)
+    rt = rng.uniform(0, 60, n)
+    abundance = rng.normal(20, 2, n)
+    frames = []
+    for run_idx in range(1, n_runs + 1):
+        gain = (rt - 30) / 30 if run_idx == 2 else 0
+        frames.append(pl.DataFrame({
+            "run_idx": run_idx, "channel": 0, "untag_prec": [f"P{i}_2" for i in range(n)],
+            "rt": rt, "plex_Area": np.exp2(abundance + gain + rng.normal(0, 0.2, n)),
+        }))
+    return pl.concat(frames, how="vertical_relaxed")
+
+
+def _ratio_trend(df, column):
+    """The range over 6 RT bins of the median log2 ratio of run 2 to run 1."""
+    wide = df.pivot(on="run_idx", index=["untag_prec", "rt"], values=column)
+    ratio = np.log2(wide["2"].to_numpy() / wide["1"].to_numpy())
+    which = np.digitize(wide["rt"].to_numpy(), np.linspace(0, 60, 7)[1:-1])
+    return np.ptp([np.median(ratio[which == b]) for b in range(6)])
+
+
+class TestNormalizeRt:
+    def test_run_adds_factor_and_corrected_area(self):
+        df = _combined().with_columns(
+            pl.when(pl.int_range(pl.len()) == 0).then(np.nan).otherwise(pl.col("plex_Area")).alias("plex_Area"))
+        normalized = normalize_rt(df, "run")
+        # The table as it was, with the two columns added
+        assert normalized.drop("norm_factor", "plex_Area_norm").equals(df)
+        factor = normalized["norm_factor"].to_numpy()
+        assert np.isfinite(factor).all()
+        np.testing.assert_allclose(normalized["plex_Area_norm"].to_numpy()[1:],
+                                   (normalized["plex_Area"] * normalized["norm_factor"]).to_numpy()[1:])
+        # A row without an area keeps its factor, and has no corrected area
+        assert np.isnan(normalized["plex_Area_norm"][0])
+
+    def test_run_flattens_the_ratio_between_runs(self):
+        normalized = normalize_rt(_combined(), "run")
+        raw = _ratio_trend(normalized, "plex_Area")
+        assert raw > 1.5
+        assert _ratio_trend(normalized, "plex_Area_norm") < 0.3 * raw
+
+    def test_none_leaves_the_table(self):
+        df = _combined()
+        assert normalize_rt(df, "none").equals(df)
+
+    def test_single_run_is_skipped(self, app_log):
+        df = _combined(n_runs=1)
+        assert normalize_rt(df, "run").equals(df)
+        assert any("needs two or more runs" in r.getMessage() for r in app_log)
+
+    @pytest.mark.parametrize("rt_norm, steps", [("sample>run", ("sample", "run")), ("run>sample", ("run", "sample"))])
+    def test_stages_and_timeplex_columns(self, monkeypatch, rt_norm, steps):
+        calls = []
+
+        def rt_normalize(df, quant_col, steps, rt_col, **kwargs):
+            calls.append((quant_col, steps, rt_col, kwargs))
+            return pl.Series(np.zeros(df.height))
+
+        monkeypatch.setattr(multi_run, "rt_normalize", rt_normalize)
+        normalize_rt(_combined().with_columns(pl.lit(0).alias("time_channel")), rt_norm)
+        [(quant_col, called_steps, rt_col, kwargs)] = calls
+        assert (quant_col, called_steps, rt_col) == ("plex_Area", steps, "rt")
+        assert kwargs == {"sample_cols": ["run_idx", "channel"], "run_cols": ["run_idx", "time_channel"],
+                          "pair_cols": ["untag_prec", "time_channel"]}
+
+    def test_combine_runs_writes_the_columns_and_logs_unfitted_runs(self, tmp_path, app_log):
+        rows = [("AAA", False, 0.9, 0.001), ("CCC", False, 0.8, 0.001), ("DDD", True, 0.1, 0.9)]
+        runs = {i: _write_run(tmp_path, name, rows) for i, name in enumerate("abc", start=1)}
+        experiment_dir = tmp_path / "experiment"
+        experiment_dir.mkdir()
+        combine_runs(runs, str(experiment_dir), 1.0, 0.01, "run")
+        written = pl.read_parquet(experiment_dir / "combined_filtered_IDs.parquet")
+        # Two precursors a run are too few to fit: every factor is 1, and the log says so
+        assert (written["norm_factor"] == 1).all()
+        assert (written["plex_Area_norm"] == written["plex_Area"]).all()
+        assert any(r.levelno == logging.WARNING and "left uncorrected" in r.getMessage() for r in app_log)
+
+    def test_combine_runs_without_rt_norm_adds_nothing(self, tmp_path):
+        rows = [("AAA", False, 0.9, 0.001), ("DDD", True, 0.1, 0.9)]
+        runs = {i: _write_run(tmp_path, name, rows) for i, name in enumerate("ab", start=1)}
+        experiment_dir = tmp_path / "experiment"
+        experiment_dir.mkdir()
+        written = combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
+        assert not {"norm_factor", "plex_Area_norm"} & set(written.columns)

@@ -369,6 +369,7 @@ def setup(GUI_config_json=None):
         args.plexDIA = True
 
     # TODO: validate all args values against default_dict['values'] lists here
+    check_rt_norm()
     if not args.speclib:
         raise JModError("No spectral library given: set speclib in the config JSON "
                         "or pass -l / --speclib")
@@ -390,6 +391,13 @@ def setup(GUI_config_json=None):
         raise JModError("No data files given: set mzml in the config JSON (one path or a "
                         "list of paths), pass -i once per file, or pass --mzml_folder")
     args.speclib = args.speclib.replace("\\", "/")
+
+
+def check_rt_norm():
+    """Raise unless args.rt_norm is one of the RT normalizations JMod knows."""
+    allowed = default_dict['rt_norm']['values']
+    if args.rt_norm not in allowed:
+        raise JModError(f"Unknown rt_norm {args.rt_norm!r}: it must be one of {', '.join(allowed)}")
 
 
 def _data_files_in(folder):

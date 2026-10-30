@@ -178,9 +178,9 @@ class TestCombinedResults:
 
         monkeypatch.setattr(experiment, "process_run", process_run)
         experiment.main()
-        ((run_folders, _, target_decoy_ratio, _),) = combined
+        ((run_folders, _, target_decoy_ratio, _, rt_norm),) = combined
         assert run_folders == {2: "b.mzML_results"}  # the failed run 1 is left out
-        assert target_decoy_ratio == 1.0
+        assert (target_decoy_ratio, rt_norm) == (1.0, "run")
 
     def test_nothing_is_combined_when_every_run_fails(self, experiment, monkeypatch, combined):
         def process_run(runState, *rest):
@@ -273,7 +273,7 @@ class TestMakeLibrary:
         # No JMod_config.json and no experiment_results: the settings are a run's,
         # the runs go by name, and the ratio is the library's from params.txt
         run_jmod.run_make_library(str(finished.dir))
-        (run_folders, experiment_dir, ratio, _), = finished.combined
+        (run_folders, experiment_dir, ratio, *_), = finished.combined
         assert run_folders == {1: str(finished.dir / "a_results"), 2: str(finished.dir / "b_results")}
         assert (experiment_dir, ratio) == (str(finished.dir), 0.95)
         assert finished.library_inputs == [("combined IDs", str(finished.library).replace("\\", "/"))]
@@ -322,10 +322,17 @@ class TestCombineResults:
     def test_the_runs_are_combined_again_even_with_combined_ids(self, finished, monkeypatch):
         (finished.dir / "combined_filtered_IDs.parquet").write_text("an earlier combination")
         monkeypatch.setattr(config.args, "combine_results", str(finished.dir))
+        monkeypatch.setattr(config.args, "rt_norm", "sample>run")
         run_jmod.main()
-        (run_folders, experiment_dir, ratio, _), = finished.combined
+        (run_folders, experiment_dir, ratio, _, rt_norm), = finished.combined
         assert run_folders == {1: str(finished.dir / "a_results"), 2: str(finished.dir / "b_results")}
-        assert (experiment_dir, ratio) == (str(finished.dir), 0.95)
+        assert (experiment_dir, ratio, rt_norm) == (str(finished.dir), 0.95, "sample>run")
+
+    def test_an_unknown_rt_norm_stops_before_combining(self, finished, monkeypatch):
+        monkeypatch.setattr(config.args, "rt_norm", "bogus")
+        with pytest.raises(JModError, match="Unknown rt_norm 'bogus'"):
+            run_jmod.run_combine_results(str(finished.dir))
+        assert finished.combined == []
 
     def test_no_library_is_read_or_made(self, finished):
         finished.library.unlink()  # the library the runs were searched with is not needed

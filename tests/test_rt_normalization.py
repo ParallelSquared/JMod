@@ -103,16 +103,12 @@ def test_steps_compose_in_either_order_each_with_its_own_frac():
         paired_rt_correction(df, "quant", ["run"], ["prec"], "rt", frac=0.1), check_names=False)
 
 
-def test_step_without_its_frac_or_columns_raises():
+def test_step_without_its_columns_raises():
     df = _runs()
     with pytest.raises(ValueError):
-        rt_normalize(df, "quant", ("sample",), "rt", sample_frac=FRAC, run_cols=["run"], pair_cols=["prec"])
+        rt_normalize(df, "quant", ("sample",), "rt", run_cols=["run"], pair_cols=["prec"])
     with pytest.raises(ValueError):
-        rt_normalize(df, "quant", ("sample",), "rt", run_frac=FRAC, sample_cols=["run"])
-    with pytest.raises(ValueError):
-        rt_normalize(df, "quant", ("run",), "rt", run_frac=FRAC, run_cols=["run"])
-    with pytest.raises(ValueError):
-        rt_normalize(df, "quant", ("run",), "rt", sample_frac=FRAC, run_cols=["run"], pair_cols=["prec"])
+        rt_normalize(df, "quant", ("run",), "rt", run_cols=["run"])
 
 
 def test_curve_held_flat_beyond_fitted_rt_and_unfitted_rows_corrected():
