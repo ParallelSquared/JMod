@@ -112,16 +112,16 @@ class TestParsingSemantics:
 
     def test_decoys_and_invalid_residues_removed(self, edgecases):
         assert sorted(edgecases.mod_seq) == [
-            "(tag)C(UniMod:4)SQAPVYGR", "LIONELK", "PEPTIDEK", "SEVENPEPK",
+            "(tag)C(UniMod:4)SQAPVYGR", "LIQNELK", "PEPTIDEK", "SEVENPEPK",
         ]
 
     def test_underscores_stripped(self, edgecases):
-        assert ("LIONELK", 1.0) in edgecases.key_to_idx
+        assert ("LIQNELK", 1.0) in edgecases.key_to_idx
 
     def test_ion_mobility_zero_and_empty_are_nan(self, edgecases):
         idx = edgecases.key_to_idx
         assert np.isnan(edgecases.ion_mob[idx[("(tag)C(UniMod:4)SQAPVYGR", 2.0)]])
-        assert np.isnan(edgecases.ion_mob[idx[("LIONELK", 1.0)]])
+        assert np.isnan(edgecases.ion_mob[idx[("LIQNELK", 1.0)]])
         assert np.isnan(edgecases.ion_mob[idx[("SEVENPEPK", 2.0)]])
         # ion_mob is stored float32; compare at f32 resolution
         assert edgecases.ion_mob[idx[("PEPTIDEK", 2.0)]] == np.float32(0.95)

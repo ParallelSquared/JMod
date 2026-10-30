@@ -57,10 +57,10 @@ def make_tagged_store():
             "(test_one_channel-0)PEPTIDEK(test_one_channel-0)", "PEPTIDEK", 464.75, 2.0,
             {'b3_1': [b("PEP"), 1.0], 'b4_1': [b("PEPT"), 0.85],
              'y3_1': [y("DEK"), 0.5], 'y4_1': [y("IDEK"), 0.4]}),
-        ("(test_one_channel-0)K(test_one_channel-0)LIONELR", 2.0): _entry(
-            "(test_one_channel-0)K(test_one_channel-0)LIONELR", "KLIONELR", 500.3, 2.0,
+        ("(test_one_channel-0)K(test_one_channel-0)LIQNELR", 2.0): _entry(
+            "(test_one_channel-0)K(test_one_channel-0)LIQNELR", "KLIQNELR", 500.3, 2.0,
             {'b2_1': [b("KL"), 0.6], 'y3_1': [y("ELR"), 1.0],
-             'y5-H2O_1': [y("ONELR") - 18.01, 0.2]}),
+             'y5-H2O_1': [y("QNELR") - 18.01, 0.2]}),
     }
     return SpectrumLibraryStore.from_dict(d)
 
@@ -219,7 +219,7 @@ class TestShuffleSeedContract:
 
     def test_plain(self):
         assert change_seq("PEPTIDEK", "shuffle") == "PPEETDIK"
-        assert change_seq("LIONELK", "shuffle") == "ENILOLK"
+        assert change_seq("LIQNELK", "shuffle") == "ILLNQEK"
 
     def test_modified(self):
         assert change_seq("C(UniMod:4)SQAPVYGR", "shuffle") == "C(UniMod:4)SVYQAGPR"

@@ -48,7 +48,7 @@ EDGECASE_ROWS = [
     # Genes (-> '""'), IonMobility "0.0" (-> NaN), fragment charge 2.
     ("(tag)C(UniMod:4)SQAPVYGR", "CSQAPVYGR", "2", "540.26", "18.2", "0.0", "PG5", "Prot5", "P005", "", "0", "y", "5", "2", "", "289.66", "1.0"),
     # P6: underscore-wrapped ModifiedPeptide, IonMobility "" (-> NaN).
-    ("_LIONELK_", "LIONELK", "1", "830.51", "40.1", "", "PG6", "Prot6", "P006", "GENE6", "", "b", "2", "1", "NH3", "210.09", "0.6"),
+    ("_LIQNELK_", "LIQNELK", "1", "830.51", "40.1", "", "PG6", "Prot6", "P006", "GENE6", "", "b", "2", "1", "NH3", "210.09", "0.6"),
     # P7: IonMobility "0" (integer spelling) -> NaN, same as "0.0".
     ("SEVENPEPK", "SEVENPEPK", "2", "520.77", "33.3", "0", "PG7", "Prot7", "P007", "GENE7", "", "y", "3", "1", "", "375.20", "0.4"),
 ]
@@ -75,7 +75,7 @@ PID_ONLY_COLUMNS = [
 ]
 
 PID_ONLY_ROWS = [
-    ("ONLYIDPEK", "ONLYIDPEK", "2", "530.28", "15.0", "P00X", "GENEX", "y", "4", "1", "", "480.27", "0.8"),
+    ("QNLYIDPEK", "QNLYIDPEK", "2", "530.28", "15.0", "P00X", "GENEX", "y", "4", "1", "", "480.27", "0.8"),
 ]
 
 # No retention-time column at all: parsing must raise.
@@ -86,7 +86,7 @@ MISSING_RT_COLUMNS = [
 ]
 
 MISSING_RT_ROWS = [
-    ("NORTPEPK", "NORTPEPK", "2", "450.24", "ProtN", "y", "3", "1", "", "360.20", "0.5"),
+    ("NQRTPEPK", "NQRTPEPK", "2", "450.24", "ProtN", "y", "3", "1", "", "360.20", "0.5"),
 ]
 
 # Columns that stay strings in the parquet variants (see module docstring).

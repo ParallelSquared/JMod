@@ -300,7 +300,7 @@ class TestParseModSpec:
     def test_strip_by_name_alone_is_every_site(self):
         spec = parse_mod_spec("UniMod:36", "--strip_mod")
         assert spec.name == "UniMod:36" and spec.mass == pytest.approx(28.0313, abs=1e-4)
-        assert spec.nterm and spec.residues == "ACDEFGHIJKLMNOPQRSTUVWY"   # every residue the parser accepts
+        assert spec.nterm and spec.residues == "ACDEFGHIKLMNPQRSTVWY"   # every residue the parser accepts
         assert parse_mod_spec("DimethylNter,28.0313", "--strip_mod").sites == spec.sites
 
     def test_strip_by_an_unknown_name_alone_asks_for_its_mass(self):

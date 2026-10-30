@@ -519,7 +519,7 @@ class TestSubsetEntries:
     def test_subset_matches_per_entry_data(self):
         store = _edgecases_store()
         keys = list(store.keys())
-        mask = np.array([k[0] != "LIONELK" for k in keys])
+        mask = np.array([k[0] != "LIQNELK" for k in keys])
         sub = store.subset_entries(mask)
         kept = [k for k, m in zip(keys, mask) if m]
         assert list(sub.keys()) == kept

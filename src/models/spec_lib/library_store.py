@@ -31,12 +31,15 @@ _SCALAR_FLOAT_FIELDS = frozenset({
 })
 _ALL_SCALAR_FIELDS = _SCALAR_STR_FIELDS | _SCALAR_FLOAT_FIELDS
 
-_STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
+# The 20 canonical amino acids.  Anything else is dropped at load: B/X/Z have
+# no mass, and U/O/J have one but the RT/IM models (JRIF) cannot represent them.
+_STANDARD_RESIDUES = frozenset("ACDEFGHIKLMNPQRSTVWY")
 
 # Version stamp for the .npz binary cache. Bump whenever parsing semantics
 # change so stale caches are re-parsed instead of silently loaded.
 # 6: both the N-term semantics change and the dtype narrowing shipped as 5
-STORE_VERSION = 6
+# 7: U/O/J dropped from the accepted residues
+STORE_VERSION = 7
 
 
 class StaleStoreCacheError(ValueError):
@@ -2578,8 +2581,9 @@ class SpectrumLibraryStore:
 
         lf = lf.with_columns(pl.col("_mod_pep_raw").alias("_mod_pep"))
 
-        # Skip precursors carrying residues with no defined mass rather than
-        # letting them reach decoy generation, where fast_mass raises.
+        # Skip precursors carrying non-canonical residues: those with no mass
+        # would make fast_mass raise in decoy generation, and the RT/IM models
+        # cannot represent any of them.
         nonstd_mask = _utf8("StrippedPeptide").str.contains(
             "[^" + "".join(sorted(_STANDARD_RESIDUES)) + "]"
         ).fill_null(False)

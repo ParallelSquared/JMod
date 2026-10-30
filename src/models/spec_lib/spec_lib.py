@@ -440,9 +440,8 @@ def _misplaced_nterm_tags(seqs, tag_pattern, rules):
 # the spec ends in ",stack": --add_fixed_mod UniMod:121,K,stack.
 # ---------------------------------------------------------------------------
 
-# The residues the library parser accepts (library_store._STANDARD_RESIDUES),
-# so "every site" includes U, O and J too
-_RESIDUES = "ACDEFGHIJKLMNOPQRSTUVWY"
+# The residues the library parser accepts (library_store._STANDARD_RESIDUES)
+_RESIDUES = "ACDEFGHIKLMNPQRSTVWY"
 # Every site: --strip_mod NAME (or NAME,MASS) strips it wherever it is
 _ALL_SITES = "n" + _RESIDUES
 
@@ -912,7 +911,7 @@ def _library_precursors(lib_file):
          if "Decoy" in columns else pl.lit(False)).alias("decoy"),
     ).filter(
         ~pl.col("decoy")
-        # The parser leaves out precursors with residues that have no mass (X, Z, ...)
+        # The parser leaves out precursors with non-canonical residues (X, Z, U, ...)
         & pl.col("mod_seq").str.replace_all(r"\([^()]*\)", "")
           .str.contains("^[" + "".join(sorted(_STANDARD_RESIDUES)) + "]+$")
     ).unique(["mod_seq", "prec_z"], keep="first").drop("decoy").collect()
