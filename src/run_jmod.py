@@ -22,7 +22,10 @@ import tqdm
 import pandas as pd
 import json
 import gc
+import glob
+import subprocess
 
+from src import _version
 from src.utils.io import file_reader
 from src.utils.set_seeds import set_seeds
 from src.models.spec_lib import spec_lib
@@ -33,7 +36,7 @@ import polars as pl
 import pyarrow.parquet as pq
 from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
-from src.mass_tags import tag_library, available_tags
+from src.mass_tags import tag_library, available_tags, set_config_tag
 from src.fdr_analysis import process_data
 from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
@@ -389,26 +392,48 @@ def _prepare_readers(run_files):
     return None
 
 
+def _is_empty_or_missing(folder):
+    return not os.path.exists(folder) or (os.path.isdir(folder) and not os.listdir(folder))
+
+
+def experiment_folder(wanted):
+    """Where an experiment given the output folder *wanted* goes, and why if not there:
+      - *wanted* missing or empty: *wanted* itself (a folder named for the experiment);
+      - holding a previous JMod experiment (its log or config): a datestamped sibling,
+        <wanted>_<datestamp>, so experiments never mix;
+      - holding anything else (Downloads, the data's folder): <wanted>/JMod_Results,
+        datestamped if that already holds something.
+    Returns (folder, reason or None)."""
+    if _is_empty_or_missing(wanted):
+        return wanted, None
+    previous = [os.path.join(glob.escape(wanted), name) for name in ("JMod_log*.log", "JMod_config*.json")]
+    if any(glob.glob(pattern) for pattern in previous):
+        return datestamped(wanted), f"{wanted} holds a previous experiment"
+    inside = os.path.join(wanted, "JMod_Results")
+    return (inside if _is_empty_or_missing(inside) else datestamped(inside)), f"{wanted} already holds other files"
+
+
 def _start_experiment_log():
     """Create the experiment folder, open the log there, and record the configuration.
 
-    Everything the experiment makes goes in one new folder, JMod_Results (or
-    JMod_Results_<--dummy_value>), datestamped if the name is taken: the log,
-    the configuration, the runs' results folders, experiment_results/ and, as
-    needed, first_pass/, mbr_library/ and a memory-mapped library.  It is made
-    in the output folder, or next to the first data file when there is none.
-    Returns it.
+    Everything the experiment makes goes in one folder: the log, the
+    configuration, the runs' results folders, experiment_results/ and, as
+    needed, first_pass/, mbr_library/ and a memory-mapped library.  Where, from
+    the output folder (-o, or the GUI's), or the first data file's folder when
+    there is none: see experiment_folder.  Returns it.
     """
     if config.args.output_folder is not None:
-        parent_dir = config.args.output_folder
+        wanted = config.args.output_folder
     else:
-        parent_dir = os.path.dirname(config.args.mzml[0].replace("\\","/")) or "."
-    name = "JMod_Results" + (f"_{config.args.dummy_value}" if config.args.dummy_value else "")
-    experiment_dir = datestamped(os.path.join(parent_dir, name))
-    os.makedirs(experiment_dir)
+        wanted = os.path.dirname(config.args.mzml[0].replace("\\","/")) or "."
+    experiment_dir, why = experiment_folder(os.path.abspath(wanted))
+    os.makedirs(experiment_dir, exist_ok=True)
 
     logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
     set_log_filepath(logfile_path)
+    _log_jmod_version(experiment_dir)
+    if why:
+        logger.info(f"{why}: this experiment writing to {experiment_dir}")
 
     if config.ran_from_GUI:
         logger.info(f"Loaded configuration from GUI")
@@ -429,6 +454,59 @@ def _start_experiment_log():
     return experiment_dir
 
 
+# JMod's own checkout, where git is asked which JMod this is
+_JMOD_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Written by the GUI as it is used, not code: not an uncommitted change
+_NOT_CODE = ":(exclude)data/settings.json"
+
+
+def _git(*args):
+    """git *args*'s output in JMod's checkout, or None without git or a checkout."""
+    try:
+        done = subprocess.run(["git", *args], cwd=_JMOD_DIR, capture_output=True,
+                              encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _log_jmod_version(experiment_dir):
+    """Log which JMod this is: git describe's version first, then, off main, the
+    branch and the commit.  With uncommitted changes, the version ends -dirty,
+    the changed files are listed, and the diff from the commit is saved as
+    JMod_uncommitted.diff in *experiment_dir* (git apply it to the commit for
+    this code).  Untracked files are listed but not in the diff.
+
+    Without a git checkout of JMod itself (a zip download, perhaps unzipped
+    inside some other repository), the version and commit a GitHub download was
+    made from (src/_version.py; a download doesn't record its branch), or else
+    unknown."""
+    top_level = _git("rev-parse", "--show-toplevel")
+    same_dir = lambda path: os.path.normcase(os.path.abspath(path))
+    if top_level is None or same_dir(top_level.strip()) != same_dir(_JMOD_DIR):
+        if _version.COMMIT.startswith("$Format"):
+            logger.info("JMod version unknown (not a git checkout or a GitHub download)")
+        else:
+            described = "" if _version.DESCRIBE.startswith("$Format") else _version.DESCRIBE.strip()
+            logger.info(f"JMod {described or _version.COMMIT[:7]}")
+            logger.info(f"Downloaded copy of commit {_version.COMMIT}: local changes cannot be checked")
+        return
+    commit = _git("rev-parse", "HEAD") or "unknown"
+    changed = _git("status", "--porcelain", "--", ".", _NOT_CODE) or ""
+    version = (_git("describe", "--tags", "--always") or "").strip() + ("-dirty" if changed.strip() else "")
+    branch = (_git("rev-parse", "--abbrev-ref", "HEAD") or "unknown").strip()
+    logger.info(f"JMod {version}")
+    if branch != "main":
+        logger.info(f"Branch {branch}, commit {commit.strip()}")
+    if not changed.strip():
+        return
+    logger.info(f"Uncommitted changes: {', '.join(line[3:] for line in changed.splitlines())}")
+    diff_path = datestamped(os.path.join(experiment_dir, "JMod_uncommitted.diff"))
+    with open(diff_path, "w", encoding="utf-8", newline="") as f:
+        f.write(_git("diff", "HEAD", "--binary", "--", ".", _NOT_CODE) or "")
+    logger.info(f"Their diff from commit {commit.strip()[:7]} written to {os.path.abspath(diff_path)}")
+
+
 def _write_experiment_config(experiment_dir):
     """Record the experiment's configuration, with every data file, next to its log.
     Datestamped if the name is taken, so an earlier experiment's record is kept.
@@ -438,8 +516,26 @@ def _write_experiment_config(experiment_dir):
     """
     json_path = datestamped(os.path.join(experiment_dir, "JMod_config.json"))
     with open(json_path, "w") as f:
-        json.dump(dict(vars(config.args), mzml_folder=None), f, indent=4)
+        json.dump(_config_record(), f, indent=4)
     logger.info(f"Configuration written to {os.path.abspath(json_path)}")
+
+
+# The options naming files or folders, made absolute in the configs JMod writes
+_PATH_OPTIONS = ("mzml", "speclib", "output_folder", "rawfilereader_path", "bruker_sdk_path", "config_json")
+
+
+def _config_record(**changes):
+    """config.args with *changes* and no --mzml_folder, for a config JSON: its
+    paths absolute (against the working directory, as the run used them) and
+    with forward slashes, so the JSON reruns from anywhere."""
+    record = dict(vars(config.args), mzml_folder=None, **changes)
+    absolute = lambda path: os.path.abspath(path).replace("\\", "/")
+    for key in _PATH_OPTIONS:
+        if isinstance(record.get(key), list):
+            record[key] = [absolute(p) for p in record[key]]
+        elif record.get(key):
+            record[key] = absolute(record[key])
+    return record
 
 
 def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, results_parent):
@@ -499,7 +595,6 @@ def _load_features(mzml_file):
     feature_path = os.path.dirname(mzml_file)+"/"+spec_file_name+".features.tsv" #TODO this breaks if you run from cd
     if not os.path.exists(feature_path):
         logger.info("Dinosaur feature file not found, running biosaur2")
-        import subprocess
         subprocess.run(["biosaur2", mzml_file], check=True)
     logger.info("Loading Dinosaur features")
     return pd.read_csv(feature_path,delimiter="\t")
@@ -551,10 +646,9 @@ def _create_results_folder(mzml_file, results_parent):
 def _write_run_config(runState):
     # This run's record of the configuration, naming only its own data file
     # (and no --mzml_folder, whose files mzml already lists)
-    args_dict = dict(vars(config.args), mzml=runState.file_name, mzml_folder=None)
     json_path = os.path.join(runState.results_folder, "outputs/config.json")
     with open(json_path, "w") as f:
-        json.dump(args_dict, f, indent=4)
+        json.dump(_config_record(mzml=runState.file_name), f, indent=4)
 
 
 def _load_spectra(mzml_file, bruker_sdk_path):
@@ -601,21 +695,9 @@ def resolve_tags():
         SILAC = None
         config.SILAC = None
 
-    if config.args.tag:
-        # Find the tag object based on the tag name
-        if config.args.tag in available_tags:
-            config.tag = available_tags[config.args.tag]
-            logger.info(f"Using tag: {config.tag.name} - {config.tag.n_channels} channels")
-            mass_tag = config.tag
-        else:
-            if config.args.tag != "None":
-                raise JModError(f"Tag '{config.args.tag}' not found in available tags: "
-                                f"{list(available_tags.keys())}")
-            mass_tag = None
-            config.tag = None
-    else:
-        mass_tag = None
-        config.tag = None
+    mass_tag = config.tag = set_config_tag(available_tags, config.args.tag, config.args.channels)
+    if mass_tag:
+        logger.info(f"Using tag: {mass_tag.name} - channels {', '.join(mass_tag.channel_names)}")
 
     return mass_tag, SILAC
 
@@ -736,6 +818,9 @@ def prepare_library(spectrumLibrary, work_dir, mass_tag, SILAC, library_tag_bool
         spectrumLibrary = tag_library(spectrumLibrary, mass_tag, source_channel=source_channel)
     if SILAC:
         spectrumLibrary = tag_library(spectrumLibrary, SILAC)
+    if mass_tag or SILAC:
+        logger.info(f"Tagged library: {spectrumLibrary.n_targets} targets, "
+                    f"{spectrumLibrary.n_decoys} decoys")
 
     ######################################################
     #### Isotopes (after tagging: the tag changes each fragment's composition)
@@ -946,6 +1031,9 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     in batches, and merges the batch parquets into
     ``outputs/decoylibsearch_coeffs.parquet``.  Returns that path.
     """
+    logger.info("")
+    logger.info("Starting Main Search")
+
     spectra_to_fit = DIAspectra.ms2scans
     all_keys = list(spectrumLibrary)
 
@@ -983,8 +1071,6 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     
     ######################################################
     ### Start the search
-    logger.info("")
-    logger.info("Starting Main Search")
     # write dia spectra meta data
     ms2scans_info = [[i.prec_mz,i.RT,i.scan_num,*i.ms1window] for i in spectra_to_fit]
     # ms2_info_path = results_folder_path+"/ms2scans.csv"
@@ -1147,6 +1233,7 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
 def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
                      mass_tag, SILAC, elution_fwhm, vote_sigma, runState):
     """Select apex scans, score and FDR-filter, quantify, and write the reports."""
+    logger.info("")
     logger.info("Selecting apex scans and scoring")
     process_data(file=decoylib_search_path,
                  spectra=DIAspectra,

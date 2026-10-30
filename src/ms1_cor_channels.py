@@ -186,10 +186,12 @@ def ms1_cor_channels(all_spectra,
 
         # Fit a wider ±fit_radius window around voted_apex so process_ms1_quant
         # can monotonically slide each channel's apex away from the group's voted
-        # apex toward a local maximum. The slide is capped at the second-from-edge
-        # position, so a channel can drift at most config.args.apex_jitter cycles
-        # from the voted apex. apex_jitter == 0 yields a 3-scan window — no walk.
-        fit_radius = max(int(config.args.apex_jitter) + 1, additional_scans + 1)
+        # apex toward a local maximum. The slide is capped plex_area_scan_radius
+        # positions in from the edge, so a channel can drift at most
+        # config.args.apex_jitter cycles from the voted apex. apex_jitter == 0
+        # yields just the plex_Area window — no walk.
+        area_radius = int(config.args.plex_area_scan_radius)
+        fit_radius = max(int(config.args.apex_jitter) + area_radius, additional_scans + area_radius)
         apex_idx = int(np.searchsorted(all_scans, voted_apex))
         lo = max(0, apex_idx - fit_radius)
         hi = min(len(all_scans), apex_idx + fit_radius + 1)

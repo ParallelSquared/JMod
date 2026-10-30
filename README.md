@@ -16,6 +16,7 @@ Kevin McDonnell, Daniel J. Geiszler, Nathan Wamsley, Jason Derks, Sarah Sipe, Za
   - [Windows Setup](#windows-setup)
   - [Linux/MacOS Setup](#linuxmacos-setup)
   - [Thermo Raw File Support](#thermo-raw-file-support)
+  - [Unimod](#unimod)
 - [Running a Search](#running-a-search)
   - [File Conversion](#file-conversion)
   - [Library Structure](#library-structure)
@@ -51,7 +52,7 @@ If you would like to set up the UV environment with the command line, please fol
 <summary><strong> Setup Steps </strong>
 </summary>
 
-1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v1.0.0)
+1. Download the JMod repository. The most recent release of JMod can be downloaded [here.](https://github.com/ParallelSquared/JMod/releases/tag/v2.0.0)
 
 
 2. It is recommended to use the UV package manager when running JMod. To set up a UV environment for JMod, run the following command:
@@ -62,7 +63,7 @@ If you would like to set up the UV environment with the command line, please fol
 
 3. Open a new terminal and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: 
 
-    ```uv sync --python 3.11```
+    ```uv sync```
 
 4. You can now launch the JMod GUI with ```uv run python run_jmod_from_GUI.py``` or run a search using the command line with ```uv run python run_jmod.py <args>```.
 
@@ -94,6 +95,10 @@ If homebrew is not installed, it can be installed with the following command:
 Thermo RawFileReader is developed and distributed by Pacific Northwest National Laboratory (PNNL) and Thermo Fisher Scientific and is licensed and distributed separately from JMod.
 
 </details>
+
+### Unimod
+
+JMod ships a copy of the [Unimod](https://www.unimod.org) modification database, `data/unimod.xml`. Unimod is copyright 2002-2006 Unimod and distributed under the Design Science License, in `data/unimod.xml.LICENSE`. To update the copy to the latest from unimod.org, run `uv run python scripts/update_unimod.py`.
 
 ###
 ## Running a Search
@@ -215,6 +220,9 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --additional_scans
   If free-apex; Each channel apex is selected within this number of scans from the plex group center. 
   default = 0
+--plex_area_scan_radius
+  Number of MS1 scans on either side of the apex summed for plex_Area.
+  default = 1
 --timeplex
   Use timePlex mode for search
   default = False
@@ -224,6 +232,9 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --tag
   Tag used in the experiment, if any. See mass_tags.py for details.
   default = None
+--channels
+  Comma-separated channels of --tag to search (e.g. --tag dimethyl --channels 0,4). 
+  default = None (all channels)
 --SILAC
   Adds stable isotope label
   default = False
@@ -238,9 +249,6 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --mbr
   Match between runs. Requires two or more files.
   default = False
---dummy_value
-  Append string to end of folder name
-  default = None
 --rawfilereader_path
   Path to the ThermoRawFileParser if using .raw files
 --bruker_sdk_path
@@ -320,10 +328,10 @@ These commands run on their own, without a search.
   Report the library's modifications, what any --strip_mod, --add_fixed_mod and --add_variable_mod
   given would do to them, and whether JMod can load it (with the --tag given, if any).
   The "i" button next to the spectral library in the GUI shows the same report.
---make_library path/to/JMod_Results
-  Build the match between runs library from a finished search's results folder.
---combine_results path/to/JMod_Results
-  Combine the results of a finished search's results folder again.
+--make_library path/to/experiment_folder
+  Build the match between runs library from a finished search's experiment folder.
+--combine_results path/to/experiment_folder
+  Combine the results of a finished search's experiment folder again.
 ```
 
 For example:
@@ -339,7 +347,7 @@ uv run python path/to/run_jmod.py --inspect_library path/to/library.parquet --ta
 ## Output Files
 
 
-JMod produces multiple output files. Each search writes them to a new `JMod_Results` folder in the output folder (`JMod_Results_<text>` with `-z <text>`), with one results folder per searched file. Below is a brief description of the main outputs alongside an example directory structure. A more comprehensive description of each output file can be found [here.](/Help/outputs.pdf)
+JMod produces multiple output files. Each search writes them to a folder determined by -o or 'Output Folder' in the GUI, with one results folder per searched file. Below is a brief description of the main outputs alongside an example directory structure. A more comprehensive description of each output file can be found [here.](/Help/outputs.pdf)
 
 - ```combined_filtered_IDs.parquet```: IDs from all searched files filtered at 1% FDR, with global q-values
 - ```experiment_results/```: Plots comparing the searched files
@@ -467,7 +475,7 @@ A comprehensive list of all output columns and descriptions for each one can be 
 ### Structure of Results Directory:
 
 ```text
-JMod_Results
+experiment_folder (-o, or 'Output Folder' entry in GUI)
 
 ├── combined_filtered_IDs.parquet
 ├── JMod_config.json

@@ -173,7 +173,7 @@ class TestOfferJsonDataFiles:
         paths = [str(tmp_path / n) for n in ("a.mzML", "r.raw", "x.d", "gone.mzML")]
         with patch("tkinter.messagebox.askyesno", return_value=True),                 patch("tkinter.messagebox.showwarning") as warn:
             offer(paths)
-        assert [c.args[0] for c in stand_in._add_mzml_or_raw.call_args_list] == paths[:2]
+        stand_in._add_mzml_or_raw.assert_called_once_with(paths[:2])
         stand_in._add_d_folder.assert_called_once_with(paths[2])
         assert "gone.mzML" in warn.call_args.args[1]
 

@@ -214,6 +214,9 @@ class TestMatchTagChannel:
         with pytest.raises(JModError, match="it is not this tag"):
             self.match(self.tag, "tag", 100.03)
 
+    def test_a_channel_not_searched_still_matches(self):
+        assert self.match(self.tag.select_channels(["0"]), "tag", 104.0)[0] == "T-4"
+
     def test_the_tag_mass_is_the_median_of_its_precursors(self):
         from pyteomics import mass as pyteomics_mass
         mz = lambda seq, tag_mass: (pyteomics_mass.fast_mass(seq) + tag_mass + 2 * 1.00727647) / 2

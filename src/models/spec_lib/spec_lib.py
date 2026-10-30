@@ -381,9 +381,9 @@ def match_tag_channel(mass_tag, tag_name, tag_mass):
     back-calculated mass *tag_mass*), as (channel name, its mass minus
     *tag_mass*, warning or None).  Raises a JModError when the closest
     channel is more than TAG_MASS_ERROR away."""
-    index = int(np.argmin(np.abs(mass_tag.channel_masses - tag_mass)))
-    channel = f"{mass_tag.name}-{mass_tag.channel_names[index]}"
-    channel_mass = float(mass_tag.channel_masses[index])
+    # Every channel the tag defines, searched or not (mass_dict, see massTag.select_channels)
+    channel, channel_mass = min(mass_tag.mass_dict.items(), key=lambda item: abs(item[1] - tag_mass))
+    channel_mass = float(channel_mass)
     difference = channel_mass - tag_mass
     if abs(difference) > TAG_MASS_ERROR:
         raise JModError(f"The library's tag ({tag_name}, {tag_mass:.4f} Da) is {abs(difference):.4f} Da "
@@ -655,7 +655,7 @@ def known_mod_mass(name):
         return None
     from src.iso_functions import unimods
     try:
-        return float(unimods.by_id(int(unimod.group(1)))["mono_mass"])
+        return float(unimods().by_id(int(unimod.group(1)))["mono_mass"])
     except KeyError:
         raise JModError(f"{name} is not in UniMod")
 
@@ -905,8 +905,8 @@ def _library_precursors(lib_file):
         columns["ModifiedPeptide"].cast(pl.String).str.strip_chars("_")
         .str.replace_all("[", "(", literal=True).str.replace_all("]", ")", literal=True).alias("mod_seq"),
         columns["PrecursorCharge"].cast(pl.Float64).alias("prec_z"),
-        (columns["PrecursorMz"].cast(pl.Float64) if "PrecursorMz" in columns
-         else pl.lit(np.nan)).alias("prec_mz"),
+        (columns["PrecursorMz"].cast(pl.Float64).cast(pl.Float32).cast(pl.Float64)
+         if "PrecursorMz" in columns else pl.lit(np.nan)).alias("prec_mz"),
         _ion_mobility(columns.get("IonMobility")).alias("ion_mob"),
         (columns["Decoy"].cast(pl.String).str.strip_chars().is_in(["1", "1.0", "True", "true"])
          if "Decoy" in columns else pl.lit(False)).alias("decoy"),

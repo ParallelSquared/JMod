@@ -52,7 +52,15 @@ from src.utils.gui_utils import load_settings, save_settings
 # Options removed from JMod (aa82426) that config JSONs written before then still list:
 # loading such a JSON ignores them without a warning
 REMOVED_OPTIONS = {"use_rt", "use_features", "mTRAQ", "pp_file", "timspeak_file",
-                   "initial_percentile", "user_percentile"}
+                   "initial_percentile", "user_percentile", "dummy_value"}
+
+
+
+def show_end(entry):
+    """Scroll a text entry to the end of its text (for a long path, the file or folder
+    name), with the cursor there. After the pending redraw, so a just-set value counts."""
+    entry.icursor(tk.END)
+    entry.after_idle(lambda: entry.xview_moveto(1.0))
 
 
 def command_line_args(key, value):
@@ -159,21 +167,22 @@ class JModGUI(ThemedTk):
                 self.text_widget.after(0, self.append, msg, record.levelno, highlight)
 
             def append(self, msg, levelno=logging.INFO, highlight=False):
+                # Only auto-scroll when the view is already at the bottom, so
+                # scrolling up to read old output isn't yanked back down by
+                # every new line.
+                at_bottom = self.text_widget.yview()[1] >= 1.0
                 self.text_widget.config(state="normal")
                 if "- INFO -" in msg and (msg.split("- INFO -")[1] == "" or msg.split("- INFO -")[1] == " "): #if log.info("") make an empty line in the GUI logger
                     self.text_widget.insert(tk.END, "\n")
-                    self.text_widget.see(tk.END)
                 elif highlight:
                     self.text_widget.insert(tk.END, msg + "\n", "blue")
-                    self.text_widget.see(tk.END)
                 elif levelno >= logging.ERROR:
                     self.text_widget.insert(tk.END, msg + "\n", "red")
-                    self.text_widget.see(tk.END)
                 elif levelno >= logging.WARNING:
                     self.text_widget.insert(tk.END, msg + "\n", "orange")
-                    self.text_widget.see(tk.END)
                 else:
                     self.text_widget.insert(tk.END, msg + "\n")
+                if at_bottom:
                     self.text_widget.see(tk.END)
                 self.text_widget.config(state="disabled")
 
@@ -467,7 +476,7 @@ class JModGUI(ThemedTk):
         # Output Folder Label + Entry + Select Button
         self.output_folder_label = ttk.Label(self.output_frame, text="Output Folder:")
         self.output_folder_label.grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        Hovertip(self.output_folder_label, "Select the folder to make the experiment's JMod_Results folder in")
+        Hovertip(self.output_folder_label, "The experiment's folder: a new or empty folder is used as it is; any other folder gets a JMod_Results folder inside it")
 
         self.output_folder_var = tk.StringVar()
         self.output_folder_entry = ttk.Entry(self.output_frame, textvariable=self.output_folder_var, width=50)
@@ -505,7 +514,6 @@ class JModGUI(ThemedTk):
         ######    QUEUE Frame   ########
         #this is defined in a function. See Queue funcs
         self.run_queue_number = 1
-        self.has_shown_no_dummy_val = False
 
 
         ## On Startup ##
@@ -729,21 +737,20 @@ class JModGUI(ThemedTk):
         """
         files = filedialog.askopenfilenames(title="Select .mzML or .raw Files", filetypes=[("Mass Spec Files", "*.mzML *.raw"), ("mzML files", "*.mzML"), ("Thermo Raw files", "*.raw")], initialdir=self.last_opened_dir)
         if files:
-            for file in files:
-                self._add_mzml_or_raw(file)
+            self._add_mzml_or_raw(files)
 
-    def _add_mzml_or_raw(self, file):
+    def _add_mzml_or_raw(self, files):
         """
-        Add one .mzML or .raw file to the file list, unless it is already there.
-        A .raw needs Thermo's RawFileReader: if its path is not set, ask for it,
-        and leave the file out if there is still none.
+        Add .mzML and .raw files to the file list, skipping any already there.
+        A .raw needs Thermo's RawFileReader: if its path is not set, ask for it
+        once, and leave all the .raw files out if there is still none.
         Called by: select_mzml, _offer_json_data_files
         """
-        if file in self.file_dropdown.files:
-            return
+        files = [f for f in files if f not in self.file_dropdown.files]
+        raw = [f for f in files if os.path.splitext(f)[1].lower() == ".raw"]
 
         #check if user has path for RawFileReader
-        if os.path.splitext(file)[1].lower() in [".raw"]:
+        if raw:
             settings = load_settings()
             if not settings["rawfilereader_path"] or not self._rawfilereader_path_valid(settings["rawfilereader_path"]):
                 new_path = self.locate_raw_path()
@@ -757,11 +764,12 @@ class JModGUI(ThemedTk):
                 save_settings(settings)
 
             if not settings["rawfilereader_path"]:
-                tk.messagebox.showinfo("File not added", f"Raw file could not be added due to absence of RawFileReader:\n\n{file}")
-                return
+                tk.messagebox.showinfo("Files not added", f"{len(raw)} raw file(s) could not be added due to absence of RawFileReader" + (":\n\n" + "\n".join(raw) if len(raw) < 5 else ""))
+                files = [f for f in files if f not in raw]
 
-        self.file_dropdown.add_files([file])
-        self.last_opened_dir = os.path.dirname(file)
+        if files:
+            self.file_dropdown.add_files(files)
+            self.last_opened_dir = os.path.dirname(files[-1])
 
     def select_d_folder(self):
         """
@@ -827,6 +835,7 @@ class JModGUI(ThemedTk):
         if file_path:
             self.tsv_entry.delete(0, tk.END)
             self.tsv_entry.insert(0, file_path)
+            show_end(self.tsv_entry)
             self.last_opened_dir = os.path.dirname(file_path)
 
 
@@ -840,8 +849,11 @@ class JModGUI(ThemedTk):
         Button: "i" button for specLib
         """
         path = self.tsv_entry.get().strip()
-        if not path or not os.path.isfile(path):
+        if not path:
             tk.messagebox.showerror("No Spectral Library", "Select a spectral library file first.")
+            return
+        if not os.path.isfile(path):
+            tk.messagebox.showerror("Spectral Library Not Found", f"File not found:\n{path}")
             return
         tag_name = self.tag_var.get()
         additional_commands = self.additional_text.get("1.0", tk.END)
@@ -936,7 +948,7 @@ class JModGUI(ThemedTk):
             # Update args with values from JSON
             for key, value in config_data.items():
                 if key in default_dict.keys():
-                    if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF", "rawfilereader_path", "bruker_sdk_path", "config_json"]: ##does not allow file input from JSON (mzml is offered separately, _offer_json_data_files). plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects. config_json is where the JSON's own run was loaded from, not a setting
+                    if key in ["mzml", "i", "plexDIA", "timeplex", "diaPASEF", "rawfilereader_path", "bruker_sdk_path", "config_json", "channels"]: ##does not allow file input from JSON (mzml is offered separately, _offer_json_data_files). plexDIA, timeplex, and diaPASEF are not explicit lines in the GUI because we are inferring them from other objects. config_json is where the JSON's own run was loaded from, not a setting. channels are the tag's checkboxes (update_masstag)
                         continue
                     if key == "speclib" or key == "output_folder":
                         if value is None or value == "":
@@ -967,6 +979,7 @@ class JModGUI(ThemedTk):
                             try:
                                 default_dict[key]['tk_handle'].delete(0, tk.END)
                                 default_dict[key]['tk_handle'].insert(0, str(value))
+                                show_end(default_dict[key]['tk_handle'])
                             except Exception as e:
                                 tk.messagebox.showerror("JSON Read Error", f"Error reading '{key}':\n\n {e}\n\nEnsure '{value}' can be converted to string")
                     elif default_dict[key]['in_GUI'] is False:  ##if key is only a command line key
@@ -989,7 +1002,7 @@ class JModGUI(ThemedTk):
         except Exception as e:
             tk.messagebox.showerror("JSON Read Error", f"Unknown Error loading JSON configuration: \n\n {e}")
             return False
-        self.update_masstag()
+        self.update_masstag(config_data.get("channels"))
         return True
 
     # How each kind of data file is named in _offer_json_data_files' question
@@ -1019,7 +1032,7 @@ class JModGUI(ThemedTk):
         if not add:
             return
 
-        missing = []
+        missing, ms_files = [], []
         for path in paths:
             if extension(path) not in counts:
                 continue
@@ -1028,7 +1041,8 @@ class JModGUI(ThemedTk):
             elif extension(path) == ".d":
                 self._add_d_folder(path.rstrip("/\\"))
             else:
-                self._add_mzml_or_raw(path)
+                ms_files.append(path)
+        self._add_mzml_or_raw(ms_files)
         if missing:
             shown = "\n".join(missing[:10]) + (f"\n... and {len(missing) - 10} more" if len(missing) > 10 else "")
             tk.messagebox.showwarning("Files Not Found",
@@ -1045,8 +1059,7 @@ class JModGUI(ThemedTk):
     def get_tag_list(self):
         """Update the mass_tags dropdown with the list of available tags"""
         from src.mass_tags import available_tags
-        tag_list = ['None'] + [tag for tag in available_tags.keys() if "#" not in tag]  ##filter out subsetted tags from dropdown might be cleaner?
-        #tag_list = ['None'] + list(available_tags.keys())
+        tag_list = ['None'] + list(available_tags.keys())
         default_dict["tag"]["values"] = tag_list
         return tag_list
 
@@ -1218,9 +1231,10 @@ class JModGUI(ThemedTk):
         self.tag_saveas_entry = tk.Entry(self.tag_saveas_frame)
         self.tag_saveas_entry.grid(row=0, column=1, padx=5, pady=5)
         tk.Label(self.tag_saveas_frame, text="Rules:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
-        self.tag_rules_dropdown = ttk.Combobox(self.tag_saveas_frame, values=["nK", "R"], state="readonly", width=10)
-        self.tag_rules_dropdown.grid(row=1, column=1, padx=5, pady=5)
-        self.tag_rules_dropdown.set("nK")
+        self.tag_rules_entry = tk.Entry(self.tag_saveas_frame, width=10)
+        self.tag_rules_entry.grid(row=1, column=1, padx=5, pady=5)
+        self.tag_rules_entry.insert(0, "nK")
+        Hovertip(self.tag_rules_entry,"n: N-terminus, capital letters: amino acids (e.g. nK, R, STY)")
         massTag_save_button = ttk.Button(self.tag_saveas_frame, text="Save Mass Tag", command=self.save_masstag, style="Accent.TButton")
         massTag_save_button.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
 
@@ -1229,7 +1243,13 @@ class JModGUI(ThemedTk):
         From the second masstag window, save the masstag to a JSON and update the massTag in the dropdown
         Button: Save Mass Tag Button in second create mass tag popup
         """
-        from src.mass_tags import refresh_tags
+        from src.mass_tags import refresh_tags, tag_rules_error
+        rules = self.tag_rules_entry.get().strip()
+        rules_error = tag_rules_error(rules)
+        if rules_error:
+            tk.messagebox.showerror("Tag Rules Error", rules_error)
+            self.second_window.focus()
+            return
         base_composition = {}
         for element in list(self.iso_pairs.keys()) + list(self.rev_iso_pairs.keys()):
             base_composition[element] = int(self.frame_dict_entryvars[1][element].get())
@@ -1247,11 +1267,11 @@ class JModGUI(ThemedTk):
                 tk.messagebox.showerror("Duplicate Channel Error", f"Duplicate Channel Error: Tab {i} has the same channel name as another channel")
                 self.second_window.focus()
                 return
-            # TODO: validate that channel_name is all digits. The search parses the
-            # channel back out of tagged sequences with f"{tag.name}-(\d+)" (see
-            # iso_functions.py:237/434, ms1_cor_channels.py:1187, fdr_analysis.py:1218),
-            # so a non-numeric name like "d0" saves fine here and then fails with an
-            # IndexError partway through isotope generation.
+            # The search reads channels back out of sequences with f"{tag.name}-(\d+)"
+            if not channel_name.isdigit():
+                tk.messagebox.showerror("Channel Name Error", f"Channel Name Error: In tab {i} the channel name '{channel_name}' is not a number.")
+                self.second_window.focus()
+                return
             compositions[channel_name] = {}
             for element in list(self.iso_pairs.keys()) + list(self.rev_iso_pairs.keys()):
                 compositions[channel_name][element] = int(self.frame_dict_entryvars[i][element].get())
@@ -1278,7 +1298,7 @@ class JModGUI(ThemedTk):
                 return
 
         mass_tag_dict = {
-            "rules": self.tag_rules_dropdown.get(),
+            "rules": rules,
             "base_mass": base_mass,
             "delta": delta,
             "channel_names": list(compositions.keys()),
@@ -1303,12 +1323,15 @@ class JModGUI(ThemedTk):
         self.tag_dropdown['values'] = self.tag_list
 
 
-    def update_masstag(self):
+    def update_masstag(self, channels=None):
         """
-        Find the path to the massTag entered (and handle it if its a subset). Then call update_mass_tag_viewer to update the viewer
+        Find the path to the massTag entered, then call update_mass_tag_viewer to update the viewer with
+        only *channels* ("0,4", as the config JSON has them) checked (all if None)
         Called by: 1) Changing the mass tag in the dropdown    2) Creating a new mass_tag     3) Loading in a config JSON
         """
         filename = default_dict['tag']['tk_handle'].get()
+        if isinstance(channels, str):
+            channels = channels.split(",")
         if filename == "None" or filename == "":
             self.update_mass_tag_viewer([], [], None, None, None)
             return
@@ -1316,25 +1339,15 @@ class JModGUI(ThemedTk):
             filename += ".json"
         mass_tags_dir = Path(__file__).parent / "MassTags"
         mass_tag_files = set(os.listdir(mass_tags_dir))
-        if filename in mass_tag_files or filename.split("#")[0] + ".json" in mass_tag_files:
-            mass_tag_subset = False
-            if filename not in mass_tag_files:
-                mass_tag_subset = True
-                subset = os.path.splitext((filename.split("#")[1]))[0]
-                filename = filename.split("#")[0] + ".json"
-                #default_dict['tag']['tk_handle'].set(os.path.splitext(filename)[0])
-                if filename not in mass_tag_files:
-                    tk.messagebox.showerror("Mass tag Error", f"Mass Tag {filename}/{filename}#{subset}.json not in mass tag dir")
-                    default_dict['tag']['tk_handle'].set("None")
-                    self.update_mass_tag_viewer([], [], None, None, None)
-                    return
-            
+        if filename in mass_tag_files:
             mass_tag_json = (os.path.join(mass_tags_dir,filename))
             if mass_tag_json:
                 with open(mass_tag_json, 'r') as f:
                     mass_tag_data = json.load(f)
-                if mass_tag_data['rules'] not in ["nK", "R"]:
-                    tk.messagebox.showerror("Mass Tag Error", f"Invalid mass tag rules in file '{filename}'.\n\n {mass_tag_data['rules']} not in {['nK', 'R']}")
+                from src.mass_tags import tag_rules_error
+                rules_error = tag_rules_error(mass_tag_data['rules'])
+                if rules_error:
+                    tk.messagebox.showerror("Mass Tag Error", f"Invalid mass tag rules in file '{filename}'.\n\n {rules_error}")
                     default_dict['tag']['tk_handle'].set("None")
                     self.update_mass_tag_viewer([], [], None, None, None)
                     return
@@ -1358,11 +1371,7 @@ class JModGUI(ThemedTk):
                     default_dict['tag']['tk_handle'].set("None")
                     self.update_mass_tag_viewer([], [], None, None, None)
                     return
-                if mass_tag_subset is False:
-                    self.update_mass_tag_viewer(mass_tag_data["channel_names"], mass_tag_data["delta"], mass_tag_data["base_mass"], mass_tag_data["rules"], None)
-                else:
-                    default_dict['tag']['tk_handle'].set(mass_tag_data['name'])
-                    self.update_mass_tag_viewer(mass_tag_data["channel_names"], mass_tag_data["delta"], mass_tag_data["base_mass"], mass_tag_data["rules"], subset)
+                self.update_mass_tag_viewer(mass_tag_data["channel_names"], mass_tag_data["delta"], mass_tag_data["base_mass"], mass_tag_data["rules"], channels)
             else:
                 tk.messagebox.showerror("Mass Tag Error", f"Mass tag file '{filename}' is empty or not found.")
                 default_dict['tag']['tk_handle'].set("None")
@@ -1373,7 +1382,7 @@ class JModGUI(ThemedTk):
             self.update_mass_tag_viewer([], [], None, None, None)
 
 
-    def update_mass_tag_viewer(self, channels, deltas, base_mass, rules, subset):
+    def update_mass_tag_viewer(self, channels, deltas, base_mass, rules, checked_channels):
         """
         Update the mass tag view with basic information about the tag
         This happens when update_masstag is called
@@ -1420,14 +1429,7 @@ class JModGUI(ThemedTk):
         if rules:
             self.rules_Label = tk.Label(self.inner_frame, text="Rules: " + rules)
             self.rules_Label.grid(row=0, column=0, sticky='nsew')
-            if rules != "":
-                if rules == "nK":
-                    rule_tip = "Tag on N-term and Lys"
-                elif rules == "R":
-                    rule_tip = "Tag on Arg"
-                else:
-                    rule_tip = "Unknown Tagging Rule"
-            Hovertip(self.rules_Label, rule_tip)
+            Hovertip(self.rules_Label, "n: N-terminus, capital letters: amino acids")
         if base_mass:
             self.base_mass_Label = tk.Label(self.inner_frame, text='  Base Mass: ' + format(round(base_mass, 8), ".8f") if base_mass else '')
             self.base_mass_Label.grid(row=0, column=1, sticky='nsew')
@@ -1461,59 +1463,16 @@ class JModGUI(ThemedTk):
             checkbutton_var = tk.BooleanVar(value=True)
             channel_checkbox = ttk.Checkbutton(self.inner_frame, variable=checkbutton_var, padding=(5, 0,), takefocus=0)
             channel_checkbox.grid(row=i, column=2, sticky='nsew')
-            if subset:
-                channel_subsets = [x for x in subset.split("d") if x]
-                if str(channel) not in channel_subsets:
-                    checkbutton_var.set(False)
+            if checked_channels is not None and str(channel) not in checked_channels:
+                checkbutton_var.set(False)
             self.channel_labels.append(channel_L)
             self.mass_labels.append(mass_L)
             self.tag_checkboxes.append(channel_checkbox)
             self.tag_checkbox_list.append(checkbutton_var)
             Hovertip(mass_L, delta)
+        self.tag_channels = [str(channel) for channel in channels]
             
     
-    def generate_tag_subset(self, base_tag_name):
-        """
-        Create a tag subset JSON if onoy using a subset of channels
-        Called by: make_config_dict (when the JSON file is being created for any reason) IF not all channel boxes are checked
-        """
-        from src.mass_tags import available_tags, refresh_tags
-        base_tag_instance = available_tags[base_tag_name]
-        channels = base_tag_instance.channel_names
-        using_channels_idxs = []
-        channel_string = ''
-        for i, channel in enumerate(channels):
-            if self.tag_checkbox_list[i].get():
-                using_channels_idxs.append(i)
-                channel_string += f"d{channel}"
-
-        new_tag_name = f"{base_tag_name}#{channel_string}"
-
-        base_mass_tag_JSON = os.path.join("src", "MassTags", base_tag_name + ".json")
-        with open(base_mass_tag_JSON, 'r') as f:
-            mass_tag_data = json.load(f)
-
-        new_deltas = [delta for i, delta in enumerate(mass_tag_data['delta']) if i in using_channels_idxs]
-        new_channels = [channel for i, channel in enumerate(mass_tag_data['channel_names']) if i in using_channels_idxs]
-        new_composition_list = [comp for i, comp in enumerate(list(mass_tag_data['compositions'].values())) if i in using_channels_idxs]
-        new_compositions = dict(zip(new_channels, new_composition_list))
-
-        new_tag_dict = {
-            'rules': mass_tag_data['rules'],
-            'base_mass': mass_tag_data['base_mass'],
-            'delta': new_deltas,
-            'channel_names': new_channels,
-            'name': new_tag_name,
-            'compositions': new_compositions
-        }
-
-        file_path = os.path.join("src", "MassTags", "Subsets", new_tag_name + ".json")
-        with open (file_path, 'w') as f:
-            json.dump(new_tag_dict, f, indent=4)
-        refresh_tags()
-
-        return new_tag_name
-
     ####         Additional Funcs      #######
 
 
@@ -1607,6 +1566,7 @@ class JModGUI(ThemedTk):
         folder_selected = filedialog.askdirectory(initialdir=self.last_opened_dir)
         if folder_selected:
             self.output_folder_var.set(folder_selected)
+            show_end(self.output_folder_entry)
             self.last_opened_folder = folder_selected
 
     def disable_buttons(self):
@@ -1789,10 +1749,13 @@ class JModGUI(ThemedTk):
         if os.path.splitext(tsv_path)[1].lower() not in speclib_filetypes:
             tk.messagebox.showerror("Speclib Type Error", f"Speclib filetype type ({os.path.splitext(tsv_path)[1].lower()}) not in supported filetypes: {speclib_filetypes}")
             return False
-        if self.output_folder_var.get() == "":
+        if self.output_folder_var.get().strip() == "":
             tk.messagebox.showerror("Output Folder Error", "Output Folder Error: Please Specify an Output Folder")
             return False
-        if not os.path.isdir(self.output_folder_var.get()):
+        # The run makes the folder if it is new (see run_jmod.experiment_folder): the
+        # folder it goes in must exist, which catches a mistyped path
+        chosen = os.path.abspath(self.output_folder_var.get().strip())
+        if not (os.path.isdir(chosen) or os.path.isdir(os.path.dirname(chosen))):
             tk.messagebox.showerror("Output Folder Error", "Output Folder Error: Please make sure output folder exists")
             return False
         return True
@@ -1809,7 +1772,7 @@ class JModGUI(ThemedTk):
             If it is in the GUI, retrieve the value
 
         Ensure all values are within parameters set by default_dict (i.e. positive only, in ['a', 'b', 'c'], etc)
-        Generate tag subset if required
+        Set channels if only some of the tag's channels are checked
 
         return config_args_dict
         """
@@ -1914,11 +1877,11 @@ class JModGUI(ThemedTk):
                 if config_args_dict[key] < 0:
                     tk.messagebox.showerror("Invalid Value", f"Value for {key} must be positive: \n\nValue: {config_args_dict[key]}")
                     return None
-        base_tag_name = config_args_dict['tag']
-        if base_tag_name != "None":  
-            if not all([x.get() for x in self.tag_checkbox_list]): ##if the user has specified only specific tag channels
-                new_tag_name = self.generate_tag_subset(base_tag_name)
-                config_args_dict['tag'] = new_tag_name
+        if config_args_dict['tag'] != "None" and not all(x.get() for x in self.tag_checkbox_list):  ##only some tag channels checked
+            config_args_dict['channels'] = ",".join(c for c, x in zip(self.tag_channels, self.tag_checkbox_list) if x.get())
+            if not config_args_dict['channels']:
+                tk.messagebox.showerror("No Channels", "Check at least one of the tag's channels.")
+                return None
 
         # Match between runs needs runs to match between.  (From the command line
         # one file only warns and skips MBR; here the user can still fix it.)
@@ -1988,11 +1951,9 @@ class JModGUI(ThemedTk):
             mzml_paths = cfg["mzml"]
             first_file = os.path.basename(mzml_paths[0])
             files_label = first_file if len(mzml_paths) == 1 else f"{first_file} + {len(mzml_paths) - 1} more"
-            mzml_display_name = files_label + "   " + (cfg.get("dummy_value") or "")
-            if cfg.get("dummy_value") is None and self.has_shown_no_dummy_val is False:
-                self.has_shown_no_dummy_val = True
-                tk.messagebox.showinfo("Queue Information", "Tip: You can use '-z your_text_here' in the additional commands frame to name the experiment's results folder (JMod_Results_your_text_here)")
-            display_name = f"Queue {run_queue_number} - {mzml_display_name}"
+            # named by where it goes: the output folder's last two parts, e.g. results/my_exp
+            output = "/".join((cfg.get("output_folder") or "").replace("\\", "/").rstrip("/").split("/")[-2:])
+            display_name = f"Queue {run_queue_number} - {files_label}   -> {output}"
             self.queue_data.append((display_name, tmp_filename))
             self.queue_listbox.insert(tk.END, display_name)
         self.queue_listbox.see(tk.END)

@@ -35,12 +35,27 @@ _STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
 
 # Version stamp for the .npz binary cache. Bump whenever parsing semantics
 # change so stale caches are re-parsed instead of silently loaded.
-STORE_VERSION = 5
+# 6: both the N-term semantics change and the dtype narrowing shipped as 5
+STORE_VERSION = 6
 
 
 class StaleStoreCacheError(ValueError):
     """Raised by :meth:`SpectrumLibraryStore.load` when the .npz cache was
     written by a different (or unstamped) parser version."""
+
+
+def _charges_to_uint8(values):
+    """Validate precursor charges and narrow to the store's uint8 dtype.
+
+    Any non-integral or out-of-range value is a hard error — malformed input
+    must never be silently truncated into a uint8.
+    """
+    arr = np.asarray(values, dtype=np.float64)
+    ok = (arr == np.floor(arr)) & (arr >= 1) & (arr <= 255)
+    if not np.all(ok):
+        raise ValueError(
+            f"PrecursorCharge must be an integer in [1, 255]; found {arr[~ok][0]}")
+    return arr.astype(np.uint8)
 
 _ALL_KNOWN_FIELDS = _ALL_SCALAR_FIELDS | frozenset({
     'spectrum', 'ordered_frags', 'ordered_frag_codes', 'frag_intensities',
@@ -421,12 +436,18 @@ def _stable_sort_permutation(primary, secondary):
 
 
 def _load_library_frame(spec_lib_file, file_type):
-    """Read a library file into a DataFrame with canonical column names.
+    """Plan a lazy read of a library file with canonical column names.
 
-    Only columns matching a known alias are read from disk. Returns
-    ``(df, found)`` where ``found`` maps canonical name -> the source column
+    Only columns matching a known alias are selected. Returns
+    ``(lf, found)`` where ``lf`` is a polars LazyFrame (nothing is read yet
+    beyond the schema) and ``found`` maps canonical name -> the source column
     it was resolved from. The same source column may back several canonical
     columns (see _LIBRARY_COLUMN_ALIASES).
+
+    The frame stays lazy so the full fragment-row table is never
+    materialized: only the grouped outputs and tiny diagnostic aggregates
+    are collected (streaming engine), bounding parse memory by the output
+    size rather than the input size.
     """
     import polars as pl
     reader = _LIBRARY_READERS.get(file_type)
@@ -442,7 +463,7 @@ def _load_library_frame(spec_lib_file, file_type):
                 found[canonical] = name
                 exprs.append(pl.col(name).alias(canonical))
                 break
-    return spec_lib_lazy_frame.select(exprs).collect(), found
+    return spec_lib_lazy_frame.select(exprs), found
 
 class SpectrumLibraryStore:
     """Columnar store for spectral library data.
@@ -458,11 +479,21 @@ class SpectrumLibraryStore:
     the original fragment dict data.
     """
 
+    # Dtype contract (enforced by tests/models/spec_lib/test_library_snapshots
+    # TestArrayDtypes; bump STORE_VERSION when changing):
+    #   prec_z uint8 | prec_mz, ion_mob float32 | iRT float64
+    #   frag_mz, frag_int, spectrum_mz, spectrum_int float32
+    #   frag_keys_data, frag_names_data, *_lengths, top_n_data int32
+    #   *_offsets, parent_idx int64 | spectrum_perm uint16
+    # f32 m/z is deliberate: 24-bit mantissa = 0.06 ppm, 100-300x finer than
+    # matching tolerances, and peppy_sage's Rust index is f32 internally.
+    # Offsets stay int64: isotope expansion multiplies totals by n_iso and
+    # int32 wraps silently past 2^31.
     __slots__ = (
         'key_to_idx',
         # scalar columns – strings (object arrays)
         'mod_seq', 'seq', 'protein_group', 'protein_name', 'genes', 'uniprot_id',
-        # scalar columns – float64
+        # scalar columns – numeric (see dtype contract above)
         'prec_mz', 'prec_z', 'iRT', 'ion_mob',
         # concatenated variable-length spectrum data (may include isotopes)
         'spectrum_mz', 'spectrum_int', 'spectrum_offsets', 'spectrum_lengths',
@@ -1149,10 +1180,17 @@ class SpectrumLibraryStore:
 
         for field in _SCALAR_FLOAT_FIELDS:
             arr = self._float_array_for(field)
-            new_arr = np.empty(idx + 1, dtype=np.float64)
+            # Preserve the column dtype (prec_z is uint8, prec_mz/ion_mob
+            # float32); growing as float64 would silently re-widen the store
+            new_arr = np.empty(idx + 1, dtype=arr.dtype)
             new_arr[:idx] = arr
             val = entry_dict.get(field)
-            new_arr[idx] = np.nan if val is None else float(val)
+            if field == 'prec_z':
+                if val is None:
+                    raise ValueError("prec_z is required when appending an entry")
+                new_arr[idx] = _charges_to_uint8([val])[0]
+            else:
+                new_arr[idx] = np.nan if val is None else float(val)
             self._set_float_array(field, new_arr)
 
         # parent_idx
@@ -1597,10 +1635,10 @@ class SpectrumLibraryStore:
             key_to_idx=key_to_idx,
             mod_seq=np.array(mod_seq_list, dtype=object),
             seq=np.array(seq_list, dtype=object),
-            prec_mz=np.array(prec_mz_list, dtype=np.float64),
-            prec_z=np.array(prec_z_list, dtype=np.float64),
+            prec_mz=np.array(prec_mz_list, dtype=np.float32),
+            prec_z=_charges_to_uint8(np.array(prec_z_list, dtype=np.float64)),
             iRT=np.array(iRT_list, dtype=np.float64),
-            ion_mob=np.array(ion_mob_list, dtype=np.float64),
+            ion_mob=np.array(ion_mob_list, dtype=np.float32),
             protein_group=np.array(protein_group_list, dtype=object),
             protein_name=np.array(protein_name_list, dtype=object),
             genes=np.array(genes_list, dtype=object),
@@ -1811,6 +1849,10 @@ class SpectrumLibraryStore:
         tok_idx = decoys.token_offsets[frag_prec] + (get_index(codes).astype(np.int64) - 1)
         tok_idx[~is_b] += len(decoys.prefix_aa)
 
+        # TODO(f64-intermediates): decoy/tag m/z shifts compute in f64 and
+        # store f32. Either justify the round-trip quantitatively (accumulated
+        # rounding across token-mass sums) or compute natively in f32; changing
+        # it re-baselines test_decoy_differential (pinned to f64 fast_mass).
         z = get_charge(codes).astype(np.float64)
         m = np.concatenate([decoys.prefix_aa, decoys.suffix_aa])[tok_idx]
         m += H2O
@@ -2185,9 +2227,12 @@ class SpectrumLibraryStore:
         out_prec_z = target_store.prec_z[valid_i]
         out_iRT = target_store.iRT[valid_i]
         out_ion_mob = target_store.ion_mob[valid_i]
-        out_prec_mz = (target_store.prec_mz[valid_i]
+        # f64 intermediates for the tag-mass shift, stored back at the store's
+        # f32 (see TODO(f64-intermediates) at _decoy_fragment_mz)
+        out_prec_mz = (target_store.prec_mz[valid_i].astype(np.float64)
                        + (channel_masses[valid_c] - source_channel_mass)
-                       * n_tag_sites[valid_i] / out_prec_z)
+                       * n_tag_sites[valid_i] / out_prec_z
+                       ).astype(np.float32)
         out_protein_group = PooledStringColumn(
             target_store.protein_group.codes[valid_i], target_store.protein_group.pool)
         out_protein_name = PooledStringColumn(
@@ -2253,6 +2298,7 @@ class SpectrumLibraryStore:
                 tag_mass = channel_masses[valid_c[out_idx]]
                 # compute in f64, store f32; sort on the stored f32 values so
                 # stored order is self-consistent
+                # TODO(f64-intermediates): see _decoy_fragment_mz
                 new_mz = (src_mz.astype(np.float64)
                           + ((tag_mass - source_channel_mass) * local_n_tags / local_charges)
                           ).astype(np.float32)
@@ -2358,8 +2404,10 @@ class SpectrumLibraryStore:
         gather_idx = offsets_expanded + within_group
 
         # -- Fragment-level columns from frag_data / frag_keys_data --
-        frag_mz = self.frag_mz[gather_idx].astype(np.float64)
-        frag_int = self.frag_int[gather_idx].astype(np.float64)
+        # Emitted as float32: peppy_sage's index stores fragment m/z and
+        # intensity as f32 internally, so f64 here is a pure 2x memory cost
+        frag_mz = self.frag_mz[gather_idx]
+        frag_int = self.frag_int[gather_idx]
         codes = self.frag_keys_data[gather_idx]
 
         # Decode packed int32 codes into separate fields
@@ -2434,10 +2482,12 @@ class SpectrumLibraryStore:
         import tqdm
 
         t_start = time.perf_counter()
-        df, found = _load_library_frame(spec_lib_file, file_type)
-        logger.info(f"Parsing spectral library: {df.height:,} fragment rows")
+        lf, found = _load_library_frame(spec_lib_file, file_type)
+        schema = lf.collect_schema()
+        # Emptiness probe: reads a single row, not the file
+        is_empty = lf.limit(1).collect().height == 0
 
-        progress = tqdm.tqdm(total=7, desc="Parsing library", unit="stage", leave=False)
+        progress = tqdm.tqdm(total=6, desc="Parsing library", unit="stage", leave=False)
 
         def _stage(name):
             progress.set_postfix_str(name)
@@ -2447,7 +2497,7 @@ class SpectrumLibraryStore:
             raise JModError(message)
 
         def _require(canonical, message):
-            if canonical not in found and df.height > 0:
+            if canonical not in found and not is_empty:
                 _raise(message)
 
         def _utf8(canonical):
@@ -2457,187 +2507,227 @@ class SpectrumLibraryStore:
             expr = _utf8(canonical) if canonical in found else pl.lit("")
             return expr.fill_null("")
 
-        decoy_precursors = set()
-        invalid_precursors = set()
-
-        if df.height > 0:
-            _require("ModifiedPeptide", "Unknown ModifiedPeptide column")
-            _require("StrippedPeptide", "Unknown StrippedPeptide column")
-            _require("PrecursorCharge", "Unknown PrecursorCharge column")
-
-            # ModifiedPeptide with wrapping underscores stripped.  N-terminal
-            # modifications stay in front of the first residue, as DIA-NN
-            # writes them (see parse_peptides.split_nterm)
-            df = df.with_columns(
-                _utf8("ModifiedPeptide")
-                .str.strip_chars("_")
-                .str.replace_all("[", "(", literal=True)
-                .str.replace_all("]", ")", literal=True)
-                .alias("_mod_pep_raw")
-            )
-            try:
-                df = df.with_columns(pl.col("PrecursorCharge").cast(pl.Float64).alias("_prec_z"))
-            except Exception:
-                _raise("SpecLib Charge Cannot be Converted to Float")
-
-            # Decoy rows: same accepted spellings as str(x).strip() in ("1","1.0","True")
-            if "Decoy" in found:
-                decoy_dtype = df.schema["Decoy"]
-                if decoy_dtype == pl.Boolean:
-                    decoy_mask = pl.col("Decoy")
-                elif decoy_dtype.is_numeric():
-                    decoy_mask = pl.col("Decoy").cast(pl.Float64) == 1.0
-                else:
-                    decoy_mask = _utf8("Decoy").str.strip_chars().is_in(["1", "1.0", "True"])
-                decoy_mask = decoy_mask.fill_null(False)
-            else:
-                decoy_mask = pl.lit(False)
-
-            decoy_precursors = set(
-                df.filter(decoy_mask).select(["_mod_pep_raw", "_prec_z"]).unique().rows()
-            )
-            df = df.filter(~decoy_mask)
-
-            ## Check for non-valid AAs
-            x_mask = _utf8("StrippedPeptide").str.contains("X", literal=True).fill_null(False)
-            invalid_precursors |= set(
-                df.filter(x_mask).select(["_mod_pep_raw", "_prec_z"]).unique().rows()
-            )
-            df = df.filter(~x_mask)
-
-            nested = df.filter(pl.col("_mod_pep_raw").str.contains(r"\([^()]*\(").fill_null(False))
-            if nested.height > 0:
-                example = nested["ModifiedPeptide"][0]
-                _raise(f"Nested modification parentheses are not supported "
-                       f"({nested.height} rows, e.g. {example})")
-
-            df = df.with_columns(pl.col("_mod_pep_raw").alias("_mod_pep"))
-
-            # Skip precursors carrying residues with no defined mass rather than
-            # letting them reach decoy generation, where fast_mass raises.
-            nonstd_mask = _utf8("StrippedPeptide").str.contains(
-                "[^" + "".join(sorted(_STANDARD_RESIDUES)) + "]"
-            ).fill_null(False)
-            invalid_precursors |= set(
-                df.filter(nonstd_mask).select(["_mod_pep", "_prec_z"]).unique().rows()
-            )
-            df = df.filter(~nonstd_mask)
-            _stage("filtered decoy/invalid rows")
-
-        if df.height > 0:
-            _require("RT", "Unknown retention time column")
-            _require("PrecursorMz", "Unknown PrecursorMz column")
-            for canonical in ("FragmentType", "FragmentSeriesNumber", "FragmentCharge",
-                              "FragmentMz", "RelativeIntensity"):
-                _require(canonical, f"Unknown {canonical} column")
-
-            rt = pl.col("RT")
-            if df.schema["RT"] == pl.Utf8:
-                rt = pl.when(rt == "").then(None).otherwise(rt)
-
-            pmz = pl.col("PrecursorMz")
-            if df.schema["PrecursorMz"] == pl.Utf8:
-                pmz = pl.when(pmz == "").then(None).otherwise(pmz)
-
-            if "IonMobility" in found:
-                im = pl.col("IonMobility")
-                if df.schema["IonMobility"] == pl.Utf8:
-                    im = pl.when(im == "").then(None).otherwise(im)
-                im = im.cast(pl.Float64)
-                # in DIANN IM = 0.0 if experiment does not have IM
-                im = pl.when(im == 0.0).then(None).otherwise(im)
-            else:
-                im = pl.lit(None, dtype=pl.Float64)
-
-            genes_base = _utf8("Genes") if "Genes" in found else pl.lit("")
-            ## standardize JMod and DIANN speclibs: empty Genes -> '""'
-            genes = pl.when(genes_base == "").then(pl.lit('""')).otherwise(genes_base).fill_null("")
-
-            # Fragment key, e.g. "y4-H2O_1". Loss strings are not enumerated:
-            # anything other than unknown/noloss/"" is carried into the key
-            # verbatim, so fragments differing only in loss type stay distinct.
-            loss_base = _utf8("FragmentLossType").fill_null("") if "FragmentLossType" in found else pl.lit("")
-            loss = pl.when(loss_base.is_in(["unknown", "noloss", ""])) \
-                     .then(pl.lit("")).otherwise(pl.lit("-") + loss_base)
-            frag_key = (_utf8("FragmentType") + _utf8("FragmentSeriesNumber")
-                        + loss + pl.lit("_") + _utf8("FragmentCharge"))
-
-            df = df.with_columns(
-                _utf8("StrippedPeptide").alias("_seq"),
-                rt.cast(pl.Float64).alias("_iRT"),
-                pmz.cast(pl.Float64).alias("_prec_mz"),
-                im.alias("_ion_mob"),
-                _str_col("ProteinGroup").alias("_protein_group"),
-                _str_col("ProteinName").alias("_protein_name"),
-                genes.alias("_genes"),
-                _str_col("ProteinID").alias("_uniprot_id"),
-                frag_key.alias("_frag_key"),
-                pl.col("FragmentMz").cast(pl.Float64).alias("_frag_mz"),
-                pl.col("RelativeIntensity").cast(pl.Float64).alias("_frag_int"),
-                # Key components, kept for arithmetic fragment-code encoding
-                _utf8("FragmentType").alias("_frag_ion"),
-                pl.col("FragmentSeriesNumber").cast(pl.Int64).alias("_frag_idx"),
-                loss_base.alias("_frag_loss"),
-                pl.col("FragmentCharge").cast(pl.Int64).alias("_frag_z"),
-            )
-
-            _stage("built typed columns")
-
-            # RT and PrecursorMz are mandatory for every precursor (IM is optional)
-            n_null_rt = df["_iRT"].null_count()
-            if n_null_rt > 0:
-                _raise(f"Library retention time has {n_null_rt} missing values")
-            n_null_pmz = df["_prec_mz"].null_count()
-            if n_null_pmz > 0:
-                _raise(f"Library PrecursorMz has {n_null_pmz} missing values")
-
-            # Precursor-level fields come from each precursor's first row;
-            # maintain_order preserves first-appearance precursor ordering
-            prec_df = df.group_by(["_mod_pep", "_prec_z"], maintain_order=True).agg(
-                pl.col("_seq").first(),
-                pl.col("_iRT").first(),
-                pl.col("_ion_mob").first(),
-                pl.col("_protein_group").first(),
-                pl.col("_protein_name").first(),
-                pl.col("_genes").first(),
-                pl.col("_uniprot_id").first(),
-                pl.col("_prec_mz").first(),
-            )
-            _stage("grouped precursors")
-            # Duplicate fragment keys (identical type+number+loss+charge):
-            # dict-update semantics are first-appearance position, last-seen value
-            frag_df = df.group_by(["_mod_pep", "_prec_z", "_frag_key"], maintain_order=True).agg(
-                pl.col("_frag_mz").last(),
-                pl.col("_frag_int").last(),
-                # equal keys imply equal components
-                pl.col("_frag_ion").first(),
-                pl.col("_frag_idx").first(),
-                pl.col("_frag_loss").first(),
-                pl.col("_frag_z").first(),
-            )
-
-            prec_df = prec_df.with_row_index("_pidx")
-            # Contiguous per-precursor fragment blocks in precursor order; the
-            # sort is stable so within-precursor first-appearance order survives
-            frag_df = frag_df.join(
-                prec_df.select(["_mod_pep", "_prec_z", "_pidx"]),
-                on=["_mod_pep", "_prec_z"],
-                how="left",
-            ).sort("_pidx", maintain_order=True)
-            _stage("deduplicated fragments")
-
-        if len(decoy_precursors) > 0:
-            logger.info(f"{len(decoy_precursors)} decoy precursors removed from input library")
-
-        if len(invalid_precursors) > 0:
-            example = sorted(invalid_precursors)[0][0]
-            logger.info(f"{len(invalid_precursors)} precursors with non-standard residues "
-                        f"removed from input library (e.g. {example})")
-
-        # Second pass: convert to columnar arrays
-        if df.height == 0:
+        if is_empty:
             progress.close()
             return cls._empty()
+
+        _require("ModifiedPeptide", "Unknown ModifiedPeptide column")
+        _require("StrippedPeptide", "Unknown StrippedPeptide column")
+        _require("PrecursorCharge", "Unknown PrecursorCharge column")
+        _require("RT", "Unknown retention time column")
+        _require("PrecursorMz", "Unknown PrecursorMz column")
+        for canonical in ("FragmentType", "FragmentSeriesNumber", "FragmentCharge",
+                          "FragmentMz", "RelativeIntensity"):
+            _require(canonical, f"Unknown {canonical} column")
+
+        # Everything below builds one lazy plan; the file is only read at the
+        # collect_all / collect calls, on the streaming engine, so the full
+        # fragment-row table is never resident. Ordering is made explicit via
+        # a row index (_ridx) instead of maintain_order, which the streaming
+        # engine may not honor without falling back to in-memory execution.
+        # Lazy-frame internals stay f64 (_prec_z is a group key); the store's
+        # narrow dtypes (see the contract at __slots__) are applied at the
+        # numpy conversion after collect.
+        lf = lf.with_row_index("_ridx")
+
+        lf = lf.with_columns(
+            _utf8("ModifiedPeptide")
+            .str.strip_chars("_")
+            .str.replace_all("[", "(", literal=True)
+            .str.replace_all("]", ")", literal=True)
+            .alias("_mod_pep_raw")
+        )
+        # Charge is cast non-strict ONLY so failures raise the historical
+        # custom message instead of a raw polars ComputeError at collect; any
+        # null result (unparseable, empty, or null input) is a hard error —
+        # checked after the first collect pass, before any data is used. All
+        # other casts in this pipeline stay strict and abort the parse at
+        # collect on malformed values.
+        lf = lf.with_columns(
+            pl.col("PrecursorCharge").cast(pl.Float64, strict=False).alias("_prec_z"))
+        bad_charge_diag = lf.filter(pl.col("_prec_z").is_null()).select(pl.len())
+
+        # Decoy rows: same accepted spellings as str(x).strip() in ("1","1.0","True")
+        if "Decoy" in found:
+            decoy_dtype = schema["Decoy"]
+            if decoy_dtype == pl.Boolean:
+                decoy_mask = pl.col("Decoy")
+            elif decoy_dtype.is_numeric():
+                decoy_mask = pl.col("Decoy").cast(pl.Float64) == 1.0
+            else:
+                decoy_mask = _utf8("Decoy").str.strip_chars().is_in(["1", "1.0", "True"])
+            decoy_mask = decoy_mask.fill_null(False)
+        else:
+            decoy_mask = pl.lit(False)
+
+        decoy_diag = (lf.filter(decoy_mask).select(["_mod_pep_raw", "_prec_z"])
+                      .unique().select(pl.len()))
+        lf = lf.filter(~decoy_mask)
+
+        ## Check for non-valid AAs
+        x_mask = _utf8("StrippedPeptide").str.contains("X", literal=True).fill_null(False)
+        invalid_x_lf = lf.filter(x_mask).select(
+            pl.col("_mod_pep_raw").alias("_bad_pep"), pl.col("_prec_z"))
+        lf = lf.filter(~x_mask)
+
+        nested_diag = (
+            lf.filter(pl.col("_mod_pep_raw").str.contains(r"\([^()]*\(").fill_null(False))
+            .select(pl.len().alias("n"),
+                    _utf8("ModifiedPeptide").first().alias("example"))
+        )
+
+        lf = lf.with_columns(pl.col("_mod_pep_raw").alias("_mod_pep"))
+
+        # Skip precursors carrying residues with no defined mass rather than
+        # letting them reach decoy generation, where fast_mass raises.
+        nonstd_mask = _utf8("StrippedPeptide").str.contains(
+            "[^" + "".join(sorted(_STANDARD_RESIDUES)) + "]"
+        ).fill_null(False)
+        invalid_nonstd_lf = lf.filter(nonstd_mask).select(
+            pl.col("_mod_pep").alias("_bad_pep"), pl.col("_prec_z"))
+        lf = lf.filter(~nonstd_mask)
+        invalid_diag = (
+            pl.concat([invalid_x_lf, invalid_nonstd_lf]).unique()
+            .select(pl.len().alias("n"), pl.col("_bad_pep").min().alias("example"))
+        )
+
+        rt = pl.col("RT")
+        if schema["RT"] == pl.Utf8:
+            rt = pl.when(rt == "").then(None).otherwise(rt)
+
+        pmz = pl.col("PrecursorMz")
+        if schema["PrecursorMz"] == pl.Utf8:
+            pmz = pl.when(pmz == "").then(None).otherwise(pmz)
+
+        if "IonMobility" in found:
+            im = pl.col("IonMobility")
+            if schema["IonMobility"] == pl.Utf8:
+                im = pl.when(im == "").then(None).otherwise(im)
+            im = im.cast(pl.Float64)
+            # in DIANN IM = 0.0 if experiment does not have IM
+            im = pl.when(im == 0.0).then(None).otherwise(im)
+        else:
+            im = pl.lit(None, dtype=pl.Float64)
+
+        genes_base = _utf8("Genes") if "Genes" in found else pl.lit("")
+        ## standardize JMod and DIANN speclibs: empty Genes -> '""'
+        genes = pl.when(genes_base == "").then(pl.lit('""')).otherwise(genes_base).fill_null("")
+
+        # Fragment key, e.g. "y4-H2O_1". Loss strings are not enumerated:
+        # anything other than unknown/noloss/"" is carried into the key
+        # verbatim, so fragments differing only in loss type stay distinct.
+        loss_base = _utf8("FragmentLossType").fill_null("") if "FragmentLossType" in found else pl.lit("")
+        loss = pl.when(loss_base.is_in(["unknown", "noloss", ""])) \
+                 .then(pl.lit("")).otherwise(pl.lit("-") + loss_base)
+        frag_key = (_utf8("FragmentType") + _utf8("FragmentSeriesNumber")
+                    + loss + pl.lit("_") + _utf8("FragmentCharge"))
+
+        lf = lf.with_columns(
+            _utf8("StrippedPeptide").alias("_seq"),
+            rt.cast(pl.Float64).alias("_iRT"),
+            pmz.cast(pl.Float64).alias("_prec_mz"),
+            im.alias("_ion_mob"),
+            _str_col("ProteinGroup").alias("_protein_group"),
+            _str_col("ProteinName").alias("_protein_name"),
+            genes.alias("_genes"),
+            _str_col("ProteinID").alias("_uniprot_id"),
+            frag_key.alias("_frag_key"),
+            pl.col("FragmentMz").cast(pl.Float64).alias("_frag_mz"),
+            pl.col("RelativeIntensity").cast(pl.Float64).alias("_frag_int"),
+            # Key components, kept for arithmetic fragment-code encoding
+            _utf8("FragmentType").alias("_frag_ion"),
+            pl.col("FragmentSeriesNumber").cast(pl.Int64).alias("_frag_idx"),
+            loss_base.alias("_frag_loss"),
+            pl.col("FragmentCharge").cast(pl.Int64).alias("_frag_z"),
+        )
+        _stage("planned lazy pipeline")
+
+        # RT and PrecursorMz are mandatory for every precursor (IM is optional)
+        null_diag = lf.select(
+            pl.col("_iRT").null_count().alias("n_null_rt"),
+            pl.col("_prec_mz").null_count().alias("n_null_pmz"),
+            pl.len().alias("n_rows"),
+        )
+
+        # Precursor-level fields come from each precursor's first row
+        # (sort_by _ridx inside the agg + the final sort reproduce the old
+        # maintain_order first-appearance semantics, streaming-safe)
+        def _first(c):
+            return pl.col(c).sort_by("_ridx").first()
+
+        prec_lazy = lf.group_by(["_mod_pep", "_prec_z"]).agg(
+            _first("_seq"),
+            _first("_iRT"),
+            _first("_ion_mob"),
+            _first("_protein_group"),
+            _first("_protein_name"),
+            _first("_genes"),
+            _first("_uniprot_id"),
+            _first("_prec_mz"),
+            pl.col("_ridx").min().alias("_first_ridx"),
+        )
+
+        # First read pass: precursors + all diagnostics in one streaming
+        # collect (common subplans are shared across the frames).
+        prec_df, decoy_n, invalid_res, nested_res, bad_charge_n, null_res = pl.collect_all(
+            [prec_lazy, decoy_diag, invalid_diag, nested_diag, bad_charge_diag, null_diag],
+            engine="streaming",
+        )
+        _stage("collected precursors + diagnostics")
+
+        if bad_charge_n.item() > 0:
+            _raise("SpecLib Charge Cannot be Converted to Float")
+        if nested_res["n"].item() > 0:
+            _raise(f"Nested modification parentheses are not supported "
+                   f"({nested_res['n'].item()} rows, e.g. {nested_res['example'].item()})")
+        if null_res["n_null_rt"].item() > 0:
+            _raise(f"Library retention time has {null_res['n_null_rt'].item()} missing values")
+        if null_res["n_null_pmz"].item() > 0:
+            _raise(f"Library PrecursorMz has {null_res['n_null_pmz'].item()} missing values")
+
+        logger.info(f"Parsing spectral library: {null_res['n_rows'].item():,} fragment rows "
+                    f"(after decoy/invalid filtering)")
+
+        if decoy_n.item() > 0:
+            logger.info(f"{decoy_n.item()} decoy precursors removed from input library")
+        if invalid_res["n"].item() > 0:
+            logger.info(f"{invalid_res['n'].item()} precursors with non-standard residues "
+                        f"removed from input library (e.g. {invalid_res['example'].item()})")
+
+        if prec_df.height == 0:
+            progress.close()
+            return cls._empty()
+
+        # First-appearance precursor order, then contiguous _pidx
+        prec_df = (prec_df.sort("_first_ridx").drop("_first_ridx")
+                   .with_row_index("_pidx"))
+
+        # Duplicate fragment keys (identical type+number+loss+charge):
+        # dict-update semantics are first-appearance position, last-seen value
+        frag_lazy = lf.group_by(["_mod_pep", "_prec_z", "_frag_key"]).agg(
+            pl.col("_frag_mz").sort_by("_ridx").last(),
+            pl.col("_frag_int").sort_by("_ridx").last(),
+            # equal keys imply equal components
+            pl.col("_frag_ion").first(),
+            pl.col("_frag_idx").first(),
+            pl.col("_frag_loss").first(),
+            pl.col("_frag_z").first(),
+            pl.col("_ridx").min().alias("_first_ridx"),
+        )
+        # Second read pass: contiguous per-precursor fragment blocks in
+        # precursor order; the _first_ridx tie-break keeps within-precursor
+        # first-appearance order (the old stable sort's guarantee)
+        frag_df = (
+            frag_lazy.join(
+                prec_df.lazy().select(["_mod_pep", "_prec_z", "_pidx"]),
+                on=["_mod_pep", "_prec_z"],
+                how="left",
+            )
+            .sort(["_pidx", "_first_ridx"])
+            .drop("_first_ridx")
+            .collect(engine="streaming")
+        )
+        _stage("collected deduplicated fragments")
 
         n = prec_df.height
         mod_seq_list = prec_df["_mod_pep"].to_list()
@@ -2645,11 +2735,14 @@ class SpectrumLibraryStore:
 
         mod_seq_arr = np.array(mod_seq_list, dtype=object)
         seq_arr = np.array(prec_df["_seq"].to_list(), dtype=object)
-        prec_mz_arr = prec_df["_prec_mz"].to_numpy().astype(np.float64, copy=False)
-        prec_z_arr = prec_df["_prec_z"].to_numpy().astype(np.float64, copy=False)
+        prec_mz_arr = prec_df["_prec_mz"].to_numpy().astype(np.float32)
+        try:
+            prec_z_arr = _charges_to_uint8(prec_df["_prec_z"].to_numpy())
+        except ValueError as e:
+            _raise(str(e))
         iRT_arr = prec_df["_iRT"].to_numpy().astype(np.float64, copy=False)
         # nulls (no IM) become NaN
-        ion_mob_arr = prec_df["_ion_mob"].to_numpy().astype(np.float64, copy=False)
+        ion_mob_arr = prec_df["_ion_mob"].to_numpy().astype(np.float32)
         protein_group_arr = np.array(prec_df["_protein_group"].to_list(), dtype=object)
         protein_name_arr = np.array(prec_df["_protein_name"].to_list(), dtype=object)
         genes_arr = np.array(prec_df["_genes"].to_list(), dtype=object)
@@ -2781,10 +2874,10 @@ class SpectrumLibraryStore:
             key_to_idx=None,
             mod_seq=np.empty(n, dtype=object),
             seq=np.empty(n, dtype=object),
-            prec_mz=np.empty(n, dtype=np.float64),
-            prec_z=np.empty(n, dtype=np.float64),
+            prec_mz=np.empty(n, dtype=np.float32),
+            prec_z=np.empty(n, dtype=np.uint8),
             iRT=np.empty(n, dtype=np.float64),
-            ion_mob=np.empty(n, dtype=np.float64),
+            ion_mob=np.empty(n, dtype=np.float32),
             protein_group=np.empty(n, dtype=object),
             protein_name=np.empty(n, dtype=object),
             genes=np.empty(n, dtype=object),
@@ -3240,7 +3333,8 @@ class _EntryView:
             store.prec_mz[idx] = float(value)
             return
         if field == 'prec_z':
-            store.prec_z[idx] = float(value)
+            # uint8 column: validate rather than let numpy truncate silently
+            store.prec_z[idx] = _charges_to_uint8([value])[0]
             return
         if field == 'iRT':
             store.iRT[idx] = np.nan if value is None else float(value)

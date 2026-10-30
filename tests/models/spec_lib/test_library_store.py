@@ -54,7 +54,8 @@ class TestFromDict:
         entry = store[('ACD', 2.0)]
         assert entry['mod_seq'] == 'ACD'
         assert entry['seq'] == 'ACD'
-        assert entry['prec_mz'] == 450.2
+        # prec_mz is stored float32; compare at f32 resolution
+        assert entry['prec_mz'] == np.float32(450.2)
         assert entry['prec_z'] == 2.0
         assert entry['iRT'] == 32.5
         assert entry['protein_group'] == 'PG1'

@@ -151,8 +151,10 @@ class TestMatchAndFill:
     def test_boundary_just_inside_is_matched(self):
         q = 500.0
         tol = 20e-6
-        # peak sits exactly at (q + q*tol): diff == tol*q, so should match.
-        peak_mz = q + q * tol
+        # Peak just inside the tolerance edge. Not exactly AT the edge: peak
+        # m/z is stored float32 (~0.06 ppm quantization), so an exact-boundary
+        # value can round to either side; 0.95*tol stays inside at f32.
+        peak_mz = q + q * tol * 0.95
         scan = _make_scan([peak_mz], [42.0], 1.0, 500, 5, 5)
         out = self._call([scan], [0], [q], ppm_tol=tol)
         assert out[0, 0] == 42.0

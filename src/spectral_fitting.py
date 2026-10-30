@@ -1145,8 +1145,8 @@ def _create_entries_direct_jit(
 
     Args:
         centroid_breaks: float64[] — sorted DIA bin edges
-        spec_data_mz:  float64[] — library spectrum_data column 0 (all fragment m/z)
-        spec_data_int: float64[] — library spectrum_data column 1 (all fragment intensities)
+        spec_data_mz:  float32[] — library spectrum_mz (all fragment m/z)
+        spec_data_int: float32[] — library spectrum_int (all fragment intensities)
         spec_offsets:  int64[n_lib] — start offset in spec_data for each library entry
         spec_lengths:  int32[n_lib] — number of fragments for each library entry
         topn_data:     int32[] — library top_n_data (local fragment indices)
@@ -1419,7 +1419,7 @@ def create_entries_direct(centroid_breaks,
             else np.empty(0, dtype=np.float64),
             float(ms1_tol),
             float(config.args.lib_frac), int(atleast_m),
-            bool(config.args.no_ms1_req),
+            not config.args.no_ms1_req,
             np.ascontiguousarray(
                 bin_mz if bin_mz is not None else np.zeros(0), dtype=np.float64),
             np.ascontiguousarray(
@@ -2355,7 +2355,7 @@ def create_entries(centroid_breaks,
             np.ascontiguousarray(ms1_spec.mz, dtype=np.float64),
             float(ms1_tol),
             float(config.args.lib_frac), int(atleast_m),
-            bool(config.args.no_ms1_req))
+            not config.args.no_ms1_req)
 
     # Reconstruct Python lists from JIT output
     peaks_in_dia = passing.tolist()

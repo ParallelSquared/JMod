@@ -178,6 +178,18 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    # plex_Area: the MS1 scans summed on either side of the apex
+    'plex_area_scan_radius': {
+        'flags': ('--plex_area_scan_radius',),
+        'default': 1,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': 'dropdown',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
+    },
     # Worker processes for isotope generation (--iso).  Each is a separate
     # process with its own memory; capped at the number of CPUs.
     'iso_workers': {
@@ -302,6 +314,17 @@ default_dict = {
         'special_upload': False,
         'values': None ## this will be set dynamically when the taglist is read into run_jmod_from_GUI. values does not affect command line reading
     },
+    'channels': {  ## the tag's channels to search, e.g. 0,4 (all if not given). The GUI's tag channel checkboxes
+        'flags': ('--channels',),
+        'default': None,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'num_iso': {
         'flags': ('--num_iso',),
         'default': 2,
@@ -323,17 +346,6 @@ default_dict = {
         'tk_handle': None,
         'special_upload': False,
         'values': '+<1'
-    },
-    'dummy_value': {
-        'flags': ('-z', '--dummy_value'),
-        'default': None,
-        'takes_value': True,
-        'in_GUI': False,
-        'type': 'str',
-        'widget': '',
-        'tk_handle': None,
-        'special_upload': False,
-        'values': 'any'
     },
     'plexDIA': { ##plexDIA has some hard coded elements in GUI because it is determined indirectly
         'flags': ('--plexDIA',),
@@ -473,7 +485,7 @@ default_dict = {
     },
     'no_ms1_req': {
         'flags': ('--no_ms1_req',),
-        'default': True,
+        'default': False,
         'takes_value': False,
         'in_GUI': False,
         'type': '',

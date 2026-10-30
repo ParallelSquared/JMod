@@ -16,6 +16,7 @@ import pytest
 import sys
 import os
 from src.mass_tags import massTag, read_json_to_massTag, refresh_tags, set_config_tag, tag_library
+from src.utils.errors import JModError
 import json
 import numpy as np
 from pathlib import Path
@@ -90,19 +91,11 @@ class Test_read_json_to_massTag():
         output_tag = read_json_to_massTag("tests/MassTags", "test_one_channel.json")
         assert output_tag.delta == [0.0]
 
-    def test_subset(self):
-        output_tag = read_json_to_massTag("tests/MassTags/Subsets", "test_subset.json")
-        assert output_tag.name == "test_subset"
-        assert output_tag.rules == "nK"
-        assert output_tag.mass == 78.03437413308
-        assert output_tag.delta == [0.0, 2.006709675600007]
-        assert output_tag.channel_names == ["0", "2"]
-
 class Test_refresh_tags():
 
     def test_refresh_tags(self):
         available_tags = refresh_tags(Path("tests/MassTags"))
-        assert set(available_tags.keys()) == set(["test_basic", "test_one_channel", "test_subset", "PSMtag_5plex"])
+        assert set(available_tags.keys()) == set(["test_basic", "test_one_channel", "PSMtag_5plex"])
         assert all([type(x) == massTag for x in available_tags.values()])
 
 class Test_set_config_tag():
@@ -120,6 +113,17 @@ class Test_set_config_tag():
     def test_unavailable_tag(self):
         with pytest.raises(Exception) as exc_info:
             tag = set_config_tag(self.available_tags, "test_no_comps")
+
+    def test_channels_select_some_of_the_tag(self):
+        tag = set_config_tag(self.available_tags, "PSMtag_5plex", "0,8")
+        assert tag.name == "PSMtag_5plex" and tag.channel_names == ["0", "8"]
+        assert list(tag.channel_comp) == ["0", "8"]
+        assert np.allclose(tag.channel_masses, self.available_tags["PSMtag_5plex"].channel_masses[[0, 2]])
+        assert tag.mass_dict == self.available_tags["PSMtag_5plex"].mass_dict  # every channel, searched or not
+
+    def test_a_channel_the_tag_does_not_have_raises(self):
+        with pytest.raises(JModError, match="not channels of PSMtag_5plex"):
+            set_config_tag(self.available_tags, "PSMtag_5plex", ["0", "5"])
 
 class Test_mass_tag_class():
 
@@ -216,7 +220,7 @@ class Test_tag_library():
         key = final_dict[("(test_one_channel-0)PEPTIDEK(test_one_channel-0)", 2.0)]
         assert key['mod_seq'] == "(test_one_channel-0)PEPTIDEK(test_one_channel-0)"
         assert key['seq'] == "PEPTIDEK"
-        assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
+        assert key['prec_mz'] == np.float32(464.727463520355 + (2*tag.mass)/2)
         assert key['prec_z'] == 2
         assert key['iRT'] == 0.57
         assert_frags_approx(key['frags'], {
@@ -270,7 +274,7 @@ class Test_tag_library():
         key = final_dict[("(test_one_channel-0)PEPTIDER", 3.0)]
         assert key['mod_seq'] == "(test_one_channel-0)PEPTIDER"
         assert key['seq'] == "PEPTIDER"
-        assert key['prec_mz'] == 319.48702501677 + (1*tag.mass)/3
+        assert key['prec_mz'] == np.float32(319.48702501677 + (1*tag.mass)/3)
         assert key['prec_z'] == 3
         assert key['iRT'] == 0.57
         assert_frags_approx(key['frags'], {
@@ -325,7 +329,7 @@ class Test_tag_library():
         key = final_dict[("(test_one_channel-0)PEPT(Unimod:21)IDER", 3.0)]
         assert key['mod_seq'] == "(test_one_channel-0)PEPT(Unimod:21)IDER"
         assert key['seq'] == "PEPTIDER"
-        assert key['prec_mz'] == 319.48702501677 + phospho_mass + (1*tag.mass)/3
+        assert key['prec_mz'] == np.float32(319.48702501677 + phospho_mass + (1*tag.mass)/3)
         assert key['prec_z'] == 3
         assert key['iRT'] == 0.57
         assert_frags_approx(key['frags'], {
@@ -384,7 +388,7 @@ class Test_tag_library():
 
             assert key['seq'] == "PEPTIDEK"
 
-            assert key['prec_mz'] == 464.727463520355 + (2*(tag.mass+tag.delta[i]))/2
+            assert key['prec_mz'] == np.float32(464.727463520355 + (2*(tag.mass+tag.delta[i]))/2)
 
             assert key['prec_z'] == 2
 
@@ -484,7 +488,7 @@ class Test_tag_library():
         key = final_dict[("(test_one_channel-0)PEPTIDEK(test_one_channel-0)", 2.0)]
         assert key['mod_seq'] == "(test_one_channel-0)PEPTIDEK(test_one_channel-0)"
         assert key['seq'] == "PEPTIDEK"
-        assert key['prec_mz'] == 464.727463520355 + (2*tag.mass)/2
+        assert key['prec_mz'] == np.float32(464.727463520355 + (2*tag.mass)/2)
         assert key['prec_z'] == 2
         assert key['iRT'] == 0.57
         assert_frags_approx(key['frags'], {
@@ -507,3 +511,31 @@ class Test_tag_library():
         #         ]), atol=1e-6)
         assert key['spec_frags'] is None
 
+
+class Test_tag_rules():
+
+    @pytest.mark.parametrize("rules", ["nK", "R", "K", "STY", "nSTY", "Kn", "n"])
+    def test_valid_rules(self, rules):
+        from src.mass_tags import tag_rules_error
+        assert tag_rules_error(rules) is None
+
+    @pytest.mark.parametrize("rules", ["", None, "nk", "c", "n K", "KX", "nKK"])
+    def test_invalid_rules(self, rules):
+        from src.mass_tags import tag_rules_error
+        assert tag_rules_error(rules) is not None
+
+    def test_tag_json_with_bad_rules_does_not_load(self, tmp_path):
+        tag_json = json.loads(Path("tests/MassTags/test_one_channel.json").read_text())
+        tag_json["rules"] = "nKK"
+        (tmp_path / "test_one_channel.json").write_text(json.dumps(tag_json))
+        assert read_json_to_massTag(tmp_path, "test_one_channel.json") == "test_one_channel"
+        tag_json["rules"] = "nSTY"
+        (tmp_path / "test_one_channel.json").write_text(json.dumps(tag_json))
+        assert read_json_to_massTag(tmp_path, "test_one_channel.json").rules == "nSTY"
+
+    def test_tag_json_with_letter_channels_does_not_load(self, tmp_path):
+        tag_json = json.loads(Path("tests/MassTags/test_one_channel.json").read_text())
+        tag_json["channel_names"] = ["a"]
+        tag_json["compositions"] = {"a": tag_json["compositions"]["0"]}
+        (tmp_path / "test_one_channel.json").write_text(json.dumps(tag_json))
+        assert read_json_to_massTag(tmp_path, "test_one_channel.json") == "test_one_channel"
