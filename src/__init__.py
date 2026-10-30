@@ -13,6 +13,13 @@
 #  limitations under the License.
 
 import os
+import warnings
+
+# pyteomics.mzml (via src.utils.io.load_files) imports psims, whose mzMLb
+# writer warns at import when hdf5plugin is absent. jmod never writes mzMLb.
+# Filtered here because load_files is imported before iso_functions, so the
+# filter there fires too late.
+warnings.filterwarnings("ignore", message="hdf5plugin is missing")
 
 # All environment variables jmod sets live here, and only here. This module
 # is the first `src` import in every entry path (CLI wrapper, GUI wrapper,
