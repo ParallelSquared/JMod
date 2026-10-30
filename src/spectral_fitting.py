@@ -2395,7 +2395,8 @@ def fit_to_lib2(dia_spec,
     # spec_idx,dia_spec,library = inputs
     # im_tol: fragment IM tolerance (the run's fitted precision).
     # im_accuracy: widening of the IM candidate gate (the run's fitted library-IM
-    # accuracy), or None to leave the gate off when no IM alignment was fitted.
+    # accuracy), or None on data without ion mobility (and timeplex), where
+    # there is no gate.
     # file_name: the run's data file, written to each result row's file_name.
     
     spec_idx=dia_spec.scan_num

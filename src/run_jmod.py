@@ -556,16 +556,16 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, res
     logger.info(f"Results will be saved to {os.path.abspath(runState.results_folder)}")
     DIAspectra = _load_spectra(mzml_file, bruker_sdk_path)
 
-    funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma = first_search(
+    funcs, target_iRT, rt_models_data, im_cal, elution_fwhm, vote_sigma = first_search(
         DIAspectra, spectrumLibrary, mass_tag, SILAC, runState.results_folder, runState)
 
     # On timeplex this is a per-channel copy of the library; otherwise it is the
     # shared library itself - unchanged (calibration is in rt_mz, there is also in_window mask).
     # The shared library stays untouched for the next run.
     searchLibrary, rt_mz, in_window = calibrate_library(
-        spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl,
+        spectrumLibrary, funcs, target_iRT, rt_models_data, im_cal,
         DIAspectra.ms2scans, runState)
-    del funcs, target_iRT, rt_models_data, im_spl
+    del funcs, target_iRT, rt_models_data, im_cal
 
     decoylib_search_path = main_search(DIAspectra, searchLibrary, rt_mz, in_window,
                                        runState.results_folder, runState)
@@ -852,12 +852,12 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC, results_folder_pa
     calibrate_library applies the result.  Sets the fitted tolerances on *runState*
     (opt_rt_tol, opt_ms1_tol, opt_im_precision, opt_im_accuracy).
 
-    Returns (funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma).
+    Returns (funcs, target_iRT, rt_models_data, im_cal, elution_fwhm, vote_sigma).
     ``funcs`` starts with the RT spline (one per time channel on timeplex) and
     the m/z function; ``target_iRT`` holds the aligned iRT of every target,
     indexed like the library; ``rt_models_data`` is None unless decoy RTs are
-    to be predicted; ``im_spl`` maps library IM to observed 1/K0, or is None
-    when no IM alignment was fitted.
+    to be predicted; ``im_cal`` is the run's IMCalibration, or None when the
+    data has no ion mobility.
     """
     ######################################################
     #### RT/MZ Alignment (initial search uses monoisotopic target entries only) #####
@@ -873,11 +873,11 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC, results_folder_pa
         # Timeplex path doesn't compute elution SD yet — use the historical default.
         vote_sigma = 1.0
         rt_models_data = None
-        im_spl = None
+        im_cal = None
 
     else:
         # MZRTfit takes MS1 features but no longer uses them
-        funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma, im_spl = MZRTfit(
+        funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma, im_cal = MZRTfit(
             DIAspectra, target_view, None, (config.args.ppm * 1e-6),
             results_folder=results_folder_path,
             ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
@@ -907,10 +907,10 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC, results_folder_pa
     if DIAspectra.has_ion_mobility:
         file_reader.reband_ms2(DIAspectra, 4.0 * runState.opt_im_precision)
 
-    return funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma
+    return funcs, target_iRT, rt_models_data, im_cal, elution_fwhm, vote_sigma
 
 
-def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl, ms2scans, runState):
+def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_cal, ms2scans, runState):
     """Map the frozen library into this run's coordinates.
 
     Every per-run change to what the search sees of the library happens here,
@@ -918,8 +918,8 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
 
     - iRT: the aligned iRT of each target, copied to its decoys, or predicted
       for them with --predict_decoys.  Only used to build rt_mz.
-    - rt_mz: each entry's RT, precursor m/z and 1/K0 (via *im_spl*) in this
-      run's observed coordinates.
+    - rt_mz: each entry's RT, precursor m/z and 1/K0 (predicted via *im_cal*)
+      in this run's observed coordinates.
     - in_window: the entries some isolation window of this run can select;
       main_search leaves the rest out of the fragment index.
     - runState.target_decoy_ratio: targets over decoys among those entries.
@@ -951,7 +951,7 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         rt_mz = np.concatenate(rt_mz)
         # Column 2 as in the standard path.  This path replicates the library once
         # per plex, so the aligned IM has to be tiled to match row-for-row.
-        _plex_im = aligned_library_im(spectrumLibrary, im_spl)
+        _plex_im = aligned_library_im(spectrumLibrary, im_cal)
         rt_mz = np.column_stack([rt_mz, np.tile(_plex_im, len(rt_spls))])
 
         from src.models.spec_lib.library_store import SpectrumLibraryStore
@@ -977,12 +977,9 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         # Build rt_mz for ALL entries (target + decoy).  The RT and m/z
         # alignments are interpolators, applied to every entry at once
         rt_mz = np.column_stack([rt_spl(iRT), mz_func(spectrumLibrary.prec_mz, iRT)])
-        # Column 2: the library's IM mapped onto observed 1/K0 by the alignment.
-        # Left all-NaN when the library carries no IM or the alignment did not
-        # fit, which leaves every downstream IM gate inert.  Decoys keep their
-        # parent's IM unchanged -- unlike m/z there is no decoy offset, since
-        # shifting it would reject decoys systematically and break FDR.
-        rt_mz = np.column_stack([rt_mz, aligned_library_im(spectrumLibrary, im_spl)])
+        # Column 2: each entry's predicted 1/K0 (see aligned_library_im; decoys
+        # take their parent's).  All-NaN only on data without ion mobility.
+        rt_mz = np.column_stack([rt_mz, aligned_library_im(spectrumLibrary, im_cal)])
         # Apply decoy m/z offset to decoy entries
         rt_mz[n_targets:, 1] -= config.decoy_mz_offset
         search_library = spectrumLibrary
@@ -1111,9 +1108,15 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     # Spectra submitted per chunk.  Bounds how many results are held at once.
     _CHUNK = 100
 
-    # The IM candidate gate needs an aligned library IM; without one the IM
-    # column of rt_mz is all NaN and the gate stays off
-    _im_accuracy = runState.opt_im_accuracy if np.isfinite(rt_mz[:, 2]).any() else None
+    # The IM candidate gate is on whenever the data has ion mobility: MZRTfit
+    # either calibrated IM prediction or stopped the run.  Timeplex has no IM
+    # calibration yet, so it has no gate.
+    if DIAspectra.has_ion_mobility and not config.args.timeplex:
+        if not np.isfinite(rt_mz[:, 2]).any():
+            raise JModError("Ion mobility data, but no library entry has a predicted IM")
+        _im_accuracy = runState.opt_im_accuracy
+    else:
+        _im_accuracy = None
 
     # Constant across every spectrum and every batch, so build the kwargs once.
     _fit_kwargs = dict(library=spectrumLibrary,
