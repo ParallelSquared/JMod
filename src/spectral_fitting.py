@@ -2509,6 +2509,15 @@ def hits_to_arrow(hits, pa_schema):
         schema=pa_schema)
 
 
+def protein_column(library):
+    """The library's config.protein_column, or None when it is not filled in
+    (judged by the first entry): fit_to_lib2 then writes "NA"."""
+    first = library.key_to_idx[next(iter(library.key_to_idx))]
+    column = {'protein_group': library.protein_group, 'protein_name': library.protein_name,
+              'genes': library.genes, 'UniprotID': library.uniprot_id}.get(config.protein_column)
+    return column if column is not None and column[first] not in (None, '') else None
+
+
 def fit_to_lib2(dia_spec,
                 library,
                 rt_mz,
@@ -2525,7 +2534,8 @@ def fit_to_lib2(dia_spec,
                output_folder=None,
                frag_index=None,
                ms1_rt=None,
-               im_bin_ms1=None):
+               im_bin_ms1=None,
+               proteins=None):
     # spec_idx,dia_spec,library = inputs
     # im_tol: fragment IM tolerance (the run's fitted precision).
     # im_accuracy: widening of the IM candidate gate (the run's fitted library-IM
@@ -2791,16 +2801,12 @@ def fit_to_lib2(dia_spec,
 
     keys = [all_keys[i] for i in lib_idxs]
 
-    # Check if protein column is populated (without creating _EntryView)
-    _first_idx = library.key_to_idx[next(iter(library.key_to_idx))]
-    _prot_field_map = {'protein_group': library.protein_group, 'protein_name': library.protein_name,
-                       'genes': library.genes, 'UniprotID': library.uniprot_id}
-    _prot_arr = _prot_field_map.get(config.protein_column)
-    return_prot = _prot_arr is not None and _prot_arr[_first_idx] not in (None, '')
-
     # Decoy entries have protein info copied from their parent target
-    protein = (library.get_scalar_batch(lib_idxs, config.protein_column) if return_prot
-               else ["NA"] * len(nz))
+    if proteins is not None:
+        pool = proteins.pool
+        protein = [pool[c] for c in proteins.codes[lib_idxs].tolist()]
+    else:
+        protein = ["NA"] * len(nz)
 
     return SpectrumHits(
         coeff=lib_coefficients[nz],

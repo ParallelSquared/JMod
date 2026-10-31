@@ -29,7 +29,7 @@ from src import _version
 from src.utils.io import file_reader
 from src.utils.set_seeds import set_seeds
 from src.models.spec_lib import spec_lib
-from src.spectral_fitting import fit_to_lib2, hits_to_arrow
+from src.spectral_fitting import fit_to_lib2, hits_to_arrow, protein_column
 from src.rt_alignment import MZRTfit, MZRTfit_timeplex, aligned_library_im
 from src.utils.misc_functions import datestamped
 import polars as pl
@@ -1139,7 +1139,8 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
                        output_folder=results_folder_path,
                        frag_index=frag_index,
                        ms1_rt=_ms1_rt,
-                       im_bin_ms1=_im_bin_ms1)
+                       im_bin_ms1=_im_bin_ms1,
+                       proteins=protein_column(spectrumLibrary))
 
     # Measure CPU utilization across the search to assess GIL contention
     import psutil as _psutil
