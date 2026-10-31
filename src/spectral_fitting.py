@@ -1577,8 +1577,13 @@ def _lasso_nnls(A, b, sample_weight=None):
 
 @njit(nogil=True)
 def _coo_gram_and_Aty(rows, cols, vals, y, n_cols):
-    """Compute Gram matrix (A^T A) and A^T y from COO arrays in one pass.
-    Returns (gram, Aty) where gram is (n_cols, n_cols) and Aty is (n_cols,)."""
+    """A^T y and the largest absolute correlation between two different
+    columns of A, from COO arrays.
+
+    The correlation is computed exactly as numpy would from the Gram matrix:
+    gram / outer(norms, norms) with zero norms set to 1 and the diagonal
+    zeroed, then max(abs(.)) -- the same operations in the same order, so
+    the result is bit-identical.  Returns (Aty, max_corr)."""
     gram = np.zeros((n_cols, n_cols))
     Aty = np.zeros(n_cols)
     # Group entries by row for outer-product accumulation
@@ -1606,7 +1611,21 @@ def _coo_gram_and_Aty(rows, cols, vals, y, n_cols):
                 if ca != cb:
                     gram[cb, ca] += va * vb
         i = j
-    return gram, Aty
+    norms = np.empty(n_cols)
+    for c in range(n_cols):
+        norms[c] = np.sqrt(gram[c, c])
+        if norms[c] == 0:
+            norms[c] = 1.0
+    max_corr = 0.0
+    for a in range(n_cols):
+        for b in range(n_cols):
+            if a != b:
+                v = abs(gram[a, b] / (norms[a] * norms[b]))
+                if v != v:
+                    return Aty, v          # NaN: np.max propagates it
+                if v > max_corr:
+                    max_corr = v
+    return Aty, max_corr
 
 
 @njit(nogil=True)
@@ -1728,19 +1747,14 @@ def huber_nnls_irls(coo_vals, coo_rows, coo_cols, n_rows, n_cols, b,
     s = float(np.max(np.abs(b)) or 1.0)
     y = b / s
 
-    # Compute Gram matrix and A^T y in one JIT pass (nogil — releases GIL)
-    gram, Aty = _coo_gram_and_Aty(coo_rows, coo_cols, coo_vals, y, n_cols)
+    # A^T y and the max column correlation in one JIT pass (nogil)
+    Aty, max_corr = _coo_gram_and_Aty(coo_rows, coo_cols, coo_vals, y, n_cols)
 
     # Data-driven regularization
     alpha_max = np.max(np.abs(Aty)) / n_rows
     alpha = alpha_max * 1e-4  # dynamic range within a spectrum is roughly 1,000x
 
     # Data-driven l1_ratio from max pairwise column correlation
-    norms = np.sqrt(np.diag(gram))
-    norms[norms == 0] = 1
-    corr = gram / np.outer(norms, norms)
-    np.fill_diagonal(corr, 0)
-    max_corr = np.max(np.abs(corr))
     l1_ratio = min(max(1 - max_corr ** 2, 0.1), 0.9)
 
     # Build CSC once from COO via JIT (nogil) — only format enet_path accepts.

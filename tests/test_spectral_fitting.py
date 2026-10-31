@@ -17,6 +17,7 @@ Tests for functions in spectral_fitting.py
 #  limitations under the License.
 
 import numpy as np
+import pytest
 from scipy import sparse
 
 # Import the functions we want to test
@@ -329,3 +330,42 @@ class TestHuberNnlsIrls:
         assert 'x' in result
         x = np.array(result['x']).flatten()
         assert x.shape == (5,)
+
+
+class TestCooGramMaxCorr:
+    """_coo_gram_and_Aty's max column correlation must equal the numpy
+    computation it replaced, bit for bit (it sets huber_nnls_irls' l1_ratio)."""
+
+    @staticmethod
+    def _numpy(rows, cols, vals, y, n_cols):
+        A = np.zeros((int(rows.max()) + 1, n_cols))
+        np.add.at(A, (rows, cols), vals)
+        gram = np.zeros((n_cols, n_cols))
+        order = np.argsort(rows, kind="quicksort")   # same accumulation order as the kernel
+        for r in np.unique(rows):
+            idx = [k for k in order if rows[k] == r]
+            for a_i, a in enumerate(idx):
+                for b in idx[a_i:]:
+                    gram[cols[a], cols[b]] += vals[a] * vals[b]
+                    if cols[a] != cols[b]:
+                        gram[cols[b], cols[a]] += vals[a] * vals[b]
+        norms = np.sqrt(np.diag(gram))
+        norms[norms == 0] = 1
+        corr = gram / np.outer(norms, norms)
+        np.fill_diagonal(corr, 0)
+        return A.T @ y, np.max(np.abs(corr))
+
+    @pytest.mark.parametrize("n_cols, empty_col", [(6, None), (6, 3), (1, None)])
+    def test_matches_numpy(self, n_cols, empty_col):
+        from src.spectral_fitting import _coo_gram_and_Aty
+        rng = np.random.default_rng(n_cols)
+        n = 40
+        rows = rng.integers(0, 15, n).astype(np.int32)
+        cols = rng.integers(0, n_cols, n).astype(np.int32)
+        if empty_col is not None:
+            cols[cols == empty_col] = (empty_col + 1) % n_cols   # a column with no entries: norm 0
+        vals = rng.random(n)
+        y = rng.random(15)
+        Aty, max_corr = _coo_gram_and_Aty(rows, cols, vals, y, n_cols)
+        _, expected = self._numpy(rows, cols, vals, y, n_cols)
+        assert max_corr == expected
