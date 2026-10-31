@@ -84,6 +84,25 @@ ION_Y = np.int32(1)
 
 # ---- Single-value encode/decode ----
 
+def _frag_code(name):
+    """encode_frag_name's code as a Python int."""
+    m = _FRAG_RE.match(name)
+    if m is None:
+        raise ValueError(f"Cannot parse fragment name: {name!r}")
+
+    ion_type = _ION_TYPE_TO_INT[m.group(1)]
+    index = int(m.group(2))
+    loss = _LOSS_TO_INT.get(m.group(3) or '', 0)
+    charge = int(m.group(4)) - 1  # store 1-7 as 0-6
+    iso = int(m.group(5)) if m.group(5) else 0
+
+    return ((ion_type << _ION_SHIFT)
+            | (index << _IDX_SHIFT)
+            | (loss << _LOSS_SHIFT)
+            | (charge << _CHG_SHIFT)
+            | (iso << _ISO_SHIFT))
+
+
 def encode_frag_name(name):
     """Encode a single fragment name string to int32.
 
@@ -97,23 +116,7 @@ def encode_frag_name(name):
     np.int32
         Packed int32 code.
     """
-    m = _FRAG_RE.match(name)
-    if m is None:
-        raise ValueError(f"Cannot parse fragment name: {name!r}")
-
-    ion_type = _ION_TYPE_TO_INT[m.group(1)]
-    index = int(m.group(2))
-    loss = _LOSS_TO_INT.get(m.group(3) or '', 0)
-    charge = int(m.group(4)) - 1  # store 1-7 as 0-6
-    iso = int(m.group(5)) if m.group(5) else 0
-
-    return np.int32(
-        (ion_type << _ION_SHIFT)
-        | (index << _IDX_SHIFT)
-        | (loss << _LOSS_SHIFT)
-        | (charge << _CHG_SHIFT)
-        | (iso << _ISO_SHIFT)
-    )
+    return np.int32(_frag_code(name))
 
 
 _decode_cache = {}
@@ -221,10 +224,8 @@ def encode_frag_names(names):
     n = len(names)
     if n == 0:
         return np.empty(0, dtype=np.int32)
-    codes = np.empty(n, dtype=np.int32)
-    for i in range(n):
-        codes[i] = encode_frag_name(names[i])
-    return codes
+    # Python ints into one array, rather than a numpy scalar per name
+    return np.fromiter((_frag_code(name) for name in names), dtype=np.int32, count=n)
 
 
 def decode_frag_names(codes):
