@@ -69,9 +69,7 @@ deps = [
   "memory-profiler",
   "pyinstrument",
 
-  # GUI (Qt + optional Tk themes)
-  "PySide6",
-  "shiboken6",
+  # GUI (Tk themes)
   "sv-ttk",
   "ttkthemes",
 
@@ -92,9 +90,6 @@ deps = [
   # Testing
   "pytest",
   "pytest-cov"
-]
-dev = [
-    "pyside6<6.8",
 ]
 
 [tool.coverage.run]
