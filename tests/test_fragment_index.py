@@ -57,3 +57,17 @@ class TestBuildInclude:
         include = np.zeros(len(keys), dtype=bool)
         index = FragmentIndex.build(store, keys, rt_mz, 10, include=include)
         assert _query_with_own_fragments(index, store, rt_mz, 0) == []
+
+
+class TestQueryScratch:
+    def test_result_survives_the_next_query(self):
+        # query() reuses a per-thread output buffer; what it returned must not
+        # change when the same thread queries again
+        store, keys, rt_mz = _library()
+        index = FragmentIndex.build(store, keys, rt_mz, 10)
+        frag_mz = store.get_spectrum(0)[:, 0].astype(np.float64)
+        first = index.query(frag_mz, rt_mz[0, 1] - 1.0, rt_mz[0, 1] + 1.0, rt_mz[0, 0], 1.0, 1)
+        kept = first.copy()
+        frag_mz = store.get_spectrum(3)[:, 0].astype(np.float64)
+        index.query(frag_mz, rt_mz[3, 1] - 1.0, rt_mz[3, 1] + 1.0, rt_mz[3, 0], 1.0, 1)
+        assert first.tolist() == kept.tolist() == [0]

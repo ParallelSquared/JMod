@@ -22,6 +22,8 @@ Uses numba JIT compilation for the inner query loop to avoid Python overhead.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import threading
+
 import numpy as np
 from numba import njit
 
@@ -205,6 +207,12 @@ def _query_all_partitions_jit(
                     n_results += 1
 
     return n_results
+
+
+# Per-thread scratch for query()'s output: sized to every precursor in the
+# index, it is ~4 MB at a million precursors, and allocating it per spectrum
+# goes to the OS each time.  One per search thread, grown when an index needs more.
+_query_scratch = threading.local()
 
 
 class FragmentIndex:
@@ -439,7 +447,10 @@ class FragmentIndex:
             return np.empty(0, dtype=np.uint32)
 
         # Output buffer — worst case: all precursors pass
-        out_indices = np.empty(self._total_precursors, dtype=np.uint32)
+        out_indices = getattr(_query_scratch, "out", None)
+        if out_indices is None or out_indices.shape[0] < self._total_precursors:
+            out_indices = np.empty(self._total_precursors, dtype=np.uint32)
+            _query_scratch.out = out_indices
 
         n_results = _query_all_partitions_jit(
             dia_mz_array, self.mz_tol_ppm,
@@ -456,4 +467,5 @@ class FragmentIndex:
             out_indices,
         )
 
-        return out_indices[:n_results]
+        # A copy: the scratch is overwritten by this thread's next query
+        return out_indices[:n_results].copy()
