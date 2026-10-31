@@ -457,42 +457,64 @@ class TestInspectLibrary:
         assert not _errors(app_log)
 
 
-class TestRowsToArrow:
-    """_rows_to_arrow must give the same table as building a polars frame from
-    the rows, which is what main_search wrote before."""
+class TestHitsToArrow:
+    """hits_to_arrow must give the table main_search wrote when fit_to_lib2
+    returned rows: a polars frame built from those rows."""
 
     @staticmethod
-    def _rows(schema):
+    def _hits(timeplex):
         import numpy as np
+        from src.spectral_fitting import SpectrumHits
+        hits = []
+        for s, n in enumerate((3, 1, 2)):
+            seg = np.array([0, 2, 2, 5][:n + 1]) if n > 1 else np.array([0, 0])  # includes empty segments
+            m = int(seg[-1])
+            hits.append(SpectrumHits(
+                coeff=np.array([np.nan, 0.1, 3.3][:n]) * (s + 1),
+                spec_id=10 + s, ms1_spec_id=20 + s,
+                seq=[f"PEP{s}{k}" for k in range(n)],
+                z=np.array([2.0, 3.0, 1.0][:n]),
+                time_channel=np.array([0.0, 4.0, 8.0][:n]) if timeplex else None,
+                window_mz=500.25 + s, rt=12.5 + s,
+                prec_im=np.array([np.nan, 0.9, 1.1][:n]),
+                features=np.arange(n * 28, dtype=np.float64).reshape(n, 28) / 7 + 1e-40,
+                frag_codes=np.arange(m, dtype=np.int32),
+                frag_errors=np.linspace(-1e-5, 1e-5, m), frag_mz=np.linspace(100, 900, m),
+                frag_int=np.linspace(0, 1, m), obs_int=np.linspace(5, 9, m),
+                frag_offsets=seg,
+                unique_frag_mz=np.linspace(100, 200, m), unique_obs_int=np.linspace(1, 2, m),
+                unique_offsets=seg,
+                file_name="run.mzML",
+                protein=["NA", None, "P1"][:n] if s != 1 else ["NA"],
+                is_decoy=np.arange(n) >= 1))
+        return hits
+
+    @staticmethod
+    def _rows(hits):
         rows = []
-        for i in range(5):
-            row = []
-            for name, dtype in schema.items():
-                if isinstance(dtype, __import__("polars").List):
-                    n = i % 3          # includes empty fragment lists
-                    inner = np.int32 if "Int" in str(dtype) else np.float64
-                    row.append(np.arange(n, dtype=inner) * 1.5 if inner is np.float64 else np.arange(n, dtype=inner))
-                elif str(dtype) == "String":
-                    row.append(None if (name == "protein" and i == 2) else f"{name}{i}")
-                elif str(dtype) == "Boolean":
-                    row.append(i % 2 == 0)
-                elif str(dtype).startswith("Int"):
-                    row.append(i)
-                else:
-                    # NaN, a numpy scalar and a plain int in float columns
-                    row.append([float("nan"), np.float64(0.1 * i), i, 1e-40, 3.3][i])
-            rows.append(row)
+        for h in hits:
+            for k in range(len(h.coeff)):
+                a, b = h.frag_offsets[k], h.frag_offsets[k + 1]
+                ua, ub = h.unique_offsets[k], h.unique_offsets[k + 1]
+                rows.append([h.coeff[k], h.spec_id, h.ms1_spec_id, h.seq[k], h.z[k]]
+                            + ([h.time_channel[k]] if h.time_channel is not None else [])
+                            + [h.window_mz, h.rt, h.prec_im[k], *h.features[k],
+                               h.frag_codes[a:b], h.frag_errors[a:b], h.frag_mz[a:b], h.frag_int[a:b],
+                               h.obs_int[a:b], h.unique_frag_mz[ua:ub], h.unique_obs_int[ua:ub],
+                               h.file_name, h.protein[k], bool(h.is_decoy[k])])
         return rows
 
     @pytest.mark.parametrize("timeplex", [False, True])
-    def test_matches_polars_construction(self, timeplex):
+    def test_matches_polars_construction_from_rows(self, timeplex):
         import io
         import polars as pl
         import pyarrow.parquet as pq
+        from src.spectral_fitting import hits_to_arrow
         from src.utils.io.read_output import get_parquet_schema
         schema = get_parquet_schema(timeplex=timeplex)
         pa_schema = pl.DataFrame(schema=schema).to_arrow().schema
-        rows = self._rows(schema)
+        hits = self._hits(timeplex)
+        rows = self._rows(hits)
 
         # Compared as the Parquet main_search writes, not as in-memory Arrow:
         # polars sets the unused padding bits of a validity bitmap, pyarrow
@@ -504,4 +526,4 @@ class TestRowsToArrow:
 
         expected = pl.DataFrame({c: [row[i] for row in rows] for i, c in enumerate(schema)},
                                 schema=schema).to_arrow()
-        assert parquet_bytes(run_jmod._rows_to_arrow(rows, pa_schema)) == parquet_bytes(expected)
+        assert parquet_bytes(hits_to_arrow(hits, pa_schema)) == parquet_bytes(expected)
