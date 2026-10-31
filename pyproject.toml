@@ -65,10 +65,6 @@ deps = [
   "statsmodels",
   "joblib",
 
-  # Optimization / math extras
-  "cvxopt",
-  "ptinnls",
-
   # Profiling & perf tools
   "line-profiler",
   "memory-profiler",

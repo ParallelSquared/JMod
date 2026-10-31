@@ -17,7 +17,6 @@ import numpy as np
 
 
 import warnings
-import ptinnls as sparse_nnls
 
 from sklearn.linear_model import ElasticNet, Lasso
 from sklearn.linear_model._coordinate_descent import enet_path
@@ -2809,6 +2808,9 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
                ms1_spectra = None,
                return_frags = False,
                frac_matched = 0.5):
+    # Only the timeplex first search calls this.  ptinnls is not a JMod
+    # dependency: it needs cvxopt, which has no free-threaded wheels
+    import ptinnls as sparse_nnls
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num
