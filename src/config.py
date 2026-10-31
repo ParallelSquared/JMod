@@ -88,6 +88,7 @@ ran_from_GUI = False
 ms1_ppm = 20
 ms1_tol = ms1_ppm*10**(-6)
 
+# TODO: unit-bound default; check whether anything still reads it.  See RT_ALIGNMENT_NOTES.md
 rt_tol = 9
 # Ion mobility, two distinct quantities (both half-widths; gates are |d| <= tol):
 #   im_precision -- spread of a precursor's fragments about their own median.

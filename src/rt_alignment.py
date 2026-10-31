@@ -402,6 +402,8 @@ def fit_errors(errors,limit=10,percentile=.999):
     """
     ### try to fit half gaussian or exponential to absolute rt errors
     
+    # TODO: filters signed errors (errors < limit), so every negative error passes;
+    # check whether callers pass |errors|.  See RT_ALIGNMENT_NOTES.md
     errors_filtered = np.array(errors)[np.array(errors)<limit]
     errors_filtered = np.sort(np.append(errors_filtered,limit))
     
@@ -1170,6 +1172,7 @@ def aligned_library_im(library, im_cal):
 
     n_filled = int((~np.isfinite(first) & np.isfinite(second)).sum())
     n_missing = int((~np.isfinite(aligned)).sum())
+    # TODO: keep this log line?  RT has no counterpart.  See RT_ALIGNMENT_NOTES.md
     logger.info(f"Library IM from {im_cal.winner} for {n} entries"
                 + (f" ({n_filled} filled from the other model)" if n_filled else "")
                 + f", range {np.nanmin(aligned):.4f}-{np.nanmax(aligned):.4f}")
@@ -1907,8 +1910,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     percentile = config.rt_percentile
     #percentile = 0.99
     
-    limit=3 ## exlcude RT diffs larger than this (outliers)
-    
     ###############################################################
     ####### fine tuning
     ###############################################################
@@ -1926,8 +1927,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
             key=s[0]
             seq_rt.setdefault(key,[])
             seq_rt[key].append(rt)
-        # exclude those with ambiguity (differences between charge states)
-        filtered_seq_rt = {s:np.median(seq_rt[s]) for s in seq_rt if np.ptp(seq_rt[s])<1}
+        # exclude those with ambiguity: charge states of one peptide that do
+        # not co-elute within an elution width
+        filtered_seq_rt = {s:np.median(seq_rt[s]) for s in seq_rt if np.ptp(seq_rt[s])<fwhm}
 
         ## use observed rt for calibration
         grouped_df =  pd.DataFrame({'mod_seq':[s for s in filtered_seq_rt],"RT":[filtered_seq_rt[s] for s in filtered_seq_rt]})
@@ -1957,8 +1959,32 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
 
         all_pred_diffs = validation_rt_diffs
 
-        emp_data, emp_p, emp_cdf_auc = cdf_data(all_emp_diffs,limit=limit)
-        pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs,limit=limit)
+        # The empirical alignment, scored on the same held-out peptides: refit
+        # without them, then predicted per peptide as the median over its rows,
+        # as its observed RT in holdout is.
+        row_seqs = np.array([key[0] for key in id_keys])
+        emp_train = np.logical_and(cor_filter, ~np.isin(row_seqs, holdout['mod_seq'].to_numpy()))
+        emp_train_spl = fast_modal_lowess(np.array(output_df.lib_rt)[emp_train],
+                                          np.array(output_df.rt)[emp_train],
+                                          .01,
+                                          anchors=1000,
+                                          grid_size=1000,
+                                          post_smooth_frac=0.01)
+        emp_seq_rt = (pd.Series(emp_train_spl(np.array(output_df.lib_rt))[cor_filter],
+                                index=row_seqs[cor_filter])
+                      .groupby(level=0).median())
+        # TODO: untested end to end (no test runs MZRTfit).  See RT_ALIGNMENT_NOTES.md
+        holdout_emp_diffs = holdout['RT'].to_numpy() - holdout['mod_seq'].map(emp_seq_rt).to_numpy()
+        holdout_pred_diffs = holdout['RT'].to_numpy() - validation_rts
+        scored = np.logical_and(np.isfinite(holdout_emp_diffs), np.isfinite(holdout_pred_diffs))
+        holdout_emp_diffs = holdout_emp_diffs[scored]
+        holdout_pred_diffs = holdout_pred_diffs[scored]
+
+        # No cutoff: both CDFs close just past the largest error of either
+        # model, so the areas track their mean absolute errors.
+        cdf_end = np.nextafter(np.abs(np.concatenate([holdout_emp_diffs, holdout_pred_diffs])).max(), np.inf)
+        emp_data, emp_p, emp_cdf_auc = cdf_data(holdout_emp_diffs,limit=cdf_end)
+        pred_data, pred_p, pred_cdf_auc = cdf_data(holdout_pred_diffs,limit=cdf_end)
 
         updatedLibrary = _OwnIRT(librarySpectra)
         all_lib_keys = list(librarySpectra)
@@ -1997,6 +2023,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         else:
             logger.info("Empirical retention times chosen")
             # Fit 2-component zero-mean GMM to residuals
+            # TODO: the empirical boundary is still fitted on in-sample residuals
+            # (all_emp_diffs), the fine-tuned one on held-out residuals.  See RT_ALIGNMENT_NOTES.md
             weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
@@ -2029,10 +2057,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         all_emp_diffs = (emp_rt_spl(output_df.lib_rt)-np.array(output_df.rt))[cor_filter]
 
         pred_data = pred_p = None
-        emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
-        emp_data = np.append(emp_data,limit)
-        emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
-        emp_cdf_auc = auc(emp_data,emp_p)
+        emp_data, emp_p, emp_cdf_auc = cdf_data(
+            all_emp_diffs, limit=np.nextafter(np.abs(all_emp_diffs).max(), np.inf))
         # Fit 2-component zero-mean GMM to residuals
         weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
         plot_rt_residuals_mixture(
@@ -2414,7 +2440,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         # plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
         
         
-        emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
+        emp_abs_errors_med = np.median(np.abs(all_emp_diffs-np.median(all_emp_diffs)))
 
         plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0],label="Emp Expon CDF")
         emp_exp_999 = stats.expon.ppf(percentile,scale=emp_abs_errors_med/np.log(2))
@@ -2424,7 +2450,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         plt.scatter([emp_gauss_999], [percentile],c=colours[0],label=f"Emp Norm {percentile}: {emp_gauss_999:.2f}")
         if not config.args.use_emp_rt:
             plt.plot(pred_data, pred_p, label="Finetuned CDF", linestyle='-')
-            pred_abs_errors_med = np.median(np.abs(all_pred_diffs[all_pred_diffs<limit]-np.median(all_pred_diffs[all_pred_diffs<limit])))
+            pred_abs_errors_med = np.median(np.abs(all_pred_diffs-np.median(all_pred_diffs)))
             plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),linestyle="--",color=colours[1],label="Pred Exp CDF")
             pred_exp_999 = stats.expon.ppf(percentile,scale=pred_abs_errors_med/np.log(2))
             plt.scatter([pred_exp_999], [percentile],c=colours[1],label=f"Pred Expon {percentile}: {pred_exp_999:.2f}",marker="*")
@@ -2938,6 +2964,7 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     # rt_offsets2 = np.array([i[0] for i in t_vals[2]])-[i[0] for i in t_vals[1]] ## for column 2 vs 3
     all_rt_offsets = [np.array([i[0] for i in t_vals[idx+1]])-[i[0] for i in t_vals[idx]] 
                       for idx in range(n_timeplex-1)]
+    # TODO: assumes RT in minutes; replace with a scale from the data.  See RT_ALIGNMENT_NOTES.md
     offset_tolerance = 1 ## 1 minute
     # expected_offset = stats.mode(np.round(all_rt_offsets[0][all_rt_offsets[0]>.5],1)).mode
     exp_offsets = [stats.mode(np.round(rt_off[rt_off>.5],1)).mode for rt_off in all_rt_offsets] ## ensure it's around zero
@@ -2994,6 +3021,8 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     
     
     percentile = config.rt_percentile
+    # TODO: assumes RT in minutes, and here it also sets the RT tolerance via
+    # fit_errors.  MZRTfit no longer has a limit.  See RT_ALIGNMENT_NOTES.md
     limit = 3 ## exlcude RT diffs larger than this (outliers)
     
     

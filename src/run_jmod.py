@@ -759,6 +759,7 @@ def load_library(lib_file, mass_tag, mod_edits):
         # Pre-filter the library to speed up processing
         # Note: This is a rough filter that will be refined after RT alignment
         filtered_library = {}
+        # TODO: rt_tolerance is unused (only read in the commented-out filter below)
         rt_tolerance = config.rt_tol * 2  # Use a wider tolerance initially
         mz_tolerance = (config.args.ppm * 1e-6) * 2
         
