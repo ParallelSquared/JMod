@@ -2494,8 +2494,10 @@ def fit_to_lib2(dia_spec,
     window_idxs = all_window_idxs[target_mask]
     decoy_window_idxs = all_window_idxs[~target_mask] if decoy else np.empty(0, dtype=all_window_idxs.dtype)
 
+    # all_keys is list(library), so all_keys[i] is library entry i: the window
+    # indices already are library indices.  Only the output needs the keys.
     mass_window_candidates = [all_keys[i] for i in window_idxs]
-    _ref_idxs = library.resolve_indices(mass_window_candidates)
+    _ref_idxs = window_idxs
 
     spec_frags = None
 
@@ -2541,7 +2543,7 @@ def fit_to_lib2(dia_spec,
     if decoy:
         # Decoy candidates already extracted from unified index above
         mass_window_decoy_candidates = [all_keys[i] for i in decoy_window_idxs]
-        _decoy_idxs = library.resolve_indices(mass_window_decoy_candidates)
+        _decoy_idxs = decoy_window_idxs
         converted_frag_codes = library.get_frag_codes_batch(_decoy_idxs)
         # Decoy m/z offset already pre-applied in rt_mz
         decoy_mz = rt_mz[:,1][decoy_window_idxs]
@@ -2601,7 +2603,7 @@ def fit_to_lib2(dia_spec,
         lib_frag_mz = [ref_pep_cand_list[i][:,0][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
         lib_frag_int = [ref_pep_cand_list[i][:,1][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
         obs_frag_int = [dia_spectrum[ref_spec_row_indices_split[i],1] for i in range(len(ref_spec_row_indices_split))]
-        _ref_surv_idxs = library.resolve_indices(ref_pep_cand)
+        _ref_surv_idxs = window_idxs[ref_peaks_in_dia]
         _ref_surv_frag_codes = library.get_frag_codes_batch(_ref_surv_idxs)
         frag_name_codes = [_ref_surv_frag_codes[i][j] for i,j in enumerate(lib_peaks_matched)]
         frag_matched_intensities = [ref_pep_cand_list[idx][:,1][j] for idx,j in enumerate(lib_peaks_matched)]
@@ -2771,15 +2773,18 @@ def fit_to_lib2(dia_spec,
 
     if len(non_zero_coeffs)>0:
         target_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
+        target_lib_idxs = [window_idxs[ref_peaks_in_dia[i]] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
         # Precursor IM per hit, filtered by the same non-zero-coeff mask and in the
         # same target-then-decoy order as all_spec_ids.
         target_prec_im = [ref_prec_im[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
         if decoy:
             updated_decoy_offset = decoy_col_offset
             decoy_spec_ids = [decoy_pep_cand[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
+            decoy_lib_idxs = [decoy_window_idxs[decoy_peaks_in_dia[i]] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
             decoy_prec_im = [dec_prec_im[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
 
             all_spec_ids = target_spec_ids+decoy_spec_ids
+            all_lib_idxs = target_lib_idxs+decoy_lib_idxs
             all_prec_im = target_prec_im+decoy_prec_im
             n_target_hits = len(target_spec_ids)
             all_features = np.concatenate((features,decoy_features))
@@ -2795,6 +2800,7 @@ def fit_to_lib2(dia_spec,
 
         else:
             all_spec_ids = target_spec_ids
+            all_lib_idxs = target_lib_idxs
             all_prec_im = target_prec_im
             n_target_hits = len(target_spec_ids)
             all_features = features
@@ -2816,8 +2822,7 @@ def fit_to_lib2(dia_spec,
         # Pre-resolve protein column values for non-zero coefficients
         # Decoy entries have protein info copied from their parent target
         if return_prot:
-            _prot_idxs = library.resolve_indices(all_spec_ids)
-            _prot_vals = library.get_scalar_batch(_prot_idxs, config.protein_column)
+            _prot_vals = library.get_scalar_batch(all_lib_idxs, config.protein_column)
 
         if config.args.timeplex:
             output = [[non_zero_coeffs[i],
