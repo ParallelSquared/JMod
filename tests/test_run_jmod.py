@@ -455,3 +455,53 @@ class TestInspectLibrary:
         messages = [r.getMessage() for r in app_log]
         assert any(m.startswith("Modification") for m in messages)
         assert not _errors(app_log)
+
+
+class TestRowsToArrow:
+    """_rows_to_arrow must give the same table as building a polars frame from
+    the rows, which is what main_search wrote before."""
+
+    @staticmethod
+    def _rows(schema):
+        import numpy as np
+        rows = []
+        for i in range(5):
+            row = []
+            for name, dtype in schema.items():
+                if isinstance(dtype, __import__("polars").List):
+                    n = i % 3          # includes empty fragment lists
+                    inner = np.int32 if "Int" in str(dtype) else np.float64
+                    row.append(np.arange(n, dtype=inner) * 1.5 if inner is np.float64 else np.arange(n, dtype=inner))
+                elif str(dtype) == "String":
+                    row.append(None if (name == "protein" and i == 2) else f"{name}{i}")
+                elif str(dtype) == "Boolean":
+                    row.append(i % 2 == 0)
+                elif str(dtype).startswith("Int"):
+                    row.append(i)
+                else:
+                    # NaN, a numpy scalar and a plain int in float columns
+                    row.append([float("nan"), np.float64(0.1 * i), i, 1e-40, 3.3][i])
+            rows.append(row)
+        return rows
+
+    @pytest.mark.parametrize("timeplex", [False, True])
+    def test_matches_polars_construction(self, timeplex):
+        import io
+        import polars as pl
+        import pyarrow.parquet as pq
+        from src.utils.io.read_output import get_parquet_schema
+        schema = get_parquet_schema(timeplex=timeplex)
+        pa_schema = pl.DataFrame(schema=schema).to_arrow().schema
+        rows = self._rows(schema)
+
+        # Compared as the Parquet main_search writes, not as in-memory Arrow:
+        # polars sets the unused padding bits of a validity bitmap, pyarrow
+        # does not, and only the in-memory bytes differ for that
+        def parquet_bytes(table):
+            sink = io.BytesIO()
+            pq.write_table(table, sink)
+            return sink.getvalue()
+
+        expected = pl.DataFrame({c: [row[i] for row in rows] for i, c in enumerate(schema)},
+                                schema=schema).to_arrow()
+        assert parquet_bytes(run_jmod._rows_to_arrow(rows, pa_schema)) == parquet_bytes(expected)

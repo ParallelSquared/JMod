@@ -33,6 +33,7 @@ from src.spectral_fitting import fit_to_lib2
 from src.rt_alignment import MZRTfit, MZRTfit_timeplex, aligned_library_im
 from src.utils.misc_functions import datestamped
 import polars as pl
+import pyarrow as pa
 import pyarrow.parquet as pq
 from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
@@ -1021,6 +1022,28 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_cal
     return search_library, rt_mz, in_window
 
 
+def _rows_to_arrow(rows, pa_schema):
+    """fit_to_lib2's result rows as an Arrow table in *pa_schema*.
+
+    Runs on the main thread, holding the GIL while the search threads wait, so
+    it avoids per-element conversion: each list column (one small array per
+    row) is concatenated once and wrapped with its offsets, rather than polars
+    converting every row's arrays separately.  Same table as building a polars
+    frame from the rows, about 5x faster.
+    """
+    arrays = []
+    for field, col in zip(pa_schema, zip(*rows)):
+        if pa.types.is_large_list(field.type):
+            lengths = np.fromiter((len(a) for a in col), dtype=np.int64, count=len(col))
+            offsets = np.zeros(len(col) + 1, dtype=np.int64)
+            np.cumsum(lengths, out=offsets[1:])
+            values = np.concatenate(col).astype(field.type.value_type.to_pandas_dtype(), copy=False)
+            arrays.append(pa.LargeListArray.from_arrays(offsets, values))
+        else:
+            arrays.append(pa.array(col, type=field.type))
+    return pa.Table.from_arrays(arrays, schema=pa_schema)
+
+
 def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_path, runState):
     """Fit every MS2 spectrum against the calibrated library.
 
@@ -1182,17 +1205,13 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
                             buffer.extend(result)
                             n_results += len(result)
                             if len(buffer) >= _BUFFER_SIZE:
-                                _col_data = {col: [row[i] for row in buffer]
-                                             for i, col in enumerate(_pl_schema)}
-                                writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+                                writer.write_table(_rows_to_arrow(buffer, _pa_schema))
                                 buffer.clear()
                     futures.clear()
 
             # Flush remaining buffered results
             if buffer:
-                _col_data = {col: [row[i] for row in buffer]
-                             for i, col in enumerate(_pl_schema)}
-                writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+                writer.write_table(_rows_to_arrow(buffer, _pa_schema))
                 buffer.clear()
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         logger.info(f"Batch {batch_idx+1}: {n_results} results written")
