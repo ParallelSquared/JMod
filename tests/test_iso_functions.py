@@ -34,8 +34,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 
 from src.iso_functions import get_seq_comp, precursor_isotopes, fragment_seq, gen_isotopes_dict, iso_library, iso_library_multi
-from brainpy import isotopic_variants
-from brainpy._c.isotopic_distribution import TheoreticalPeak as Peak
+from src.isotope_distribution import Peak, isotopic_variants
 from src.mass_tags import massTag, read_json_to_massTag
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 import src.iso_functions as iso
@@ -102,7 +101,7 @@ def _composition(residues, *extra):
 
 def _assert_fragment_envelope(seq, frag, comp, tag=None, n_iso=3):
     """gen_isotopes_dict's peaks for fragment *frag* of *seq* (at m/z 500,
-    intensity 1) are brainpy's isotope envelope of composition *comp*."""
+    intensity 1) are isotopic_variants' envelope of composition *comp*."""
     charge = int(frag.rsplit("_", 1)[1])
     spectrum, names = gen_isotopes_dict(seq, {frag: [500.0, 1.0]}, tag, n_iso)
     isotopes = isotopic_variants(comp, npeaks=n_iso, charge=charge)

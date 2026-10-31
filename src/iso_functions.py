@@ -18,7 +18,7 @@ import warnings
 # TODO: remove once we figure out what imports psims at startup on Windows (jmod never writes mzMLb)
 warnings.filterwarnings("ignore", message="hdf5plugin is missing")
 
-from brainpy import isotopic_variants
+from src.isotope_distribution import isotopic_variants
 import re
 from pyteomics import mass
 import src.config as config
@@ -278,7 +278,7 @@ def _hashable_channel_comps(tag):
 
 # Each fragment's isotope envelope by (n_iso, charge, composition): its peaks'
 # m/z offsets from the monoisotopic peak and intensities relative to it, as
-# brainpy gives them.  Cleared when full, which bounds a worker's memory
+# isotopic_variants gives them.  Cleared when full, which bounds a worker's memory
 # (about 110 MB at 2 isotopes) while the fragments every peptide shares stay cached
 _ENVELOPES = {}
 _MAX_ENVELOPES = 2 ** 18
@@ -550,7 +550,7 @@ def iso_library_multi(library, tag, n_iso, n_workers):
 
 def precursor_isotopes(sequence,charge,tags,n_isotopes=2, decoys=True):
     """
-    Return a list of brainpy theoretical peak objects: Peak(p.mz, p.intensity, p.charge)
+    Return a list of isotope Peak objects (src.isotope_distribution): Peak(p.mz, p.intensity, p.charge)
 
     Parameters
     ----------
@@ -567,7 +567,7 @@ def precursor_isotopes(sequence,charge,tags,n_isotopes=2, decoys=True):
 
     Returns
     -------
-    isotopes : list of brainpy theoretical peaks
+    isotopes : list of isotope Peaks
         i.e. Peak(p.mz, p.intensity, p.charge), Peak(p.mz, p.intensity, p.charge)]
     
     """

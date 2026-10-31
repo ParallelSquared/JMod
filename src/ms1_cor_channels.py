@@ -619,7 +619,7 @@ def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset, prec_im=None
 
     Parameters
     ----------
-    isotopes : list of brainpy theoretical peak objects
+    isotopes : list of isotope Peak objects (src.isotope_distribution)
         Peak objects (with p.mz, p.intensity, and p.charge) for one precursor
     mz_ppm : float
         MS1 tolerance
@@ -702,7 +702,7 @@ def get_trace_int_numba(spec_mz, spec_intens, mz_array, rtol, base):
 
 def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tags):
     """
-    Gets a list of brainpy theoretical peak isotopes for a precursor
+    Gets a list of isotope peaks for a precursor
 
     Parameters
     ----------
@@ -719,7 +719,7 @@ def compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tags):
     
     Returns
     -------
-    isotopes : list of brainpy theoretical peak objects
+    isotopes : list of isotope Peak objects (src.isotope_distribution)
         A list of peak objects with p.mz, p.intensity, and p.charge of length num_iso
 
     Notes
@@ -893,7 +893,7 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
 #         The spectrum object
 #     ms1_spec_idxs : list of int
 #         List of ms1 spec idxs
-#     group_iso : list of list of brainpy theoretical peak objects (one for each channel)
+#     group_iso : list of list of isotope Peak objects (src.isotope_distribution) (one for each channel)
 #         group_iso contains a list of outputs from compute_isotopes corresponding to each channel
 #     key : tuple
 #         The key identifying the group in fdc_group:
@@ -1297,14 +1297,14 @@ def fit_channel_isotopes_numba(spec, all_iso, mz_ppm, prec_im=None, im_tol=0.0):
     ----------
     spec : Spectrum Object
         The spectrum to look in
-    all_iso : a list of list of brainpy theoretical peak instances
+    all_iso : a list of list of isotope Peak instances
         i.e.
         [
         [Channel_1_Peak_1, Channel_1_Peak_2, ...]
         [Channel_2_Peak_1, Channel_2_Peak_2, ...]
         etc
         ]
-        where the peaks are brainpy theoretical peaks with p.mz, p.intensity, and p.charge
+        where the peaks are isotope Peaks with p.mz, p.intensity, and p.charge
     mz_ppm : float
         MS1 ppm tolerance
 
