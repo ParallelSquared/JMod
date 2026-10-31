@@ -1745,11 +1745,10 @@ def huber_nnls_irls(coo_vals, coo_rows, coo_cols, n_rows, n_cols, b,
 
     # Build CSC once from COO via JIT (nogil) — only format enet_path accepts.
     # Replaces COO→CSR→CSC conversion chain that held the GIL.
-    # Also pre-allocate X_w for IRLS loop — mutate .data in-place to avoid
-    # reconstructing the csc_matrix object each iteration.
+    # One matrix for both solves: the first reads X_w as built (its data equals
+    # csc_data); the IRLS loop then reweights X_w.data in place from csc_data.
     csc_data, csc_indices, csc_indptr = _coo_to_csc_arrays(
         coo_rows, coo_cols, coo_vals, n_rows, n_cols)
-    A_csc = csc_matrix((csc_data, csc_indices, csc_indptr), shape=(n_rows, n_cols))
     X_w = csc_matrix((csc_data.copy(), csc_indices, csc_indptr), shape=(n_rows, n_cols))
 
     coef = np.zeros(n_cols)
@@ -1759,7 +1758,7 @@ def huber_nnls_irls(coo_vals, coo_rows, coo_cols, n_rows, n_cols, b,
     weights = np.ones(n_rows)
     _rng = _get_enet_rng()  # thread-local, reseeded to 42 (enet_path mutates rng state)
     _, coef_path, _, n_iters = _enet_path(
-        A_csc, y,
+        X_w, y,
         l1_ratio=l1_ratio,
         alphas=[alpha],
         positive=True,
