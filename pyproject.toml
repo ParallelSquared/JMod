@@ -7,6 +7,7 @@ version = "2.0.0"
 requires-python = ">=3.14.3"
 
 [tool.uv]
+required-version = ">=0.13"
 managed = true
 default-groups = ["deps"]
 

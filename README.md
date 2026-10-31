@@ -59,7 +59,11 @@ If you would like to set up the UV environment with the command line, please fol
 
     ```pip install uv``` 
  
-    or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. 
+    or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. JMod needs UV 0.13 or newer. To update an existing UV, run
+
+    ```uv self update```
+
+    or, if UV was installed with pip, ```pip install -U uv```.
 
 3. Open a new terminal and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: 
 
