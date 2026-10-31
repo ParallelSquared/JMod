@@ -203,7 +203,7 @@ Some commonly used search parameters are listed below. A more extensive list of 
   Number of MS2 isotopes to consider if using them
   default = 2
 --iso_workers
-  Number of processes used to generate isotopes.
+  Number of threads used to generate isotopes.
   default = 3
 -m --atleast_m
   Required number of fragments matched from top N fragments (N=10)

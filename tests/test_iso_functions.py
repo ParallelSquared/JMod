@@ -953,9 +953,30 @@ class Test_iso_library():
             self.compare_outputs(new_library_output[key], new_library_expected[key])
 
 
+def _loss_takes_parent_envelope(expected):
+    """*expected* (exact neutral-loss isotopes) as iso_library_multi gives it:
+    a loss fragment's isotope peaks are its parent ion's envelope (offset and
+    ratio from the parent's monoisotopic peak) applied to its own
+    monoisotopic peak.  Every other peak is unchanged."""
+    spectrum = np.array(expected['spectrum'], dtype=np.float64)
+    names = [str(n) for n in expected['ordered_frags']]
+    row = {n: i for i, n in enumerate(names)}
+    for i, name in enumerate(names):
+        base, _, iso = name.partition('_iso')
+        ion, _, rest = base.partition('-')
+        if not rest or not iso:
+            continue
+        parent = ion + '_' + rest.split('_', 1)[1]
+        mono, p_mono, p_iso = row[base], row[parent], row[parent + '_iso' + iso]
+        spectrum[i, 0] = spectrum[mono, 0] + (spectrum[p_iso, 0] - spectrum[p_mono, 0])
+        spectrum[i, 1] = spectrum[mono, 1] * (spectrum[p_iso, 1] / spectrum[p_mono, 1])
+    return dict(expected, spectrum=spectrum)
+
+
 class Test_iso_library_multi():
 
     def compare_outputs(self, output, expected):
+        expected = _loss_takes_parent_envelope(expected)
         assert_frags_approx(output['frags'], expected['frags'])
         assert np.allclose(output['spectrum'], expected['spectrum'])
         assert np.array_equal(output['ordered_frags'], expected['ordered_frags'])
@@ -1321,3 +1342,33 @@ if __name__ == "__main__":
     main()
 
 
+
+
+class TestIsoLibraryKernel:
+    """iso_library_multi (per-peptide kernel, threads) gives exactly what
+    iso_library (gen_isotopes_dict per fragment) gives for fragments without
+    neutral losses, across several chunks and threads."""
+
+    @staticmethod
+    def _library(n=2500):
+        rng = np.random.default_rng(0)
+        aas = list("ACDEFGHIKLMNPQRSTVWY")
+        lib = {}
+        while len(lib) < n:
+            pep = "".join(rng.choice(aas, rng.integers(7, 15))) + "K"
+            seq = "(PSMtag_5plex-0)" + pep + "(PSMtag_5plex-0)" if rng.random() < 0.5 else pep
+            frags = {"y1_1": [mass.fast_mass(sequence="K", ion_type='y'), 0.5],
+                     "y3_1": [mass.fast_mass(sequence=pep[-3:], ion_type='y'), 0.8],
+                     "b3_1": [mass.fast_mass(sequence=pep[:3], ion_type='b'), 1.0],
+                     "b5_2": [mass.fast_mass(sequence=pep[:5], ion_type='b', charge=2), 0.4]}
+            lib[(seq, float(rng.integers(2, 4)))] = {"frags": frags}
+        return lib
+
+    def test_matches_per_fragment_path(self):
+        lib = self._library()
+        tag = read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")
+        kernel = iso_library_multi(SpectrumLibraryStore.from_dict(lib), tag, 3, 3)
+        exact = iso_library(SpectrumLibraryStore.from_dict(lib), tag, 3)
+        for field in ("spectrum_mz", "spectrum_int", "frag_names_data",
+                      "spectrum_offsets", "spectrum_lengths"):
+            assert np.array_equal(getattr(kernel, field), getattr(exact, field)), field

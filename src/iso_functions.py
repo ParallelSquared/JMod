@@ -26,6 +26,8 @@ import tqdm
 import os
 import copy
 import functools
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from functools import reduce
 import numpy as np
 
@@ -342,12 +344,254 @@ def gen_isotopes_dict(seq,frags, tag, n_iso):
     return frag_to_peak(new_frags,return_frags=True)
 
 
-def _gen_isotopes_encoded(args):
-    """Wrapper that encodes frag names to int32 inside the worker process."""
-    seq, frags, tag, n_iso = args
-    from src.utils.frag_encoding import encode_frag_names
-    spectrum, ordered_frags = gen_isotopes_dict(seq, frags, tag, n_iso)
-    return spectrum, encode_frag_names(ordered_frags)
+# ---------------------------------------------------------------------------
+# Fragment isotopes for a chunk of library entries in one GIL-free kernel.
+#
+# JrMod's construction (src/library/isotopes.rs, fragment_isotope_envelopes):
+# per peptide, a prefix walk convolves each residue's isotope distribution in
+# turn (a/b/c ions) and a suffix walk does the same from the C terminus
+# (x/y/z), so every fragment's envelope comes from one pass over the
+# residues.  Unlike JrMod, residues carry their modifications and tag
+# channels (_residue_comp), and each distribution carries an abundance-
+# weighted mass track (isotope_distribution), so isotope m/z offsets are
+# exact, not nominal.  Neutral losses are ignored: a loss fragment gets its
+# parent ion's envelope.  a and z ions remove atoms, which a walk can not, so
+# they are computed from the fragment's exact element counts.
+# ---------------------------------------------------------------------------
+
+from numba import njit as _njit
+from src import isotope_distribution as _isodist
+from src.utils import frag_encoding as _fe
+
+# Ion type codes (frag_encoding._ION_TYPE_TO_INT): b 0, y 1, a 2, c 3, x 4, z 5
+_ION_ORDER = ("b", "y", "a", "c", "x", "z")
+assert all(_fe._ION_TYPE_TO_INT[t] == i for i, t in enumerate(_ION_ORDER))
+# Frag code layout (frag_encoding), as plain ints for the kernel
+_ION_SHIFT, _ION_MASK = _fe._ION_SHIFT, _fe._ION_MASK
+_IDX_SHIFT, _IDX_MASK = _fe._IDX_SHIFT, _fe._IDX_MASK
+_CHG_SHIFT, _CHG_MASK = _fe._CHG_SHIFT, _fe._CHG_MASK
+_ISO_SHIFT = _fe._ISO_SHIFT
+
+
+@_njit(nogil=True)
+def _dense_dist(counts, offsets, abundances, shifts, starts, k):
+    """(probability, shift sum) of peaks +0..+(k-1) for element counts over
+    the element table (counts[e] of table element e)."""
+    p = np.zeros(k)
+    s = np.zeros(k)
+    p[0] = 1.0
+    for e in range(counts.shape[0]):
+        n = counts[e]
+        if n == 0:
+            continue
+        base_p = np.zeros(k)
+        base_s = np.zeros(k)
+        for t in range(starts[e], starts[e + 1]):
+            o = offsets[t]
+            if o < k:
+                base_p[o] += abundances[t]
+                base_s[o] += abundances[t] * shifts[t]
+        acc_p = np.zeros(k)
+        acc_s = np.zeros(k)
+        acc_p[0] = 1.0
+        while n > 0:
+            if n & 1:
+                acc_p, acc_s = _isodist._convolve(acc_p, acc_s, base_p, base_s, k)
+            n >>= 1
+            if n > 0:
+                base_p, base_s = _isodist._convolve(base_p, base_s, base_p, base_s, k)
+        p, s = _isodist._convolve(p, s, acc_p, acc_s, k)
+    return p, s
+
+
+@_njit(nogil=True)
+def _conv_into(a_p, a_s, b_p, b_s, out_p, out_s, k):
+    """_isodist._convolve written into out_p/out_s (no allocation)."""
+    for i in range(k):
+        out_p[i] = 0.0
+        out_s[i] = 0.0
+    for i in range(k):
+        if a_p[i] == 0.0 and a_s[i] == 0.0:
+            continue
+        for j in range(k - i):
+            out_p[i + j] += a_p[i] * b_p[j]
+            out_s[i + j] += a_p[i] * b_s[j] + a_s[i] * b_p[j]
+
+
+@_njit(nogil=True)
+def _iso_chunk_kernel(rows, res_ids, res_offsets, uniq_counts, n_stripped,
+                      frag_offsets, frag_lengths, frag_mz, frag_int, frag_codes,
+                      spec_offsets, out_mz, out_int, out_codes,
+                      ion_counts, offsets, abundances, shifts, starts, n_iso):
+    """Isotope peaks of every fragment of library entries rows[i], written to
+    out_* at spec_offsets[rows[i]]: n_iso peaks per fragment, sorted by m/z
+    (stable), codes carrying the isotope index.  Entry i's residues are
+    uniq_counts[res_ids[res_offsets[i]:res_offsets[i+1]]] (element counts).
+    Everything per residue and per fragment reuses buffers sized once."""
+    k = n_iso
+    n_el = ion_counts.shape[1]
+    # Each distinct residue's distribution, once
+    n_u = uniq_counts.shape[0]
+    u_p = np.zeros((n_u, k))
+    u_s = np.zeros((n_u, k))
+    for u in range(n_u):
+        pp, ss = _dense_dist(uniq_counts[u], offsets, abundances, shifts, starts, k)
+        u_p[u] = pp
+        u_s[u] = ss
+    ion_p = np.zeros((6, k))
+    ion_s = np.zeros((6, k))
+    for t in range(6):
+        if t != 2 and t != 5:
+            pp, ss = _dense_dist(ion_counts[t], offsets, abundances, shifts, starts, k)
+            ion_p[t] = pp
+            ion_s[t] = ss
+    max_res = 0
+    max_peaks = 0
+    for i in range(rows.shape[0]):
+        max_res = max(max_res, res_offsets[i + 1] - res_offsets[i])
+        max_peaks = max(max_peaks, frag_lengths[rows[i]] * k)
+    pre_p = np.zeros((max_res + 1, k))
+    pre_s = np.zeros((max_res + 1, k))
+    suf_p = np.zeros((max_res + 1, k))
+    suf_s = np.zeros((max_res + 1, k))
+    fp = np.zeros(k)
+    fs = np.zeros(k)
+    counts = np.zeros(n_el, dtype=np.int64)
+    mz = np.empty(max_peaks)
+    inten = np.empty(max_peaks)
+    codes = np.empty(max_peaks, dtype=np.int32)
+    order = np.empty(max_peaks, dtype=np.int64)
+
+    for i in range(rows.shape[0]):
+        row = rows[i]
+        r0 = res_offsets[i]
+        n_res = res_offsets[i + 1] - r0
+        # prefix[j] / suffix[j]: the first / last j residues
+        for q in range(k):
+            pre_p[0, q] = 0.0
+            pre_s[0, q] = 0.0
+            suf_p[0, q] = 0.0
+            suf_s[0, q] = 0.0
+        pre_p[0, 0] = 1.0
+        suf_p[0, 0] = 1.0
+        for j in range(n_res):
+            u = res_ids[r0 + j]
+            _conv_into(pre_p[j], pre_s[j], u_p[u], u_s[u], pre_p[j + 1], pre_s[j + 1], k)
+            u = res_ids[r0 + n_res - 1 - j]
+            _conv_into(suf_p[j], suf_s[j], u_p[u], u_s[u], suf_p[j + 1], suf_s[j + 1], k)
+
+        f0 = frag_offsets[row]
+        nf = frag_lengths[row]
+        for f in range(nf):
+            code = frag_codes[f0 + f]
+            ion = (code >> _ION_SHIFT) & _ION_MASK
+            idx = (code >> _IDX_SHIFT) & _IDX_MASK
+            charge = ((code >> _CHG_SHIFT) & _CHG_MASK) + 1
+            if idx >= n_stripped[i]:
+                raise ValueError("fragment index beyond the peptide")
+            if ion == 2 or ion == 5:
+                # a / z remove atoms: from the fragment's exact element counts
+                for e in range(n_el):
+                    counts[e] = ion_counts[ion, e]
+                if ion == 2:
+                    lo, hi = 0, min(idx, n_res)
+                else:
+                    lo, hi = (max(n_res - idx, 0) if idx else 0), n_res
+                for j in range(lo, hi):
+                    u = res_ids[r0 + j]
+                    for e in range(n_el):
+                        counts[e] += uniq_counts[u, e]
+                dp, ds = _dense_dist(counts, offsets, abundances, shifts, starts, k)
+                for q in range(k):
+                    fp[q] = dp[q]
+                    fs[q] = ds[q]
+            elif ion == 0 or ion == 3:
+                j = min(idx, n_res)
+                _conv_into(pre_p[j], pre_s[j], ion_p[ion], ion_s[ion], fp, fs, k)
+            else:
+                j = min(idx, n_res) if idx else n_res
+                _conv_into(suf_p[j], suf_s[j], ion_p[ion], ion_s[ion], fp, fs, k)
+            if fp[0] <= 0:
+                raise ValueError("fragment with no monoisotopic peak")
+            shift0 = fs[0] / fp[0]
+            base_mz = np.float64(frag_mz[f0 + f])
+            base_int = np.float64(frag_int[f0 + f])
+            for q in range(k):
+                shift = fs[q] / fp[q] if fp[q] > 0 else 0.0
+                mz[f * k + q] = base_mz + (shift - shift0) / charge
+                inten[f * k + q] = base_int * (fp[q] / fp[0])
+                codes[f * k + q] = code | (q << _ISO_SHIFT)
+
+        # stable insertion sort of this entry's peaks by m/z
+        n_peaks = nf * k
+        for q in range(n_peaks):
+            order[q] = q
+        for q in range(1, n_peaks):
+            cur = order[q]
+            v = mz[cur]
+            w = q - 1
+            while w >= 0 and mz[order[w]] > v:
+                order[w + 1] = order[w]
+                w -= 1
+            order[w + 1] = cur
+        o = spec_offsets[row]
+        for q in range(n_peaks):
+            out_mz[o + q] = mz[order[q]]
+            out_int[o + q] = inten[order[q]]
+            out_codes[o + q] = codes[order[q]]
+
+
+_iso_tls = threading.local()
+
+
+def _iso_chunk(library, rows, tag, n_iso, spec_offsets, out_mz, out_int, out_codes):
+    """Fill out_* for library entries *rows* (see _iso_chunk_kernel).  The
+    Python here is per residue, with per-thread caches; everything per
+    fragment runs in the kernel."""
+    cache = getattr(_iso_tls, "residues", None)
+    if cache is None:
+        cache = _iso_tls.residues = {}
+    tag_name = tag.name if tag else None
+    channel_comps = _hashable_channel_comps(tag)
+    uniq, res_ids, res_offsets, n_stripped = {}, [], [0], []
+    for row in rows:
+        seq = library.mod_seq[row]
+        residues = parse_peptide(seq)
+        for r in residues:
+            u = uniq.get(r)
+            if u is None:
+                u = uniq[r] = len(uniq)
+            res_ids.append(u)
+        res_offsets.append(len(res_ids))
+        n_stripped.append(len(_BRACKETS.sub("", seq)))
+    comps = []
+    for r in uniq:
+        key = (r, tag_name, channel_comps)
+        comp = cache.get(key)
+        if comp is None:
+            comp = cache[key] = dict(_residue_comp.__wrapped__(r, tag_name, channel_comps))
+        comps.append(comp)
+    ion_comps = [_ion_comp(t, None) for t in _ION_ORDER]
+    symbols = {e for c in comps for e in c} | {e for c in ion_comps for e in c}
+    table = _isodist._table_for(sorted(symbols))
+    n_el = len(table.index)
+    uniq_counts = np.zeros((len(comps), n_el), dtype=np.int64)
+    for u, comp in enumerate(comps):
+        for e, n in comp.items():
+            uniq_counts[u, table.index[e]] = n
+    ions = np.zeros((6, n_el), dtype=np.int64)
+    for t, comp in enumerate(ion_comps):
+        for e, n in comp.items():
+            ions[t, table.index[e]] = n
+    _iso_chunk_kernel(np.asarray(rows, dtype=np.int64),
+                      np.array(res_ids, dtype=np.int64),
+                      np.array(res_offsets, dtype=np.int64),
+                      uniq_counts,
+                      np.array(n_stripped, dtype=np.int64),
+                      library.frag_offsets, library.frag_lengths,
+                      library.frag_mz, library.frag_int, library.frag_keys_data,
+                      spec_offsets, out_mz, out_int, out_codes,
+                      ions, table.offsets, table.abundances, table.shifts, table.starts, n_iso)
 
 
 def _alloc_iso_buffers(library, all_keys, n_iso):
@@ -465,22 +709,19 @@ def iso_library(library, tag, n_iso):
 
     return library
 
-import multiprocessing
-def _iso_arg_gen(library, all_keys, tag, n_iso):
-    """Lazily yield (seq, frags, tag, n_iso) tuples one at a time.
-
-    This avoids materializing all fragment dicts in memory at once.
-    """
-    for k in all_keys:
-        yield (k[0], library[k]["frags"], tag, n_iso)
-
-
 def iso_library_multi(library, tag, n_iso, n_workers):
     """
-    Generate isotopes for library fragments (multiprocessed).
+    Generate isotopes for library fragments, in parallel.
 
     Only rebuilds spectrum_data and frag_names_data on the store.
     All other arrays (frag_data, frag_keys_data, scalars) are unchanged.
+
+    Fragments get their isotope envelopes from _iso_chunk_kernel (JrMod's
+    per-peptide prefix/suffix walk; neutral losses take their parent ion's
+    envelope).  Entries are processed in chunks by a thread pool; each chunk
+    writes its own entries' slices of the preallocated arrays.  The kernel
+    runs without the GIL, so the threads overlap on any Python build, and
+    fully on free-threaded Python.
 
     Parameters
     ----------
@@ -491,16 +732,13 @@ def iso_library_multi(library, tag, n_iso, n_workers):
     n_iso : int
         Number of isotopes per fragment to generate.
     n_workers : int
-        Worker processes to generate them with (--iso_workers), at most one
-        per CPU.  Each is a separate process with its own memory.
+        Threads to generate them with (--iso_workers), at most one per CPU.
 
     Returns
     -------
     SpectrumLibraryStore
         The same store with updated spectrum/frag_names arrays.
     """
-    from src.utils.frag_encoding import encode_frag_names
-
     n = len(library)
     all_keys = list(library)
 
@@ -515,21 +753,16 @@ def iso_library_multi(library, tag, n_iso, n_workers):
     library.spectrum_perm = None  # iso rebuilds spectra; acts as the finalizer
 
     logger.info("Generating isotopes for library:")
-    p = multiprocessing.get_context('spawn').Pool(min(multiprocessing.cpu_count(), n_workers),
-                                                  initializer=config.limit_blas_threads)
-
     chunksize = 1000
-    arg_gen = _iso_arg_gen(library, all_keys, tag, n_iso)
-    try:
-        for i, (spectrum, ordered_frags) in enumerate(
-            tqdm.tqdm(p.imap(_gen_isotopes_encoded, arg_gen, chunksize=chunksize), total=n)
-        ):
-            _store_iso_entry(i, spectrum, ordered_frags,
-                             spec_offsets, spec_lengths,
-                             spectrum_mz, spectrum_int, frag_names_data, all_keys[i])
-    finally:
-        p.terminate()
-        p.join()
+    chunks = [range(i, min(i + chunksize, n)) for i in range(0, n, chunksize)]
+    n_workers = max(1, min(os.cpu_count() or 1, n_workers))
+    with ThreadPoolExecutor(n_workers) as pool, tqdm.tqdm(total=n) as bar:
+        futures = {pool.submit(_iso_chunk, library, chunk, tag, n_iso, spec_offsets,
+                               spectrum_mz, spectrum_int, frag_names_data): len(chunk)
+                   for chunk in chunks}
+        for f in as_completed(futures):
+            f.result()
+            bar.update(futures[f])
 
     library.spectrum_mz = spectrum_mz
     library.spectrum_int = spectrum_int
