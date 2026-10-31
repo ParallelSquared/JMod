@@ -55,7 +55,7 @@ if %ERRORLEVEL% neq 0 goto uvFailed
 :uvFound
 
 @rem Sync UV environment
-uv sync --python 3.11
+uv sync --python 3.14t
 
 @rem Launch GUI application
 start "" uv run pythonw run_jmod_from_GUI.py

@@ -24,6 +24,9 @@ import json
 import gc
 import glob
 import subprocess
+import sys
+import sysconfig
+import platform
 
 from src import _version
 from src.utils.io import file_reader
@@ -428,6 +431,7 @@ def _start_experiment_log():
     logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
     set_log_filepath(logfile_path)
     _log_jmod_version(experiment_dir)
+    _log_python()
     if why:
         logger.info(f"{why}: this experiment writing to {experiment_dir}")
 
@@ -464,6 +468,19 @@ def _git(*args):
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout if done.returncode == 0 else None
+
+
+def _log_python():
+    """Log the Python version, and warn when the GIL is on: threads then run one
+    at a time.  On a free-threaded build an imported extension that does not
+    declare free-threading support turns the GIL back on for the whole process."""
+    logger.info(f"Python {platform.python_version()}")
+    if not sys._is_gil_enabled():
+        return
+    if sysconfig.get_config_var("Py_GIL_DISABLED"):
+        logger.warning("GIL re-enabled by an imported extension: threads will not run in parallel (set PYTHON_GIL=0 to override)")
+    else:
+        logger.warning("Not a free-threaded Python build: threads will not run in parallel")
 
 
 def _log_jmod_version(experiment_dir):
