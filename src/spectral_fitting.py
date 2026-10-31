@@ -2137,6 +2137,122 @@ def hyperscore2(frag_intensities, frag_codes):
     dp = np.sum(frag_intensities[not_iso])
     return max(0, np.log(dp * math.factorial(num_b) * math.factorial(num_y))), num_b, num_y
     
+@njit(nogil=True, error_model="numpy")
+def _get_features_jit(rt_mz, prec_im,
+                      ref_rows, ref_vals, ref_cols, ref_offsets,
+                      dec_rows, dec_vals, dec_cols, dec_offsets,
+                      dia_spectrum, prec_rt, dia_spec_int, coeffs,
+                      sparse_row_indices, sparse_col_indices, sparse_values,
+                      matched_lib_int, matched_codes, matched_offsets,
+                      ms1_error, ref_spec_offset, decoy_spec_offset, unique_lookup):
+    """get_features in one GIL-free call.  The same steps as the numpy code it
+    replaced; only the sums round differently (numba sums sequentially, numpy
+    pairwise).  error_model="numpy": a zero TIC gives inf/nan, not an exception."""
+    val_obs = dia_spectrum[:, 1]
+    tic = np.sum(val_obs)
+
+    # Combined flat arrays (ref + decoy) for the large-coeff block
+    n_ref = len(ref_offsets) - 1
+    n_dec = len(dec_offsets) - 1
+    if n_dec > 0:
+        all_rows = np.concatenate((ref_rows, dec_rows))
+        all_vals = np.concatenate((ref_vals, dec_vals))
+        all_offsets = np.empty(n_ref + n_dec + 1, dtype=ref_offsets.dtype)
+        all_offsets[:n_ref + 1] = ref_offsets
+        for k in range(n_dec):
+            all_offsets[n_ref + 1 + k] = dec_offsets[k + 1] + ref_offsets[n_ref]
+    else:
+        all_rows = ref_rows
+        all_vals = ref_vals
+        all_offsets = ref_offsets.copy()
+    n_total = n_ref + n_dec
+    max_col = max(ref_spec_offset + n_ref, decoy_spec_offset + n_dec) if n_total > 0 else 0
+    col_to_pos = np.full(max_col, -1, dtype=np.int32)
+    for k in range(n_ref):
+        col_to_pos[ref_spec_offset + k] = k
+    for k in range(n_dec):
+        col_to_pos[decoy_spec_offset + k] = n_ref + k
+
+    y_pred = np.zeros(len(val_obs))
+    if len(ref_rows) > 0:
+        _build_y_pred_jit(ref_rows, ref_cols, ref_vals, ref_offsets, coeffs, ref_spec_offset, y_pred)
+    if len(dec_rows) > 0:
+        _build_y_pred_jit(dec_rows, dec_cols, dec_vals, dec_offsets, coeffs, decoy_spec_offset, y_pred)
+    residuals = val_obs - y_pred
+
+    n = n_ref
+    scribe_scores = np.zeros(n)
+    gof_stats = np.zeros(n)
+    max_unmatched_residuals = np.zeros(n)
+    max_matched_residuals = np.zeros(n)
+    manhattan_distances = np.zeros(n)
+    fitted_spectral_contrasts = np.zeros(n)
+    num_lib_peaks_matched = np.zeros(n)
+    frac_lib_intensity = np.zeros(n)
+    frac_dia_intensity = np.zeros(n)
+    if len(ref_rows) > 0:
+        _compute_candidate_features_jit(
+            ref_rows, ref_vals, ref_cols, ref_offsets,
+            val_obs, residuals, y_pred, coeffs, ref_spec_offset,
+            scribe_scores, gof_stats, max_unmatched_residuals, max_matched_residuals,
+            manhattan_distances, fitted_spectral_contrasts,
+            num_lib_peaks_matched, frac_lib_intensity, frac_dia_intensity,
+            tic)
+
+    m = rt_mz.shape[0]
+    rel_error = np.empty(len(ms1_error))
+    for k in range(len(ms1_error)):
+        rel_error[k] = abs(ms1_error[k]) if not np.isnan(ms1_error[k]) else -1.0
+    rt_error = np.empty(m)
+    im_error = np.empty(m)
+    for k in range(m):
+        rt_error[k] = prec_rt - rt_mz[k, 0]
+        im_error[k] = prec_im[k] - rt_mz[k, 2]
+    sum_dia_spec_int = np.sum(dia_spec_int)
+    frac_int_matched = sum_dia_spec_int / tic
+
+    n_coo_rows = sparse_row_indices.max() + 1 if len(sparse_row_indices) > 0 else 0
+    predicted_spec_full, lc_frac, lc_cosine = _large_coeff_block_jit(
+        sparse_row_indices, sparse_col_indices, sparse_values, n_coo_rows,
+        coeffs, val_obs, all_rows, all_vals, all_offsets, col_to_pos)
+    predicted_spec = predicted_spec_full[:-1]   # drop penalty row (unmatched-fragment intensity)
+
+    r2all = np.zeros(m)
+    r2_lib_spec = np.zeros(m)
+    r2_unique = np.zeros(m)
+    frac_unique_pred = np.zeros(n)
+    if len(ref_rows) > 0:
+        _compute_unique_frac_jit(ref_rows, ref_vals, ref_offsets,
+                                 unique_lookup, val_obs, coeffs, ref_spec_offset,
+                                 frac_unique_pred)
+    frac_dia_intensity_pred = np.empty(n)
+    for k in range(n):
+        d = frac_dia_intensity[k] if frac_dia_intensity[k] > 0 else 1.0
+        frac_dia_intensity_pred[k] = (frac_lib_intensity[k] * coeffs[ref_spec_offset + k]) / d
+
+    sum_predicted = np.sum(predicted_spec)
+    frac_int_pred = sum_predicted / tic if tic > 0 else 0.0
+    frac_int_matched_pred = sum_predicted / sum_dia_spec_int if sum_dia_spec_int > 0 else 0.0
+
+    hyperscores = np.zeros(n)
+    b_counts = np.zeros(n)
+    y_counts = np.zeros(n)
+    longest_y_ions = np.zeros(n)
+    if n > 0:
+        _compute_hyperscores_jit(matched_lib_int, matched_codes, matched_offsets.astype(np.int32),
+                                 hyperscores, b_counts, y_counts, longest_y_ions)
+
+    return _assemble_features_jit(
+        num_lib_peaks_matched, frac_lib_intensity, frac_dia_intensity,
+        rel_error, rt_error, frac_int_matched, frac_int_pred,
+        r2all, r2_lib_spec, r2_unique, frac_unique_pred, frac_dia_intensity_pred,
+        hyperscores, b_counts, y_counts, longest_y_ions,
+        scribe_scores, max_unmatched_residuals, max_matched_residuals,
+        gof_stats, manhattan_distances, fitted_spectral_contrasts,
+        frac_int_matched_pred, lc_frac, lc_cosine,
+        rt_mz[:, 1].copy(), tic, im_error)
+
+
 #@profile
 def get_features(
     rt_mz,
@@ -2158,186 +2274,25 @@ def get_features(
     decoy_spec_offset,
     unique_lookup_dia=None):
 
-    val_obs = dia_spectrum[:, 1]
-    coeffs = np.asarray(lib_coefficients).ravel()
-    tic = np.sum(val_obs)
+    """The 28 per-candidate features, as _assemble_features_jit lays them out.
 
-    # Build combined flat arrays (ref + decoy) for large_coeff JIT
-    n_ref = len(ref_offsets) - 1
-    n_dec = len(dec_offsets) - 1
-    if n_dec > 0:
-        _all_flat_rows = np.concatenate([ref_rows, dec_rows])
-        _all_flat_vals = np.concatenate([ref_vals, dec_vals])
-        _all_flat_offsets = np.concatenate([ref_offsets, dec_offsets[1:] + ref_offsets[-1]])
-    else:
-        _all_flat_rows = ref_rows
-        _all_flat_vals = ref_vals
-        _all_flat_offsets = ref_offsets
-
-    # Map sparse matrix column index → position in combined flat arrays
-    n_total = n_ref + n_dec
-    _max_col = max(int(ref_spec_offset + n_ref), int(decoy_spec_offset + n_dec)) if n_total > 0 else 0
-    _col_to_pos = np.full(_max_col, -1, dtype=np.int32)
-    if n_ref > 0:
-        _col_to_pos[ref_spec_offset:ref_spec_offset + n_ref] = np.arange(n_ref, dtype=np.int32)
-    if n_dec > 0:
-        _col_to_pos[decoy_spec_offset:decoy_spec_offset + n_dec] = np.arange(n_ref, n_ref + n_dec, dtype=np.int32)
-
-    # ── Step 2: Build predicted spectrum y_pred = A * x ──
-    y_pred = np.zeros(len(val_obs))
-    if len(ref_rows) > 0:
-        _build_y_pred_jit(ref_rows, ref_cols, ref_vals, ref_offsets, coeffs, ref_spec_offset, y_pred)
-    if len(dec_rows) > 0:
-        _build_y_pred_jit(dec_rows, dec_cols, dec_vals, dec_offsets, coeffs, decoy_spec_offset, y_pred)
-    residuals = val_obs - y_pred
-
-    # ── Step 3: Fused per-candidate features ──
-    # Replaces three separate functions that each looped over the same fragment data:
-    #   - get_scribe       → scribe_scores
-    #   - gof_stat         → gof_stats, max_unmatched_residuals, max_matched_residuals
-    #   - get_manhattan_distance → manhattan_distances, fitted_spectral_contrasts
-    # Also computes simple per-candidate stats that were previously list comprehensions:
-    #   - num_lib_peaks_matched  (was: np.array([np.sum(i) for i in lib_peaks_matched]))
-    #   - frac_lib_intensity     (was: [np.sum(i) for i in ref_spec_values_split])
-    #   - frac_dia_intensity     (was: [np.sum(dia_spectrum[i,1])/tic for i in ...])
-    n = n_ref
-    scribe_scores = np.zeros(n)
-    gof_stats = np.zeros(n)
-    max_unmatched_residuals = np.zeros(n)
-    max_matched_residuals = np.zeros(n)
-    manhattan_distances = np.zeros(n)
-    fitted_spectral_contrasts = np.zeros(n)
-    num_lib_peaks_matched = np.zeros(n)
-    frac_lib_intensity = np.zeros(n)
-    frac_dia_intensity = np.zeros(n)
-
-    if len(ref_rows) > 0:
-        _compute_candidate_features_jit(
-            ref_rows, ref_vals, ref_cols, ref_offsets,
-            val_obs, residuals, y_pred, coeffs, ref_spec_offset,
-            scribe_scores, gof_stats, max_unmatched_residuals, max_matched_residuals,
-            manhattan_distances, fitted_spectral_contrasts,
-            num_lib_peaks_matched, frac_lib_intensity, frac_dia_intensity,
-            tic
-        )
-
-    # mz tol
-    rel_error = np.where(~np.isnan(ms1_error), np.abs(ms1_error), -1.0)
-    rt_error = prec_rt-rt_mz[:,0]
-    # Observed IM minus the library's aligned prediction -- the IM analogue of
-    # rt_error, signed for the same reason.  rt_mz column 2 is the aligned
-    # library IM; both sides are NaN on non-IM runs, exactly as prec_im already
-    # is, so the feature is NaN there and finite whenever IM is in play.
-    im_error = np.asarray(prec_im, dtype=np.float64).ravel() - rt_mz[:, 2]
-
-    frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
-
-    # Compute predicted spectrum + large_coeff features in one JIT pass (nogil).
-    # Replaces: sparse_lib_matrix*lib_coefficients, np.isin, np.unique, .toarray(), cosim, etc.
-    _n_coo_rows = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
-    predicted_spec_full, _lc_frac, _lc_cosine = _large_coeff_block_jit(
-        sparse_row_indices, sparse_col_indices, sparse_values, _n_coo_rows,
-        coeffs, val_obs,
-        _all_flat_rows, _all_flat_vals, _all_flat_offsets,
-        _col_to_pos)
-    predicted_spec = predicted_spec_full[:-1]  # drop penalty row (unmatched-fragment intensity)
-
-    r2all = np.zeros_like(rt_error)
-    r2_lib_spec = np.zeros_like(rt_error)
-    
-    # Use precomputed DIA-space lookup from fit_to_lib2 if available
-    if unique_lookup_dia is not None:
-        _unique_lookup = unique_lookup_dia
-    else:
-        # Fallback: compute from COO arrays directly
+    All of it runs in _get_features_jit, so a candidate group crosses the GIL
+    once.  unique_lookup_dia is computed here only if the caller has none.
+    """
+    if unique_lookup_dia is None:
         _n_sm = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
-        _unique_lookup = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _n_sm)
+        unique_lookup_dia = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _n_sm)
+    return _get_features_jit(
+        np.ascontiguousarray(rt_mz, dtype=np.float64), np.asarray(prec_im, dtype=np.float64).ravel(),
+        ref_rows, ref_vals, ref_cols, ref_offsets,
+        dec_rows, dec_vals, dec_cols, dec_offsets,
+        dia_spectrum, float(prec_rt), dia_spec_int,
+        np.asarray(lib_coefficients, dtype=np.float64).ravel(),
+        sparse_row_indices, sparse_col_indices, sparse_values,
+        matched_lib_int, matched_codes, matched_offsets,
+        np.asarray(ms1_error, dtype=np.float64),
+        int(ref_spec_offset), int(decoy_spec_offset), unique_lookup_dia)
 
-    r2_unique = np.zeros_like(rt_error)
-
-    # JIT: compute frac_unique_pred directly from flat arrays (GIL-free)
-    frac_unique_pred = np.zeros(n)
-    if len(ref_rows) > 0:
-        _compute_unique_frac_jit(
-            ref_rows, ref_vals, ref_offsets,
-            _unique_lookup, val_obs, coeffs, ref_spec_offset,
-            frac_unique_pred)
-
-    frac_dia_intensity_pred = (frac_lib_intensity * coeffs[ref_spec_offset:ref_spec_offset + n]) / np.where(frac_dia_intensity > 0, frac_dia_intensity, 1.0)
-
-    #### stack spectrum features
-    # Compute scalar feature values (broadcast to all candidates below in JIT)
-    _sum_predicted = np.sum(predicted_spec)
-    _sum_dia_spec_int = np.sum(dia_spec_int)
-    _frac_int_matched_scalar = frac_int_matched  # already a scalar
-    _frac_int_pred_scalar = _sum_predicted / tic if tic > 0 else 0.0
-    _frac_int_matched_pred_scalar = _sum_predicted / _sum_dia_spec_int if _sum_dia_spec_int > 0 else 0.0
-
-    # ── Hyperscores + ion counts ──
-    # Replaces per-candidate loop of hyperscore2() + get_index() calls (231K calls
-    # total across target+decoy). Batch-processes all candidates in one JIT'd pass.
-    if n > 0:
-        all_hyper_int = matched_lib_int
-        all_hyper_codes = matched_codes
-        n_hyper = n
-        hyper_offsets = matched_offsets.astype(np.int32)
-        hyperscores = np.zeros(n_hyper)
-        b_counts = np.zeros(n_hyper)
-        y_counts = np.zeros(n_hyper)
-        longest_y_ions = np.zeros(n_hyper)
-
-        _compute_hyperscores_jit(
-            all_hyper_int, all_hyper_codes, hyper_offsets,
-            hyperscores, b_counts, y_counts, longest_y_ions
-        )
-    else:
-        hyperscores = np.zeros_like(num_lib_peaks_matched)
-        b_counts = np.zeros_like(num_lib_peaks_matched)
-        y_counts = np.zeros_like(num_lib_peaks_matched)
-        longest_y_ions = np.zeros_like(num_lib_peaks_matched)
-
-    # ── Assemble feature matrix in one pass (nogil) ──
-    # Replaces ~5 np.ones_like*scalar broadcasts + np.stack of 26 arrays.
-    # Each row is a feature column; transposed at the end via -1 axis.
-    _prec_mz = rt_mz[:, 1].copy()  # contiguous for JIT
-    features = _assemble_features_jit(
-        num_lib_peaks_matched,          #  0: number of library peaks matched per candidate
-        frac_lib_intensity,             #  1: fraction of library intensity matched
-        frac_dia_intensity,             #  2: fraction of DIA intensity at matched peaks
-        rel_error,                      #  3: relative MS1 m/z error
-        rt_error,                       #  4: RT error (observed - calibrated)
-        _frac_int_matched_scalar,       #  5: fraction of total DIA intensity matched (scalar → broadcast)
-        _frac_int_pred_scalar,          #  6: fraction of TIC predicted by model (scalar → broadcast)
-        r2all,                          #  7: R² all (placeholder, currently zeros)
-        r2_lib_spec,                    #  8: R² library spectrum (placeholder, currently zeros)
-        r2_unique,                      #  9: R² unique (placeholder, currently zeros)
-        frac_unique_pred,               # 10: predicted intensity fraction at uniquely-matched peaks
-        frac_dia_intensity_pred,        # 11: predicted DIA intensity fraction per candidate
-        hyperscores,                    # 12: X!Tandem-style hyperscore
-        b_counts,                       # 13: number of b-ions matched
-        y_counts,                       # 14: number of y-ions matched
-        longest_y_ions,                 # 15: longest consecutive y-ion series
-        scribe_scores,                  # 16: scribe score (spectral similarity metric)
-        max_unmatched_residuals,        # 17: max residual at unmatched peaks
-        max_matched_residuals,          # 18: max residual at matched peaks
-        gof_stats,                      # 19: goodness-of-fit statistic (log2 residual/fitted ratio)
-        manhattan_distances,            # 20: manhattan distance between predicted and observed
-        fitted_spectral_contrasts,      # 21: spectral contrast angle between fitted and observed
-        _frac_int_matched_pred_scalar,  # 22: predicted/observed intensity ratio (scalar → broadcast)
-        _lc_frac,                       # 23: large-coeff predicted/observed intensity ratio (scalar → broadcast)
-        _lc_cosine,                     # 24: large-coeff subset cosine similarity (scalar → broadcast)
-        _prec_mz,                       # 25: calibrated precursor m/z
-        tic,                             # 26: total ion current (scalar → broadcast)
-        im_error                         # 27: observed IM - aligned library IM
-    )
-    return features
-
-
-#@profile
-
-
-
-#@profile
 def _batch_closest_peak_diff(query_mzs, ref_mzs, max_diff):
     """Vectorized closest_peak_diff for an array of query m/z values.
 
