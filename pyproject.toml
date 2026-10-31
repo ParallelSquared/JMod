@@ -37,7 +37,6 @@ deps = [
   "pyteomics",
   "pymzml",
   "psims",
-  "biosaur2",
   "lxml",
   "regex",
   "tqdm",
