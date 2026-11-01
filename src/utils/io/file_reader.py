@@ -259,12 +259,12 @@ def _centroid_d(d_path: str, peaks_path: str, sdk_path: str = None) -> None:
 
 
 def _load_d(filepath: str, bruker_sdk_path: str = None) -> SpectrumFile:
-    """Load timsTOF .d data from peaks.parquet + analysis.tdf.
+    """Load timsTOF .d data.
 
-    If peaks.parquet is absent it is generated first, by centroiding the raw
-    signal in analysis.tdf_bin (see ``_centroid_d``), and then read normally.
-    Delete peaks.parquet to force a re-centroid, e.g. after changing the
-    thresholds.
+    With a peaks.parquet in the .d, peaks come from it (already centroided and
+    calibrated).  Without one, the raw ions in analysis.tdf_bin are read
+    uncentroided and calibrated with tables computed by Bruker's timsdata
+    (see ``_sdk_calibration_tables``).
     """
     logger.info("Loading Spectra... from .d file")
     d_path = filepath.rstrip("/")
@@ -276,29 +276,120 @@ def _load_d(filepath: str, bruker_sdk_path: str = None) -> SpectrumFile:
     if not os.path.exists(tdf_path):
         raise FileNotFoundError(f"analysis.tdf not found in {d_path}")
 
-    if not os.path.exists(peaks_path):
-        if not os.path.exists(bin_path):
-            raise FileNotFoundError(
-                f"Peaks file not found: {peaks_path}, and {bin_path} is absent "
-                f"too, so it cannot be created. Place a peaks.parquet inside "
-                f"{d_path}."
-            )
-        logger.info(f"No peaks.parquet in {d_path}; centroiding the raw data")
-        _centroid_d(d_path, peaks_path, bruker_sdk_path)
+    raw = not os.path.exists(peaks_path)
+    if raw and not os.path.exists(bin_path):
+        raise FileNotFoundError(
+            f"Neither {peaks_path} nor {bin_path} exists; there are no peaks "
+            f"to read."
+        )
 
     logger.info(f"Loading calibration from {d_path}")
     cal = _load_calibration(tdf_path)
+    if raw:
+        logger.info(f"No peaks.parquet in {d_path}; reading the raw, "
+                    f"uncentroided ions with Bruker's calibration")
+        _load_sdk_tables(_sdk_calibration_tables(d_path, bruker_sdk_path), cal)
     dia_lookup = _load_dia_windows(tdf_path, cal["frame_ids"], cal["ms_level"])
 
     im_bins = compute_im_bins(cal["im_range_lower"], cal["im_range_upper"])
     logger.info(f"Computed {len(im_bins)} overlapping IM bins "
                 f"[{cal['im_range_lower']:.4f}, {cal['im_range_upper']:.4f}]")
 
-    logger.info(f"Reading peaks from {peaks_path}")
-    sf = _build_spectrum_file(filepath, peaks_path, cal, dia_lookup, im_bins)
+    if raw:
+        sf = _build_spectrum_file(filepath, None, cal, dia_lookup, im_bins,
+                                  raw_d_path=d_path)
+    else:
+        logger.info(f"Reading peaks from {peaks_path}")
+        sf = _build_spectrum_file(filepath, peaks_path, cal, dia_lookup, im_bins)
 
     logger.info(f"Loaded {len(sf.ms1scans)} MS1 spectra, {len(sf.ms2scans)} MS2 spectra")
     return sf
+
+
+# Bruker's m/z and 1/K0 tables for a .d, cached inside it beside where
+# peaks.parquet would go, as written by scripts/bruker_calibration_tables.py.
+_SDK_TABLES_DIR = "bruker_calibration"
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_SDK_TABLES_SCRIPT = os.path.join(_REPO_ROOT, "scripts", "bruker_calibration_tables.py")
+
+# TODO(mono_d): local-testing setup on a Mac, hardcoded. Bruker ships no macOS
+# library, so the Windows one runs under Wine with a Windows Python; see
+# MONO_D_CALIBRATION_PLAN.md for how these were installed.
+_WINE = os.path.expanduser(
+    "~/Applications/Wine Devel.app/Contents/Resources/wine/bin/wine")
+_WINE_PREFIX = os.path.expanduser("~/.wine-jmod")
+_WINE_PYTHON = os.path.expanduser("~/.wine-jmod-py/python.exe")
+_WINE_TIMSDATA = os.path.join(_REPO_ROOT, "timsdata", "win64", "timsdata.dll")
+
+
+def _wine_path(path: str) -> str:
+    """A macOS path as Wine's Z: drive sees it."""
+    return "Z:" + os.path.abspath(path).replace("/", "\\")
+
+
+def _sdk_calibration_tables(d_path: str, bruker_sdk_path: str = None) -> str:
+    """Return the folder of Bruker calibration tables for ``d_path``, making it
+    on first use.
+
+    The tables are computed by calling Bruker's unmodified timsdata library
+    through scripts/bruker_calibration_tables.py: natively with
+    ``bruker_sdk_path`` on Windows or Linux, under Wine on a Mac.
+    """
+    import subprocess
+    import sys
+
+    tables_dir = os.path.join(d_path, _SDK_TABLES_DIR)
+    if os.path.isfile(os.path.join(tables_dir, "calibration.json")):
+        return tables_dir
+
+    # Write beside the target and rename, so an interrupted run cannot leave
+    # partial tables that the next run would treat as complete.
+    tmp_dir = tables_dir + ".partial"
+    if sys.platform == "darwin":
+        for p in (_WINE, _WINE_PYTHON, _WINE_TIMSDATA):
+            if not os.path.exists(p):
+                raise FileNotFoundError(
+                    f"Cannot compute Bruker calibration for {d_path}: {p} is missing")
+        cmd = [_WINE, _WINE_PYTHON, _wine_path(_SDK_TABLES_SCRIPT),
+               _wine_path(_WINE_TIMSDATA), _wine_path(d_path), _wine_path(tmp_dir)]
+        env = dict(os.environ, WINEPREFIX=_WINE_PREFIX, WINEDEBUG="-all")
+    else:
+        if not bruker_sdk_path:
+            _fail_bruker(f"No peaks.parquet in {d_path}, and reading it raw needs "
+                         f"Bruker's calibration")
+        cmd = [sys.executable, _SDK_TABLES_SCRIPT, bruker_sdk_path, d_path, tmp_dir]
+        env = None
+
+    logger.info(f"Computing Bruker calibration tables -> {tables_dir}")
+    t0 = perf_counter()
+    result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    if result.returncode != 0 or not os.path.isfile(
+            os.path.join(tmp_dir, "calibration.json")):
+        raise RuntimeError(
+            f"Computing Bruker calibration for {d_path} failed "
+            f"(exit {result.returncode}):\n{result.stdout}\n{result.stderr}")
+    os.replace(tmp_dir, tables_dir)
+    logger.info(f"Bruker calibration: {result.stdout.strip()} "
+                f"({perf_counter() - t0:.0f}s)")
+    return tables_dir
+
+
+def _load_sdk_tables(tables_dir: str, cal: dict) -> None:
+    """Swap ``cal``'s estimated m/z and 1/K0 lookups for Bruker's tables.
+
+    The tables replace ``cal["mz_values"]`` (by TOF index) and
+    ``cal["mobility_values"]`` (by scan number) one for one, so they must cover
+    exactly the same index ranges as the estimates they replace.
+    """
+    mz_values = np.load(os.path.join(tables_dir, "mz.npy"))
+    mobility_values = np.load(os.path.join(tables_dir, "ook0.npy"))
+    for name, table, estimate in (("mz", mz_values, cal["mz_values"]),
+                                  ("ook0", mobility_values, cal["mobility_values"])):
+        if table.dtype != np.float64 or table.shape != estimate.shape:
+            raise ValueError(f"{name}.npy in {tables_dir} is {table.dtype} "
+                             f"{table.shape}; expected float64 {estimate.shape}")
+    cal["mz_values"] = mz_values
+    cal["mobility_values"] = mobility_values
 
 
 def _load_calibration(tdf_path: str) -> dict:
@@ -675,14 +766,12 @@ def _read_raw_peak_groups(d_path: str, cal: dict, dia_lookup: pl.DataFrame,
     instead of the centroider's peak list.  Downstream code cannot tell the two
     apart.
 
-    Calibration is estimation mode: the ``mz_values`` / ``mobility_values``
-    lookup arrays that ``_load_calibration`` already builds from
-    ``GlobalMetadata``.  These approximate the instrument response rather than
-    reproducing it, so m/z here is *not* equivalent to a peaks.parquet produced
-    with the Bruker SDK.  The real calibration coefficients sit unused in the
-    ``MzCalibration`` / ``TimsCalibration`` tables of the same database; when a
-    converter for them exists, it drops in at the two lookups below and nothing
-    else in this function changes.
+    Calibration is whatever ``cal["mz_values"]`` / ``cal["mobility_values"]``
+    hold.  By default that is estimation mode, the lookups ``_load_calibration``
+    builds from ``GlobalMetadata``, which approximate the instrument response
+    and so do *not* match a peaks.parquet produced with the Bruker SDK.
+    ``_load_d`` replaces them with tables Bruker's timsdata computed
+    (``_load_sdk_tables``), so m/z and 1/K0 match the SDK.
 
     ``min_intensity`` drops peaks at or below a raw detector count before
     grouping.  It defaults to 0 (keep everything), since recovering the signal
@@ -737,10 +826,10 @@ def _read_raw_peak_groups(d_path: str, cal: dict, dia_lookup: pl.DataFrame,
                 tof_indices = tof_indices[keep]
                 intensities = intensities[keep]
 
-            # Estimation-mode calibration by table lookup. Indices come from the
+            # Calibration by table lookup (see the docstring). Indices come from the
             # instrument and should always be in range; clipping keeps a corrupt
             # frame from taking the whole run down.
-            mz = mz_values[np.clip(tof_indices, 0, len(mz_values) - 1)]
+            mz = mz_values[np.clip(tof_indices, 0, len(mz_values) - 1)].astype(PEAK_MZ_DTYPE)
             mob = mobility_values[
                 np.clip(scans, 0, len(mobility_values) - 1)
             ].astype(PEAK_MOB_DTYPE)
