@@ -21,6 +21,7 @@ warnings.filterwarnings("ignore", message="hdf5plugin is missing")
 from src.isotope_distribution import isotopic_variants
 import re
 from pyteomics import mass
+from src.unimod import Unimod
 import src.config as config
 import tqdm
 import os
@@ -157,8 +158,7 @@ UNIMOD_XML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 @functools.cache
 def unimods():
     """Unimod's modifications, read from UNIMOD_XML the first time a process needs them."""
-    with open(UNIMOD_XML, "rb") as f:
-        return mass.Unimod(f)
+    return Unimod(UNIMOD_XML)
 
 # [i["title"] for i in unimods.mods[:10]]
 

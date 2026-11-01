@@ -17,14 +17,15 @@ import sys
 import tempfile
 import urllib.request
 
-from pyteomics import mass
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.unimod import Unimod  # noqa: E402  (needs JMod's folder on the path)
 
 UNIMOD_URL = "https://www.unimod.org/xml/unimod.xml"
 UNIMOD_XML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "unimod.xml")
 
 
 def record_ids(path):
-    return {mod["record_id"] for mod in mass.Unimod(path).mods}
+    return {mod["record_id"] for mod in Unimod(path).mods}
 
 
 def main():
@@ -32,7 +33,7 @@ def main():
         downloaded = os.path.join(tmp, "unimod.xml")
         with urllib.request.urlopen(UNIMOD_URL, timeout=60) as response, open(downloaded, "wb") as f:
             f.write(response.read())
-        new = record_ids(downloaded)  # raises if pyteomics cannot read it, leaving the copy as it was
+        new = record_ids(downloaded)  # raises if it cannot be read, leaving the copy as it was
         old = record_ids(UNIMOD_XML) if os.path.exists(UNIMOD_XML) else set()
         shutil.move(downloaded, UNIMOD_XML)  # the temp folder may be on another drive
     print(f"{UNIMOD_XML}: {len(new)} modifications "
