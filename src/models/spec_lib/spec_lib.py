@@ -30,7 +30,7 @@ import re
 import logging
 from dataclasses import dataclass, replace
 import polars as pl
-from pyteomics import mass
+from src import mass
 
 
 # load in spec library (tsv)

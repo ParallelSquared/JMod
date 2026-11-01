@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore", message="hdf5plugin is missing")
 
 from src.isotope_distribution import isotopic_variants
 import re
-from pyteomics import mass
+from src import mass
 from src.unimod import Unimod
 import src.config as config
 import tqdm

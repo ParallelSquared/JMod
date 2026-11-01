@@ -35,7 +35,6 @@ warnings.filterwarnings(
 )
 
 from scipy import sparse
-from pyteomics import mass
 import re
 from src.utils.io.read_output import names
 import src.config as config

@@ -14,7 +14,7 @@ import pickle
 
 import numpy as np
 import pytest
-from pyteomics import mass
+from src import mass
 
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.models.spec_lib.spec_lib import create_decoy_lib

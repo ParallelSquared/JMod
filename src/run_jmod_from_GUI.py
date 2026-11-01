@@ -30,7 +30,7 @@ from src.default_dict import default_dict
 import shlex
 from pathlib import Path
 import subprocess
-from pyteomics import mass
+from src import mass
 import re
 from src.logger import logger, ElapsedFormatter
 import logging

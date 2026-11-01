@@ -23,8 +23,8 @@ abundance-weighted exact mass shift, so a peak's center mass is the
 monoisotopic mass plus shift_sum / probability.
 
 Fixed isotopes ("C[13]") are single-isotope elements: they add their exact
-mass and leave the shape alone.  Masses and abundances are pyteomics'
-nist_mass, the table brainpy ships.  Output follows brainpy: peaks +0 ...
+mass and leave the shape alone.  Masses and abundances are NIST's
+(src/mass_data.py, pyteomics' table, which brainpy ships too).  Output follows brainpy: peaks +0 ...
 +(npeaks-1), intensities normalised over the peaks returned, m/z =
 (mass + z * proton) / |z| (the neutral mass for z = 0), sorted by m/z.
 
@@ -37,7 +37,7 @@ from typing import NamedTuple
 
 import numpy as np
 from numba import njit
-from pyteomics.mass import nist_mass
+from src.mass import nist_mass
 
 PROTON = nist_mass["H+"][0][0]
 

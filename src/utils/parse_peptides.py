@@ -17,7 +17,7 @@
 import hashlib
 import random
 import re
-from pyteomics import mass
+from src import mass
 from src.utils.errors import JModError
 import src.config as config
 from src.logger import logger

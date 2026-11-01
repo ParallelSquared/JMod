@@ -27,7 +27,9 @@ import sys
 
 import numpy as np
 import tqdm
-from pyteomics import mass
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src import mass  # noqa: E402  (needs JMod's folder on the path)
 
 # ── Amino acid parsing ────────────────────────────────────────────────────────
 

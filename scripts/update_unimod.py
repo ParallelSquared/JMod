@@ -2,7 +2,7 @@
 """Replace JMod's copy of Unimod (data/unimod.xml) with the latest from unimod.org.
 
 JMod reads modifications from that copy, so a search needs no network.  This
-downloads the current file, checks pyteomics can read it, and replaces the
+downloads the current file, checks it can be read, and replaces the
 copy only then, reporting how many modifications were added or removed.
 Commit the new data/unimod.xml to ship it.
 

@@ -218,8 +218,8 @@ class TestMatchTagChannel:
         assert self.match(self.tag.select_channels(["0"]), "tag", 104.0)[0] == "T-4"
 
     def test_the_tag_mass_is_the_median_of_its_precursors(self):
-        from pyteomics import mass as pyteomics_mass
-        mz = lambda seq, tag_mass: (pyteomics_mass.fast_mass(seq) + tag_mass + 2 * 1.00727647) / 2
+        from src import mass
+        mz = lambda seq, tag_mass: (mass.fast_mass(seq) + tag_mass + 2 * 1.00727647) / 2
         peptides = ["(t)PEPTIDEK", "(t)ELVISK", "(t)AAAAK"]
         prec_mz = [mz("PEPTIDEK", 100.0), mz("ELVISK", 100.0), mz("AAAAK", 150.0)]   # one badly written
         tag_mass, found, name = has_mass_tag(peptides, prec_mz, [2, 2, 2])

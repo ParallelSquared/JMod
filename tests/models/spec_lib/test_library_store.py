@@ -249,7 +249,7 @@ class TestStoreMutation:
 
 def _peptide_store(*mod_seqs):
     """A store of charge-2 precursors, each with b3 and y3 at their true m/z."""
-    from pyteomics import mass
+    from src import mass
     from src.utils.misc_functions import frag_to_peak
     from src.utils.parse_peptides import parse_peptide
     entries = {}

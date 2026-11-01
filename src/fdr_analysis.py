@@ -48,7 +48,7 @@ from src import config
 from src.logger import logger
 from src.utils.misc_functions import p_result
 from src.mass_tags import massTag
-from pyteomics import mass
+from src import mass
 from numba import njit
 
 

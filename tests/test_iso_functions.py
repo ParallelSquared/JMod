@@ -17,8 +17,7 @@ from functools import partial
 import pytest
 import numpy as np
 import sys, os
-from pyteomics import mass
-from pyteomics.auxiliary.structures import PyteomicsError
+from src import mass
 
 def assert_frags_approx(actual, expected, rtol=3e-7):
     """Fragment dicts match keywise; m/z & intensity within f32 quantization."""
@@ -319,7 +318,8 @@ class Test_precursor_isotopes():
         self.compare_outputs(output, expected_output)
 
     def test_decoy_peptide_decoys_off(self):
-        with pytest.raises(PyteomicsError, match="No information for ecoy_P"):
+        # "Decoy_" is left in, so its lowercase letters are not residues
+        with pytest.raises(ValueError, match="No information for e "):
             precursor_isotopes("Decoy_PEPTIDEK", 2, None, 2, decoys=False)
 
     def test_tag_channel_comp_is_none(self):

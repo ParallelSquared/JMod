@@ -1683,7 +1683,7 @@ class SpectrumLibraryStore:
         from src.utils.parse_peptides import (
             parse_peptide, decoy_permutation, change_seq, extract_mod, split_nterm,
         )
-        from pyteomics.mass import std_aa_mass
+        from src.mass import std_aa_mass
         from src import config
         from src.logger import logger
         from array import array
@@ -1815,7 +1815,7 @@ class SpectrumLibraryStore:
 
             ((sum + H2O) + delta_ion + z*H+)/z  -  loss/z  +  (tag_sum + mod_sum)/z
         """
-        from pyteomics.mass import std_ion_comp, nist_mass, calculate_mass
+        from src.mass import std_ion_comp, nist_mass, calculate_mass
         from src.utils.frag_encoding import get_ion_type, get_index, get_charge, get_loss
 
         H2O = nist_mass['H'][0][0] * 2 + nist_mass['O'][0][0]
