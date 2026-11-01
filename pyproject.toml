@@ -36,6 +36,7 @@ deps = [
   "numba",
   "pyteomics",
   "pymzml",
+  "mzmlpy",
   "psims",
   "lxml",
   "regex",

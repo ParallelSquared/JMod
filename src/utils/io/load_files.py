@@ -15,7 +15,8 @@
 
 import subprocess
 import numpy as np
-from pyteomics import mzml
+from mzmlpy import Mzml
+from mzmlpy.constants import SpectrumMSAccession
 import os
 import matplotlib.pyplot as plt
 import re
@@ -223,6 +224,50 @@ class Spectrum:
         return int(re.search("scan=(\d+)", scanname)[1])
 
     
+def _mzml_scans(mzml_file):
+    """The spectra of an mzML file, as dicts with the keys and nesting
+    Spectrum.get_vals reads (pyteomics' layout).
+
+    Read with mzmlpy, which needs no lxml: lxml would turn the GIL back on.
+    Scan start time is the file's own value and unit, unconverted.
+    """
+    with Mzml(mzml_file) as run:
+        for spec in run.spectra:
+            scan = spec.scans[0]
+            window = scan.scan_windows[0]
+            entry = {
+                "scan start time": scan.cv_float(SpectrumMSAccession.SCAN_START_TIME),
+                "scanWindowList": {"scanWindow": [{
+                    "scan window lower limit": window.lower_mz,
+                    "scan window upper limit": window.upper_mz,
+                }]},
+            }
+            if scan.ion_injection_time is not None:
+                entry["ion injection time"] = scan.ion_injection_time  # milliseconds
+            out = {
+                "id": spec.id,
+                "ms level": spec.ms_level,
+                "scanList": {"scan": [entry]},
+                "m/z array": spec.mz,
+                "intensity array": spec.intensity,
+                "total ion current": spec.total_ion_current,
+            }
+            if spec.ms_level == 2:
+                precursor = spec.precursors[0]
+                activation = precursor.activation
+                window = precursor.isolation_window
+                out["precursorList"] = {"precursor": [{
+                    "activation": ({"collision energy": activation.collision_energy}
+                                   if activation is not None and activation.collision_energy is not None else {}),
+                    "isolationWindow": {
+                        "isolation window target m/z": window.isolation_mz,
+                        "isolation window lower offset": window.lower_offset,
+                        "isolation window upper offset": window.upper_offset,
+                    },
+                }]}
+            yield out
+
+
 class SpectrumFile:
 
     def __init__(self, mzml_file=None, raw_file=None):
@@ -299,20 +344,19 @@ class SpectrumFile:
         self.ms1_by_id = {}
         self.ms2_by_id = {}
 
-        with mzml.MzML(mzml_file) as reader:
-            for scan in reader:
-                if scan["ms level"] == 1:
-                    spec = Spectrum(scan)
-                    idx = len(self.ms1scans)
-                    self.ms1scans.append(spec)
-                    self.ms1_by_id[spec.scan_num] = idx
-                    self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms1scans)-1]
-                if scan["ms level"] == 2:
-                    spec = Spectrum(scan)
-                    idx = len(self.ms2scans)
-                    self.ms2scans.append(spec)
-                    self.ms2_by_id[spec.scan_num] = idx
-                    self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms2scans)-1]
+        for scan in _mzml_scans(mzml_file):
+            if scan["ms level"] == 1:
+                spec = Spectrum(scan)
+                idx = len(self.ms1scans)
+                self.ms1scans.append(spec)
+                self.ms1_by_id[spec.scan_num] = idx
+                self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms1scans)-1]
+            if scan["ms level"] == 2:
+                spec = Spectrum(scan)
+                idx = len(self.ms2scans)
+                self.ms2scans.append(spec)
+                self.ms2_by_id[spec.scan_num] = idx
+                self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms2scans)-1]
 
         self.build_ms2_to_ms1_map()
 
