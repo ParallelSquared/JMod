@@ -332,6 +332,165 @@ class TestHuberNnlsIrls:
         assert x.shape == (5,)
 
 
+# The dense-Gram implementation _coo_gram_and_Aty replaced (it allocated an
+# n_cols x n_cols matrix per fit), kept as the bit-identity reference.
+from numba import njit  # noqa: E402
+
+@njit(nogil=True)
+def _dense_gram_reference(rows, cols, vals, y, n_cols):
+    """A^T y and the largest absolute correlation between two different
+    columns of A, from COO arrays.
+
+    The correlation is computed exactly as numpy would from the Gram matrix:
+    gram / outer(norms, norms) with zero norms set to 1 and the diagonal
+    zeroed, then max(abs(.)) -- the same operations in the same order, so
+    the result is bit-identical.  Returns (Aty, max_corr)."""
+    gram = np.zeros((n_cols, n_cols))
+    Aty = np.zeros(n_cols)
+    # Group entries by row for outer-product accumulation
+    # First pass: A^T y
+    for i in range(len(vals)):
+        Aty[cols[i]] += vals[i] * y[rows[i]]
+    # Gram matrix: for each pair of entries sharing a row, accumulate
+    # Sort by row for efficient grouping
+    order = np.argsort(rows)
+    i = 0
+    n = len(order)
+    while i < n:
+        r = rows[order[i]]
+        j = i
+        while j < n and rows[order[j]] == r:
+            j += 1
+        # entries order[i:j] all share row r
+        for a in range(i, j):
+            ca = cols[order[a]]
+            va = vals[order[a]]
+            for b in range(a, j):
+                cb = cols[order[b]]
+                vb = vals[order[b]]
+                gram[ca, cb] += va * vb
+                if ca != cb:
+                    gram[cb, ca] += va * vb
+        i = j
+    norms = np.empty(n_cols)
+    for c in range(n_cols):
+        norms[c] = np.sqrt(gram[c, c])
+        if norms[c] == 0:
+            norms[c] = 1.0
+    max_corr = 0.0
+    for a in range(n_cols):
+        for b in range(n_cols):
+            if a != b:
+                v = abs(gram[a, b] / (norms[a] * norms[b]))
+                if v != v:
+                    return Aty, v          # NaN: np.max propagates it
+                if v > max_corr:
+                    max_corr = v
+    return Aty, max_corr
+
+
+
+def _random_coo(rng, n_rows, n_cols, n, dup=True):
+    rows = rng.integers(0, n_rows, n).astype(np.int32)
+    cols = rng.integers(0, n_cols, n).astype(np.int32)
+    if not dup:
+        key = np.unique(rows.astype(np.int64) * n_cols + cols)
+        rows = (key // n_cols).astype(np.int32)
+        cols = (key % n_cols).astype(np.int32)
+        perm = rng.permutation(len(rows))
+        rows, cols = rows[perm], cols[perm]
+    vals = rng.random(len(rows))
+    return rows, cols, vals, rng.random(n_rows)
+
+
+def _search_like_coo(rng, n_rows, n_cols):
+    """Each candidate (column) matches 8-36 peaks (rows), unique per column,
+    rows ordered the way the matcher emits them (by candidate)."""
+    rows, cols = [], []
+    for c in range(n_cols):
+        k = int(rng.integers(8, 37))
+        rows.append(np.sort(rng.choice(n_rows, k, replace=False)))
+        cols.append(np.full(k, c))
+    rows = np.concatenate(rows).astype(np.int32)
+    cols = np.concatenate(cols).astype(np.int32)
+    return rows, cols, rng.random(len(rows)), rng.random(n_rows)
+
+
+class TestCooGramSparseMatchesDense:
+    """The sparse _coo_gram_and_Aty must return exactly what the dense-Gram
+    version did: Aty and max_corr bit for bit, NaN included."""
+
+    @staticmethod
+    def _check(rows, cols, vals, y, n_cols):
+        from src.spectral_fitting import _coo_gram_and_Aty
+        Aty, mc = _coo_gram_and_Aty(rows, cols, vals, y, n_cols)
+        Aty_ref, mc_ref = _dense_gram_reference(rows, cols, vals, y, n_cols)
+        assert np.array_equal(Aty, Aty_ref, equal_nan=True)
+        if mc_ref != mc_ref:
+            assert mc != mc
+        else:
+            assert mc == mc_ref
+
+    @pytest.mark.parametrize("seed", range(40))
+    def test_random_with_duplicate_entries(self, seed):
+        rng = np.random.default_rng(seed)
+        n_rows = int(rng.integers(1, 60)); n_cols = int(rng.integers(1, 80))
+        self._check(*_random_coo(rng, n_rows, n_cols, int(rng.integers(1, 600))), n_cols)
+
+    @pytest.mark.parametrize("seed", range(10))
+    def test_random_without_duplicates(self, seed):
+        rng = np.random.default_rng(100 + seed)
+        self._check(*_random_coo(rng, 200, 300, 4000, dup=False), 300)
+
+    @pytest.mark.parametrize("seed", range(3))
+    def test_search_like(self, seed):
+        rng = np.random.default_rng(200 + seed)
+        self._check(*_search_like_coo(rng, 3000, 2500), 2500)
+
+    def test_columns_without_entries(self):
+        rng = np.random.default_rng(7)
+        rows, cols, vals, y = _random_coo(rng, 30, 20, 200)
+        cols = np.where(cols % 3 == 0, 1, cols).astype(np.int32)  # columns 0, 3, 6, ... empty
+        self._check(rows, cols, vals, y, 20)
+
+    def test_single_column_and_no_entries(self):
+        rng = np.random.default_rng(8)
+        self._check(*_random_coo(rng, 10, 1, 30), 1)
+        empty = np.empty(0, np.int32)
+        self._check(empty, empty, np.empty(0), np.ones(3), 4)
+
+    @pytest.mark.parametrize("where", ["shared_row", "isolated_column"])
+    def test_nan(self, where):
+        rng = np.random.default_rng(9)
+        rows, cols, vals, y = _random_coo(rng, 30, 20, 200)
+        if where == "isolated_column":
+            # column 19 alone in its own row: no shared row, NaN only via its norm
+            rows = np.append(rows[cols != 19], 30).astype(np.int32)
+            vals = np.append(vals[cols != 19], np.nan)
+            cols = np.append(cols[cols != 19], 19).astype(np.int32)
+            y = np.append(y, 1.0)
+        else:
+            vals[5] = np.nan
+        self._check(rows, cols, vals, y, 20)
+
+    def test_large_fit_stays_small(self):
+        """5,000 candidates: the dense Gram would be 200 MB.  (The test session
+        runs numba-disabled, so this is kept small; compiled, the 55,000-
+        candidate fits of a raw-data run would have needed 22 GB.)"""
+        from src.spectral_fitting import _coo_gram_and_Aty
+        from src.utils import mem_profile as mp
+        rng = np.random.default_rng(10)
+        n_cols = 5_000
+        rows, cols, vals, y = _search_like_coo(rng, 2000, n_cols)
+        _coo_gram_and_Aty(rows[:100], cols[:100], vals[:100], y, n_cols)  # compile if JIT on
+        before = mp.malloc_stats()[0]
+        Aty, mc = _coo_gram_and_Aty(rows, cols, vals, y, n_cols)
+        after = mp.malloc_stats()[0]
+        assert 0.0 < mc <= 1.0 + 1e-12
+        if before is not None:
+            assert after - before < 64 * 2**20   # nothing near the 200 MB dense matrix held
+
+
 class TestCooGramMaxCorr:
     """_coo_gram_and_Aty's max column correlation must equal the numpy
     computation it replaced, bit for bit (it sets huber_nnls_irls' l1_ratio)."""

@@ -1576,53 +1576,129 @@ def _lasso_nnls(A, b, sample_weight=None):
 @njit(nogil=True)
 def _coo_gram_and_Aty(rows, cols, vals, y, n_cols):
     """A^T y and the largest absolute correlation between two different
-    columns of A, from COO arrays.
+    columns of A, from COO arrays.  Returns (Aty, max_corr).
 
-    The correlation is computed exactly as numpy would from the Gram matrix:
-    gram / outer(norms, norms) with zero norms set to 1 and the diagonal
-    zeroed, then max(abs(.)) -- the same operations in the same order, so
-    the result is bit-identical.  Returns (Aty, max_corr)."""
-    gram = np.zeros((n_cols, n_cols))
+    Bit-identical to forming the dense Gram matrix (gram / outer(norms, norms),
+    zero norms set to 1, diagonal zeroed, max(abs(.))), without allocating it:
+    that matrix is n_cols^2 float64 -- 22 GB for one 55,000-candidate fit.
+    Only columns that share a row have a non-zero Gram entry, so each column
+    accumulates its Gram row against later columns in an O(n_cols) scratch
+    vector, adding the same products in the same order as the dense build
+    (rows ascending, then row-sorted position, the earlier entry's value
+    first), and duplicate (row, column) entries included.  Memory is
+    O(nnz + n_cols).
+    """
     Aty = np.zeros(n_cols)
-    # Group entries by row for outer-product accumulation
-    # First pass: A^T y
     for i in range(len(vals)):
         Aty[cols[i]] += vals[i] * y[rows[i]]
-    # Gram matrix: for each pair of entries sharing a row, accumulate
-    # Sort by row for efficient grouping
+
+    n = len(vals)
+    # Entries grouped by row, in the dense build's order (same argsort).
     order = np.argsort(rows)
+    row_lo = np.empty(n, np.int64)   # [row_lo, row_hi): sorted span of the entry's row
+    row_hi = np.empty(n, np.int64)
     i = 0
-    n = len(order)
     while i < n:
         r = rows[order[i]]
         j = i
         while j < n and rows[order[j]] == r:
             j += 1
-        # entries order[i:j] all share row r
-        for a in range(i, j):
-            ca = cols[order[a]]
-            va = vals[order[a]]
-            for b in range(a, j):
-                cb = cols[order[b]]
-                vb = vals[order[b]]
-                gram[ca, cb] += va * vb
-                if ca != cb:
-                    gram[cb, ca] += va * vb
+        for t in range(i, j):
+            row_lo[t] = i
+            row_hi[t] = j
         i = j
+    s_cols = np.empty(n, np.int64)
+    s_vals = np.empty(n)
+    for t in range(n):
+        s_cols[t] = cols[order[t]]
+        s_vals[t] = vals[order[t]]
+
+    # Each column's sorted positions, ascending (so rows ascending).
+    col_ptr = np.zeros(n_cols + 1, np.int64)
+    for t in range(n):
+        col_ptr[s_cols[t] + 1] += 1
+    for c in range(n_cols):
+        col_ptr[c + 1] += col_ptr[c]
+    col_pos = np.empty(n, np.int64)
+    fill = col_ptr[:-1].copy()
+    for t in range(n):
+        c = s_cols[t]
+        col_pos[fill[c]] = t
+        fill[c] += 1
+
+    # Diagonal: per row, pairs (p, q), p <= q, both in the column.
     norms = np.empty(n_cols)
     for c in range(n_cols):
-        norms[c] = np.sqrt(gram[c, c])
+        g = 0.0
+        k = col_ptr[c]
+        end = col_ptr[c + 1]
+        while k < end:
+            m = k
+            while m < end and row_lo[col_pos[m]] == row_lo[col_pos[k]]:
+                m += 1
+            for u in range(k, m):
+                vp = s_vals[col_pos[u]]
+                for w in range(u, m):
+                    g += vp * s_vals[col_pos[w]]
+            k = m
+        norms[c] = np.sqrt(g)
         if norms[c] == 0:
             norms[c] = 1.0
+    # A NaN norm makes the dense ratio NaN for every pair with that column,
+    # shared row or not, so the dense scan returns NaN.
+    if n_cols > 1:
+        for c in range(n_cols):
+            if norms[c] != norms[c]:
+                return Aty, norms[c]
+
+    # Off-diagonal: for column a, every later column b sharing a row.
+    acc = np.zeros(n_cols)
+    seen = np.zeros(n_cols, np.bool_)
+    touched = np.empty(n_cols, np.int64)
     max_corr = 0.0
     for a in range(n_cols):
-        for b in range(n_cols):
-            if a != b:
-                v = abs(gram[a, b] / (norms[a] * norms[b]))
-                if v != v:
-                    return Aty, v          # NaN: np.max propagates it
-                if v > max_corr:
-                    max_corr = v
+        n_touched = 0
+        k = col_ptr[a]
+        end = col_ptr[a + 1]
+        while k < end:
+            lo = row_lo[col_pos[k]]
+            hi = row_hi[col_pos[k]]
+            m = k
+            while m < end and row_lo[col_pos[m]] == lo:
+                m += 1
+            # Positions of column a in this row: col_pos[k:m].  Visit the row's
+            # pairs (p, q), p < q, that involve a, in the dense order.
+            for p in range(lo, hi):
+                cp = s_cols[p]
+                vp = s_vals[p]
+                if cp == a:
+                    for q in range(p + 1, hi):
+                        cq = s_cols[q]
+                        if cq > a:
+                            acc[cq] += vp * s_vals[q]
+                            if not seen[cq]:
+                                seen[cq] = True
+                                touched[n_touched] = cq
+                                n_touched += 1
+                elif cp > a:
+                    for u in range(k, m):
+                        q = col_pos[u]
+                        if q > p:
+                            acc[cp] += vp * s_vals[q]
+                            if not seen[cp]:
+                                seen[cp] = True
+                                touched[n_touched] = cp
+                                n_touched += 1
+            k = m
+        for x in range(n_touched):
+            b = touched[x]
+            v = abs(acc[b] / (norms[a] * norms[b]))
+            if v != v:
+                return Aty, v          # NaN: np.max propagates it
+            if v > max_corr:
+                max_corr = v
+            acc[b] = 0.0
+            seen[b] = False
     return Aty, max_corr
 
 
