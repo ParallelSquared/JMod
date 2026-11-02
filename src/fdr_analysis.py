@@ -566,7 +566,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
         fdc[f"all_ms1_iso{i}vals"] = [";".join(map(str,trace[i].values())) for trace in ms1_traces]
     # fdc["ms2_trace"] = [";".join(map(str,trace.values())) for trace in ms2_traces]
     
-    fdc["MS1_Area"]=[auc(list(map(float,fdc.all_ms1_specs.iloc[idx].split(";"))),list(map(float,fdc.all_ms1_iso0vals.iloc[idx].split(";")))) for idx in range(len(fdc))]
+    fdc["MS1_Area"]=[np.sum(list(map(float,fdc.all_ms1_iso0vals.iloc[idx].split(";")))) for idx in range(len(fdc))]
 
 
         # Define selected columns that we want to merge
