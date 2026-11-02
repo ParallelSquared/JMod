@@ -47,6 +47,8 @@ from src.utils.errors import JModError, report_error, mark_run_failed
 from src.multi_run import combine_runs, mbr_library_rts, mbr_targets
 
 from src.logger import logger, set_log_filepath
+from src.utils.mem_profile import (log_memory, MemoryWatch, GB, hits_bytes,
+                                   search_tracker)
 
 
 def main(GUI_config_json=None):
@@ -571,10 +573,14 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, res
     runState.results_folder = _create_results_folder(mzml_file, results_parent)
     _write_run_config(runState)
     logger.info(f"Results will be saved to {os.path.abspath(runState.results_folder)}")
-    DIAspectra = _load_spectra(mzml_file, bruker_sdk_path)
+    with MemoryWatch("loading spectra"):
+        DIAspectra = _load_spectra(mzml_file, bruker_sdk_path)
+    log_memory("after loading spectra", library=spectrumLibrary, spectra=DIAspectra)
 
-    funcs, target_iRT, rt_models_data, im_cal, elution_fwhm, vote_sigma = first_search(
-        DIAspectra, spectrumLibrary, mass_tag, SILAC, runState.results_folder, runState)
+    with MemoryWatch("first search"):
+        funcs, target_iRT, rt_models_data, im_cal, elution_fwhm, vote_sigma = first_search(
+            DIAspectra, spectrumLibrary, mass_tag, SILAC, runState.results_folder, runState)
+    log_memory("after first search", library=spectrumLibrary, spectra=DIAspectra)
 
     # On timeplex this is a per-channel copy of the library; otherwise it is the
     # shared library itself - unchanged (calibration is in rt_mz, there is also in_window mask).
@@ -583,14 +589,19 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, res
         spectrumLibrary, funcs, target_iRT, rt_models_data, im_cal,
         DIAspectra.ms2scans, runState)
     del funcs, target_iRT, rt_models_data, im_cal
+    log_memory("after calibrating library", library=searchLibrary, spectra=DIAspectra,
+               rt_mz=rt_mz)
 
     decoylib_search_path = main_search(DIAspectra, searchLibrary, rt_mz, in_window,
                                        runState.results_folder, runState)
     del rt_mz, in_window
     gc.collect()
 
-    score_and_report(decoylib_search_path, DIAspectra, searchLibrary,
-                     mass_tag, SILAC, elution_fwhm, vote_sigma, runState)
+    log_memory("after main search", library=searchLibrary, spectra=DIAspectra)
+    with MemoryWatch("scoring"):
+        score_and_report(decoylib_search_path, DIAspectra, searchLibrary,
+                         mass_tag, SILAC, elution_fwhm, vote_sigma, runState)
+    log_memory("after scoring", library=searchLibrary, spectra=DIAspectra)
     del searchLibrary, DIAspectra
     gc.collect()
 
@@ -857,6 +868,7 @@ def prepare_library(spectrumLibrary, work_dir, mass_tag, SILAC, library_tag_bool
     spectrumLibrary.bulk_set_top_n(config.top_n)
     spectrumLibrary.freeze()
     logger.info("Finished Library Setup")
+    log_memory("after library setup", library=spectrumLibrary)
 
     return spectrumLibrary
 
@@ -1038,6 +1050,115 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_cal
     return search_library, rt_mz, in_window
 
 
+def _profiled_fit(dia_spec, fit_kwargs):
+    """fit_to_lib2 for one spectrum, with its sizes and step times recorded.
+
+    Returns ``(hits, record)``.  The record is one row of the fit profile (see
+    _log_fit_profile); the search tracker counts the fit as running until it
+    returns and its results as held until main_search writes them.
+    """
+    record = dict(scan=dia_spec.scan_num, rt=dia_spec.RT, prec_mz=dia_spec.prec_mz,
+                  im_lo=getattr(dia_spec, "im_lo", None), im_hi=getattr(dia_spec, "im_hi", None))
+    search_tracker.fit_started()
+    rows = nbytes = 0
+    t0 = time.perf_counter()
+    try:
+        hits = fit_to_lib2(dia_spec, stats=record, **fit_kwargs)
+        record["fit_s"] = time.perf_counter() - t0
+        if hits is not None:
+            rows, nbytes = len(hits.coeff), hits_bytes(hits)
+        record["results"] = rows
+        record["results_bytes"] = nbytes
+    finally:
+        search_tracker.fit_finished(rows, nbytes)
+    return hits, record
+
+
+# fit_to_lib2's steps, in order (see _StepClock in spectral_fitting).
+_FIT_STEPS = ["bin_peaks", "query", "match_targets", "match_decoys", "assemble", "solve",
+              "unique_peaks", "fragment_columns", "features", "output"]
+_FIT_COUNTS = ["raw_peaks", "binned_peaks", "candidates", "columns", "nonzeros", "results"]
+
+
+def _fmt_bytes(v):
+    return f"{v / 2**30:.2f} GB" if v >= 2**30 else f"{v / 2**20:.1f} MB"
+
+
+def _log_fit_profile(batch_idx, records, results_folder_path, n_threads):
+    """Summarise one batch's per-spectrum fit records, and save them all.
+
+    Logs, for the batch: the size of each fit (peaks, candidates, matrix,
+    results); where the fit time goes, step by step; how much memory each
+    step's output holds per fit, and the fit's whole working set; what the
+    *n_threads* largest working sets add up to (the worst case with every
+    thread on a large fit at once); and the five slowest and five largest
+    spectra.  The records go to <results>/fit_profile/batch<N>.parquet.
+    """
+    if not records:
+        return
+    df = pl.DataFrame(records, infer_schema_length=None)
+    cols = (_FIT_COUNTS + ["fit_s", "solve_gram_bytes", "solve_internal_bytes", "results_bytes"]
+            + [f"{s}_s" for s in _FIT_STEPS] + [f"{s}_bytes" for s in _FIT_STEPS])
+    df = df.with_columns([pl.lit(None, dtype=pl.Float64).alias(c)
+                          for c in cols if c not in df.columns])
+    step_bytes = [f"{s}_bytes" for s in _FIT_STEPS if s != "output"] + \
+                 ["solve_internal_bytes", "results_bytes"]
+    df = df.with_columns(pl.sum_horizontal([pl.col(c).fill_null(0) for c in step_bytes])
+                         .alias("working_bytes"))
+    out_dir = os.path.join(results_folder_path, "fit_profile")
+    os.makedirs(out_dir, exist_ok=True)
+    df.write_parquet(os.path.join(out_dir, f"batch{batch_idx+1}.parquet"))
+
+    b = batch_idx + 1
+
+    def _q(c, fmt):
+        col = df[c].drop_nulls().cast(pl.Float64)
+        if col.len() == 0:
+            return "n/a"
+        return f"{fmt(col.median())}/{fmt(col.quantile(0.99))}/{fmt(col.max())}"
+
+    count = lambda v: f"{v:,.0f}"
+    logger.info(f"Batch {b} fit sizes ({df.height} spectra; median/p99/max): "
+                + ", ".join(f"{c.replace('_', ' ')} {_q(c, count)}" for c in _FIT_COUNTS))
+
+    total = df["fit_s"].sum() or 0.0
+    parts = []
+    for s in _FIT_STEPS:
+        t = df[f"{s}_s"].fill_null(0).sum()
+        parts.append(f"{s.replace('_', ' ')} {t:.0f}s ({t / total:.0%})" if total else
+                     f"{s.replace('_', ' ')} 0s")
+    logger.info(f"Batch {b} fit time by step, summed over threads ({total:.0f}s): "
+                + ", ".join(parts))
+
+    mem = [f"{s.replace('_', ' ')} {_q(f'{s}_bytes', _fmt_bytes)}" for s in _FIT_STEPS
+           if s != "output"]
+    mem += [f"solver correlation scratch {_q('solve_gram_bytes', _fmt_bytes)}",
+            f"solver internals {_q('solve_internal_bytes', _fmt_bytes)}",
+            f"results {_q('results_bytes', _fmt_bytes)}",
+            f"whole fit {_q('working_bytes', _fmt_bytes)}"]
+    logger.info(f"Batch {b} fit memory by step (median/p99/max): " + ", ".join(mem))
+
+    worst = df["working_bytes"].sort(descending=True).head(n_threads).sum()
+    logger.info(f"Batch {b}: the {n_threads} largest fits (one per thread) hold "
+                f"{_fmt_bytes(worst)} together")
+
+    def _row(r):
+        im = (f", IM {r['im_lo']:.3f}-{r['im_hi']:.3f}" if r.get("im_lo") is not None else "")
+        steps = sorted(((r.get(f"{s}_s") or 0.0, s) for s in _FIT_STEPS), reverse=True)[:2]
+        big = sorted(((r.get(c) or 0, c.replace("_bytes", "")) for c in step_bytes),
+                     reverse=True)[:2]
+        return (f"scan {r['scan']} (RT {r['rt']:.1f}, m/z {r['prec_mz']:.2f}{im}): "
+                f"{(r['fit_s'] or 0):.1f}s [{', '.join(f'{n} {t:.1f}s' for t, n in steps)}], "
+                f"{_fmt_bytes(r['working_bytes'])} [{', '.join(f'{n} {_fmt_bytes(v)}' for v, n in big)}]; "
+                f"{(r['raw_peaks'] or 0):,} peaks ({(r['binned_peaks'] or 0):,} binned), "
+                f"{(r['candidates'] or 0):,} candidates, {(r['columns'] or 0):,} fitted, "
+                f"{(r['nonzeros'] or 0):,} nonzeros, {(r['results'] or 0):,} results")
+
+    for label, key in (("slowest", "fit_s"), ("largest", "working_bytes")):
+        for r in df.sort(key, descending=True, nulls_last=True).head(5).iter_rows(named=True):
+            logger.info(f"Batch {b} {label}: {_row(r)}")
+
+
 def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_path, runState):
     """Fit every MS2 spectrum against the calibrated library.
 
@@ -1056,9 +1177,11 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
         from src.fragment_index import FragmentIndex
         logger.info("Building fragment ion index")
         # Entries outside this run's isolation windows are left out
-        frag_index = FragmentIndex.build(spectrumLibrary, all_keys, rt_mz, config.args.ppm,
-                                         include=in_window)
+        with MemoryWatch("fragment index build"):
+            frag_index = FragmentIndex.build(spectrumLibrary, all_keys, rt_mz, config.args.ppm,
+                                             include=in_window)
         logger.info("Fragment index built")
+        log_memory("after building fragment index", fragment_index=frag_index)
     else:
         frag_index = None
 
@@ -1173,14 +1296,17 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
 
         batch_parquet_path = results_folder_path + f"/decoylibsearch_coeffs_batch{batch_idx}.parquet"
         n_results = 0
+        fit_records = []      # per-spectrum sizes and times (profiling)
 
         # ``with`` guarantees ``writer.close()`` even when a worker crashes or
         # a network write fails — otherwise the OS handle (and the server-side
         # SMB/NFS oplock on network mounts like Synology) leaks and the file
         # stays "Resource busy" until the next mount cycle.
-        with pq.ParquetWriter(batch_parquet_path, _pa_schema) as writer:
+        with MemoryWatch(f"batch {batch_idx+1}", search=True), \
+                pq.ParquetWriter(batch_parquet_path, _pa_schema) as writer:
             buffer = []           # SpectrumHits, one per spectrum with results
             n_buffered = 0
+            buffer_bytes = 0
             # Submit in chunks and drain each before submitting the next.
             # Holding every future for the whole batch (the previous dict, keyed
             # by an index nothing read) kept each completed future -- and so its
@@ -1190,31 +1316,38 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
             with ThreadPoolExecutor(max_workers=n_threads) as pool, \
                     tqdm.tqdm(total=len(batch_spectra)) as bar:
                 for _start in range(0, len(batch_spectra), _CHUNK):
-                    futures = [pool.submit(fit_to_lib2, dia_spec, **_fit_kwargs)
+                    futures = [pool.submit(_profiled_fit, dia_spec, _fit_kwargs)
                                for dia_spec in batch_spectra[_start:_start + _CHUNK]]
                     # Drain in submission order, not completion order, so rows are
                     # written in spectrum order every run.  Scoring depends on row
                     # order (apex_pc1 ties, CV folds), so completion order made
                     # repeat runs of the same file give different IDs.
                     for f in futures:
-                        hits = f.result()
+                        hits, record = f.result()
+                        fit_records.append(record)
                         bar.update(1)
                         if hits is not None:
                             buffer.append(hits)
                             n_buffered += len(hits.coeff)
+                            buffer_bytes += record["results_bytes"]
                             n_results += len(hits.coeff)
                             if n_buffered >= _BUFFER_SIZE:
                                 writer.write_table(hits_to_arrow(buffer, _pa_schema))
                                 buffer.clear()
+                                search_tracker.results_written(n_buffered, buffer_bytes)
                                 n_buffered = 0
+                                buffer_bytes = 0
                     futures.clear()
 
             # Flush remaining buffered results
             if buffer:
                 writer.write_table(hits_to_arrow(buffer, _pa_schema))
                 buffer.clear()
+                search_tracker.results_written(n_buffered, buffer_bytes)
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         logger.info(f"Batch {batch_idx+1}: {n_results} results written")
+        _log_fit_profile(batch_idx, fit_records, results_folder_path, n_threads)
+        del fit_records
 
     # Report CPU utilization for GIL contention assessment
     _search_wall = time.time() - _search_wall_t0
@@ -1234,18 +1367,19 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     batch_files = sorted(_glob.glob(results_folder_path + "/decoylibsearch_coeffs_batch*.parquet"))
     decoylib_search_path = results_folder_path + "/outputs/decoylibsearch_coeffs.parquet"
     merge_writer = None
-    try:
-        for bf in batch_files:
-            table = pq.read_table(bf)
-            if merge_writer is None:
-                merge_writer = pq.ParquetWriter(decoylib_search_path, table.schema)
-            merge_writer.write_table(table)
-            del table
-    finally:
-        # Guarantee close even on read/write failure mid-merge — same Synology
-        # oplock leak story as the batch writer above.
-        if merge_writer is not None:
-            merge_writer.close()
+    with MemoryWatch("merging batch results"):
+        try:
+            for bf in batch_files:
+                table = pq.read_table(bf)
+                if merge_writer is None:
+                    merge_writer = pq.ParquetWriter(decoylib_search_path, table.schema)
+                merge_writer.write_table(table)
+                del table
+        finally:
+            # Guarantee close even on read/write failure mid-merge — same Synology
+            # oplock leak story as the batch writer above.
+            if merge_writer is not None:
+                merge_writer.close()
     for bf in batch_files:
         os.remove(bf)
 
