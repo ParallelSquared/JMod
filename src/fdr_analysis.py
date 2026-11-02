@@ -716,6 +716,11 @@ class score_model():
                     
                     if self.folder:
                         os.makedirs(os.path.join(self.folder, "scoring"), exist_ok=True)
+                        # TODO: look into the feature importances with
+                        # importance_type="total_gain" alongside this one (keep "gain").
+                        # "gain" is the average per split, so a feature split on rarely
+                        # but near the root -- z, with three values -- ranks above
+                        # features the model leans on far more in total.
                         fi = m.model.get_score(importance_type="gain")
                         feature_importance = np.array([fi.get(c, 0) for c in X.columns])
                         sorted_indices = np.argsort(feature_importance, kind='stable')

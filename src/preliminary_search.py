@@ -145,6 +145,10 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # I don't think min_isotope_error needs to be touched for DIA data since we don't care what peaks are annotated as
     scorer = ps.Scorer(
         precursor_tol_da=(-1,1), # Unused in WWA -> defaults to window tol
+        # TODO: optimize the fragment tolerance for the preliminary search.  It is
+        # a fixed 10 ppm (ms2_ppm_error, from MZRTfit), chosen before anything
+        # about the run's fragment mass accuracy is known; uncalibrated raw
+        # timsTOF ions sit on a 3-5 ppm TOF grid, so 10 ppm may be too wide.
         fragment_tol_ppm=(-1*ms2_ppm_error,ms2_ppm_error),
         min_isotope_err=0, # Changing these to look at other isotopes will require increasing report_PSMs due to
         max_isotope_err=0, # degenerate matches

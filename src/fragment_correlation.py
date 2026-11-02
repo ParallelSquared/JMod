@@ -1013,6 +1013,12 @@ def compute_fragment_correlations(
         _pairwise_corr_and_features_numba(sub_matrix, feat_scratch)
         out[row, 2:2 + _n_pairwise_feats] = feat_scratch
 
+        # TODO: review precursor peak picking here against the MS1 precursor peak
+        # (most intense within the ppm window and IM gate).  The precursor trace
+        # sums every MS2 peak within mz_tol (and the IM gate) of the library's
+        # uncalibrated prec_mz; the IM kernel weights every peak in the window;
+        # and _match_and_fill_im_numba's reference-IM fallback takes the
+        # nearest-m/z peak.
         # Precursor–fragment correlation: extract unfragmented precursor
         # intensity from the SAME single-bin scan set and correlate with fragments.
         prec_mz_arr_q = np.array([prec_mz], dtype=np.float64)
