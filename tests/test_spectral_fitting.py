@@ -57,13 +57,58 @@ class TestDiaPrep2D:
             np.array([0], dtype=np.int64), np.array([2], dtype=np.int32),
             np.array([0, 1], dtype=np.int32), np.array([0], dtype=np.int64),
             np.array([2], dtype=np.int32), np.array([0], dtype=np.int64),
-            np.array([500.0]), np.array([500.0]), np.array([0.90]), 20e-6,
+            np.array([500.0]), np.array([500.0]), np.array([1.0]), np.array([0.90]), 20e-6,
             0.0, 0, False,
             bmz, bint, bmob, 20e-6, 0.05, True)
         passing, flat_rows, all_coords = res[0], res[1], res[6]
         assert passing.tolist() == [0]
         assert all(c % 2 == 1 for c in all_coords)              # both matched
         assert sorted(bint[flat_rows].tolist()) == [500.0, 900.0]  # clean, not the 100 interferer
+
+class TestMainSearchMs1Error:
+    """The main search's MS1 error is to the most intense MS1 peak within the
+    ppm window and the candidate's IM gate, not to the nearest by m/z."""
+
+    @staticmethod
+    def _ms1_error(ms1_mz, ms1_int, ms1_mob, ms1_tol=20e-6):
+        # One candidate (library spectrum 200/400) matched in a 2-peak DIA spectrum
+        # at IM 0.90, precursor m/z 500.
+        mz = np.array([200.0, 400.0]); ints = np.array([900.0, 500.0]); mob = np.array([0.90, 0.90])
+        bmz, bint, bmob = _dia_prep_2d_jit(mz, ints, mob, 20e-6, 0.05)
+        res = _create_entries_direct_jit(
+            np.zeros(0), np.array([200.0, 400.0]), np.array([1.0, 1.0]),
+            np.array([0], dtype=np.int64), np.array([2], dtype=np.int32),
+            np.array([0, 1], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([2], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([500.0]),
+            np.asarray(ms1_mz, float), np.asarray(ms1_int, float), np.asarray(ms1_mob, float),
+            ms1_tol, 0.0, 0, False,
+            bmz, bint, bmob, 20e-6, 0.05, True)
+        passing, ms1_error = res[0], res[5]
+        assert passing.tolist() == [0]
+        return ms1_error[0]
+
+    def test_most_intense_not_nearest(self):
+        # 500.0005 (1 ppm, weak) vs 500.004 (8 ppm, intense), both at IM 0.90
+        e = self._ms1_error([500.0005, 500.004], [10.0, 1000.0], [0.90, 0.90])
+        assert abs(e - 0.004 / 500.0) < 1e-12
+
+    def test_im_gate_still_applies(self):
+        # the intense peak is at another mobility, so the weak in-gate one wins
+        e = self._ms1_error([500.0005, 500.004], [10.0, 1000.0], [0.90, 1.30])
+        assert abs(e - 0.0005 / 500.0) < 1e-12
+
+    def test_outside_the_ppm_window_is_ignored(self):
+        e = self._ms1_error([500.0005, 500.02], [10.0, 1000.0], [0.90, 0.90])
+        assert abs(e - 0.0005 / 500.0) < 1e-12
+
+    def test_none_in_window_is_nan(self):
+        assert np.isnan(self._ms1_error([500.5], [10.0], [0.90]))
+
+    def test_ties_go_to_the_lowest_mz(self):
+        e = self._ms1_error([499.999, 500.001], [5.0, 5.0], [0.90, 0.90])
+        assert abs(e - (-0.001 / 500.0)) < 1e-12
+
 
 class TestGetClosestMS1:
     def test_get_closest_ms1(self):
