@@ -1221,8 +1221,8 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
 
     # Measured on the 9plex speed-test file: 4 threads is fastest (2.34x one
     # thread), 5 the same, more is slower -- the solver's own scaling, not
-    # Python, is the limit now.  With 3 it was 2.06x.
-    n_threads = min(4, os.cpu_count() or 1)
+    # Python, is the limit now.  With 3 it was 2.06x.  Capped at 10.
+    n_threads = min(10, os.cpu_count() or 1)
     logger.info(f"Using {n_threads} threads for main search")
 
     # Precompute MS1 RT array once (shared across all threads, read-only)
