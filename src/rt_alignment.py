@@ -663,7 +663,13 @@ def empirical_fit(output_df, results_folder=None):
     import src.quality_pca as quality_pca
     pc1 = quality_pca.first_search_pc1(output_df)
 
-    for feature_percentile in range(20, 100, 5):
+    # Every 5th percentile, then finer steps at the top for first searches
+    # whose IDs are mostly noise even in the best 5%.
+    percentiles = list(range(20, 100, 5)) + [96, 97, 98, 99, 99.5, 99.9]
+    converged = False
+    tested = []  # (partial posterior, percentile, cor_filter, rt diffs, rt tolerance)
+
+    for feature_percentile in percentiles:
 
         cor_filter = pc1 > np.percentile(pc1, feature_percentile)
 
@@ -730,11 +736,24 @@ def empirical_fit(output_df, results_folder=None):
             f"Ratio: {outside_ratio:.4f}, #IDs: {cor_filter.sum()}, Partial Posterior: {partial_posterior:.4f}"
         )
 
-        # new + existing stopping criteria
-        if (partial_posterior >= 0.99 or
-                outside_ratio < 0.05 or
-                (cor_filter.sum() - bad_IDs.sum()) < 800):
+        # Too few good IDs left to calibrate on: stop, and do not use this one
+        # if any earlier percentile kept enough.
+        if (cor_filter.sum() - bad_IDs.sum()) < 800:
             break
+        tested.append((partial_posterior, feature_percentile, cor_filter,
+                       first_rt_diffs, first_rt_tolerance))
+        if partial_posterior >= 0.99 or outside_ratio < 0.05:
+            converged = True
+            break
+
+    # No percentile met the stopping criteria: use the one whose IDs were
+    # cleanest, by partial posterior.
+    if not converged and tested:
+        best = max(tested, key=lambda t: t[0])
+        _, feature_percentile, cor_filter, first_rt_diffs, first_rt_tolerance = best
+        logger.info(f"Using Percentile: {feature_percentile} (highest Partial Posterior, "
+                    f"{best[0]:.4f})")
+    del tested
 
     cor_filter = np.logical_and(
         cor_filter,
