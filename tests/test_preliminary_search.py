@@ -25,10 +25,12 @@ from src.utils.io.load_files import SpectrumFile
 from src.models.spec_lib.spec_lib import loadSpecLib, create_decoy_lib
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.preliminary_search import (
+    _most_intense_ms1_peak,
     create_fragment_library_map,
     fit_with_features,
     hellinger_score_polars_udf,
     library_entries_for,
+    lookup_ms1_data_list,
     peptide_to_mod_array,
     scribe_score_polars_udf,
 )
@@ -50,6 +52,75 @@ def dia_spectra():
 def library_spectra():
     """Load library spectra from test TSV file."""
     return loadSpecLib(TEST_LIBRARY)[0]
+
+
+class _Scan:
+    def __init__(self, mz, intens, mobility=None, scan_num=1, im_lo=None, im_hi=None):
+        self.mz = np.asarray(mz, float)
+        self.intens = np.asarray(intens, float)
+        self.mobility = None if mobility is None else np.asarray(mobility, float)
+        self.scan_num = scan_num
+        self.im_lo, self.im_hi = im_lo, im_hi
+
+
+class TestMostIntenseMs1Peak:
+    """The precursor peak is the most intense within the ppm tolerance (and the
+    MS2 spectrum's mobility band), not the nearest in m/z."""
+    # 500 +/- 20 ppm is 499.99..500.01
+    mz = [499.985, 499.995, 500.0002, 500.004, 500.02]
+    intens = [1e6, 50.0, 10.0, 300.0, 1e6]
+
+    def test_most_intense_within_tolerance_not_nearest(self):
+        assert _most_intense_ms1_peak(_Scan(self.mz, self.intens), 500.0, 20) == 3
+
+    def test_none_within_tolerance(self):
+        assert _most_intense_ms1_peak(_Scan(self.mz, self.intens), 600.0, 20) is None
+
+    def test_band_excludes_ions_at_other_mobilities(self):
+        scan = _Scan(self.mz, self.intens, mobility=[1.0, 1.0, 1.0, 0.7, 1.0])
+        assert _most_intense_ms1_peak(scan, 500.0, 20, 0.95, 1.05) == 1
+        assert _most_intense_ms1_peak(scan, 500.0, 20, 0.60, 0.65) is None
+
+    def test_no_band_or_no_mobility_ignores_mobility(self):
+        scan = _Scan(self.mz, self.intens, mobility=[1.0, 1.0, 1.0, 0.7, 1.0])
+        assert _most_intense_ms1_peak(scan, 500.0, 20) == 3
+        assert _most_intense_ms1_peak(_Scan(self.mz, self.intens), 500.0, 20, 0.95, 1.05) == 3
+
+    def test_ties_go_to_the_lowest_mz(self):
+        assert _most_intense_ms1_peak(_Scan([499.999, 500.001], [5.0, 5.0]), 500.0, 20) == 0
+
+
+class TestLookupMs1DataList:
+    class _Spectra:
+        def __init__(self, ms1, ms2):
+            self.ms1, self.ms2scans, self.ms2_by_id = ms1, [ms2], {7: 0}
+
+        def get_nearest_ms1_for_scan(self, spec_id):
+            return self.ms1
+
+    def test_reports_the_band_gated_most_intense_peak(self):
+        ms1 = _Scan([499.995, 500.004], [50.0, 300.0], mobility=[1.0, 0.7], scan_num=3)
+        ms2 = _Scan([], [], im_lo=0.95, im_hi=1.05)
+        out = lookup_ms1_data_list(pl.DataFrame({"spec_id": [7], "mz": [500.0]}),
+                                   self._Spectra(ms1, ms2), 20)
+        assert out == [{"Ms1_spec_id": 3, "closest_peak_mz_ms1": 499.995,
+                        "closest_peak_intensity_ms1": 50.0, "precursor_mobility": 1.0}]
+
+    def test_native_id_spec_ids(self):
+        """mzML PSMs carry the native ID string, not the scan number."""
+        ms1 = _Scan([500.001], [50.0], scan_num=3)
+        out = lookup_ms1_data_list(
+            pl.DataFrame({"spec_id": ["controllerType=0 controllerNumber=1 scan=7"], "mz": [500.0]}),
+            self._Spectra(ms1, _Scan([], [])), 20)
+        assert out[0]["closest_peak_mz_ms1"] == 500.001
+
+    def test_no_peak_in_window_gives_the_placeholder(self):
+        ms1 = _Scan([500.5], [50.0], mobility=[1.0], scan_num=3)
+        ms2 = _Scan([], [], im_lo=0.95, im_hi=1.05)
+        out = lookup_ms1_data_list(pl.DataFrame({"spec_id": [7], "mz": [500.0]}),
+                                   self._Spectra(ms1, ms2), 20)
+        assert out[0]["closest_peak_mz_ms1"] == 0.0
+        assert out[0]["precursor_mobility"] is None
 
 
 class TestPeptideToModArray:

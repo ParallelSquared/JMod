@@ -2286,10 +2286,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
             #
             # Observed IM = median of the matched fragments' 1/K0, not
             # `precursor`.  The MS1 value comes from lookup_ms1_data_list,
-            # which takes the nearest-m/z MS1 peak with no mobility
-            # constraint, so on IM-unbanded MS1 frames it frequently picks
+            # which took the nearest-m/z MS1 peak with no mobility
+            # constraint, so on IM-unbanded MS1 frames it frequently picked
             # a co-isolated ion at an unrelated mobility (observed values
-            # outside the acquisition's own window range).  The fragment
+            # outside the acquisition's own window range); it is now the
+            # most intense peak within the MS2 spectrum's band.  The fragment
             # median is IM-gated by construction -- the fragments come from
             # an IM-banded MS2 spectrum -- and tracks library IM better at
             # every PSM-confidence level.

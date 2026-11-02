@@ -202,7 +202,7 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # 3. MS1 Lookup (The non-vectorized bottleneck, handled in a dedicated function)
     # Convert Polars DF to Python lists, run the loop, and convert result back to Polars.
     logger.info("Looking up MS1 data")
-    ms1_data_list = lookup_ms1_data_list(df, dia_spectra)
+    ms1_data_list = lookup_ms1_data_list(df, dia_spectra, ms1_ppm_error)
     ms1_df = pl.DataFrame(ms1_data_list)
 
     # Add the MS1 data columns back to the main DataFrame
@@ -561,15 +561,52 @@ def matched_lib_intensity_pct_udf(r: dict, fragment_library_map: dict) -> float:
 
 
 
-def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
+def _most_intense_ms1_peak(ms1_scan, theo_mz, ppm, im_lo=None, im_hi=None):
+    """Index of the most intense MS1 peak within *ppm* of *theo_mz*, or None.
+
+    With a mobility band (*im_lo*, *im_hi*) and per-peak mobility, only peaks
+    inside the band count: an MS1 frame spans the whole mobility range, so
+    the band the PSM's MS2 spectrum was cut from keeps the choice to ions
+    that can be its precursor.  Ties go to the lowest m/z.
     """
-    Performs the non-vectorized MS1 scan lookup and closest peak finding
+    mz = ms1_scan.mz
+    tol = theo_mz * ppm * 1e-6
+    lo = np.searchsorted(mz, theo_mz - tol, side="left")
+    hi = np.searchsorted(mz, theo_mz + tol, side="right")
+    if hi <= lo:
+        return None
+    idx = np.arange(lo, hi)
+    mob = ms1_scan.mobility
+    if im_lo is not None and mob is not None:
+        m = mob[lo:hi]
+        idx = idx[(m >= im_lo) & (m <= im_hi)]
+        if idx.size == 0:
+            return None
+    return int(idx[np.argmax(ms1_scan.intens[idx])])
+
+
+def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra, ms1_ppm_error):
+    """
+    Performs the non-vectorized MS1 scan lookup and precursor peak finding
     in a dedicated Python loop.
+
+    For each PSM, the precursor peak is the most intense peak of the nearest
+    MS1 scan within *ms1_ppm_error* of the theoretical m/z and, on ion
+    mobility data, within the mobility band of the PSM's MS2 spectrum (see
+    _most_intense_ms1_peak).  PSMs with no such peak get the same placeholder
+    as PSMs with no MS1 scan, and fit_with_features then drops them with the
+    other PSMs outside *ms1_ppm_error*.
 
     Returns a list of dictionaries with the MS1 data to be converted back
     to a Polars DataFrame.
     """
     ms1_data = []
+    missing = {
+        'Ms1_spec_id': None,
+        "closest_peak_mz_ms1": 0.0,
+        "closest_peak_intensity_ms1": 0.0,
+        "precursor_mobility": None,
+    }
 
     # We must extract the columns and iterate in Python because the underlying
     # dia_spectra methods are not vectorized.
@@ -583,25 +620,28 @@ def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra):
             leave=False
     ):
         ms1_scan = dia_spectra.get_nearest_ms1_for_scan(spec_id)
+        if not ms1_scan:
+            ms1_data.append(dict(missing))
+            continue
 
-        if ms1_scan:
-            # Assumes ms1_scan.closest_peak(theo_mz) returns (idx, mz, intensity)
-            closest_idx, closest_mz, intensity = ms1_scan.closest_peak(theo_mz)
-            mob = float(ms1_scan.mobility[closest_idx]) if ms1_scan.mobility is not None else None
-            ms1_data.append({
-                'Ms1_spec_id': ms1_scan.scan_num,
-                "closest_peak_mz_ms1": closest_mz,
-                "closest_peak_intensity_ms1": intensity,
-                "precursor_mobility": mob,
-            })
-        else:
-            # Use 0.0 or None/NaN placeholders for missing data
-            ms1_data.append({
-                'Ms1_spec_id': None,
-                "closest_peak_mz_ms1": 0.0,
-                "closest_peak_intensity_ms1": 0.0,
-                "precursor_mobility": None,
-            })
+        # spec_id is a scan number (.d) or a native ID string (mzML), as
+        # get_nearest_ms1_for_scan accepts it
+        scan_num = (int(re.search(r"scan=(\d+)", spec_id).group(1))
+                    if isinstance(spec_id, str) else spec_id)
+        ms2_scan = dia_spectra.ms2scans[dia_spectra.ms2_by_id[scan_num]]
+        idx = _most_intense_ms1_peak(ms1_scan, theo_mz, ms1_ppm_error,
+                                     getattr(ms2_scan, "im_lo", None),
+                                     getattr(ms2_scan, "im_hi", None))
+        if idx is None:
+            ms1_data.append(dict(missing, Ms1_spec_id=ms1_scan.scan_num))
+            continue
+        mob = float(ms1_scan.mobility[idx]) if ms1_scan.mobility is not None else None
+        ms1_data.append({
+            'Ms1_spec_id': ms1_scan.scan_num,
+            "closest_peak_mz_ms1": float(ms1_scan.mz[idx]),
+            "closest_peak_intensity_ms1": float(ms1_scan.intens[idx]),
+            "precursor_mobility": mob,
+        })
 
     return ms1_data
 
