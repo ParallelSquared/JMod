@@ -24,6 +24,7 @@ from scipy import sparse
 from src.spectral_fitting import (
     get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, gof_stat, huber_nnls_irls,
     _dia_prep_2d_jit, _match_mz_only, _match_mz_im, _create_entries_direct_jit,
+    _keep_passing,
 )
 from src.utils.frag_encoding import encode_frag_name
 
@@ -613,3 +614,29 @@ class TestEntropyNormalizedAngle:
         out = self._run([1.0, 3.0], [0, 1 << 17], [900.0, 500.0])
         assert abs(out[0]) < 1e-9
 
+
+class TestKeepPassing:
+    """The candidate cap cuts the flat COO arrays per candidate and renumbers columns."""
+
+    def test_keeps_segments_and_renumbers(self):
+        passing = np.array([3, 5, 9], dtype=np.int64)
+        offsets = np.array([0, 2, 3, 6], dtype=np.int32)
+        rows = np.array([10, 11, 12, 13, 14, 15], dtype=np.int32)
+        cols = np.array([0, 0, 1, 2, 2, 2], dtype=np.int32)
+        vals = np.arange(6, dtype=np.float64)
+        extra = np.array([0.1, 0.2, 0.3])
+        p, r, c, v, o, e = _keep_passing(np.array([True, False, True]),
+                                         passing, rows, cols, vals, offsets, extra)
+        assert p.tolist() == [3, 9]
+        assert r.tolist() == [10, 11, 13, 14, 15]
+        assert c.tolist() == [0, 0, 1, 1, 1]
+        assert v.tolist() == [0, 1, 3, 4, 5]
+        assert o.tolist() == [0, 2, 5]
+        assert o.dtype == offsets.dtype and c.dtype == cols.dtype
+        assert e.tolist() == [0.1, 0.3]
+
+    def test_keep_none(self):
+        p, r, c, v, o = _keep_passing(np.array([False]), np.array([1], dtype=np.int64),
+                                      np.array([4], dtype=np.int32), np.array([0], dtype=np.int32),
+                                      np.array([1.0]), np.array([0, 1], dtype=np.int32))
+        assert len(p) == 0 and len(r) == 0 and o.tolist() == [0]

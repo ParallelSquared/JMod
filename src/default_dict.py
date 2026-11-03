@@ -149,6 +149,20 @@ default_dict = {
         'special_upload': False,
         'values': '+<10'
     },
+    # Per-spectrum cap on candidates entering the fit: targets and decoys ranked
+    # together by matched top-N ions, then matched fraction of library intensity.
+    # None = no cap.
+    'max_candidates': {
+        'flags': ('--max_candidates',),
+        'default': 1000,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'apex_jitter': {
         'flags': ('--apex_jitter',),
         'default': 0,

@@ -1484,10 +1484,29 @@ def _create_entries_direct_jit(
         ms1_error_out[j] = ms1_error[passing[j]]
 
     ent_angle_out = np.empty(n_passing, dtype=np.float64)
+    topn_out = np.empty(n_passing, dtype=np.int32)
+    frac_out = np.empty(n_passing, dtype=np.float64)
     for j in range(n_passing):
         ent_angle_out[j] = ent_angle[passing[j]]
+        topn_out[j] = top_n_matched[passing[j]]
+        frac_out[j] = frac_matched_arr[passing[j]]
 
-    return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets, prec_im_out, ent_angle_out
+    return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets, prec_im_out, ent_angle_out, topn_out, frac_out
+
+
+def _keep_passing(keep, passing, flat_rows, flat_cols, flat_vals, flat_offsets, *per_passing):
+    """Keep the passing candidates where *keep* is True, in their order: the flat
+    COO arrays are cut to their segments and their columns renumbered, and each
+    per-passing array is filtered the same way."""
+    kept = np.flatnonzero(keep)
+    seg = [np.arange(flat_offsets[j], flat_offsets[j + 1]) for j in kept]
+    take = np.concatenate(seg) if seg else np.empty(0, dtype=np.int64)
+    lengths = np.diff(flat_offsets)[kept]
+    new_offsets = np.zeros(len(kept) + 1, dtype=flat_offsets.dtype)
+    np.cumsum(lengths, out=new_offsets[1:])
+    new_cols = np.repeat(np.arange(len(kept), dtype=flat_cols.dtype), lengths)
+    return (passing[kept], flat_rows[take], new_cols, flat_vals[take], new_offsets,
+            *[a[kept] for a in per_passing])
 
 
 def create_entries_direct(centroid_breaks,
@@ -1541,12 +1560,12 @@ def create_entries_direct(centroid_breaks,
                 np.array([], dtype=np.float64),
                 np.empty(0, np.int64), np.empty(0, np.float64),
                 np.zeros(1, np.int32), np.empty(0, np.float64), np.empty(0, np.int64),
-                np.empty(0, np.float64))
+                np.empty(0, np.float64), np.empty(0, np.int32), np.empty(0, np.float64))
 
     cand_idx_arr = np.asarray(candidate_indices, dtype=np.int64)
 
     passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, \
-        all_coords, all_norm_int, frag_offsets, prec_im_out, ent_angle_out = \
+        all_coords, all_norm_int, frag_offsets, prec_im_out, ent_angle_out, topn_out, frac_out = \
         _create_entries_direct_jit(
             np.ascontiguousarray(centroid_breaks, dtype=np.float64),
             spec_data_mz, spec_data_int,
@@ -1578,7 +1597,7 @@ def create_entries_direct(centroid_breaks,
             flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out,
             all_coords, all_norm_int, frag_offsets,
             prec_im_out[passing].astype(np.float64), cand_idx_arr,
-            ent_angle_out)
+            ent_angle_out, topn_out, frac_out)
 
 
 def _flatten_splits(row_idx_split, col_idx_split, val_split):
@@ -2816,7 +2835,7 @@ def fit_to_lib2(dia_spec,
     # all_keys, which is list(library)
     ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets, ref_ms1_error, \
         ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_prec_im, ref_cand_idx, \
-        ref_ent_angle = create_entries_direct(
+        ref_ent_angle, ref_topn, ref_frac = create_entries_direct(
             candidate_indices=window_idxs, prec_mzs=rt_mz[:,1][window_idxs],
             **_lib_arrays, **_match_args)
     clock.lap("match_targets", ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals,
@@ -2828,12 +2847,37 @@ def fit_to_lib2(dia_spec,
         decoy_mz = rt_mz[:,1][decoy_window_idxs]
         decoy_passing, decoy_flat_rows, decoy_flat_cols, decoy_flat_vals, decoy_flat_offsets, decoy_ms1_error, \
             dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_prec_im, dec_cand_idx, \
-            dec_ent_angle = create_entries_direct(
+            dec_ent_angle, dec_topn, dec_frac = create_entries_direct(
                 candidate_indices=decoy_window_idxs, prec_mzs=decoy_mz,
                 **_lib_arrays, **_match_args)
         clock.lap("match_decoys", decoy_passing, decoy_flat_rows, decoy_flat_cols,
                   decoy_flat_vals, decoy_flat_offsets, decoy_ms1_error, dec_all_coords,
                   dec_all_norm_int, dec_frag_offsets, dec_prec_im, dec_cand_idx)
+
+    # Per-spectrum cap on candidates entering the fit (--max_candidates).
+    # Targets and decoys are ranked together, by matched top-N ions then the
+    # matched fraction of library intensity, with the library index breaking ties
+    # so the choice is deterministic.  Same rule for both, so it is symmetric.
+    _cap = getattr(config.args, "max_candidates", None)
+    _n_dec = len(decoy_passing) if decoy else 0
+    if _cap is not None and len(ref_passing) + _n_dec > _cap:
+        _topn = np.concatenate([ref_topn, dec_topn]) if decoy else ref_topn
+        _frac = np.concatenate([ref_frac, dec_frac]) if decoy else ref_frac
+        _lib = (np.concatenate([window_idxs[ref_passing], decoy_window_idxs[decoy_passing]])
+                if decoy else window_idxs[ref_passing]).astype(np.int64)
+        _order = np.lexsort((_lib, -_frac, -_topn.astype(np.int64)))
+        _keep = np.zeros(len(_order), dtype=bool)
+        _keep[_order[:_cap]] = True
+        _kr, _kd = _keep[:len(ref_passing)], _keep[len(ref_passing):]
+        (ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets,
+         ref_ms1_error, ref_prec_im, ref_ent_angle) = _keep_passing(
+            _kr, ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets,
+            ref_ms1_error, ref_prec_im, ref_ent_angle)
+        if decoy:
+            (decoy_passing, decoy_flat_rows, decoy_flat_cols, decoy_flat_vals, decoy_flat_offsets,
+             decoy_ms1_error, dec_prec_im, dec_ent_angle) = _keep_passing(
+                _kd, decoy_passing, decoy_flat_rows, decoy_flat_cols, decoy_flat_vals,
+                decoy_flat_offsets, decoy_ms1_error, dec_prec_im, dec_ent_angle)
 
     decoy_col_offset = int(np.max(ref_flat_cols)) + 1 if len(ref_flat_rows) > 0 else 0
 
