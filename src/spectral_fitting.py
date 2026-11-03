@@ -1494,6 +1494,76 @@ def _create_entries_direct_jit(
     return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets, prec_im_out, ent_angle_out, topn_out, frac_out
 
 
+@njit(nogil=True)
+def _resp_ent_angle_jit(passing, cand_idx, col_offset, coeffs,
+                        spec_offsets, spec_lengths, spec_data_int, frag_names_data,
+                        all_coords, all_norm_int, frag_offsets,
+                        peak_idx_lookup, y_pred, obs_rows):
+    """Entropy-normalized spectral angle against the candidate's share of each peak.
+
+    As in _create_entries_direct_jit step 4b -- theta / sqrt(D1 - 1) over the
+    candidate's monoisotopic library fragments, theta between sqrt(library) and
+    sqrt(observed), unmatched fragments observed as 0 -- but each matched peak's
+    observed intensity is first split by responsibility: the candidate's
+    predicted share of the fitted peak, coeff * library value / y_pred.  A peak
+    only this candidate explains keeps its whole intensity; a peak shared with
+    another fitted candidate gives this one only its share.  NaN for candidates
+    with a zero coefficient (they are not written out).
+    """
+    n = len(passing)
+    out = np.full(n, np.nan)
+    for j in range(n):
+        x = coeffs[col_offset + j]
+        if x <= 0.0:
+            continue
+        i = int(passing[j])
+        lib_idx = cand_idx[i]
+        src_off = int(spec_offsets[lib_idx])
+        src_len = int(spec_lengths[lib_idx])
+        dst_off = int(frag_offsets[i])
+        lib_sum = 0.0
+        for k in range(src_len):
+            if ((frag_names_data[src_off + k] >> 17) & 0xF) == 0:
+                lib_sum += spec_data_int[src_off + k]
+        if lib_sum <= 0.0:
+            continue
+        dot = 0.0
+        a2 = 0.0
+        b2 = 0.0
+        ent = 0.0
+        for k in range(src_len):
+            if ((frag_names_data[src_off + k] >> 17) & 0xF) != 0:
+                continue
+            li = spec_data_int[src_off + k]
+            if li <= 0.0:
+                continue
+            p = li / lib_sum
+            ent -= p * math.log(p)
+            b2 += li
+            c = all_coords[dst_off + k]
+            if c % 2 == 1:
+                b = c // 2
+                if b < len(peak_idx_lookup):
+                    r = peak_idx_lookup[b]
+                    if r >= 0 and y_pred[r] > 0.0:
+                        ob = obs_rows[r] * x * all_norm_int[dst_off + k] / y_pred[r]
+                        if ob > 0.0:
+                            dot += math.sqrt(ob) * math.sqrt(li)
+                            a2 += ob
+        if a2 > 0.0 and b2 > 0.0:
+            cosv = dot / math.sqrt(a2 * b2)
+            if cosv > 1.0:
+                cosv = 1.0
+            theta = math.acos(cosv)
+        else:
+            theta = math.pi / 2.0
+        d1m1 = math.exp(ent) - 1.0
+        if d1m1 < 1e-6:
+            d1m1 = 1e-6
+        out[j] = theta / math.sqrt(d1m1)
+    return out
+
+
 def _keep_passing(keep, passing, flat_rows, flat_cols, flat_vals, flat_offsets, *per_passing):
     """Keep the passing candidates where *keep* is True, in their order: the flat
     COO arrays are cut to their segments and their columns renumbered, and each
@@ -2929,6 +2999,28 @@ def fit_to_lib2(dia_spec,
                                          + len(sparse_values) * (8 + 4 + 8)
                                          + (_n_coo_rows + _n_coo_cols) * 8 * 4)
 
+    # Responsibility-split entropy-normalized angle (30th feature column).
+    # TODO: evaluate on multiplexed data (several channels, crowded spectra), the
+    # case it is for: on the single-channel timsTOF 200 pg test it correlated 0.91
+    # with ent_norm_angle and changed IDs within noise.  Also evaluate its
+    # minimum across adjacent scans (the resp_ent_norm_angle nearby feature).
+    _y_pred = np.bincount(sparse_row_indices,
+                          weights=sparse_values * lib_coefficients[sparse_col_indices],
+                          minlength=_n_coo_rows)
+    def _resp_angle(passing, cand_idx, col_offset, coords, norm_int, frag_offsets):
+        return _resp_ent_angle_jit(passing, cand_idx, col_offset, lib_coefficients,
+                                   library.spectrum_offsets, library.spectrum_lengths,
+                                   library.spectrum_int, library.frag_names_data,
+                                   coords, norm_int, frag_offsets,
+                                   peak_idx_lookup, _y_pred, dia_spec_int)
+    ref_resp_angle = _resp_angle(ref_passing, ref_cand_idx, 0, ref_all_coords,
+                                 ref_all_norm_int, ref_frag_offsets)
+    if _has_dec:
+        dec_resp_angle = _resp_angle(decoy_passing, dec_cand_idx, decoy_col_offset,
+                                     dec_all_coords, dec_all_norm_int, dec_frag_offsets)
+    elif decoy:
+        dec_resp_angle = np.full(len(decoy_passing), np.nan)
+
     # Compute single-matched rows via JIT (replaces sparse.coo_matrix + np.sum(matrix>0,1)==1)
     _sm_max = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
     single_match_lookup = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _sm_max)
@@ -2973,8 +3065,9 @@ def fit_to_lib2(dia_spec,
                             0,
                             decoy_col_offset,
                             unique_lookup_dia=unique_lookup_dia)
-    # 29th column: entropy-normalized spectral angle (_create_entries_direct_jit)
-    features = np.column_stack((features, ref_ent_angle))
+    # 29th column: entropy-normalized spectral angle (_create_entries_direct_jit);
+    # 30th: the same against each peak's responsibility-split intensity
+    features = np.column_stack((features, ref_ent_angle, ref_resp_angle))
     clock.lap("features", features)
 
     if decoy:
@@ -3002,7 +3095,7 @@ def fit_to_lib2(dia_spec,
                                       decoy_col_offset,
                                       0,
                                       unique_lookup_dia=unique_lookup_dia)
-        decoy_features = np.column_stack((decoy_features, dec_ent_angle))
+        decoy_features = np.column_stack((decoy_features, dec_ent_angle, dec_resp_angle))
         clock.lap("features", decoy_features)
 
     # Rows: the candidates with a non-zero coefficient, targets then decoys.

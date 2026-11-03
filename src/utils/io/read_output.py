@@ -55,6 +55,7 @@ names = ["coeff", "spec_id", "Ms1_spec_id",
          "tic",
          "im_error",
          "ent_norm_angle",
+         "resp_ent_norm_angle",
          "frag_names",
          "frag_errors",
          "frag_mz",
@@ -103,6 +104,7 @@ dtypes  = {"coeff":np.float32,
             "tic":np.float32,
             "im_error":np.float32,
             "ent_norm_angle":np.float32,
+            "resp_ent_norm_angle":np.float32,
             "frag_names":str,
             "frag_errors":str,
             "frag_mz":str,
@@ -129,7 +131,7 @@ _SCHEMA_SPEC = [
     ("window_mz",                   pl.Float32,             0.0),
     ("rt",                          pl.Float32,             0.0),
     ("prec_im",                     pl.Float32,             0.0),
-    # 29 feature columns
+    # 30 feature columns
     ("num_lib",                     pl.Float32,             0.0),
     ("frac_lib_int",                pl.Float32,             0.0),
     ("frac_dia_int",                pl.Float32,             0.0),
@@ -161,6 +163,9 @@ _SCHEMA_SPEC = [
     ("im_error",                    pl.Float32,             0.0),
     # theta / sqrt(D1 - 1) over monoisotopic library fragments; lower is better
     ("ent_norm_angle",              pl.Float32,             0.0),
+    # the same, against each matched peak's intensity split by responsibility
+    # (the candidate's share of the fitted peak); lower is better
+    ("resp_ent_norm_angle",         pl.Float32,             0.0),
     # 7 fragment list columns
     ("frag_names",                  pl.List(pl.Int32),       None),
     ("frag_errors",                 pl.List(pl.Float64),     None),
@@ -517,8 +522,10 @@ def get_large_prec(file,
     decoy_coeffs_lf = find_extrema_in_nearby_scans(
         decoy_coeffs_lf,
         ["manhattan_distances", "max_matched_residuals", "gof_stats", "scribe_scores",
-         "ent_norm_angle"],
-        [True, False, False, False, False],
+         # TODO: evaluate whether the adjacent-scan minimum of resp_ent_norm_angle
+         # helps, on single-channel and multiplexed data.
+         "ent_norm_angle", "resp_ent_norm_angle"],
+        [True, False, False, False, False, False],
         n_scans=2, anchor_col="apex_score")
 
     # maintain_order: the default sort is unstable, so apex_pc1 ties would feed

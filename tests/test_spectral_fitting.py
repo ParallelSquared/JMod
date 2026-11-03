@@ -24,7 +24,7 @@ from scipy import sparse
 from src.spectral_fitting import (
     get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, gof_stat, huber_nnls_irls,
     _dia_prep_2d_jit, _match_mz_only, _match_mz_im, _create_entries_direct_jit,
-    _keep_passing,
+    _keep_passing, _resp_ent_angle_jit,
 )
 from src.utils.frag_encoding import encode_frag_name
 
@@ -640,3 +640,47 @@ class TestKeepPassing:
                                       np.array([4], dtype=np.int32), np.array([0], dtype=np.int32),
                                       np.array([1.0]), np.array([0, 1], dtype=np.int32))
         assert len(p) == 0 and len(r) == 0 and o.tolist() == [0]
+
+
+class TestResponsibilityEntropyAngle:
+    """theta / sqrt(D1 - 1) against each peak's responsibility-split intensity."""
+
+    @staticmethod
+    def _run(lib_a, lib_b, coeffs, obs, b_bins=(0, 1)):
+        # Two candidates (library entries 0 and 1), two monoisotopic fragments each.
+        # Candidate a's fragments sit on DIA peaks 0 and 1; b's on b_bins.
+        spec_int = np.array(list(lib_a) + list(lib_b), float)
+        spec_off = np.array([0, 2], np.int64); spec_len = np.array([2, 2], np.int32)
+        codes = np.zeros(4, np.int32)
+        coords = np.array([2 * 0 + 1, 2 * 1 + 1, 2 * b_bins[0] + 1, 2 * b_bins[1] + 1], np.int64)
+        norm = np.concatenate([np.asarray(lib_a, float) / sum(lib_a), np.asarray(lib_b, float) / sum(lib_b)])
+        frag_off = np.array([0, 2, 4], np.int32)
+        n_peaks = max(2, max(b_bins) + 1)
+        lookup = np.arange(n_peaks, dtype=np.int32)
+        x = np.asarray(coeffs, float)
+        y = np.zeros(n_peaks)
+        for c, bins in ((0, (0, 1)), (1, b_bins)):
+            for k, r in enumerate(bins):
+                y[r] += x[c] * norm[2 * c + k]
+        return _resp_ent_angle_jit(np.array([0, 1], np.int64), np.array([0, 1], np.int64), 0, x,
+                                   spec_off, spec_len, spec_int, codes, coords, norm, frag_off,
+                                   lookup, y, np.asarray(obs, float))
+
+    def test_unshared_peaks_match_the_plain_angle(self):
+        # b on its own peaks 2, 3: a's peaks are a's alone, so a's angle is the plain one.
+        lib = [1.0, 3.0]; obs = [900.0, 500.0, 0.0, 0.0]
+        out = self._run(lib, [1.0, 1.0], [1.0, 1.0], obs, b_bins=(2, 3))
+        a = np.sqrt(obs[:2]); b = np.sqrt(lib)
+        theta = np.arccos(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+        p = np.array(lib) / sum(lib); d1 = np.exp(-(p * np.log(p)).sum())
+        assert abs(out[0] - theta / np.sqrt(d1 - 1)) < 1e-9
+
+    def test_shared_peak_is_split_by_share(self):
+        # Both candidates on peaks 0 and 1 with the same library: each gets half
+        # of every peak, so both see the observed shape and the same angle.
+        out = self._run([1.0, 3.0], [1.0, 3.0], [2.0, 2.0], [900.0, 500.0])
+        assert abs(out[0] - out[1]) < 1e-12
+
+    def test_zero_coefficient_is_nan(self):
+        out = self._run([1.0, 3.0], [1.0, 1.0], [1.0, 0.0], [900.0, 500.0, 0.0, 0.0], b_bins=(2, 3))
+        assert np.isfinite(out[0]) and np.isnan(out[1])
