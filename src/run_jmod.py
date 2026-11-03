@@ -1169,6 +1169,15 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     logger.info("")
     logger.info("Starting Main Search")
 
+    # On a .d, the MS2 tolerance is the fitted MS1 tolerance for everything after
+    # the first search (fragment index, fits, scoring-time fragment correlations
+    # all read config.args.ppm).  Other inputs keep --ppm.
+    # TODO: calculate the MS2 tolerance from the first-search fragment errors
+    # instead of borrowing the MS1 one, for every input type, and drop this gate.
+    if runState.file_name.rstrip("/\\").lower().endswith(".d"):
+        config.args.ppm = round(float(runState.opt_ms1_tol) * 1e6, 5)
+        logger.info(f"MS2 tolerance set to the MS1 tolerance: {config.args.ppm} ppm")
+
     spectra_to_fit = DIAspectra.ms2scans
     all_keys = list(spectrumLibrary)
 
