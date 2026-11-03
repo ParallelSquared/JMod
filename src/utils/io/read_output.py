@@ -20,6 +20,7 @@ import os
 
 import src.config as config
 import src.quality_pca as quality_pca
+from src.logger import logger
 
 
 names = ["coeff", "spec_id", "Ms1_spec_id",
@@ -187,13 +188,14 @@ def get_parquet_schema(timeplex=False):
 
 
 
-def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
+def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3, anchor_col="apex_pc1"):
     """
     Polars equivalent of find_extrema_in_nearby_scans.
 
     For each precursor, finds the minimum or maximum value of a specified column from
     nearby scans (N scans before and N scans after by retention time) relative to
-    the scan with the highest coefficient.
+    the apex scan: the scan with the highest *anchor_col* (the apex PC1 the
+    collapse keeps, so the nearby window and the reported apex are the same scan).
 
     Parameters
     ----------
@@ -205,6 +207,8 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
         If True, find the maximum value; if False, find the minimum value.
     n_scans : int, default=3
         The number of scans before and after to consider.
+    anchor_col : str, default="apex_pc1"
+        The column whose per-precursor maximum is the window's centre.
 
     Returns
     -------
@@ -234,11 +238,11 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
         .alias("rt_rank")
     )
 
-    # 3. Find the rank of the row with the maximum 'coeff' within each group
-    #    (coeff ties broken on spec_id for the same reason)
+    # 3. Find the rank of the apex row (maximum anchor_col) within each group
+    #    (ties broken on spec_id for the same reason)
     df = df.with_columns(
         pl.col("rt_rank")
-        .sort_by(pl.struct(["coeff", "spec_id"]), descending=True)
+        .sort_by(pl.struct([anchor_col, "spec_id"]), descending=True)
         .first()
         .over(group_cols)
         .alias("max_coeff_rank")
@@ -368,7 +372,9 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
     # 6. Sum the squared derivatives within each group (smoothness)
     # Handle the group length <= 1 case and apex_weight == 0 case
 
-    smoothness_expr = (pl.when(pl.col("n_scans") <= 1)
+    # Group length computed here rather than read from the n_scans column, which
+    # find_extrema_in_nearby_scans adds and now runs after this (it needs apex_pc1).
+    smoothness_expr = (pl.when(pl.len().over(group_cols) <= 1)
             .then(0.0)  # Length <= 1
         .when(pl.col("apex_weight") == 0)
             .then(0.0)  # Apex weight is 0
@@ -410,7 +416,9 @@ def numpy_dtypes_to_polars_schema(np_dtypes_dict):
 
 def get_large_prec(file,
                    condense_output=True,
-                   timeplex=False):
+                   timeplex=False,
+                   rt_sigma=None,
+                   im_scale=None):
     """
     Process peptide identification results to extract high-confidence precursors
     using Polars, converting to Pandas for external function calls.
@@ -444,11 +452,6 @@ def get_large_prec(file,
     decoy_coeffs_lf = (_scan
                         .with_row_index("__parquet_row")
                         .drop(_present_list_cols))
-    decoy_coeffs_lf = find_extrema_in_nearby_scans(
-        decoy_coeffs_lf,
-        ["manhattan_distances", "max_matched_residuals", "gof_stats", "scribe_scores"],
-        [True, False, False, False],
-        n_scans=2)
 
     # Convert to Pandas for external function calls
     decoy_coeffs_lf = calculate_peak_smoothness(
@@ -466,10 +469,63 @@ def get_large_prec(file,
                                               seed=config.RANDOM_SEED)
     decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
         quality_pca.main_apex_pc1_expr(loadings, apex_group_cols).alias("apex_pc1"))
+    logger.info("Apex PC1 loadings: " + ", ".join(
+        f"{c} {w:+.3f}" for (c, _), w in zip(quality_pca.MAIN_APEX_FEATURES, loadings)))
+    # Apex score: the spectral PC1 plus log priors for agreement with the predicted
+    # RT (Gaussian, the RT tolerance's core sigma) and IM (Laplace, the IM accuracy
+    # fit's core scale).  PC1 alone has no RT/IM term, and putting rt_error into the
+    # PCA does not add one: it varies independently of the spectral features, so
+    # PC1 gives it a loading of ~0.  Decoys inherit their target's RT and IM, so the
+    # priors treat both alike.  NaN errors (no IM data) contribute 0.
+    _rt_lp = (pl.lit(0.0) if not rt_sigma else
+              (-0.5 * (pl.col("rt_error").cast(pl.Float64) / float(rt_sigma)) ** 2).fill_nan(0.0).fill_null(0.0))
+    _im_lp = (pl.lit(0.0) if not im_scale else
+              (-(pl.col("im_error").cast(pl.Float64).abs()) / float(im_scale)).fill_nan(0.0).fill_null(0.0))
+    decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
+        _rt_lp.alias("rt_logprior"), _im_lp.alias("im_logprior"))
+    decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
+        (pl.col("apex_pc1") + pl.col("rt_logprior") + pl.col("im_logprior")).alias("apex_score"))
+    logger.info(f"Apex score: PC1 + RT log prior (sigma {rt_sigma}) + IM log prior (scale {im_scale})")
+    # What the priors overrode, as scoring features.  The spectral apex (max PC1)
+    # and the chosen apex (max apex_score) come from the same PC1 values: for a
+    # real peptide they usually agree; a null's best spectral evidence is anywhere
+    # in its RT window.  Moving the apex toward the prediction would otherwise hide
+    # that from rt_error / im_error at the chosen apex.  Same for targets and decoys.
+    _spec = pl.struct(["apex_pc1", "spec_id"])
+    _chosen = pl.struct(["apex_score", "spec_id"])
+    decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
+        pl.col("rt_error").cast(pl.Float64).abs().fill_nan(0.0).fill_null(0.0)
+        .sort_by(_spec, descending=True).first().over(apex_group_cols)
+        .alias("spec_apex_rt_error"),
+        pl.col("im_error").cast(pl.Float64).abs().fill_nan(0.0).fill_null(0.0)
+        .sort_by(_spec, descending=True).first().over(apex_group_cols)
+        .alias("spec_apex_im_error"),
+        (pl.col("apex_pc1").max().over(apex_group_cols)
+         - pl.col("apex_pc1").sort_by(_chosen, descending=True).first().over(apex_group_cols))
+        .alias("apex_pc1_cost"),
+    )
+    # Every scan's apex terms, for inspecting apex choices along the gradient.
+    _apex_scans = os.path.join(os.path.dirname(os.path.abspath(file)), "apex_pc1_scans.parquet")
+    (decoy_coeffs_lf
+     .select(apex_group_cols + ["spec_id", "rt", "prec_im", "coeff", "rt_error",
+                                "im_error", "is_decoy", "apex_pc1", "rt_logprior",
+                                "im_logprior", "apex_score"])
+     .sink_parquet(_apex_scans))
+    # Nearby-scan extrema around the apex PC1 scan, the scan the collapse below
+    # keeps; not around the max-coefficient scan, which is a different scan for
+    # about a third of precursors.
+    decoy_coeffs_lf = find_extrema_in_nearby_scans(
+        decoy_coeffs_lf,
+        ["manhattan_distances", "max_matched_residuals", "gof_stats", "scribe_scores",
+         "ent_norm_angle"],
+        [True, False, False, False, False],
+        n_scans=2, anchor_col="apex_score")
 
     # maintain_order: the default sort is unstable, so apex_pc1 ties would feed
     # the unique() below in a different order per run.
-    sorted_decoy_coeffs_lf = decoy_coeffs_lf.sort(by="apex_pc1", maintain_order=True)
+    sorted_decoy_coeffs_lf = (decoy_coeffs_lf.sort(by="apex_score", maintain_order=True)
+                              # selection only: kept out of the scoring features
+                              .drop(["rt_logprior", "im_logprior", "apex_score"]))
 
     # Polars equivalent of drop_duplicates(..., keep='last')
     if timeplex:

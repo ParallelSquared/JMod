@@ -1289,7 +1289,8 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
 
 
 def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
-                 mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0):
+                 mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0,
+                 im_accuracy=None):
     # ms1_tol, rt_tol, im_tol: the run's fitted tolerances (RunState.opt_*);
     # target_decoy_ratio: targets over decoys among the run's searchable entries
 
@@ -1298,7 +1299,15 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     mz_ppm = ms1_tol
 
     # After loading data and adding basic features
-    _glp = get_large_prec(file, condense_output=False, timeplex=timeplex)
+    # Apex log-prior scales, recovered from the fitted tolerances.  RT tolerance =
+    # 4*sigma + 8*elution_sd (rt_alignment); IM accuracy tolerance = b*ln(100) of a
+    # zero-mean Laplace core (_im_error_model).
+    _rt_sigma = None
+    if rt_tol and elution_fwhm:
+        _rt_sigma = max((float(rt_tol) - 8.0 * float(elution_fwhm) / 2.3548200450309493) / 4.0, 1e-6)
+    _im_scale = float(im_accuracy) / np.log(100.0) if im_accuracy else None
+    _glp = get_large_prec(file, condense_output=False, timeplex=timeplex,
+                          rt_sigma=_rt_sigma, im_scale=_im_scale)
     # Tests monkey-patch ``get_large_prec`` to return a legacy 3-tuple; the
     # production path returns a 4-tuple with a separate polars list-cols frame.
     if len(_glp) == 4:

@@ -1402,4 +1402,5 @@ def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
                  ms1_tol=runState.opt_ms1_tol,
                  rt_tol=runState.opt_rt_tol,
                  im_tol=runState.opt_im_precision,
-                 target_decoy_ratio=runState.target_decoy_ratio)
+                 target_decoy_ratio=runState.target_decoy_ratio,
+                 im_accuracy=getattr(runState, "opt_im_accuracy", None))
