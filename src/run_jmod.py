@@ -15,6 +15,7 @@
 
 # Update imports to relative imports
 import src.config as config
+from collections import deque
 import numpy as np
 import os
 import time
@@ -1258,8 +1259,9 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     _pa_schema = pl.DataFrame(schema=_pl_schema).to_arrow().schema
     _BUFFER_SIZE = 1000  # results to buffer before flushing to disk
 
-    # Spectra submitted per chunk.  Bounds how many results are held at once.
-    _CHUNK = 100
+    # Fits submitted ahead of the one being drained.  Bounds how many results are
+    # held at once while keeping every thread fed.
+    _IN_FLIGHT = 32 * n_threads
 
     # The IM candidate gate is on whenever the data has ion mobility: MZRTfit
     # either calibrated IM prediction or stopped the run.  Timeplex has no IM
@@ -1324,29 +1326,34 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
             # tasks was enough to exhaust the machine.
             with ThreadPoolExecutor(max_workers=n_threads) as pool, \
                     tqdm.tqdm(total=len(batch_spectra)) as bar:
-                for _start in range(0, len(batch_spectra), _CHUNK):
-                    futures = [pool.submit(_profiled_fit, dia_spec, _fit_kwargs)
-                               for dia_spec in batch_spectra[_start:_start + _CHUNK]]
-                    # Drain in submission order, not completion order, so rows are
-                    # written in spectrum order every run.  Scoring depends on row
-                    # order (apex_pc1 ties, CV folds), so completion order made
-                    # repeat runs of the same file give different IDs.
-                    for f in futures:
-                        hits, record = f.result()
-                        fit_records.append(record)
-                        bar.update(1)
-                        if hits is not None:
-                            buffer.append(hits)
-                            n_buffered += len(hits.coeff)
-                            buffer_bytes += record["results_bytes"]
-                            n_results += len(hits.coeff)
-                            if n_buffered >= _BUFFER_SIZE:
-                                writer.write_table(hits_to_arrow(buffer, _pa_schema))
-                                buffer.clear()
-                                search_tracker.results_written(n_buffered, buffer_bytes)
-                                n_buffered = 0
-                                buffer_bytes = 0
-                    futures.clear()
+                # Sliding window: keep up to _IN_FLIGHT fits submitted and drain the
+                # oldest, so the pool always has queued work.  Submitting a chunk and
+                # draining it completely before the next left every thread idle
+                # while the chunk's slowest fit (and the main thread's writing)
+                # finished -- about 3.5-5 of 10 threads busy.  Still drained in
+                # submission order, not completion order, so rows are written in
+                # spectrum order every run: scoring depends on row order (apex_pc1
+                # ties, CV folds).  The window also bounds how many results are held.
+                inflight = deque()
+                _next = 0
+                while _next < len(batch_spectra) or inflight:
+                    while _next < len(batch_spectra) and len(inflight) < _IN_FLIGHT:
+                        inflight.append(pool.submit(_profiled_fit, batch_spectra[_next], _fit_kwargs))
+                        _next += 1
+                    hits, record = inflight.popleft().result()
+                    fit_records.append(record)
+                    bar.update(1)
+                    if hits is not None:
+                        buffer.append(hits)
+                        n_buffered += len(hits.coeff)
+                        buffer_bytes += record["results_bytes"]
+                        n_results += len(hits.coeff)
+                        if n_buffered >= _BUFFER_SIZE:
+                            writer.write_table(hits_to_arrow(buffer, _pa_schema))
+                            buffer.clear()
+                            search_tracker.results_written(n_buffered, buffer_bytes)
+                            n_buffered = 0
+                            buffer_bytes = 0
 
             # Flush remaining buffered results
             if buffer:
