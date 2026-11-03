@@ -1434,6 +1434,13 @@ def _create_entries_direct_jit(
     n_passing = 0
     passing = np.empty(n_cands, dtype=np.int32)
     for i in range(n_cands):
+        # TODO: atleast_m is misnamed and inconsistent: this filter is
+        # top_n_matched > atleast_m ("at least atleast_m + 1") while fragment_index
+        # uses >= ("at least atleast_m").  Rename it to what it is (e.g.
+        # min_topn_matched) and make every use the same comparison, so one name
+        # means one threshold everywhere.  Switching this filter to >= (at least 3)
+        # lost about 1,000 precursors on the timsTOF 200 pg test, so retune when
+        # changing it.
         ok = frac_matched_arr[i] > frac_lib_threshold and top_n_matched[i] > atleast_m
         if match_ms1:
             ok = ok and not np.isnan(ms1_error[i])

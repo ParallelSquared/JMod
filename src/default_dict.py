@@ -134,6 +134,10 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # TODO: misnamed -- the minimum number of a candidate's top-N library fragments
+    # that must match.  It was applied as "> atleast_m" in spectral_fitting but
+    # ">= atleast_m" in fragment_index; rename (e.g. min_topn_matched) and make every
+    # use the same "at least" comparison.
     'atleast_m': {
         'flags': ('-m','--atleast_m'),
         'default': 3,
