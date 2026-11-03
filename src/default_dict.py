@@ -450,6 +450,17 @@ default_dict = {
         'special_upload': False,
         'values': ['none', 'run', 'sample>run', 'sample', 'run>sample']
     },
+    'no_median_norm': {  ## Turns off the median normalization of plex_Area when the runs are combined, which follows any rt_norm
+        'flags': ('--no_median_norm',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': False,
+        'type': '',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'unfiltered_quant': {
         'flags': ('--unfiltered_quant',),
         'default': True,

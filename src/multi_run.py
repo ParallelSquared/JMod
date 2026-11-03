@@ -110,7 +110,8 @@ _ID_LEVELS = [
 _PRECURSOR_STACK_COLORS = [_BLUE_RAMP[1], _BLUE_RAMP[2], _BLUE_RAMP[4], _BLUE_RAMP[6]]
 
 
-def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_threshold, rt_norm="none"):
+def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_threshold, rt_norm="none",
+                 median_norm=False):
     """Combine the completed runs into one table, and plot it.
 
     *completed_run_folders* maps each completed run's index to its results
@@ -118,8 +119,9 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     run's IDs that pass the run-level FDR, with a global q-value per untagged
     precursor and per protein.  Nothing is filtered on the global q-values;
     that is left to the user.  With two or more runs, *rt_norm* other than
-    "none" adds norm_factor and plex_Area_norm (normalize_rt).  The plots and
-    run_index.txt go in an experiment_results folder beside it; those that
+    "none", or *median_norm*, adds norm_factor and plex_Area_norm
+    (normalize_rt).  The plots and run_index.txt go in an
+    experiment_results folder beside it; those that
     compare runs only when there are enough runs to compare.  Each is
     datestamped if its name is taken.  Returns the combined table.
     """
@@ -127,7 +129,7 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     logger.info(f"Combining the results of {len(completed_run_folders)} run(s)")
     df, untag_prec_global_qs, protein_global_qs = collect_results(completed_run_folders, target_decoy_ratio,
                                                                   fdr_threshold)
-    df = normalize_rt(df, rt_norm)
+    df = normalize_rt(df, rt_norm, median_norm)
 
     combined_path = datestamped(os.path.join(experiment_dir, "combined_filtered_IDs.parquet"))
     df.write_parquet(combined_path)
@@ -167,31 +169,34 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     return df
 
 
-def normalize_rt(df, rt_norm):
-    """The combined IDs with RT-dependent trends in plex_Area normalized out
-    (src/rt_normalization.py).
+def normalize_rt(df, rt_norm, median_norm=False):
+    """The combined IDs with RT-dependent trends in plex_Area normalized out,
+    then with *median_norm* the runs' levels aligned on the precursors in
+    every run (src/rt_normalization.py).
 
-    *rt_norm* is the stages in order: "run", "sample", "sample>run" or
-    "run>sample"; "none" returns *df* as it is, and so does a single run.
-    Adds norm_factor, the factor each row's plex_Area is multiplied by, and
-    plex_Area_norm, the product.  A sample is a run's channel; a run, and a
-    precursor's pairing across runs, is per time channel on timeplex.
+    *rt_norm* is the RT stages in order: "run", "sample", "sample>run" or
+    "run>sample", or "none"; with no stages at all, or a single run, *df* is
+    returned as it is.  Adds norm_factor, the factor each row's plex_Area is
+    multiplied by, and plex_Area_norm, the product.  A sample is a run's
+    channel; a run, and a precursor's pairing across runs, is per time
+    channel on timeplex.
     """
-    if rt_norm == "none":
+    steps = (() if rt_norm == "none" else tuple(rt_norm.split(">"))) + (("median",) if median_norm else ())
+    if not steps:
         return df
     if df["run_idx"].n_unique() < 2:
-        logger.info(f"RT normalization ({rt_norm}) needs two or more runs with IDs; skipped")
+        logger.info(f"Normalization ({'>'.join(steps)}) needs two or more runs with IDs; skipped")
         return df
     time_channel = ["time_channel"] if "time_channel" in df.columns else []
-    # The fits too small to make are reported as warnings: they go to the log
+    # The stages with too few points to go on are reported as warnings: they go to the log
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        corr = rt_normalize(df, "plex_Area", tuple(rt_norm.split(">")), "rt",
+        corr = rt_normalize(df, "plex_Area", steps, "rt",
                             sample_cols=["run_idx", "channel"],
                             run_cols=["run_idx", *time_channel], pair_cols=["untag_prec", *time_channel])
     for warning in caught:
         logger.warning(str(warning.message))
-    logger.info(f"RT normalization ({rt_norm}) of plex_Area: norm_factor and plex_Area_norm added")
+    logger.info(f"Normalization ({'>'.join(steps)}) of plex_Area: norm_factor and plex_Area_norm added")
     return df.with_columns(
         pl.Series("norm_factor", np.exp2(-corr.to_numpy())),
         apply_correction(df["plex_Area"].cast(pl.Float64), corr).alias("plex_Area_norm"),

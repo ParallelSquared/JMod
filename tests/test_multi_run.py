@@ -249,6 +249,12 @@ def _combined(n_runs=2, n=300, seed=0):
     return pl.concat(frames, how="vertical_relaxed")
 
 
+def _median_ratio(df, column):
+    """The median log2 ratio of run 2 to run 1."""
+    wide = df.pivot(on="run_idx", index=["untag_prec", "rt"], values=column)
+    return np.median(np.log2(wide["2"].to_numpy() / wide["1"].to_numpy()))
+
+
 def _ratio_trend(df, column):
     """The range over 6 RT bins of the median log2 ratio of run 2 to run 1."""
     wide = df.pivot(on="run_idx", index=["untag_prec", "rt"], values=column)
@@ -281,6 +287,22 @@ class TestNormalizeRt:
         df = _combined()
         assert normalize_rt(df, "none").equals(df)
 
+    def test_median_alone_aligns_the_runs(self):
+        df = _combined().with_columns(
+            pl.when(pl.col("run_idx") == 2).then(pl.col("plex_Area") * 2 ** 0.7).otherwise(pl.col("plex_Area")))
+        normalized = normalize_rt(df, "none", median_norm=True)
+        assert _median_ratio(normalized, "plex_Area") == pytest.approx(0.7, abs=0.1)
+        assert _median_ratio(normalized, "plex_Area_norm") == pytest.approx(0, abs=1e-9)
+        # Only a level: one factor a run
+        assert normalized.group_by("run_idx").agg(pl.col("norm_factor").n_unique())["norm_factor"].to_list() == [1, 1]
+
+    def test_run_then_median_flattens_and_aligns(self):
+        df = _combined().with_columns(
+            pl.when(pl.col("run_idx") == 2).then(pl.col("plex_Area") * 2 ** 0.7).otherwise(pl.col("plex_Area")))
+        normalized = normalize_rt(df, "run", median_norm=True)
+        assert _ratio_trend(normalized, "plex_Area_norm") < 0.3 * _ratio_trend(normalized, "plex_Area")
+        assert _median_ratio(normalized, "plex_Area_norm") == pytest.approx(0, abs=1e-9)
+
     def test_single_run_is_skipped(self, app_log):
         df = _combined(n_runs=1)
         assert normalize_rt(df, "run").equals(df)
@@ -296,8 +318,10 @@ class TestNormalizeRt:
 
         monkeypatch.setattr(multi_run, "rt_normalize", rt_normalize)
         normalize_rt(_combined().with_columns(pl.lit(0).alias("time_channel")), rt_norm)
-        [(quant_col, called_steps, rt_col, kwargs)] = calls
+        normalize_rt(_combined().with_columns(pl.lit(0).alias("time_channel")), rt_norm, median_norm=True)
+        [(quant_col, called_steps, rt_col, kwargs), (_, median_steps, _, median_kwargs)] = calls
         assert (quant_col, called_steps, rt_col) == ("plex_Area", steps, "rt")
+        assert (median_steps, median_kwargs) == ((*steps, "median"), kwargs)
         assert kwargs == {"sample_cols": ["run_idx", "channel"], "run_cols": ["run_idx", "time_channel"],
                           "pair_cols": ["untag_prec", "time_channel"]}
 
@@ -306,12 +330,13 @@ class TestNormalizeRt:
         runs = {i: _write_run(tmp_path, name, rows) for i, name in enumerate("abc", start=1)}
         experiment_dir = tmp_path / "experiment"
         experiment_dir.mkdir()
-        combine_runs(runs, str(experiment_dir), 1.0, 0.01, "run")
+        combine_runs(runs, str(experiment_dir), 1.0, 0.01, "run", True)
         written = pl.read_parquet(experiment_dir / "combined_filtered_IDs.parquet")
         # Two precursors a run are too few to fit: every factor is 1, and the log says so
         assert (written["norm_factor"] == 1).all()
         assert (written["plex_Area_norm"] == written["plex_Area"]).all()
         assert any(r.levelno == logging.WARNING and "left uncorrected" in r.getMessage() for r in app_log)
+        assert any(r.levelno == logging.WARNING and "no unit is corrected" in r.getMessage() for r in app_log)
 
     def test_combine_runs_without_rt_norm_adds_nothing(self, tmp_path):
         rows = [("AAA", False, 0.9, 0.001), ("DDD", True, 0.1, 0.9)]

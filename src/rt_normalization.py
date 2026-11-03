@@ -12,15 +12,18 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-"""LOWESS normalization of RT-dependent trends in quant.
+"""LOWESS normalization of RT-dependent trends in quant, and median
+normalization of runs.
 
-Two stages, each returning a per-row log2 correction in the table's row
+Three stages, each returning a per-row log2 correction in the table's row
 order; the corrected quant is apply_correction(quant, corr):
 
 - lowess_rt_correction: flattens log2(quant) vs RT within each sample.
 - paired_rt_correction: per precursor, its log2 quant less its mean over runs,
   fitted against RT in each run and centred, so the RT-dependent differences
   between runs are removed without changing any run's level.
+- median_correction: aligns the runs' levels, on the median of those same
+  residuals over the precursors in every run.
 
 rt_normalize runs any sequence of them.  Nothing here depends on the rest of
 JMod; every column is named by the caller.
@@ -84,6 +87,38 @@ def paired_rt_correction(df, quant_col, run_cols, pair_cols, rt_col, *, frac, it
     return pl.Series("rt_correction", corr)
 
 
+def median_correction(df, quant_col, run_cols, pair_cols, *, min_points=50):
+    """Per row, the log2 correction that aligns the levels of the units of
+    *run_cols*.
+
+    Each precursor (*pair_cols*) seen in every unit has a residual in each,
+    its log2 quant less its mean over the units; a unit's correction is the
+    median of its residuals, centred on the mean over the units.  With fewer
+    than *min_points* such precursors, nothing is corrected (0), with a
+    warning.
+    """
+    quant = pl.col(quant_col).cast(pl.Float64)
+    rows = df.with_row_index(_ROW).with_columns(pl.when(quant > 0).then(quant.log(2)).otherwise(np.nan).alias(_Y))
+    keys = list(dict.fromkeys([*pair_cols, *run_cols]))
+    collapsed = rows.filter(pl.col(_Y).is_finite()).group_by(keys).agg(pl.col(_Y).median())
+    n_units = collapsed.select(run_cols).unique().height
+    shared = collapsed.filter(pl.len().over(pair_cols) == n_units)
+    n_shared = shared.select(pair_cols).unique().height
+    corr = np.zeros(df.height)
+    if n_shared < min_points:
+        warnings.warn(f"Median normalization: {n_shared} precursors are in every unit, fewer than "
+                      f"{min_points}, so no unit is corrected")
+        return pl.Series("rt_correction", corr)
+    medians = (
+        shared.with_columns((pl.col(_Y) - pl.col(_Y).mean().over(pair_cols)).alias(_Y))
+        .group_by(run_cols).agg(pl.col(_Y).median())
+        .with_columns(pl.col(_Y) - pl.col(_Y).mean())
+    )
+    joined = rows.select(_ROW, *run_cols).join(medians, on=run_cols, how="left", nulls_equal=True)
+    corr[joined[_ROW].to_numpy()] = joined[_Y].fill_null(0).to_numpy()
+    return pl.Series("rt_correction", corr)
+
+
 def apply_correction(quant, corr):
     """*quant* corrected by the log2 correction *corr*."""
     return quant * np.exp2(-corr)
@@ -94,8 +129,9 @@ def rt_normalize(df, quant_col, steps, rt_col, *, sample_frac=0.2, run_frac=0.05
     """The total log2 correction of running *steps* in order, each on the
     quant as corrected by those before it.  A step is "sample"
     (lowess_rt_correction over *sample_cols*, span *sample_frac*) or "run"
-    (paired_rt_correction over *run_cols* and *pair_cols*, span *run_frac*);
-    a step whose columns or span aren't given raises."""
+    (paired_rt_correction over *run_cols* and *pair_cols*, span *run_frac*)
+    or "median" (median_correction over *run_cols* and *pair_cols*); a step
+    whose columns or span aren't given raises."""
     total = pl.Series("rt_correction", np.zeros(df.height))
     for step in steps:
         if step == "sample" and sample_frac is not None and sample_cols is not None:
@@ -104,6 +140,8 @@ def rt_normalize(df, quant_col, steps, rt_col, *, sample_frac=0.2, run_frac=0.05
         elif step == "run" and run_frac is not None and run_cols is not None and pair_cols is not None:
             corr = paired_rt_correction(df, quant_col, run_cols, pair_cols, rt_col,
                                         frac=run_frac, it=it, min_points=min_points)
+        elif step == "median" and run_cols is not None and pair_cols is not None:
+            corr = median_correction(df, quant_col, run_cols, pair_cols, min_points=min_points)
         else:
             raise ValueError(f"RT normalization step {step!r} is unknown, or its frac or columns weren't given")
         total = total + corr

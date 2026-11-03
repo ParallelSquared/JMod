@@ -3,7 +3,7 @@ import polars as pl
 import pytest
 
 from src.rt_normalization import (_collapse, _with_log2, apply_correction, lowess_rt_correction,
-                                  paired_rt_correction, rt_normalize)
+                                  median_correction, paired_rt_correction, rt_normalize)
 
 FRAC = 0.3
 RT_BINS = np.linspace(0, 100, 11)
@@ -144,6 +144,60 @@ def test_correction_follows_row_order_and_leaves_df_unchanged():
     order = np.random.default_rng(1).permutation(df.height)
     shuffled = rt_normalize(df[order], "quant", ("sample", "run"), "rt", **kwargs)
     np.testing.assert_allclose(shuffled.to_numpy(), corr.to_numpy()[order])
+
+
+OFFSETS = (0.0, 0.5, -0.3)
+
+
+def _levelled_runs(n=2000, seed=0):
+    """Runs 0-2 of the same *n* precursors at the same RTs (0-100), run r's
+    log2 quant offset by OFFSETS[r], each precursor in two channels."""
+    rng = np.random.default_rng(seed)
+    rt = rng.uniform(0, 100, n)
+    abundance = rng.normal(20, 2, n)
+    return pl.concat([
+        pl.DataFrame({"run": run, "channel": channel, "prec": np.arange(n), "rt": rt,
+                      "quant": np.exp2(abundance + offset + rng.normal(0, 0.2, n))})
+        for run, offset in enumerate(OFFSETS) for channel in (0, 1)
+    ], how="vertical_relaxed")
+
+
+def test_median_stage_aligns_run_levels_centred():
+    df = _levelled_runs()
+    corr = median_correction(df, "quant", ["run"], ["prec"])
+    expected = np.array(OFFSETS) - np.mean(OFFSETS)
+    for run in range(3):
+        values = corr.filter(df["run"] == run)
+        assert values.n_unique() == 1
+        assert values[0] == pytest.approx(expected[run], abs=0.02)
+
+
+def test_median_stage_uses_only_precursors_in_every_run():
+    df = _levelled_runs()
+    base = median_correction(df, "quant", ["run"], ["prec"]).to_numpy()
+    # Precursors missing from run 0, far brighter in runs 1 and 2
+    extra = pl.DataFrame({"run": [1, 2] * 500, "channel": 0, "prec": np.repeat(np.arange(-500, 0), 2),
+                          "rt": 50.0, "quant": 2.0 ** 30})
+    more = pl.concat([df, extra], how="vertical_relaxed")
+    corr = median_correction(more, "quant", ["run"], ["prec"]).to_numpy()
+    np.testing.assert_allclose(corr[:df.height], base)
+
+
+def test_median_stage_with_too_few_shared_precursors_corrects_nothing():
+    df = _levelled_runs().filter((pl.col("prec") < 40) | (pl.col("run") != 2))
+    with pytest.warns(UserWarning, match="40 precursors are in every unit"):
+        corr = median_correction(df, "quant", ["run"], ["prec"])
+    assert (corr == 0).all()
+
+
+def test_median_after_run_stage_leaves_no_level_differences():
+    df = _runs(gain=lambda rt: 0.3 + (rt - 50) / 50 + ((rt - 50) / 50) ** 2)
+    corr = rt_normalize(df, "quant", ("run", "median"), "rt", run_frac=FRAC, run_cols=["run"], pair_cols=["prec"])
+    resid = _collapse(_with_log2(df.with_columns(apply_correction(df["quant"], corr).alias("quant")),
+                                 "quant", "rt"), ["run"], ["prec"])
+    resid = resid.with_columns(pl.col("__log2_quant") - pl.col("__log2_quant").mean().over("prec"))
+    for run in (0, 1):
+        assert np.median(resid.filter(pl.col("run") == run)["__log2_quant"]) == pytest.approx(0, abs=1e-9)
 
 
 def test_apply_correction():

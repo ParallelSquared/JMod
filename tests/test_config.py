@@ -95,6 +95,10 @@ class TestSetup:
     def test_rt_norm_defaults_to_run(self):
         assert config.parser.parse_args([]).rt_norm == "run"
 
+    def test_median_norm_is_on_unless_turned_off(self):
+        assert config.parser.parse_args([]).no_median_norm is False
+        assert config.parser.parse_args(["--no_median_norm"]).no_median_norm is True
+
     @pytest.mark.parametrize("rt_norm", ["none", "run", "sample>run", "sample", "run>sample"])
     def test_known_rt_norm_is_accepted(self, inputs, monkeypatch, rt_norm):
         monkeypatch.setattr(config.args, "rt_norm", rt_norm)

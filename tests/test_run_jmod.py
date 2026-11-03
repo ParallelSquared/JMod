@@ -282,9 +282,9 @@ class TestCombinedResults:
 
         monkeypatch.setattr(experiment, "process_run", process_run)
         experiment.main()
-        ((run_folders, _, target_decoy_ratio, _, rt_norm),) = combined
+        ((run_folders, _, target_decoy_ratio, _, rt_norm, median_norm),) = combined
         assert run_folders == {2: "b.mzML_results"}  # the failed run 1 is left out
-        assert (target_decoy_ratio, rt_norm) == (1.0, "run")
+        assert (target_decoy_ratio, rt_norm, median_norm) == (1.0, "run", True)
 
     def test_nothing_is_combined_when_every_run_fails(self, experiment, monkeypatch, combined):
         def process_run(runState, *rest):
@@ -427,9 +427,15 @@ class TestCombineResults:
         monkeypatch.setattr(config.args, "combine_results", str(finished.dir))
         monkeypatch.setattr(config.args, "rt_norm", "sample>run")
         run_jmod.main()
-        (run_folders, experiment_dir, ratio, _, rt_norm), = finished.combined
+        (run_folders, experiment_dir, ratio, _, rt_norm, median_norm), = finished.combined
         assert run_folders == {1: str(finished.dir / "a_results"), 2: str(finished.dir / "b_results")}
-        assert (experiment_dir, ratio, rt_norm) == (str(finished.dir), 0.95, "sample>run")
+        assert (experiment_dir, ratio, rt_norm, median_norm) == (str(finished.dir), 0.95, "sample>run", True)
+
+    def test_no_median_norm_is_passed_on(self, finished, monkeypatch):
+        monkeypatch.setattr(config.args, "no_median_norm", True)
+        run_jmod.run_combine_results(str(finished.dir))
+        (*_, median_norm), = finished.combined
+        assert median_norm is False
 
     def test_an_unknown_rt_norm_stops_before_combining(self, finished, monkeypatch):
         monkeypatch.setattr(config.args, "rt_norm", "bogus")
