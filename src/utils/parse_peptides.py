@@ -325,20 +325,36 @@ def untag_sequences(seqs, mass_tag, SILAC) -> list[str]:
             untagged = [re.sub(f"(\\({label.name}-\\d+\\))?", "", peptide) for peptide in untagged]
     return untagged
 
-def decoy_permutation(tokens, rules: str) -> list:
-    """Index permutation that change_seq applies for 'rev', 'rev_nc', or
-    'shuffle'. Single source of truth for which decoy a peptide becomes:
+def decoy_permutation(tokens, rules: str, anchored=()) -> list:
+    """Index permutation that change_seq applies for 'rev', 'rev_nc', 'rev_tag'
+    or 'shuffle'. Single source of truth for which decoy a peptide becomes:
     both the string path (change_seq) and the columnar decoy builder use it.
 
     tokens : tag-stripped residue tokens (mods still attached), as produced
              by parse_peptide from the sequence without its N-terminal
              modifications (split_nterm).
+    anchored : positions that carry the mass tag ('rev_tag' keeps them fixed).
     """
     n = len(tokens)
     if rules == "rev":
         return list(range(n - 2, -1, -1)) + [n - 1]
     if rules == "rev_nc":
         return [0] + list(range(n - 2, 0, -1)) + [n - 1]
+    if rules == "rev_tag":
+        # Reverse, keeping every tagged position and the C-terminal residue in
+        # place (N-terminal tags already stay at position 0).  The mass tag then
+        # sits at the same positions in target and decoy, so each b and y ion
+        # carries the same number of tags in both.  Under 'rev', a tagged
+        # residue moves to its mirror position -- a penultimate tagged K to the
+        # N-terminus, putting the decoy's tags on the opposite ion series from
+        # its target's -- and such decoys are not a valid null for their
+        # targets.  Without a tag nothing is anchored and this is 'rev'.
+        fixed = set(anchored) | {n - 1}
+        free = [i for i in range(n) if i not in fixed]
+        perm = list(range(n))
+        for i, j in zip(free, reversed(free)):
+            perm[i] = j
+        return perm
     if rules == "shuffle":
         # Shuffle body (all but C-term), keeping mods attached to their AA.
         # Seed on the tag-stripped sequence so all channels get the same shuffle.
@@ -367,7 +383,7 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
     seq : str
         The original peptide sequence
     rules : str
-        Method to modify string ('rev', 'diann', or 'shuffle')
+        Method to modify string ('rev', 'rev_nc', 'rev_tag', 'diann', or 'shuffle')
     tag : massTag, optional
         Channel label tag. When provided, tags are stripped before
         transformation and re-applied afterward so all channels get
@@ -415,8 +431,9 @@ def change_seq(seq: str, rules: str, tag=None) -> str:
     if rules=="diann":
         new_split_seq = [diann_rules[aa] for aa in seq]
         perm = list(range(len(seq)))
-    elif rules in ("rev", "rev_nc", "shuffle"):
-        perm = decoy_permutation(seq, rules)
+    elif rules in ("rev", "rev_nc", "rev_tag", "shuffle"):
+        perm = decoy_permutation(seq, rules,
+                                 anchored=[i for i, t in enumerate(tags) if t])
         new_split_seq = [seq[i] for i in perm]
     else:
         raise JModError("Unavailable rules selected")

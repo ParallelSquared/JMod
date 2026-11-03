@@ -1742,7 +1742,9 @@ class SpectrumLibraryStore:
                 nterm = tag_re.sub("", nterm)
             else:
                 stripped = tokens
-            perm = decoy_permutation(stripped, rules)
+            perm = decoy_permutation(
+                stripped, rules,
+                anchored=[j for j, t in enumerate(tag_lists) if t] if tag else ())
             new_tokens = [stripped[j] for j in perm]
             L = len(new_tokens)
 

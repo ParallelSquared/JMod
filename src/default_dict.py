@@ -301,7 +301,7 @@ default_dict = {
         'widget': '',
         'tk_handle': None,
         'special_upload': False,
-        'values': ['rev', 'rev_nc', 'shuffle']
+        'values': ['rev', 'rev_nc', 'rev_tag', 'shuffle']
     },
     'tag': {
         'flags': ('--tag',),
