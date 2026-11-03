@@ -477,7 +477,7 @@ class TestHitsToArrow:
                 time_channel=np.array([0.0, 4.0, 8.0][:n]) if timeplex else None,
                 window_mz=500.25 + s, rt=12.5 + s,
                 prec_im=np.array([np.nan, 0.9, 1.1][:n]),
-                features=np.arange(n * 28, dtype=np.float64).reshape(n, 28) / 7 + 1e-40,
+                features=np.arange(n * 29, dtype=np.float64).reshape(n, 29) / 7 + 1e-40,
                 frag_codes=np.arange(m, dtype=np.int32),
                 frag_errors=np.linspace(-1e-5, 1e-5, m), frag_mz=np.linspace(100, 900, m),
                 frag_int=np.linspace(0, 1, m), obs_int=np.linspace(5, 9, m),

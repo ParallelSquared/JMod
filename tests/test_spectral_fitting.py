@@ -59,7 +59,8 @@ class TestDiaPrep2D:
             np.array([2], dtype=np.int32), np.array([0], dtype=np.int64),
             np.array([500.0]), np.array([500.0]), np.array([1.0]), np.array([0.90]), 20e-6,
             0.0, 0, False,
-            bmz, bint, bmob, 20e-6, 0.05, True)
+            bmz, bint, bmob, 20e-6, 0.05, True,
+            np.zeros(2, dtype=np.int32), bint)
         passing, flat_rows, all_coords = res[0], res[1], res[6]
         assert passing.tolist() == [0]
         assert all(c % 2 == 1 for c in all_coords)              # both matched
@@ -83,7 +84,8 @@ class TestMainSearchMs1Error:
             np.array([500.0]),
             np.asarray(ms1_mz, float), np.asarray(ms1_int, float), np.asarray(ms1_mob, float),
             ms1_tol, 0.0, 0, False,
-            bmz, bint, bmob, 20e-6, 0.05, True)
+            bmz, bint, bmob, 20e-6, 0.05, True,
+            np.zeros(2, dtype=np.int32), bint)
         passing, ms1_error = res[0], res[5]
         assert passing.tolist() == [0]
         return ms1_error[0]
@@ -573,3 +575,41 @@ class TestCooGramMaxCorr:
         Aty, max_corr = _coo_gram_and_Aty(rows, cols, vals, y, n_cols)
         _, expected = self._numpy(rows, cols, vals, y, n_cols)
         assert max_corr == expected
+
+
+class TestEntropyNormalizedAngle:
+    """theta / sqrt(D1 - 1) over monoisotopic library fragments, from the matcher."""
+
+    @staticmethod
+    def _run(lib_int, codes, dia):
+        mz = np.array([200.0, 400.0]); ints = np.asarray(dia, float); mob = np.array([0.90, 0.90])
+        bmz, bint, bmob = _dia_prep_2d_jit(mz, ints, mob, 20e-6, 0.05)
+        res = _create_entries_direct_jit(
+            np.zeros(0), np.array([200.0, 400.0]), np.asarray(lib_int, float),
+            np.array([0], dtype=np.int64), np.array([2], dtype=np.int32),
+            np.array([0, 1], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([2], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([500.0]), np.array([500.0]), np.array([1.0]), np.array([0.90]), 20e-6,
+            0.0, 0, False,
+            bmz, bint, bmob, 20e-6, 0.05, True,
+            np.asarray(codes, dtype=np.int32), bint)
+        return res[10]
+
+    def test_matches_the_formula(self):
+        lib = [1.0, 3.0]; dia = [900.0, 500.0]
+        a = np.sqrt(dia); b = np.sqrt(lib)
+        theta = np.arccos(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+        p = np.array(lib) / sum(lib); d1 = np.exp(-(p * np.log(p)).sum())
+        out = self._run(lib, [0, 0], dia)
+        assert out.shape == (1,)
+        assert abs(out[0] - theta / np.sqrt(d1 - 1)) < 1e-9
+
+    def test_proportional_spectrum_scores_zero(self):
+        assert abs(self._run([9.0, 5.0], [0, 0], [900.0, 500.0])[0]) < 1e-9
+
+    def test_isotope_fragments_are_ignored(self):
+        # second fragment flagged as isotope 1 (bits 17-20): only one monoisotopic
+        # ion remains, D1 = 1, so the score is theta / sqrt(1e-6) with theta = 0
+        out = self._run([1.0, 3.0], [0, 1 << 17], [900.0, 500.0])
+        assert abs(out[0]) < 1e-9
+

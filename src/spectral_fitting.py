@@ -1209,7 +1209,8 @@ def _create_entries_direct_jit(
     cand_indices,
     prec_mzs, ms1_mz, ms1_int, ms1_mob, ms1_tol,
     frac_lib_threshold, atleast_m, match_ms1,
-    bin_mz, bin_int, bin_mob, mz_tol, im_tol, has_im):
+    bin_mz, bin_int, bin_mob, mz_tol, im_tol, has_im,
+    frag_names_data, dia_int):
     """Like _create_entries_core_jit but reads directly from library backing arrays.
 
     Instead of pre-flattened fragment arrays, this takes the library's contiguous
@@ -1381,6 +1382,54 @@ def _create_entries_direct_jit(
                 j -= 1
             ms1_error[i] = best
 
+    # Step 4b: entropy-normalized spectral angle, theta / sqrt(D1 - 1), over the
+    # candidate's MONOISOTOPIC library fragments.  theta is the angle between
+    # sqrt(library) and sqrt(observed) intensities (unmatched fragments observed
+    # as 0); D1 = exp(Shannon entropy of the library intensity shares), the
+    # effective number of library ions.  Lower is better.
+    ent_angle = np.full(n_cands, np.nan)
+    for i in range(n_cands):
+        lib_idx = cand_indices[i]
+        src_off = int(spec_offsets[lib_idx])
+        src_len = int(spec_lengths[lib_idx])
+        dst_off = int(frag_offsets[i])
+        lib_sum = 0.0
+        for k in range(src_len):
+            if ((frag_names_data[src_off + k] >> 17) & 0xF) == 0:
+                lib_sum += spec_data_int[src_off + k]
+        if lib_sum <= 0.0:
+            continue
+        dot = 0.0
+        a2 = 0.0
+        b2 = 0.0
+        ent = 0.0
+        for k in range(src_len):
+            if ((frag_names_data[src_off + k] >> 17) & 0xF) != 0:
+                continue
+            li = spec_data_int[src_off + k]
+            if li <= 0.0:
+                continue
+            p = li / lib_sum
+            ent -= p * math.log(p)
+            b2 += li
+            c = all_coords[dst_off + k]
+            if c % 2 == 1:
+                ob = dia_int[c // 2]
+                if ob > 0.0:
+                    dot += math.sqrt(ob) * math.sqrt(li)
+                    a2 += ob
+        if a2 > 0.0 and b2 > 0.0:
+            cosv = dot / math.sqrt(a2 * b2)
+            if cosv > 1.0:
+                cosv = 1.0
+            theta = math.acos(cosv)
+        else:
+            theta = math.pi / 2.0
+        d1m1 = math.exp(ent) - 1.0
+        if d1m1 < 1e-6:
+            d1m1 = 1e-6
+        ent_angle[i] = theta / math.sqrt(d1m1)
+
     # Candidate filtering
     n_passing = 0
     passing = np.empty(n_cands, dtype=np.int32)
@@ -1427,7 +1476,11 @@ def _create_entries_direct_jit(
     for j in range(n_passing):
         ms1_error_out[j] = ms1_error[passing[j]]
 
-    return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets, prec_im_out
+    ent_angle_out = np.empty(n_passing, dtype=np.float64)
+    for j in range(n_passing):
+        ent_angle_out[j] = ent_angle[passing[j]]
+
+    return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets, prec_im_out, ent_angle_out
 
 
 def create_entries_direct(centroid_breaks,
@@ -1444,7 +1497,9 @@ def create_entries_direct(centroid_breaks,
                           bin_mob=None,
                           mz_tol=0.0,
                           im_tol=0.0,
-                          has_im=False):
+                          has_im=False,
+                          frag_names_data=None,
+                          dia_int=None):
     """Like create_entries but reads directly from library backing arrays.
 
     Eliminates Python-level flattening of candidate_peaks and top_n_idxs
@@ -1478,12 +1533,13 @@ def create_entries_direct(centroid_breaks,
                 np.zeros(1, np.int32),
                 np.array([], dtype=np.float64),
                 np.empty(0, np.int64), np.empty(0, np.float64),
-                np.zeros(1, np.int32), np.empty(0, np.float64), np.empty(0, np.int64))
+                np.zeros(1, np.int32), np.empty(0, np.float64), np.empty(0, np.int64),
+                np.empty(0, np.float64))
 
     cand_idx_arr = np.asarray(candidate_indices, dtype=np.int64)
 
     passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, \
-        all_coords, all_norm_int, frag_offsets, prec_im_out = \
+        all_coords, all_norm_int, frag_offsets, prec_im_out, ent_angle_out = \
         _create_entries_direct_jit(
             np.ascontiguousarray(centroid_breaks, dtype=np.float64),
             spec_data_mz, spec_data_int,
@@ -1505,13 +1561,17 @@ def create_entries_direct(centroid_breaks,
                 bin_int if bin_int is not None else np.zeros(0), dtype=np.float64),
             np.ascontiguousarray(
                 bin_mob if bin_mob is not None else np.zeros(0), dtype=np.float64),
-            float(mz_tol), float(im_tol), bool(has_im))
+            float(mz_tol), float(im_tol), bool(has_im),
+            np.ascontiguousarray(frag_names_data if frag_names_data is not None
+                                 else np.zeros(len(spec_data_mz), dtype=np.int32)),
+            np.ascontiguousarray(dia_int if dia_int is not None else np.zeros(0), dtype=np.float64))
 
     passing = passing.astype(np.int64)
     return (passing,
             flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out,
             all_coords, all_norm_int, frag_offsets,
-            prec_im_out[passing].astype(np.float64), cand_idx_arr)
+            prec_im_out[passing].astype(np.float64), cand_idx_arr,
+            ent_angle_out)
 
 
 def _flatten_splits(row_idx_split, col_idx_split, val_split):
@@ -2741,12 +2801,15 @@ def fit_to_lib2(dia_spec,
     _match_args = dict(centroid_breaks=centroid_breaks, atleast_m=atleast_m,
                        ms1_spec=ms1_spec, ms1_tol=ms1_tol,
                        bin_mz=_bin_mz, bin_int=_bin_int, bin_mob=_bin_mob,
-                       mz_tol=mz_tol, im_tol=_im_tol, has_im=_has_im)
+                       mz_tol=mz_tol, im_tol=_im_tol, has_im=_has_im,
+                       frag_names_data=library.frag_names_data,
+                       dia_int=dia_spectrum[:, 1])
 
     # window_idxs are library indices: the fragment index returns positions in
     # all_keys, which is list(library)
     ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets, ref_ms1_error, \
-        ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_prec_im, ref_cand_idx = create_entries_direct(
+        ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_prec_im, ref_cand_idx, \
+        ref_ent_angle = create_entries_direct(
             candidate_indices=window_idxs, prec_mzs=rt_mz[:,1][window_idxs],
             **_lib_arrays, **_match_args)
     clock.lap("match_targets", ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals,
@@ -2757,7 +2820,8 @@ def fit_to_lib2(dia_spec,
     if decoy:
         decoy_mz = rt_mz[:,1][decoy_window_idxs]
         decoy_passing, decoy_flat_rows, decoy_flat_cols, decoy_flat_vals, decoy_flat_offsets, decoy_ms1_error, \
-            dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_prec_im, dec_cand_idx = create_entries_direct(
+            dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_prec_im, dec_cand_idx, \
+            dec_ent_angle = create_entries_direct(
                 candidate_indices=decoy_window_idxs, prec_mzs=decoy_mz,
                 **_lib_arrays, **_match_args)
         clock.lap("match_decoys", decoy_passing, decoy_flat_rows, decoy_flat_cols,
@@ -2858,6 +2922,8 @@ def fit_to_lib2(dia_spec,
                             0,
                             decoy_col_offset,
                             unique_lookup_dia=unique_lookup_dia)
+    # 29th column: entropy-normalized spectral angle (_create_entries_direct_jit)
+    features = np.column_stack((features, ref_ent_angle))
     clock.lap("features", features)
 
     if decoy:
@@ -2885,6 +2951,7 @@ def fit_to_lib2(dia_spec,
                                       decoy_col_offset,
                                       0,
                                       unique_lookup_dia=unique_lookup_dia)
+        decoy_features = np.column_stack((decoy_features, dec_ent_angle))
         clock.lap("features", decoy_features)
 
     # Rows: the candidates with a non-zero coefficient, targets then decoys.

@@ -53,6 +53,7 @@ names = ["coeff", "spec_id", "Ms1_spec_id",
          "mz",
          "tic",
          "im_error",
+         "ent_norm_angle",
          "frag_names",
          "frag_errors",
          "frag_mz",
@@ -100,6 +101,7 @@ dtypes  = {"coeff":np.float32,
             "mz":np.float32,
             "tic":np.float32,
             "im_error":np.float32,
+            "ent_norm_angle":np.float32,
             "frag_names":str,
             "frag_errors":str,
             "frag_mz":str,
@@ -126,7 +128,7 @@ _SCHEMA_SPEC = [
     ("window_mz",                   pl.Float32,             0.0),
     ("rt",                          pl.Float32,             0.0),
     ("prec_im",                     pl.Float32,             0.0),
-    # 28 feature columns
+    # 29 feature columns
     ("num_lib",                     pl.Float32,             0.0),
     ("frac_lib_int",                pl.Float32,             0.0),
     ("frac_dia_int",                pl.Float32,             0.0),
@@ -156,6 +158,8 @@ _SCHEMA_SPEC = [
     ("tic",                         pl.Float32,             0.0),
     # observed prec_im minus the aligned library IM; NaN on non-IM runs, as prec_im is
     ("im_error",                    pl.Float32,             0.0),
+    # theta / sqrt(D1 - 1) over monoisotopic library fragments; lower is better
+    ("ent_norm_angle",              pl.Float32,             0.0),
     # 7 fragment list columns
     ("frag_names",                  pl.List(pl.Int32),       None),
     ("frag_errors",                 pl.List(pl.Float64),     None),
