@@ -222,6 +222,13 @@ class JmodRTPredictor:
         train = work.drop(holdout.index)
 
         predictor = RTPredictor.from_checkpoint(ckpt)
+        # TODO: evaluate determinism.  Repeat runs on the same input give the same
+        # first search but different calibrations from here on: on the timsTOF
+        # 200 pg test, holdout MAE 23.465 vs 23.467 and the fitted RT tolerance
+        # 112.988-112.993 s, which moves the MS1 tolerance (8.538-8.549 ppm), the
+        # MS2 tolerance set from it, and the IDs.  Suspected: the LOESS warp in
+        # JRIF.  Check it and the fine-tune (seeds, thread/BLAS order) and seed or
+        # fix whatever is not deterministic.
         # IDs JRIF cannot represent are skipped there, with one printed line.
         report = predictor.calibrate(
             pd.DataFrame({

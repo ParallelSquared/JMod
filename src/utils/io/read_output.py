@@ -223,6 +223,18 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3, anc
 
     group_cols = ['seq', 'z'] + (['time_channel'] if 'time_channel' in df.collect_schema().names() else [])
 
+    # TODO: bug -- "nearby scans" are not adjacent scans.  rt_rank below ranks only
+    # this precursor's own fitted rows, so:
+    #   - gaps are invisible: if the precursor was not fitted for several cycles,
+    #     the next fitted row 10+ s away still counts as the neighbouring scan;
+    #   - IM bands count as scans: overlapping IM bands of one frame are separate
+    #     rows with the same rt, so the +/-n_scans window can be 2-3 bands of a
+    #     single cycle instead of the cycles before and after.
+    # The window should be on the run's cycle grid (best band per cycle, or every
+    # band of each cycle), with cycles where the precursor was not fitted counted
+    # as missing, not skipped.  Fixing it changes every *_nearby_* scoring
+    # feature, so it needs the entrapment validation.
+
     # 1. Use Expression to calculate n_scans (group length)
     df = df.with_columns(
         pl.len().over(group_cols).alias("n_scans")
