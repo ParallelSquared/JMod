@@ -207,7 +207,14 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # Convert Polars DF to Python lists, run the loop, and convert result back to Polars.
     logger.info("Looking up MS1 data")
     ms1_data_list = lookup_ms1_data_list(df, dia_spectra, ms1_ppm_error)
-    ms1_df = pl.DataFrame(ms1_data_list)
+    # Explicit schema: rows without an MS1 peak carry None, and when the first
+    # rows are all None (centroided .d input) polars would infer a Null column.
+    ms1_df = pl.DataFrame(ms1_data_list, schema={
+        "Ms1_spec_id": pl.Int64,
+        "closest_peak_mz_ms1": pl.Float64,
+        "closest_peak_intensity_ms1": pl.Float64,
+        "precursor_mobility": pl.Float64,
+    })
 
     # Add the MS1 data columns back to the main DataFrame
     # Since the data was iterated in order, we can just horizontally stack (hstack)
