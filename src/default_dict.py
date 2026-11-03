@@ -472,8 +472,9 @@ default_dict = {
         'special_upload': lambda handle, handles: (float(handle.get()) if handles['user_rt_tol'].get() else 0.5),
         'values': '+'
     },
-    'no_ms1_req': {
-        'flags': ('--no_ms1_req',),
+    # Older config JSONs hold no_ms1_req instead (config.translate_old_keys)
+    'require_ms1': {
+        'flags': ('--require_ms1',),
         'default': False,
         'takes_value': False,
         'in_GUI': False,

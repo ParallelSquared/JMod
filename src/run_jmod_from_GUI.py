@@ -25,7 +25,7 @@ from tkinter import filedialog, messagebox
 import json
 from idlelib.tooltip import Hovertip
 import os
-from src.config import parser
+from src.config import parser, translate_old_keys
 from src.default_dict import default_dict
 import shlex
 from pathlib import Path
@@ -944,6 +944,8 @@ class JModGUI(ThemedTk):
             args_list = []
             with open(file_path, 'r') as f:
                 config_data = json.load(f)
+            for warning in translate_old_keys(config_data, file_path):
+                logging.getLogger("GUI").warning(warning)
             
             # Update args with values from JSON
             for key, value in config_data.items():

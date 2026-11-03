@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 
@@ -37,6 +38,27 @@ class TestLoadConfigFromJson:
         monkeypatch.setattr(config.args, "config_json", str(path))
         config.load_config_from_json(str(path))
         assert config.args.config_json == str(path)
+
+    # Until c395306, no_ms1_req was true unless --no_ms1_req was passed, and true required MS1
+    @pytest.mark.parametrize("old", [True, False])
+    def test_old_no_ms1_req_is_read_as_require_ms1(self, tmp_path, monkeypatch, old):
+        monkeypatch.setattr(config.args, "require_ms1", not old)
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"no_ms1_req": old}))
+        config.load_config_from_json(str(path))
+        assert config.args.require_ms1 is old
+        assert not hasattr(config.args, "no_ms1_req")
+        assert "no_ms1_req" in config.config_warnings[0]
+
+    @pytest.mark.parametrize("saved, warnings", [(datetime.datetime(2026, 8, 1), 1),
+                                                 (datetime.datetime(2026, 10, 27), 2)])
+    def test_old_no_ms1_req_saved_since_c395306_is_flagged(self, tmp_path, monkeypatch, saved, warnings):
+        monkeypatch.setattr(config.args, "require_ms1", False)
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"no_ms1_req": True}))
+        os.utime(path, (saved.timestamp(), saved.timestamp()))
+        config.load_config_from_json(str(path))
+        assert len(config.config_warnings) == warnings
 
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(JModError, match="Could not open config JSON"):
@@ -138,8 +160,8 @@ class TestDataFolder:
 
 class TestCommandLineOverrides:
     def test_only_typed_options_are_collected(self):
-        given = vars(config._given_parser.parse_args(["--no_ms1_req", "-i", "a.mzML"]))
-        assert given == {"no_ms1_req": False, "mzml": ["a.mzML"]}  # no defaults for the rest
+        given = vars(config._given_parser.parse_args(["--require_ms1", "-i", "a.mzML"]))
+        assert given == {"require_ms1": True, "mzml": ["a.mzML"]}  # no defaults for the rest
 
     def test_typed_option_beats_the_json(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config.args, "ppm", config.args.ppm)

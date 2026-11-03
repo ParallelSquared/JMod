@@ -244,7 +244,7 @@ class TestMainSearchApex:
         assert spearmanr(Z @ v_full, Z @ v_sub).statistic > 0.99
 
     def test_no_ms1_features(self):
-        # --no_ms1_req lets MS1-less PSMs through the main search, so an MS1 column
+        # Without --require_ms1 MS1-less PSMs get through the main search, so an MS1 column
         # would be meaningless for part of the population and bias every loading.
         names = {c for c, _ in MAIN_APEX_FEATURES}
         assert not (names & {"mz_error", "im_error", "prec_im",

@@ -21,7 +21,7 @@
     "unfiltered_quant": true,
     "user_rt_tol": false,
     "rt_tol": 0.5,
-    "no_ms1_req": false,
+    "require_ms1": true,
     "ms1_ppm": 0.0,
     "rawfilereader_path": null,
     "config_json": null,
