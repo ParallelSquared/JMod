@@ -375,6 +375,15 @@ class JModGUI(ThemedTk):
         self.mbr_cb = ttk.Checkbutton(self.ms_frame, variable=self.mbr_var)
         self.mbr_cb.grid(row=2, column=1, padx=5, pady=5, sticky="w")
 
+        # Require MS1 (label + checkbox)
+        self.require_ms1_lab = ttk.Label(self.ms_frame, text="Require MS1:")
+        self.require_ms1_lab.grid(row=2, column=2, padx=20, pady=5, sticky="e")
+        Hovertip(self.require_ms1_lab, "Require observation of an MS1 peak for consideration in the search. Recommended for large libraries")
+        self.require_ms1_var = tk.BooleanVar(value=False)
+        default_dict["require_ms1"]["tk_handle"] = self.require_ms1_var
+        self.require_ms1_cb = ttk.Checkbutton(self.ms_frame, variable=self.require_ms1_var)
+        self.require_ms1_cb.grid(row=2, column=3, padx=5, pady=5, sticky="w")
+
         ####         Multiplex Frame      #######
         self.multiplex_frame = ttk.LabelFrame(self, text="Multiplexing")
         self.multiplex_frame.grid(row=3, column=0, columnspan=10, padx=10, pady=3, sticky="ew")

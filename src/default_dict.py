@@ -477,9 +477,9 @@ default_dict = {
         'flags': ('--require_ms1',),
         'default': False,
         'takes_value': False,
-        'in_GUI': False,
+        'in_GUI': True,
         'type': '',
-        'widget': '',
+        'widget': 'checkbutton',
         'tk_handle': None,
         'special_upload': False,
         'values': 'any'
