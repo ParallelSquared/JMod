@@ -558,9 +558,9 @@ class TestPublicAPI:
         row = result.iloc[0].values
         # Summary features are NaN
         assert np.all(np.isnan(row[:10]))
-        # Ranked features are -1 (missing), precursor-frag features are NaN
-        assert np.all(row[10:-2] == -1.0)
-        assert np.all(np.isnan(row[-2:]))
+        # Ranked features are -1 (missing); precursor-frag and sparse-trace features are NaN
+        assert np.all(row[10:-4] == -1.0)
+        assert np.all(np.isnan(row[-4:]))
 
     def test_target_high_correlation(self):
         library, spectra = _build_coherent_scenario()
@@ -634,8 +634,8 @@ class TestPublicAPI:
         )
         row = result.iloc[0].values
         assert np.all(np.isnan(row[:10]))
-        assert np.all(row[10:-2] == -1.0)
-        assert np.all(np.isnan(row[-2:]))
+        assert np.all(row[10:-4] == -1.0)
+        assert np.all(np.isnan(row[-4:]))
 
     def test_fwhm_none_returns_nan_or_missing(self):
         library, spectra = _build_coherent_scenario()
@@ -652,8 +652,8 @@ class TestPublicAPI:
         )
         row = result.iloc[0].values
         assert np.all(np.isnan(row[:10]))
-        assert np.all(row[10:-2] == -1.0)
-        assert np.all(np.isnan(row[-2:]))
+        assert np.all(row[10:-4] == -1.0)
+        assert np.all(np.isnan(row[-4:]))
 
 
 # ---------------------------------------------------------------------------
@@ -783,3 +783,31 @@ class TestIMBinSelection:
         assert np.isnan(res["max_prec_frag_corr"].iloc[0])
         assert np.isnan(res["im_prec_frag_mean"].iloc[0])
         assert np.isnan(res["im_mean_frag_corr"].iloc[0])
+
+
+def test_sparse_trace_scores_reward_coelution_at_the_apex():
+    """Fragments that rise together at the apex score high on both the
+    consensus and the elution-profile sums; scattered ones do not."""
+    from src.fragment_correlation import _sparse_trace_scores_numba
+    t = np.arange(21, dtype=float)
+    profile = np.exp(-0.5 * ((t - 10) / 1.2) ** 2)
+    coherent = np.outer(profile, [5.0, 3.0, 2.0, 1.0])
+    rng = np.random.default_rng(0)
+    scattered = np.zeros((21, 4))
+    for j in range(4):
+        scattered[rng.integers(0, 21), j] = 5.0
+    out_c = np.empty(2)
+    out_s = np.empty(2)
+    _sparse_trace_scores_numba(coherent, profile, out_c)
+    _sparse_trace_scores_numba(scattered, profile, out_s)
+    assert out_c[0] > 3.5 and out_c[1] > 3.5      # four fragments, r ~ 1 each
+    assert out_s[0] < out_c[0] and out_s[1] < out_c[1]
+
+
+def test_sparse_trace_scores_need_two_fragments_with_signal():
+    from src.fragment_correlation import _sparse_trace_scores_numba
+    m = np.zeros((21, 3))
+    m[10, 0] = 4.0
+    out = np.empty(2)
+    _sparse_trace_scores_numba(m, np.ones(21), out)
+    assert np.all(np.isnan(out))

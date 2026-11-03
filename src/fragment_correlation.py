@@ -67,6 +67,12 @@ FEATURE_COLUMNS = (
     # Precursor–fragment correlation (unfragmented precursor in MS2 vs fragment traces)
     "mean_prec_frag_corr",     # mean Pearson r between precursor trace and each fragment
     "max_prec_frag_corr",      # max r
+    # Sparse-trace scores over every fragment with any signal (not min_obs-filtered):
+    # sum over fragments of max(0, r), r against the summed trace of the other
+    # fragments (consensus) or against a Gaussian of the run's elution width
+    # centred on the apex scan (profile).
+    "cons_sum_frag_corr",
+    "gau_sum_frag_corr",
     # Same correlation taken across the ION MOBILITY axis instead of RT: at the
     # apex scan only, each fragment's matched intensity is binned by its peaks'
     # own 1/K0 across the band, giving a mobility profile per fragment.  A real
@@ -94,6 +100,8 @@ FEATURE_COLUMNS = (
 # silently breaks the moment any column is appended.
 _IDX_PREC_MEAN = FEATURE_COLUMNS.index("mean_prec_frag_corr")
 _IDX_PREC_MAX = FEATURE_COLUMNS.index("max_prec_frag_corr")
+_IDX_CONS_SUM = FEATURE_COLUMNS.index("cons_sum_frag_corr")
+_IDX_GAU_SUM = FEATURE_COLUMNS.index("gau_sum_frag_corr")
 _IDX_IM_MEAN = FEATURE_COLUMNS.index("im_prec_frag_mean")
 _IDX_IM_MAX = FEATURE_COLUMNS.index("im_prec_frag_max")
 # Start of the 38-slot IM pairwise block (same layout as the RT block).
@@ -740,6 +748,79 @@ def _kernel_pairwise_numba(peaks_mz, peaks_int, peaks_mob,
 
 
 @nb.njit(cache=False, nogil=True)
+def _pearson_cols_numba(x, y):
+    """Pearson r of two equal-length vectors; 0 when either has no variance."""
+    n = x.shape[0]
+    mx = 0.0
+    my = 0.0
+    for i in range(n):
+        mx += x[i]
+        my += y[i]
+    mx /= n
+    my /= n
+    sxx = 0.0
+    syy = 0.0
+    sxy = 0.0
+    for i in range(n):
+        dx = x[i] - mx
+        dy = y[i] - my
+        sxx += dx * dx
+        syy += dy * dy
+        sxy += dx * dy
+    if sxx == 0.0 or syy == 0.0:
+        return 0.0
+    return sxy / np.sqrt(sxx * syy)
+
+
+@nb.njit(cache=False, nogil=True)
+def _sparse_trace_scores_numba(matrix, profile, out):
+    """Consensus and elution-profile scores for sparse fragment traces.
+
+    ``matrix`` (n_scans, n_frags), ``profile`` (n_scans,) the expected elution
+    shape at the apex.  Over fragments with any signal, sums max(0, r) of each
+    fragment against (a) the summed trace of the other fragments and (b)
+    ``profile``.  Writes out[0], out[1]; NaN with fewer than two such fragments.
+    """
+    n_scans, n_frags = matrix.shape
+    out[0] = np.nan
+    out[1] = np.nan
+    if n_scans < 2:
+        return
+    total = np.zeros(n_scans)
+    n_sig = 0
+    for j in range(n_frags):
+        s = 0.0
+        for i in range(n_scans):
+            s += matrix[i, j]
+        if s > 0.0:
+            n_sig += 1
+            for i in range(n_scans):
+                total[i] += matrix[i, j]
+    if n_sig < 2:
+        return
+    rest = np.empty(n_scans)
+    cons = 0.0
+    gau = 0.0
+    for j in range(n_frags):
+        s = 0.0
+        for i in range(n_scans):
+            s += matrix[i, j]
+        if s <= 0.0:
+            continue
+        col = matrix[:, j]
+        for i in range(n_scans):
+            rest[i] = total[i] - col[i]
+        r = _pearson_cols_numba(col, rest)
+        if r > 0.0:
+            cons += r
+        r = _pearson_cols_numba(col, profile)
+        if r > 0.0:
+            gau += r
+    out[0] = cons
+    out[1] = gau
+
+
+@nb.njit(cache=False, nogil=True)
 def _precursor_frag_corr_numba(prec_trace, frag_matrix, out_mean, out_max):
     """Pearson correlation between the precursor intensity trace and each
     fragment column. Writes mean and max r into scalar outputs.
@@ -915,6 +996,9 @@ def compute_fragment_correlations(
     im_prec_scratch = np.empty(2, dtype=np.float64)
     prec_corr_mean = np.empty(1, dtype=np.float64)
     prec_corr_max = np.empty(1, dtype=np.float64)
+    sparse_scratch = np.empty(2, dtype=np.float64)
+    # Elution profile width: the run's FWHM as a Gaussian sigma (seconds)
+    _profile_sigma = float(fwhm) / 2.3548200450309493
 
     seqs = fdc["seq"].to_numpy()
     zs = fdc["z"].to_numpy()
@@ -1003,6 +1087,15 @@ def compute_fragment_correlations(
             )
 
         nonzero_counts = np.count_nonzero(matrix, axis=0)
+
+        # Sparse-trace scores over every fragment with any signal.  The profile is
+        # centred on this row's apex scan (rts[row], the scan the apex selection
+        # chose), the same anchor the IM block below uses.
+        _profile = np.exp(-0.5 * ((scan_rt[use_scans] - float(rts[row])) / _profile_sigma) ** 2)
+        _sparse_trace_scores_numba(np.ascontiguousarray(matrix), _profile, sparse_scratch)
+        out[row, _IDX_CONS_SUM] = sparse_scratch[0]
+        out[row, _IDX_GAU_SUM] = sparse_scratch[1]
+
         keep_cols = nonzero_counts >= min_obs
         n_frags_final = int(keep_cols.sum())
         out[row, 1] = float(n_frags_final)
