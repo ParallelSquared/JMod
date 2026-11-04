@@ -62,6 +62,17 @@ _TAG_CHEMISTRIES = {
 }
 _LABEL_FREE = "lf"
 
+# Device for JRIF calibration (training).  CPU, because training on the GPU is
+# not reproducible: on Apple MPS two calibrations on identical input in fresh
+# processes differ (RT predictions by up to 0.03 s, IM by 5e-5 1/K0), even with
+# torch.use_deterministic_algorithms; on CPU they are bitwise identical.  The
+# drift moved the fitted RT tolerance, hence the MS1 tolerance, the MS2
+# tolerance set from it, and the IDs, between otherwise identical runs.  Costs
+# ~8 s per model on this Mac (RT 5 -> 13 s, IM 7 -> 14 s for ~4,000 IDs).
+# Prediction keeps JRIF's default device: for fixed weights it is reproducible
+# on MPS (tested across processes).
+_CALIBRATION_DEVICE = "cpu"
+
 
 def to_jrif_seq(mod_seq: str, tag=None) -> str:
     """Translate a JMod modified sequence into JRIF's notation.
@@ -222,13 +233,6 @@ class JmodRTPredictor:
         train = work.drop(holdout.index)
 
         predictor = RTPredictor.from_checkpoint(ckpt)
-        # TODO: evaluate determinism.  Repeat runs on the same input give the same
-        # first search but different calibrations from here on: on the timsTOF
-        # 200 pg test, holdout MAE 23.465 vs 23.467 and the fitted RT tolerance
-        # 112.988-112.993 s, which moves the MS1 tolerance (8.538-8.549 ppm), the
-        # MS2 tolerance set from it, and the IDs.  Suspected: the LOESS warp in
-        # JRIF.  Check it and the fine-tune (seeds, thread/BLAS order) and seed or
-        # fix whatever is not deterministic.
         # IDs JRIF cannot represent are skipped there, with one printed line.
         report = predictor.calibrate(
             pd.DataFrame({
@@ -237,6 +241,7 @@ class JmodRTPredictor:
             }),
             seq_col="seq",
             rt_col="rt",
+            device=_CALIBRATION_DEVICE,
             verbose=False,
         )
         logger.info(
@@ -349,6 +354,7 @@ class JmodIMPredictor:
             seq_col="seq",
             charge_col="charge",
             im_col="im",
+            device=_CALIBRATION_DEVICE,
             verbose=False,
         )
         logger.info(

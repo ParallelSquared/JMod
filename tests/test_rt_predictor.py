@@ -229,3 +229,37 @@ class TestIMPredict:
         assert np.isfinite(out[[0, 2]]).all()
         assert np.isnan(out[1])
         assert any("cannot be represented by the IM model" in r.getMessage() for r in app_log)
+
+
+class TestCalibrationDevice:
+    """JRIF calibration trains on CPU: GPU (MPS) training is not reproducible."""
+
+    @staticmethod
+    def _capture(monkeypatch, cls_name):
+        import jrif
+        seen = {}
+
+        class _Stub:
+            def calibrate(self, df, **kw):
+                seen.update(kw)
+                return {"mode": "warp", "n": len(df), "holdout_mae": 0.0}
+
+        monkeypatch.setattr(getattr(jrif, cls_name), "from_checkpoint",
+                            classmethod(lambda cls, *a, **k: _Stub()))
+        return seen
+
+    def test_rt_calibration_runs_on_cpu(self, monkeypatch):
+        import pandas as pd
+        seen = self._capture(monkeypatch, "RTPredictor")
+        df = pd.DataFrame({"mod_seq": [f"PEPTIDE{'K' * i}R" for i in range(10)],
+                           "RT": np.arange(10, dtype=float)})
+        JmodRTPredictor.calibrate(df, tag=None)
+        assert seen.get("device") == "cpu"
+
+    def test_im_calibration_runs_on_cpu(self, monkeypatch):
+        import pandas as pd
+        from src.rt_predictor import JmodIMPredictor
+        seen = self._capture(monkeypatch, "IMPredictor")
+        df = pd.DataFrame({"mod_seq": ["PEPTIDEK", "PEPTIDER"], "z": [2.0, 2.0], "im": [0.9, 0.95]})
+        JmodIMPredictor.calibrate(df, tag=None)
+        assert seen.get("device") == "cpu"
