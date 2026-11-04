@@ -151,10 +151,19 @@ default_dict = {
     },
     # Per-spectrum cap on candidates entering the fit: targets and decoys ranked
     # together by matched top-N ions, then matched fraction of library intensity.
-    # None = no cap.
+    # None = no cap.  100 from a sweep on the uncentroided timsTOF 200 pg test
+    # (precursors at 1% FDR / also in DIA-NN): 1000 -> 12,781 / 10,488,
+    # 250 -> 13,750 / 10,871, 100 -> 13,908 / 11,053.  Fewer weak candidates per
+    # spectrum give cleaner coefficients and goodness-of-fit for the real ones.
+    # TODO: optimize this automatically per run (e.g. from the first search, or a
+    # quick sweep on a subset of spectra) instead of a fixed value: the best cap
+    # depends on the data (centroided spectra hit 1000 in 2% of spectra,
+    # uncentroided in 27%), the library and the load.  Below 250 the share of IDs
+    # not in DIA-NN rose (17.9% -> ~20.5%), so whatever chooses it needs an
+    # FDR check (entrapment), not just the ID count.
     'max_candidates': {
         'flags': ('--max_candidates',),
-        'default': 1000,
+        'default': 100,
         'takes_value': True,
         'in_GUI': False,
         'type': 'int',
