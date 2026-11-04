@@ -78,7 +78,7 @@ deps = [
   "pythonnet",
 
   # Retention-time prediction
-  "jrif>=0.2.0",
+  "jrif==0.3.0",
   # torch<2.11: from 2.11 torch's bundled libomp has install name
   # /opt/llvm-openmp/lib/libomp.dylib instead of Homebrew's path, so on
   # macOS/arm64 dyld loads it as a SECOND OpenMP runtime alongside the one
