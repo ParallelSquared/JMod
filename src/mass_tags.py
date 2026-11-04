@@ -91,6 +91,11 @@ class massTag():
         else:
             self.channel_comp=None
 
+        # The name of the channel that is left empty in the sample, searched as a
+        # null draw for the channel-level FDR.  None unless with_decoy_channel or
+        # resolve_decoy_channel set it; every other channel is a real one.
+        self.decoy_channel = None
+
     def __repr__(self):
         return("\n".join([
                            "Mass Tag",
@@ -115,6 +120,61 @@ class massTag():
         tag = massTag(self.rules, self.mass, [float(self.channel_masses[i] - self.mass) for i in keep],
                       [self.channel_names[i] for i in keep], self.name, compositions=self.channel_comp)
         tag.mass_dict = self.mass_dict
+        return tag
+
+    def with_decoy_channel(self):
+        """This tag with one more channel appended, to be searched as a decoy.
+
+        The new channel is the step from the first to the second channel applied
+        on top of the last channel.  The step is taken as a *composition*, not a
+        mass, so the decoy channel carries the isotopes a real channel one step
+        further along would carry, and its isotope envelope looks like a real
+        channel's rather than like the monoisotopic tag shifted by a mass.
+
+        The step is always extrapolated, even when the tag itself defines a channel
+        of that name -- searching 0, 4, 8, 12 of a tag that also has 16 gives a
+        decoy 16 of the extrapolation's own chemistry, 6.3 ppm from the reagent's
+        on PSMtag_5plex (a different isotope route to the same nominal mass).  The
+        decoy channel is a null draw, so what matters is that it sits one real step
+        out, not that it is a reagent anyone could buy.  mass_dict's entry for that
+        name is the extrapolated channel's from here on.
+
+        Extrapolating can take an element's count negative: the step swaps light
+        atoms for heavy ones, and the tag has only so many light ones to give.
+        That is fine while every element with a negative count is one the peptide
+        itself supplies, which is the usual case (C, H, N, O).  A tag built from an
+        element amino acids do not contain would break there, and nothing checks
+        for it.
+        """
+        if self.n_channels < 2:
+            raise JModError(f"A decoy channel needs at least two channels to take its step from; "
+                            f"{self.name} is searching {self.channel_names}")
+        try:
+            numbers = [int(c) for c in self.channel_names]
+        except ValueError:
+            raise JModError(f"A decoy channel can only be named for a tag whose channel names are "
+                            f"numbers; {self.name}'s are {self.channel_names}")
+        decoy_name = str(numbers[-1] + (numbers[1] - numbers[0]))
+        if decoy_name in self.channel_names:
+            raise JModError(f"The decoy channel {self.name}-{decoy_name} is already being searched: "
+                            f"channels {self.channel_names}")
+
+        if self.channel_comp is not None:
+            step = self.channel_comp[self.channel_names[1]] - self.channel_comp[self.channel_names[0]]
+            decoy_comp = self.channel_comp[self.channel_names[-1]] + step
+            decoy_delta = mass.calculate_mass(decoy_comp) - self.mass
+        else:
+            decoy_comp = None
+            decoy_delta = self.delta[-1] + (self.delta[1] - self.delta[0])
+        compositions = None if self.channel_comp is None else {**self.channel_comp, decoy_name: decoy_comp}
+
+        tag = massTag(self.rules, self.mass, list(self.delta) + [decoy_delta],
+                      list(self.channel_names) + [decoy_name], self.name,
+                      compositions=compositions)
+        # As in select_channels, mass_dict keeps every channel the tag defines,
+        # now including the decoy one
+        tag.mass_dict = {**self.mass_dict, f"{self.name}-{decoy_name}": self.mass + decoy_delta}
+        tag.decoy_channel = decoy_name
         return tag
 
 
@@ -273,6 +333,47 @@ def set_config_tag(available_tags, config_args_tag, channels=None):
     if channels is None:
         return available_tags[config_args_tag]
     return available_tags[config_args_tag].select_channels(channels.split(",") if isinstance(channels, str) else [str(c) for c in channels])
+
+
+def resolve_decoy_channel(mass_tag, setting):
+    """*mass_tag* with its decoy channel resolved from *setting*, the
+    --decoy_channel option.
+
+    "none" leaves the tag alone.  "auto" appends a channel one step past the last
+    one being searched (massTag.with_decoy_channel).  Any other value names a
+    channel that is already being searched, which is then treated as the empty
+    one; a channel the search is not covering is an error, since the decoy
+    channel has to be searched like any other.
+
+    Called from build_library, after a pre-tagged library's own channel has been
+    matched against the tag: the decoy channel is one JMod invented, so it must
+    not be in mass_dict while that match is looking for the library's channel.
+    """
+    if mass_tag is None or not setting or str(setting).lower() in ("none", "off"):
+        return mass_tag
+    if mass_tag.decoy_channel is not None:
+        return mass_tag  # already resolved; the MBR pass builds a second library from the same tag
+    if str(setting).lower() == "auto":
+        # "auto" is the default, so it has to mean "if there is one to make": a tag
+        # searching a single channel has no step to take one from, and no plex to
+        # score channels within either
+        if mass_tag.n_channels < 2:
+            logger.info(f"No decoy channel: {mass_tag.name} is searching one channel "
+                        f"({mass_tag.channel_names[0]})")
+            return mass_tag
+        mass_tag = mass_tag.with_decoy_channel()
+    elif str(setting) in mass_tag.channel_names:
+        mass_tag = copy.copy(mass_tag)
+        mass_tag.decoy_channel = str(setting)
+    else:
+        raise JModError(f"Decoy channel '{setting}' is not one of the channels being searched "
+                        f"({', '.join(mass_tag.channel_names)}). Use --decoy_channel auto to add a "
+                        f"channel one step past the last one, 'none' for no decoy channel, or add "
+                        f"the channel to --channels.")
+    decoy_mass = mass_tag.mass_dict[f"{mass_tag.name}-{mass_tag.decoy_channel}"]
+    logger.info(f"Decoy channel: {mass_tag.name}-{mass_tag.decoy_channel} at "
+                f"{decoy_mass:.5f} (delta {decoy_mass - mass_tag.mass:+.5f})")
+    return mass_tag
 
 
 config.tag = set_config_tag(available_tags, config.args.tag, config.args.channels)

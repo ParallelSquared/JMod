@@ -15,7 +15,7 @@
 import pytest
 import sys
 import os
-from src.mass_tags import massTag, read_json_to_massTag, refresh_tags, set_config_tag, tag_library
+from src.mass_tags import massTag, read_json_to_massTag, refresh_tags, set_config_tag, tag_library, resolve_decoy_channel
 from src.utils.errors import JModError
 import json
 import numpy as np
@@ -539,3 +539,109 @@ class Test_tag_rules():
         tag_json["compositions"] = {"a": tag_json["compositions"]["0"]}
         (tmp_path / "test_one_channel.json").write_text(json.dumps(tag_json))
         assert read_json_to_massTag(tmp_path, "test_one_channel.json") == "test_one_channel"
+
+
+class Test_decoy_channel():
+
+    available_tags = refresh_tags(Path("tests/MassTags"))
+
+    def test_the_step_is_extrapolated_even_when_the_tag_defines_that_channel(self):
+        """0, 4, 8, 12 of PSMtag_5plex steps to 16, which the tag also defines --
+        but the decoy channel is always the extrapolation, a different isotope
+        route to the same nominal mass, 6.3 ppm from the reagent's."""
+        full = self.available_tags["PSMtag_5plex"]
+        tag = set_config_tag(self.available_tags, "PSMtag_5plex", "0,4,8,12").with_decoy_channel()
+        assert tag.decoy_channel == "16"
+        assert tag.channel_names == ["0", "4", "8", "12", "16"]
+        assert tag.channel_comp["16"] == full.channel_comp["12"] + (full.channel_comp["4"]
+                                                                    - full.channel_comp["0"])
+        assert tag.channel_comp["16"] != full.channel_comp["16"]
+        assert tag.channel_masses[-1] - full.channel_masses[-1] == pytest.approx(0.00632, abs=1e-5)
+        # mass_dict's entry for that name is the extrapolated channel's from here on
+        assert tag.mass_dict["PSMtag_5plex-16"] == pytest.approx(tag.channel_masses[-1])
+
+    def test_auto_past_the_last_channel_carries_the_isotopes_of_the_step(self):
+        """All 5 channels searched, so 20 has to be made: the 0 -> 4 step applied
+        to 16, as a composition."""
+        full = self.available_tags["PSMtag_5plex"]
+        tag = full.with_decoy_channel()
+        assert tag.decoy_channel == "20"
+        step = full.channel_comp["4"] - full.channel_comp["0"]
+        assert tag.channel_comp["20"] == full.channel_comp["16"] + step
+        assert dict(tag.channel_comp["20"]) == {"C": 4, "H": 16, "O": 1,
+                                                "C[13]": 14, "N[15]": 2, "O[18]": 2}
+        expected = mass.calculate_mass(tag.channel_comp["20"])
+        assert tag.channel_masses[-1] == pytest.approx(expected)
+        assert tag.delta[-1] == pytest.approx(expected - full.mass)
+        # one step past the last real channel, in mass as well as in isotopes
+        assert tag.delta[-1] - full.delta[-1] == pytest.approx(full.delta[1] - full.delta[0], abs=1e-3)
+
+    def test_the_step_comes_from_the_channels_being_searched(self):
+        """0, 8 steps by 8, not by the tag's own 4."""
+        tag = set_config_tag(self.available_tags, "PSMtag_5plex", "0,8").with_decoy_channel()
+        assert tag.decoy_channel == "16"
+
+    def test_a_tag_without_compositions_steps_by_mass(self):
+        tag = massTag(rules="nK", base_mass=100.0, delta=[0.0, 4.0, 8.0],
+                      channel_names=["0", "4", "8"], name="no_comps").with_decoy_channel()
+        assert tag.decoy_channel == "12" and tag.channel_comp is None
+        assert tag.channel_masses[-1] == pytest.approx(112.0)
+
+    def test_one_channel_cannot_make_a_decoy_channel(self):
+        tag = set_config_tag(self.available_tags, "PSMtag_5plex", "0")
+        with pytest.raises(JModError, match="at least two channels"):
+            tag.with_decoy_channel()
+
+    def test_channels_need_not_be_evenly_spaced(self):
+        """A tag whose channels are 0, 4, 6: the step is the first to the second
+        (4), by name and by composition, not the spacing at the end."""
+        comps = {"0": mass.Composition({"C": 6}),
+                 "4": mass.Composition({"C": 2, "C[13]": 4}),
+                 "6": mass.Composition({"C": 0, "C[13]": 6})}
+        full = massTag(rules="K", base_mass=mass.calculate_mass(comps["0"]),
+                       delta=[mass.calculate_mass(c) - mass.calculate_mass(comps["0"])
+                              for c in comps.values()],
+                       channel_names=["0", "4", "6"], name="uneven", compositions=comps)
+        tag = full.with_decoy_channel()
+        assert tag.decoy_channel == "10"                       # 6 + (4 - 0), not 6 + 2
+        assert tag.channel_comp["10"] == comps["6"] + (comps["4"] - comps["0"])
+
+
+
+class Test_resolve_decoy_channel():
+
+    available_tags = refresh_tags(Path("tests/MassTags"))
+
+    @pytest.mark.parametrize("setting", ["none", "None", "off", "", None])
+    def test_no_decoy_channel(self, setting):
+        tag = set_config_tag(self.available_tags, "PSMtag_5plex", "0,4,8,12")
+        assert resolve_decoy_channel(tag, setting).decoy_channel is None
+
+    def test_no_tag(self):
+        assert resolve_decoy_channel(None, "auto") is None
+
+    def test_auto(self):
+        tag = resolve_decoy_channel(set_config_tag(self.available_tags, "PSMtag_5plex", "0,4,8"), "auto")
+        assert tag.decoy_channel == "12" and tag.channel_names == ["0", "4", "8", "12"]
+
+    def test_a_named_channel_already_being_searched(self):
+        """The 9-plex runs used 2 or 14 as the empty channel, not the last one."""
+        tag = resolve_decoy_channel(set_config_tag(self.available_tags, "PSMtag_5plex", "0,4,8,16"), "16")
+        assert tag.decoy_channel == "16" and tag.channel_names == ["0", "4", "8", "16"]
+
+    def test_a_named_channel_leaves_the_available_tag_alone(self):
+        resolve_decoy_channel(self.available_tags["PSMtag_5plex"], "8")
+        assert self.available_tags["PSMtag_5plex"].decoy_channel is None
+
+    def test_auto_is_skipped_when_there_is_no_step_to_take(self, app_log):
+        """auto is the default, so a tag searching one channel must go through it
+        untouched rather than stop the experiment."""
+        for tag in (self.available_tags["test_one_channel"],                    # a one-channel tag
+                    set_config_tag(self.available_tags, "PSMtag_5plex", "0")):  # one channel searched
+            assert resolve_decoy_channel(tag, "auto").decoy_channel is None
+        assert any("No decoy channel" in r.getMessage() for r in app_log)
+
+    def test_a_channel_not_being_searched_raises(self):
+        tag = set_config_tag(self.available_tags, "PSMtag_5plex", "0,4,8")
+        with pytest.raises(JModError, match="not one of the channels being searched"):
+            resolve_decoy_channel(tag, "16")

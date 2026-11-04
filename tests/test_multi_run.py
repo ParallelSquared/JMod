@@ -11,12 +11,15 @@ from src.multi_run import (_PROTEIN_LEVEL, _Units, collect_results, combine_runs
 from tests.models.spec_lib.test_decoy_differential import _entry
 
 
-def _write_run(tmp_path, run_name, rows, proteins=None, channels=None):
+def _write_run(tmp_path, run_name, rows, proteins=None, channels=None, decoy_channels=None):
     """A run's results folder, with an outputs/all_IDs_filtered.parquet of *rows*.
 
     Each row is (sequence, is_decoy, PredVal, BestChannel_Qvalue); every
     precursor is charge 2, of protein P1 unless *proteins* names one per row,
     and label-free (channel 0) unless *channels* names one per row.
+    *decoy_channels* says per row whether it is in the tag's empty channel; the
+    column is left out entirely when it is None, as results written before
+    decoy channels existed have no such column.
     """
     folder = tmp_path / run_name
     (folder / "outputs").mkdir(parents=True)
@@ -31,6 +34,7 @@ def _write_run(tmp_path, run_name, rows, proteins=None, channels=None):
         "BestChannel_Qvalue": [q for *_, q in rows], "plex_Area": [1.0] * n,
         "seq": seqs, "silac_channel": [float("nan")] * n, "untag_seq": seqs,
         "rt": [1.0] * n, "mz": [500.0] * n, "prec_im": [float("nan")] * n, "coeff": [1.0] * n,
+        **({"is_decoy_channel": decoy_channels} if decoy_channels is not None else {}),
     }).write_parquet(folder / "outputs" / "all_IDs_filtered.parquet")
     return str(folder)
 
@@ -184,6 +188,19 @@ class TestGroupedResults:
         grouped, _, _ = collect_results({1: without}, target_decoy_ratio=1.0, fdr_threshold=0.01)
         assert not {"coeff", "prec_im"} & set(grouped.columns)
 
+    def test_channel_qvalue_is_carried_when_the_runs_have_it(self, tmp_path):
+        """It is written only once the channel-level FDR has run, so the combined
+        results take it when it is there and do without it when it is not."""
+        without = _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001)])
+        grouped, _, _ = collect_results({1: without}, target_decoy_ratio=1.0, fdr_threshold=0.01)
+        assert "Channel_Qvalue" not in grouped.columns
+
+        with_it = _write_run(tmp_path, "b", [("AAA", False, 0.9, 0.001)])
+        parquet = os.path.join(with_it, "outputs", "all_IDs_filtered.parquet")
+        pl.read_parquet(parquet).with_columns(Channel_Qvalue=pl.lit(0.004)).write_parquet(parquet)
+        grouped, _, _ = collect_results({1: with_it}, target_decoy_ratio=1.0, fdr_threshold=0.01)
+        assert grouped["Channel_Qvalue"].to_list() == [pytest.approx(0.004)]
+
     def test_table_beside_every_plot_in_its_folder(self, tmp_path):
         rows = [("AAA", False, 0.9, 0.001), ("DDD", True, 0.1, 0.9)]
         runs = {i: _write_run(tmp_path, name, rows) for i, name in enumerate("abc", start=1)}
@@ -226,3 +243,39 @@ class TestGroupedResults:
         # Both datestamped
         assert len(list(experiment_dir.glob("combined_filtered_IDs_*.parquet"))) == 1
         assert len(list(experiment_dir.glob("experiment_results_*"))) == 1
+
+
+class TestDecoyChannel:
+    """The tag's empty channel is searched like any other, but it is a null draw,
+    so nothing of it reaches the combined IDs -- and so nothing of it reaches the
+    per-run counts and plots or the MBR library, which read them."""
+
+    def test_decoy_channel_rows_are_left_out(self, tmp_path):
+        run = _write_run(tmp_path, "a",
+                         [("AAA", False, 0.9, 0.001), ("AAA", False, 0.8, 0.001),
+                          ("BBB", False, 0.7, 0.001)],
+                         channels=[0, 16, 16], decoy_channels=[False, True, True])
+        ids, _, _ = collect_results({1: run}, target_decoy_ratio=1.0, fdr_threshold=0.01)
+        assert ids.select("untag_prec", "channel").rows() == [("AAA_2", 0)]
+
+    def test_the_decoy_channel_does_not_count_towards_the_global_q_value(self, tmp_path):
+        rows = [("AAA", False, 0.9, 0.001), ("CCC", True, 0.7, 0.5)]
+        without = _write_run(tmp_path, "a", rows, channels=[0, 0],
+                             decoy_channels=[False, False])
+        with_decoys = _write_run(tmp_path, "b", rows + [("BBB", False, 0.8, 0.001)],
+                                 channels=[0, 0, 16], decoy_channels=[False, False, True])
+        _, plain, _ = collect_results({1: without}, target_decoy_ratio=1.0, fdr_threshold=0.01)
+        _, with_decoy_channel, _ = collect_results({1: with_decoys}, target_decoy_ratio=1.0,
+                                                   fdr_threshold=0.01)
+        assert _global_q(with_decoy_channel) == pytest.approx(_global_q(plain))
+
+    def test_results_written_without_the_column_are_unaffected(self, tmp_path):
+        run = _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001)])
+        ids, _, _ = collect_results({1: run}, target_decoy_ratio=1.0, fdr_threshold=0.01)
+        assert ids.select("untag_prec").rows() == [("AAA_2",)]
+
+    def test_the_mbr_library_leaves_the_decoy_channel_out(self, tmp_path):
+        run = _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001), ("BBB", False, 0.8, 0.001)],
+                         channels=[0, 16], decoy_channels=[False, True])
+        ids, _, _ = collect_results({1: run}, target_decoy_ratio=1.0, fdr_threshold=0.01)
+        assert sorted(ids["untag_prec"].unique()) == ["AAA_2"]

@@ -272,3 +272,61 @@ def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
     qq = ms1_quality(ids)
     # percentiles: PredVal 1/4, 2/4, 3.5/4, 3.5/4; gauss_r2_joint 1/3, 3/3, missing = 0, 2/3
     assert np.allclose(qq, [np.sqrt(1 / 4 * 1 / 3), np.sqrt(2 / 4), 0.0, 0.01 * np.sqrt(3.5 / 4 * 2 / 3)])
+
+
+def test_process_data_flags_and_filters_the_decoy_channel(tmp_path, monkeypatch):
+    """The tag's empty channel is scored like any other, so it is in all_IDs with
+    is_decoy_channel set, but it is never an identification: out of the filtered
+    IDs, which is what the combined results and the MBR library are built from."""
+    from src.mass_tags import available_tags
+
+    mass_tag = available_tags["PSMtag_5plex"].select_channels(["0", "4"]).with_decoy_channel()
+    assert mass_tag.decoy_channel == "8"
+    seqs = [f"(PSMtag_5plex-{c})AAAA" for c in (0, 8)] + [f"(PSMtag_5plex-{c})BBBB" for c in (0, 8)]
+
+    dummy_file = tmp_path / "input.mzML"
+    dummy_file.write_text("dummy")
+    (tmp_path.parent / "outputs").mkdir(exist_ok=True)
+
+    monkeypatch.setattr("src.fdr_analysis.get_large_prec",
+                        lambda *args, **kwargs: (None,
+                                                 pd.DataFrame({
+                                                     "seq": seqs,
+                                                     "z": [2] * 4,
+                                                     "rt": [10.0] * 4,
+                                                     "mz": [500.0] * 4,
+                                                     "rt_error": [0.1] * 4,
+                                                     "mz_error": [5] * 4,
+                                                     "gof_stats": [0.1] * 4,
+                                                     "scribe_scores": [1] * 4,
+                                                     "max_matched_residuals": [0.5] * 4,
+                                                     "manhattan_distances": [5] * 4,
+                                                     "frag_errors": [[1.0, 2.0]] * 4,
+                                                     "frag_mz": [[200.0, 300.0]] * 4,
+                                                     "frag_int": [[1.0, 2.0]] * 4,
+                                                     "frac_lib_int": [1] * 4,
+                                                     "file_name": ["f"] * 4,
+                                                     "time_channel": [0] * 4,
+                                                     "silac_channel": [np.nan] * 4,
+                                                     "is_decoy": [False] * 4,
+                                                     "stripped_seq": ["AAAA", "AAAA", "BBBB", "BBBB"],
+                                                 }),
+                                                 None))
+    monkeypatch.setattr("src.fdr_analysis.score_precursors",
+                        lambda fdc, *args, **kwargs: fdc.assign(PredVal=0.9, Qvalue=0.001))
+    monkeypatch.setattr("src.fdr_analysis.ms1_quant",
+                        lambda *args, **kwargs: args[0].assign(plex_Area=100.0))
+    monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
+                        lambda df, results_folder=None, **kwargs: df.assign(Protein_Qvalue=1.0,
+                                                                            protein="P12345"))
+    monkeypatch.setattr("src.fdr_analysis.unstring_floats",
+                        lambda x: x if isinstance(x, list) else [1.0, 2.0])
+
+    process_data(str(dummy_file), None, None, ms1_tol=20e-6, rt_tol=1.0, im_tol=0.01,
+                 target_decoy_ratio=1.0, mass_tag=mass_tag)
+
+    all_ids = pd.read_csv(tmp_path.parent / "outputs/all_IDs.csv")
+    assert dict(zip(all_ids["channel"], all_ids["is_decoy_channel"])) == {0: False, 8: True}
+    filtered = pd.read_csv(tmp_path.parent / "filtered_IDs.csv")
+    assert filtered["channel"].tolist() == [0, 0]
+    assert "is_decoy_channel" in pd.read_parquet(tmp_path.parent / "outputs/all_IDs_filtered.parquet").columns

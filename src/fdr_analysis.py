@@ -1349,7 +1349,19 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     else: 
         fdc["channel"] = 0 #if LF
-        
+
+    # The tag channel left empty in the sample (massTag.decoy_channel): searched
+    # like any other channel, but never a real identification, so it is kept out
+    # of the filtered outputs, the combined results and the MBR library
+    decoy_channel = mass_tag.decoy_channel if mass_tag is not None else None
+    if decoy_channel is None:
+        fdc["is_decoy_channel"] = False
+    elif timeplex:
+        # a timeplex channel is "<time channel>_<tag channel>"
+        fdc["is_decoy_channel"] = [str(c).rsplit("_", 1)[-1] == decoy_channel for c in fdc["channel"]]
+    else:
+        fdc["is_decoy_channel"] = fdc["channel"] == int(decoy_channel)
+
     if SILAC is not None:
         silac_channel = [re.findall(f"{SILAC.name}-(\d+)",i) for i in fdc.seq]
         fdc["silac_channel"] = [int(i[0]) if len(i)>0 else np.nan for i in silac_channel] ### Note: This needs to change for multichannel SILAC
@@ -1435,7 +1447,9 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
     fdx_quant.to_csv(results_folder+"/outputs/all_IDs.csv",index=False)
-    filtered = fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold)].copy()
+    filtered = fdx_quant[np.logical_and.reduce([~fdx_quant["is_decoy"],
+                                                ~fdx_quant["is_decoy_channel"],
+                                                fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold])].copy()
     filtered["MS1_quality"] = ms1_quality(filtered)
     # For the parquets (all_IDs.csv is written): NaN outside the filtered IDs
     fdx_quant["MS1_quality"] = filtered["MS1_quality"]
@@ -1456,8 +1470,8 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
 
     ### select minimum columns for parquet
-    parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
-                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+    parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","is_decoy_channel","Qvalue", "Protein_Qvalue","PredVal",
+                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'Channel_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")

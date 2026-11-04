@@ -36,7 +36,7 @@ import polars as pl
 import pyarrow.parquet as pq
 from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
-from src.mass_tags import tag_library, available_tags, set_config_tag
+from src.mass_tags import tag_library, available_tags, set_config_tag, resolve_decoy_channel
 from src.fdr_analysis import process_data
 from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
@@ -87,7 +87,7 @@ def run_experiment(GUI_config_json=None):
     first_pass_dir = os.path.join(experiment_dir, "first_pass") if mbr else None
 
     #### Build the library once.
-    spectrumLibrary = build_library(config.args.speclib, experiment_dir, mass_tag, SILAC, mod_edits)
+    spectrumLibrary, mass_tag = build_library(config.args.speclib, experiment_dir, mass_tag, SILAC, mod_edits)
     # The global q-value counts targets and decoys like the per-run one, over
     # the whole library
     target_decoy_ratio = spectrumLibrary.target_decoy_ratio
@@ -178,7 +178,7 @@ def _match_between_runs(combined_ids, run_files, experiment_dir, mass_tag, SILAC
                 extra={"highlight": True})
     mbr_dir = datestamped(os.path.join(experiment_dir, "mbr_library"))
     os.makedirs(mbr_dir)
-    spectrumLibrary = build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits)
+    spectrumLibrary, mass_tag = build_mbr_library(combined_ids, mbr_dir, SILAC, mod_edits)
     target_decoy_ratio = spectrumLibrary.target_decoy_ratio
 
     # The library's RTs are now empirical: RT prediction has nothing to add
@@ -705,12 +705,19 @@ def resolve_tags():
 
 def build_library(lib_file, work_dir, mass_tag, SILAC, mod_edits):
     """Load the spectral library and build the target + decoy search library:
-    load_library, then prepare_library."""
+    load_library, then prepare_library.
+
+    Returns (the frozen library, the mass tag).  The tag comes back because the
+    decoy channel is resolved here: it is a channel JMod invents, so it is added
+    once load_library has matched a pre-tagged library's own channel against the
+    tag, and before prepare_library tags every entry with it.
+    """
     targets, library_tag_bool, source_channel = load_library(lib_file, mass_tag, mod_edits)
-    return prepare_library(targets, work_dir, mass_tag, SILAC, library_tag_bool, source_channel)
+    mass_tag = config.tag = resolve_decoy_channel(mass_tag, config.args.decoy_channel)
+    return prepare_library(targets, work_dir, mass_tag, SILAC, library_tag_bool, source_channel), mass_tag
 
 
-def build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits):
+def build_mbr_library(combined_ids, mbr_dir, SILAC, mod_edits):
     """The match-between-runs search library, from the first pass's IDs.
 
     The input library's entries for the precursors the first pass identified,
@@ -718,10 +725,19 @@ def build_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits):
     the same decoys, tagging and isotopes as the first pass's library.  The
     entries are also written to <mbr_dir>/mbrlib.parquet, next to the
     alignment plots.
+
+    Returns (the frozen library, the mass tag), as build_library does.  The
+    library is read again here, so the tag is taken fresh from the settings:
+    the first pass's tag carries the decoy channel JMod invented, which no
+    library can be tagged with, and whose name may be a real channel's.  The
+    decoy channel is then made again, on the fresh tag, before the entries are
+    tagged.
     """
+    mass_tag = set_config_tag(available_tags, config.args.tag, config.args.channels)
     targets, library_tag_bool, source_channel = write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC,
                                                                   mod_edits)
-    return prepare_library(targets, mbr_dir, mass_tag, SILAC, library_tag_bool, source_channel)
+    mass_tag = config.tag = resolve_decoy_channel(mass_tag, config.args.decoy_channel)
+    return prepare_library(targets, mbr_dir, mass_tag, SILAC, library_tag_bool, source_channel), mass_tag
 
 
 def write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits):
