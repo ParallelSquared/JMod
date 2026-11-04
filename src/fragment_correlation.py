@@ -65,6 +65,16 @@ FEATURE_COLUMNS = (
     # Top-10 pairwise correlations (sorted descending; -1 = missing)
     *[f"top{i}_pair_corr" for i in range(1, 11)],
     # Precursor–fragment correlation (unfragmented precursor in MS2 vs fragment traces)
+    # TODO: add the MS1 precursor to these correlations: the precursor's MS1
+    # isotope-envelope trace (monoisotopic + M+1, within the MS1 tolerance and
+    # IM gate, one point per MS1 frame) correlated with each fragment trace, as
+    # mean/max features alongside these MS2 ones.  Presence or intensity of MS1
+    # alone does not separate weak real IDs from the decoys competing with them
+    # (decoys share the target's precursor m/z and RT/IM priors, so 96% of the
+    # decoys above the q=5% cut have an MS1 envelope at their apex), but the MS1
+    # trace should co-elute with a real candidate's fragments and not with a
+    # decoy's.  Not computed before scoring today: ms1_cor/iso_cor/MS1_Area come
+    # from quantitation, after scoring, for passing IDs only.
     "mean_prec_frag_corr",     # mean Pearson r between precursor trace and each fragment
     "max_prec_frag_corr",      # max r
     # Sparse-trace scores over every fragment with any signal (not min_obs-filtered):
