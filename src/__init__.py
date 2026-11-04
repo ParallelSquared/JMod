@@ -72,3 +72,10 @@ os.environ.setdefault("MIMALLOC_PURGE_DELAY", "0")
 #
 # No-op on Linux and Windows, where both libraries share one OpenMP runtime.
 import torch  # noqa: E402,F401  (ordering side effect, not an API)
+
+# numba's compile timers are process-global listeners, so two threads compiling
+# at once can crash one compile with "TimingListener object has no attribute
+# '_ts'" (see src/utils/numba_threads.py).  Installed here, before any worker
+# thread can compile.
+from src.utils.numba_threads import make_compile_timers_thread_safe  # noqa: E402
+make_compile_timers_thread_safe()
