@@ -108,8 +108,11 @@ def test_without_peaks_parquet_reads_raw_with_sdk_tables(tmp_path, stub_loader):
     assert not (d / "peaks.parquet").exists()
 
 
-def test_with_peaks_parquet_reads_it(tmp_path, stub_loader):
+def test_a_peaks_parquet_is_ignored_and_the_raw_ions_are_read(tmp_path, stub_loader):
+    # .d data is always read raw with Bruker's calibration; a centroided
+    # peaks.parquet in the folder is not used.
     d = _fake_d(tmp_path, parquet=True)
     fr._load_d(str(d))
-    assert "tables" not in stub_loader
-    assert stub_loader["build"] == (str(d / "peaks.parquet"), None)
+    assert stub_loader["tables"] == str(d)
+    assert stub_loader["loaded"] == "TABLES"
+    assert stub_loader["build"] == (None, str(d))

@@ -390,7 +390,12 @@ def _prepare_readers(run_files):
         file_reader.load_rawfilereader(reader_path)
 
     if any(f.rstrip("/").lower().endswith(".d") for f in run_files):
-        return file_reader.resolve_bruker_setting(config.args.bruker_sdk_path)
+        sdk_path = file_reader.resolve_bruker_setting(config.args.bruker_sdk_path)
+        # .d data is always read raw with Bruker's calibration, so the SDK is
+        # required (on macOS its Windows library runs under Wine).
+        if sdk_path is None:
+            file_reader._fail_bruker("Reading .d data needs the Bruker timsdata SDK")
+        return sdk_path
     return None
 
 

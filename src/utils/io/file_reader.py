@@ -37,9 +37,10 @@ MIN_ION_COUNT_MS2 = 2.0
 # directories -- win64/ and linux64/ -- alongside include/, examples/ and
 # thirdparty/. Bruker publishes no macOS build, so there is deliberately no
 # .dylib name and no 32-bit directory here; both would be dead entries.
-_BRUKER_LIB_NAME = {"win32": "timsdata.dll"}
+# macOS has no Bruker build: the Windows library runs under Wine there.
+_BRUKER_LIB_NAME = {"win32": "timsdata.dll", "darwin": "timsdata.dll"}
 _BRUKER_LIB_DEFAULT = "libtimsdata.so"
-_BRUKER_PLATFORM_DIR = {"win32": "win64"}
+_BRUKER_PLATFORM_DIR = {"win32": "win64", "darwin": "win64"}
 _BRUKER_PLATFORM_DIR_DEFAULT = "linux64"
 # Deep enough to find <sdk_root>/linux64/lib when pointed one level above the
 # root; shallow enough that pointing at a large directory stays cheap.
@@ -276,7 +277,10 @@ def _load_d(filepath: str, bruker_sdk_path: str = None) -> SpectrumFile:
     if not os.path.exists(tdf_path):
         raise FileNotFoundError(f"analysis.tdf not found in {d_path}")
 
-    raw = not os.path.exists(peaks_path)
+    # Always read the raw, uncentroided ions with Bruker's calibration; a
+    # peaks.parquet in the .d is ignored and the centroider is not used.
+    # raw = not os.path.exists(peaks_path)
+    raw = True
     if raw and not os.path.exists(bin_path):
         raise FileNotFoundError(
             f"Neither {peaks_path} nor {bin_path} exists; there are no peaks "
@@ -295,12 +299,11 @@ def _load_d(filepath: str, bruker_sdk_path: str = None) -> SpectrumFile:
     logger.info(f"Computed {len(im_bins)} overlapping IM bins "
                 f"[{cal['im_range_lower']:.4f}, {cal['im_range_upper']:.4f}]")
 
-    if raw:
-        sf = _build_spectrum_file(filepath, None, cal, dia_lookup, im_bins,
-                                  raw_d_path=d_path)
-    else:
-        logger.info(f"Reading peaks from {peaks_path}")
-        sf = _build_spectrum_file(filepath, peaks_path, cal, dia_lookup, im_bins)
+    sf = _build_spectrum_file(filepath, None, cal, dia_lookup, im_bins,
+                              raw_d_path=d_path)
+    # else:
+    #     logger.info(f"Reading peaks from {peaks_path}")
+    #     sf = _build_spectrum_file(filepath, peaks_path, cal, dia_lookup, im_bins)
 
     logger.info(f"Loaded {len(sf.ms1scans)} MS1 spectra, {len(sf.ms2scans)} MS2 spectra")
     return sf
@@ -312,14 +315,11 @@ _SDK_TABLES_DIR = "bruker_calibration"
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _SDK_TABLES_SCRIPT = os.path.join(_REPO_ROOT, "scripts", "bruker_calibration_tables.py")
 
-# TODO(mono_d): local-testing setup on a Mac, hardcoded. Bruker ships no macOS
-# library, so the Windows one runs under Wine with a Windows Python; see
-# MONO_D_CALIBRATION_PLAN.md for how these were installed.
-_WINE = os.path.expanduser(
-    "~/Applications/Wine Devel.app/Contents/Resources/wine/bin/wine")
-_WINE_PREFIX = os.path.expanduser("~/.wine-jmod")
-_WINE_PYTHON = os.path.expanduser("~/.wine-jmod-py/python.exe")
-_WINE_TIMSDATA = os.path.join(_REPO_ROOT, "timsdata", "win64", "timsdata.dll")
+# macOS: Bruker ships no macOS library, so the Windows timsdata.dll from
+# --bruker_sdk_path runs under Wine, which the user installs (never bundled,
+# LGPL).  JMod only calls it: `wine` must be on PATH, and its prefix (WINEPREFIX
+# or Wine's default) must have a Windows Python on its PATH as `python`.  The
+# helper script needs only the standard library.
 
 
 def _wine_path(path: str) -> str:
@@ -345,18 +345,19 @@ def _sdk_calibration_tables(d_path: str, bruker_sdk_path: str = None) -> str:
     # Write beside the target and rename, so an interrupted run cannot leave
     # partial tables that the next run would treat as complete.
     tmp_dir = tables_dir + ".partial"
+    if not bruker_sdk_path:
+        _fail_bruker(f"No peaks.parquet in {d_path}, and reading it raw needs "
+                     f"Bruker's calibration")
     if sys.platform == "darwin":
-        for p in (_WINE, _WINE_PYTHON, _WINE_TIMSDATA):
-            if not os.path.exists(p):
-                raise FileNotFoundError(
-                    f"Cannot compute Bruker calibration for {d_path}: {p} is missing")
-        cmd = [_WINE, _WINE_PYTHON, _wine_path(_SDK_TABLES_SCRIPT),
-               _wine_path(_WINE_TIMSDATA), _wine_path(d_path), _wine_path(tmp_dir)]
-        env = dict(os.environ, WINEPREFIX=_WINE_PREFIX, WINEDEBUG="-all")
+        import shutil
+        wine = shutil.which("wine")
+        if wine is None:
+            _fail_bruker("On macOS, Bruker's Windows timsdata library runs under Wine, "
+                         "but `wine` is not on PATH")
+        cmd = [wine, "python", _wine_path(_SDK_TABLES_SCRIPT),
+               _wine_path(bruker_sdk_path), _wine_path(d_path), _wine_path(tmp_dir)]
+        env = dict(os.environ, WINEDEBUG="-all")
     else:
-        if not bruker_sdk_path:
-            _fail_bruker(f"No peaks.parquet in {d_path}, and reading it raw needs "
-                         f"Bruker's calibration")
         cmd = [sys.executable, _SDK_TABLES_SCRIPT, bruker_sdk_path, d_path, tmp_dir]
         env = None
 
@@ -1215,14 +1216,6 @@ def resolve_bruker_sdk_path(sdk_path, *, platform=None, strict=True):
     raw = str(sdk_path).strip().strip("\"'").strip()
     if not raw:
         return None
-
-    if platform == "darwin":
-        return _fail(
-            f"--bruker_sdk_path was given ({raw}), but Bruker does not publish a "
-            f"macOS build of the timsdata SDK -- there is no library to load. "
-            f"Real-calibration centroiding of .d data requires Linux or Windows "
-            f"(for example the JMod Docker container)."
-        )
 
     lib_name = _bruker_lib_name(platform)
     p = Path(raw).expanduser()

@@ -141,15 +141,13 @@ def test_wrong_platform_library_raises(fake_sdk):
     assert "timsdata.dll" in str(exc.value)
 
 
-def test_darwin_always_raises(fake_sdk):
-    # Bruker publishes no macOS build, so even a valid tree cannot resolve.
-    with pytest.raises(JModError) as exc:
-        resolve_bruker_sdk_path(str(fake_sdk), platform="darwin")
-    assert "macOS" in str(exc.value)
+def test_darwin_resolves_to_the_windows_library(fake_sdk):
+    # Bruker publishes no macOS build; its Windows library runs under Wine.
+    got = resolve_bruker_sdk_path(str(fake_sdk), platform="darwin")
+    assert got == str((fake_sdk / "win64" / "timsdata.dll").resolve())
 
 
-def test_darwin_unspecified_still_returns_none():
-    # Omitting the flag on macOS stays valid: it takes the approximation path.
+def test_darwin_unspecified_returns_none():
     assert resolve_bruker_sdk_path(None, platform="darwin") is None
 
 
@@ -256,3 +254,84 @@ class TestResolveBrukerSetting:
 
         assert resolve_bruker_setting("") is None
         assert self._read(settings_file)["bruker_sdk_path"] is None
+
+
+# --- which command computes the calibration tables, per platform -----------
+
+class _Done:
+    returncode = 0
+    stdout = "ok"
+    stderr = ""
+
+
+@pytest.fixture
+def capture_run(monkeypatch):
+    """Stub subprocess.run: record the command and write calibration.json."""
+    import subprocess
+    seen = {}
+
+    def run(cmd, env=None, **kw):
+        seen["cmd"], seen["env"] = cmd, env
+        out = cmd[-1]
+        if out.startswith("Z:"):        # Wine path back to the Mac path
+            out = out[2:].replace("\\", "/")
+        os.makedirs(out, exist_ok=True)
+        open(os.path.join(out, "calibration.json"), "w").write("{}")
+        return _Done()
+    monkeypatch.setattr(subprocess, "run", run)
+    return seen
+
+
+@pytest.mark.parametrize("plat", ["linux", "win32"])
+def test_linux_and_windows_run_the_sdk_natively(tmp_path, monkeypatch, capture_run, plat):
+    from src.utils.io import file_reader as fr
+    monkeypatch.setattr(sys, "platform", plat)
+    d = tmp_path / "run.d"; d.mkdir()
+    tables = fr._sdk_calibration_tables(str(d), "/sdk/libtimsdata.so")
+    cmd = capture_run["cmd"]
+    assert cmd[0] == sys.executable and cmd[1] == fr._SDK_TABLES_SCRIPT
+    assert cmd[2] == "/sdk/libtimsdata.so" and capture_run["env"] is None
+    assert os.path.isfile(os.path.join(tables, "calibration.json"))
+
+
+def test_macos_runs_the_windows_sdk_under_wine(tmp_path, monkeypatch, capture_run):
+    import shutil
+    from src.utils.io import file_reader as fr
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/wine" if name == "wine" else None)
+    d = tmp_path / "run.d"; d.mkdir()
+    fr._sdk_calibration_tables(str(d), str(tmp_path / "sdk" / "timsdata.dll"))
+    cmd = capture_run["cmd"]
+    assert cmd[:2] == ["/usr/local/bin/wine", "python"]
+    assert cmd[3] == fr._wine_path(str(tmp_path / "sdk" / "timsdata.dll"))
+    assert "WINEPREFIX" not in capture_run["env"] or capture_run["env"]["WINEPREFIX"] == os.environ.get("WINEPREFIX")
+
+
+def test_macos_without_wine_fails(tmp_path, monkeypatch, capture_run):
+    import shutil
+    from src.utils.io import file_reader as fr
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    d = tmp_path / "run.d"; d.mkdir()
+    with pytest.raises(JModError) as exc:
+        fr._sdk_calibration_tables(str(d), "/sdk/timsdata.dll")
+    assert "wine" in str(exc.value)
+    assert "cmd" not in capture_run
+
+
+@pytest.mark.parametrize("plat", ["linux", "win32", "darwin"])
+def test_the_sdk_is_required(tmp_path, monkeypatch, capture_run, plat):
+    from src.utils.io import file_reader as fr
+    monkeypatch.setattr(sys, "platform", plat)
+    d = tmp_path / "run.d"; d.mkdir()
+    with pytest.raises(JModError):
+        fr._sdk_calibration_tables(str(d), None)
+    assert "cmd" not in capture_run
+
+
+def test_cached_tables_are_reused(tmp_path, capture_run):
+    from src.utils.io import file_reader as fr
+    d = tmp_path / "run.d"; (d / fr._SDK_TABLES_DIR).mkdir(parents=True)
+    (d / fr._SDK_TABLES_DIR / "calibration.json").write_text("{}")
+    fr._sdk_calibration_tables(str(d), "/sdk/libtimsdata.so")
+    assert "cmd" not in capture_run
