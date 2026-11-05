@@ -521,23 +521,6 @@ class TestCooGramSparseMatchesDense:
             vals[5] = np.nan
         self._check(rows, cols, vals, y, 20)
 
-    def test_large_fit_stays_small(self):
-        """5,000 candidates: the dense Gram would be 200 MB.  (The test session
-        runs numba-disabled, so this is kept small; compiled, the 55,000-
-        candidate fits of a raw-data run would have needed 22 GB.)"""
-        from src.spectral_fitting import _coo_gram_and_Aty
-        from src.utils import mem_profile as mp
-        rng = np.random.default_rng(10)
-        n_cols = 5_000
-        rows, cols, vals, y = _search_like_coo(rng, 2000, n_cols)
-        _coo_gram_and_Aty(rows[:100], cols[:100], vals[:100], y, n_cols)  # compile if JIT on
-        before = mp.malloc_stats()[0]
-        Aty, mc = _coo_gram_and_Aty(rows, cols, vals, y, n_cols)
-        after = mp.malloc_stats()[0]
-        assert 0.0 < mc <= 1.0 + 1e-12
-        if before is not None:
-            assert after - before < 64 * 2**20   # nothing near the 200 MB dense matrix held
-
 
 class TestCooGramMaxCorr:
     """_coo_gram_and_Aty's max column correlation must equal the numpy

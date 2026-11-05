@@ -2720,38 +2720,6 @@ def protein_column(library):
     return column if column is not None and column[first] not in (None, '') else None
 
 
-class _StepClock:
-    """Per-step wall time and output bytes for one fit_to_lib2 call.
-
-    ``lap(step, *arrays)`` charges the time since the previous lap to *step*
-    and adds the arrays' sizes to its bytes; repeated steps (targets, then
-    decoys) accumulate.  Everything a step produces stays alive until the fit
-    returns, so the sum of the steps' bytes is the fit's working set (plus
-    the solver's internal copies, estimated separately).  A no-op when
-    *stats* is None.
-    """
-    __slots__ = ("stats", "t")
-
-    def __init__(self, stats):
-        self.stats = stats
-        self.t = time.perf_counter()
-
-    def lap(self, step, *arrays):
-        if self.stats is None:
-            return
-        now = time.perf_counter()
-        st = self.stats
-        st[step + "_s"] = st.get(step + "_s", 0.0) + (now - self.t)
-        self.t = now
-        nbytes = 0
-        for a in arrays:
-            if isinstance(a, np.ndarray):
-                nbytes += a.nbytes
-            elif isinstance(a, (list, tuple)):
-                nbytes += sum(x.nbytes for x in a if isinstance(x, np.ndarray))
-        st[step + "_bytes"] = st.get(step + "_bytes", 0) + nbytes
-
-
 def fit_to_lib2(dia_spec,
                 library,
                 rt_mz,
@@ -2769,12 +2737,8 @@ def fit_to_lib2(dia_spec,
                frag_index=None,
                ms1_rt=None,
                im_bin_ms1=None,
-               proteins=None,
-               stats=None):
+               proteins=None):
     # spec_idx,dia_spec,library = inputs
-    # stats: optional dict; when given, filled with this fit's sizes and the
-    # time and output bytes of each step (see _StepClock and main_search).
-    clock = _StepClock(stats)
     # im_tol: fragment IM tolerance (the run's fitted precision).
     # im_accuracy: widening of the IM candidate gate (the run's fitted library-IM
     # accuracy), or None on data without ion mobility (and timeplex), where
@@ -2787,8 +2751,6 @@ def fit_to_lib2(dia_spec,
     atleast_m=config.args.atleast_m
     spec = dia_spec
     dia_spectrum = np.stack(spec.peak_list(),1)
-    if stats is not None:
-        stats["raw_peaks"] = dia_spectrum.shape[0]
     prec_mz = spec.prec_mz
     prec_rt = spec.RT
     windowWidth = window_width(dia_spec)
@@ -2832,9 +2794,6 @@ def fit_to_lib2(dia_spec,
         dia_spectrum = np.stack([merged_mz, merged_int], axis=1)
         _bin_mz = _bin_int = _bin_mob = None
 
-    if stats is not None:
-        stats["binned_peaks"] = dia_spectrum.shape[0]
-    clock.lap("bin_peaks", dia_spectrum, _dia_mob, _bin_mz, _bin_int, _bin_mob)
 
     # Get candidates via fragment index or fallback to m/z + RT window
     # Single query returns both target and decoy candidates from unified index
@@ -2875,9 +2834,6 @@ def fit_to_lib2(dia_spec,
             )
         all_window_idxs = np.where(_bool)[0]
 
-    if stats is not None:
-        stats["candidates"] = len(all_window_idxs)
-    clock.lap("query", all_window_idxs)
 
     # Split into target and decoy candidates
     # TODO: unify target/decoy processing paths to eliminate this split
@@ -2908,9 +2864,6 @@ def fit_to_lib2(dia_spec,
         ref_ent_angle, ref_topn, ref_frac = create_entries_direct(
             candidate_indices=window_idxs, prec_mzs=rt_mz[:,1][window_idxs],
             **_lib_arrays, **_match_args)
-    clock.lap("match_targets", ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals,
-              ref_flat_offsets, ref_ms1_error, ref_all_coords, ref_all_norm_int,
-              ref_frag_offsets, ref_prec_im, ref_cand_idx)
 
     ### Decoys, from the same index query (their m/z offset is already in rt_mz)
     if decoy:
@@ -2920,9 +2873,6 @@ def fit_to_lib2(dia_spec,
             dec_ent_angle, dec_topn, dec_frac = create_entries_direct(
                 candidate_indices=decoy_window_idxs, prec_mzs=decoy_mz,
                 **_lib_arrays, **_match_args)
-        clock.lap("match_decoys", decoy_passing, decoy_flat_rows, decoy_flat_cols,
-                  decoy_flat_vals, decoy_flat_offsets, decoy_ms1_error, dec_all_coords,
-                  dec_all_norm_int, dec_frag_offsets, dec_prec_im, dec_cand_idx)
 
     # Per-spectrum cap on candidates entering the fit (--max_candidates).
     # Targets and decoys are ranked together, by matched top-N ions then the
@@ -2979,25 +2929,9 @@ def fit_to_lib2(dia_spec,
     # Pass flat COO arrays directly — avoids constructing scipy sparse matrix
     _n_coo_rows = len(dia_spec_int)
     _n_coo_cols = int(sparse_col_indices.max()) + 1 if len(sparse_col_indices) > 0 else 0
-    if stats is not None:
-        stats["rows"] = _n_coo_rows
-        stats["columns"] = _n_coo_cols
-        stats["nonzeros"] = len(sparse_values)
-    clock.lap("assemble", sparse_row_indices, sparse_col_indices, sparse_values,
-              dia_spec_int, peak_idx_lookup)
     fit_results = huber_nnls_irls(sparse_values, sparse_row_indices, sparse_col_indices,
                                   _n_coo_rows, _n_coo_cols, dia_spec_int)
     lib_coefficients = fit_results['x']
-    clock.lap("solve", lib_coefficients, fit_results.get('weights'))
-    if stats is not None:
-        # Freed before huber_nnls_irls returns, so not in the lap above:
-        # _coo_gram_and_Aty's scratch (six per-entry and six per-column
-        # arrays), and the CSC matrix, its reweighted copy and enet_path's
-        # vectors.
-        stats["solve_gram_bytes"] = 48 * len(sparse_values) + 49 * _n_coo_cols
-        stats["solve_internal_bytes"] = (stats["solve_gram_bytes"]
-                                         + len(sparse_values) * (8 + 4 + 8)
-                                         + (_n_coo_rows + _n_coo_cols) * 8 * 4)
 
     # Responsibility-split entropy-normalized angle (30th feature column).
     # TODO: evaluate on multiplexed data (several channels, crowded spectra), the
@@ -3042,10 +2976,8 @@ def fit_to_lib2(dia_spec,
                                  library.spectrum_mz, library.spectrum_int, library.frag_names_data,
                                  coords, frag_offsets, flat_rows, flat_offsets,
                                  bin_centers, _dia_int, single_match_lookup, peak_idx_lookup)
-    clock.lap("unique_peaks", single_match_lookup, unique_lookup_dia)
     ref_frags = _frag_columns(ref_passing, ref_cand_idx, ref_all_coords, ref_frag_offsets,
                               ref_flat_rows, ref_flat_offsets)
-    clock.lap("fragment_columns", ref_frags)
 
     # Build decoy flat arrays for get_features (empty if no decoys)
     _dec_offsets = decoy_flat_offsets if (decoy and len(decoy_flat_offsets) > 1) else np.zeros(1, np.int32)
@@ -3068,12 +3000,10 @@ def fit_to_lib2(dia_spec,
     # 29th column: entropy-normalized spectral angle (_create_entries_direct_jit);
     # 30th: the same against each peak's responsibility-split intensity
     features = np.column_stack((features, ref_ent_angle, ref_resp_angle))
-    clock.lap("features", features)
 
     if decoy:
         decoy_frags = _frag_columns(decoy_passing, dec_cand_idx, dec_all_coords, dec_frag_offsets,
                                     decoy_flat_rows, decoy_flat_offsets)
-        clock.lap("fragment_columns", decoy_frags)
         # Column 2 (aligned library IM) has to be carried through here too --
         # this array is rebuilt rather than sliced, so it would otherwise be
         # 2 columns wide and the IM error feature would fail on decoys.
@@ -3096,7 +3026,6 @@ def fit_to_lib2(dia_spec,
                                       0,
                                       unique_lookup_dia=unique_lookup_dia)
         decoy_features = np.column_stack((decoy_features, dec_ent_angle, dec_resp_angle))
-        clock.lap("features", decoy_features)
 
     # Rows: the candidates with a non-zero coefficient, targets then decoys.
     # Columns of lib_coefficients are the target candidates then the decoys
@@ -3157,7 +3086,6 @@ def fit_to_lib2(dia_spec,
         protein=protein,
         is_decoy=np.arange(len(nz)) >= len(nz_target),
     )
-    clock.lap("output")  # its bytes are the results', measured by the caller
     return hits
 
 
