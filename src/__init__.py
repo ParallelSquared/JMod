@@ -24,12 +24,8 @@ warnings.filterwarnings("ignore", message="hdf5plugin is missing")
 # All environment variables jmod sets live here, and only here. This module
 # is the first `src` import in every entry path (CLI wrapper, GUI wrapper,
 # pytest), which is early enough for libraries that read their config at
-# first load (polars' allocator, TensorFlow). All are setdefault: anything
+# first load (polars' allocator). All are setdefault: anything
 # exported in the shell wins.
-
-# TODO: revisit if TF C++ INFO logs are ever needed; hides the benign oneDNN
-# round-off notice
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "1")
 
 # Make polars' allocator return freed pages to the OS immediately instead of
 # pooling them. The streaming engine allocates thousands of small pipe buffers

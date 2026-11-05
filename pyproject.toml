@@ -74,7 +74,6 @@ deps = [
   "ttkthemes",
 
   # OS-specific helper
-  "pywin32; platform_system == 'Windows'",
   "pythonnet",
 
   # Retention-time prediction
