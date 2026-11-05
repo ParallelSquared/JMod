@@ -212,8 +212,8 @@ Some commonly used search parameters are listed below. A more extensive list of 
 -m --atleast_m
   Required number of fragments matched from top N fragments (N=10)
   default = 3
---no_ms1_req
-  Don't require observation of an MS1 peak for consideration in the search.
+--require_ms1
+  Require observation of an MS1 peak for consideration in the search.
   default = False
 --apex_jitter
   Allow center scan for MS1 quant to slide this many scans if intensity is monotonically increasing.

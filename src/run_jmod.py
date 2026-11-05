@@ -226,6 +226,8 @@ def run_make_library(experiment_dir):
     set_log_filepath(os.path.join(mbr_dir, "JMod_log.log"))
     logger.info(f"Match between runs for {os.path.abspath(experiment_dir)}")
     logger.info(f"Settings from {config.args.config_json}")
+    for warning in config.config_warnings:
+        logger.warning(warning)
     logger.info(f"Library: {config.args.speclib}")
     logger.info(f"{len(run_folders)} completed run(s)")
 
@@ -458,6 +460,8 @@ def _start_experiment_log():
         overrides = {k: v for k, v in config.cli_args.items() if k != "config_json"}
         if overrides:
             logger.info(f"Command-line options overriding the config JSON: {overrides}")
+    for warning in config.config_warnings:
+        logger.warning(warning)
 
     # Log the configuration that will be used
     logger.info("Using configuration:")

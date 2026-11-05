@@ -200,15 +200,15 @@ def first_search_apex_pc1(df):
     Replaces picking the most intense MS1 scan, which uses one number and ignores
     every match feature the first search already computed. Anchored on that same
     MS1 intensity, which unambiguously peaks at the apex. The main search anchors on
-    ``coeff`` instead -- ``no_ms1_req`` lets MS1-less PSMs through there.
+    ``coeff`` instead -- without ``require_ms1`` MS1-less PSMs get through there.
     """
     return within_group_pc1(df, APEX_FEATURES, ["seq", "z"],
                             anchor="closest_peak_intensity_ms1",
                             label="First-search apex PC1")
 
 
-# Main-search apex features. No MS1-derived column appears here: --no_ms1_req lets
-# MS1-less PSMs through the main search, and a feature that is meaningless for part
+# Main-search apex features. No MS1-derived column appears here: without --require_ms1
+# MS1-less PSMs get through the main search, and a feature that is meaningless for part
 # of the population would bias the loadings for all of it. Transforms follow the
 # measured minima -- gof_stats, manhattan_distances and max_matched_residuals all go
 # below -1, so log1p is undefined for them.

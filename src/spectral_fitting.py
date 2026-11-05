@@ -1650,7 +1650,7 @@ def create_entries_direct(centroid_breaks,
             else np.empty(0, dtype=np.float64),
             float(ms1_tol),
             float(config.args.lib_frac), int(atleast_m),
-            not config.args.no_ms1_req,
+            bool(config.args.require_ms1),
             np.ascontiguousarray(
                 bin_mz if bin_mz is not None else np.zeros(0), dtype=np.float64),
             np.ascontiguousarray(
@@ -2606,7 +2606,7 @@ def create_entries(centroid_breaks,
             np.ascontiguousarray(ms1_spec.mz, dtype=np.float64),
             float(ms1_tol),
             float(config.args.lib_frac), int(atleast_m),
-            not config.args.no_ms1_req)
+            bool(config.args.require_ms1))
 
     # Reconstruct Python lists from JIT output
     peaks_in_dia = passing.tolist()

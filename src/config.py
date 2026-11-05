@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import argparse
+import datetime
 import json
 import os
 from src.default_dict import default_dict
@@ -274,6 +275,28 @@ _BUILTIN_DIANN_MODS = dict(diann_mods)
 
 
 # Function to load configuration from JSON
+# Warnings from the last config JSON loaded, for the experiment log (written after the JSON is loaded)
+config_warnings = []
+
+
+def translate_old_keys(config_data, json_path):
+    """Rename, in place, keys of *config_data* that older config JSONs hold, and
+    return a warning for each.
+
+    no_ms1_req is now require_ms1.  Until commit c395306 (Oct 26 2026)
+    no_ms1_req was true unless --no_ms1_req was passed, and true required an MS1
+    peak: it is read with that meaning, which a JSON saved since then reverses.
+    """
+    warnings = []
+    if "no_ms1_req" in config_data:
+        value = bool(config_data.pop("no_ms1_req"))
+        config_data.setdefault("require_ms1", value)
+        warnings.append(f"Config loaded has no_ms1_req = {value}. This is deprecated. Reading as require_ms1 = {value}")
+        if datetime.datetime.fromtimestamp(os.path.getmtime(json_path)) >= datetime.datetime(2026, 10, 26):
+            warnings.append("Config modified after October 26, 2026 and is likely to have the incorrect require_ms1 flag")
+    return warnings
+
+
 def load_config_from_json(json_path):
     """Load configuration parameters from a JSON file.
 
@@ -293,6 +316,8 @@ def load_config_from_json(json_path):
         raise JModError(f"Could not read config JSON {json_path}: {e}{hint}") from e
     except OSError as e:
         raise JModError(f"Could not open config JSON {json_path}: {e}") from e
+
+    config_warnings[:] = translate_old_keys(config_data, json_path)
 
     # Update args with values from JSON. Downstream code reads
     # ``config.args.X`` directly, so there is no module-level alias to

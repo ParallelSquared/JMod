@@ -25,7 +25,7 @@ from tkinter import filedialog, messagebox
 import json
 from idlelib.tooltip import Hovertip
 import os
-from src.config import parser
+from src.config import parser, translate_old_keys
 from src.default_dict import default_dict
 import shlex
 from pathlib import Path
@@ -374,6 +374,15 @@ class JModGUI(ThemedTk):
         default_dict["mbr"]["tk_handle"] = self.mbr_var
         self.mbr_cb = ttk.Checkbutton(self.ms_frame, variable=self.mbr_var)
         self.mbr_cb.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+
+        # Require MS1 (label + checkbox)
+        self.require_ms1_lab = ttk.Label(self.ms_frame, text="Require MS1:")
+        self.require_ms1_lab.grid(row=2, column=2, padx=20, pady=5, sticky="e")
+        Hovertip(self.require_ms1_lab, "Require observation of an MS1 peak for consideration in the search. Recommended for large libraries")
+        self.require_ms1_var = tk.BooleanVar(value=False)
+        default_dict["require_ms1"]["tk_handle"] = self.require_ms1_var
+        self.require_ms1_cb = ttk.Checkbutton(self.ms_frame, variable=self.require_ms1_var)
+        self.require_ms1_cb.grid(row=2, column=3, padx=5, pady=5, sticky="w")
 
         ####         Multiplex Frame      #######
         self.multiplex_frame = ttk.LabelFrame(self, text="Multiplexing")
@@ -955,6 +964,8 @@ class JModGUI(ThemedTk):
             args_list = []
             with open(file_path, 'r') as f:
                 config_data = json.load(f)
+            for warning in translate_old_keys(config_data, file_path):
+                logging.getLogger("GUI").warning(warning)
             
             # Update args with values from JSON
             for key, value in config_data.items():
