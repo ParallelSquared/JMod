@@ -377,6 +377,14 @@ def _prepare_readers(run_files):
     It is only needed for a .d with no peaks.parquet yet, where it supplies the
     calibration for centroiding.  Returns the Bruker SDK path, or None.
     """
+    # TODO: handle the Thermo and Bruker paths the same way.  Thermo's CLI-vs-
+    # settings logic is inline here, saves a CLI path to settings.json before it
+    # is validated, and a missing path only fails as Path(None) inside
+    # load_rawfilereader; Bruker's goes through resolve_bruker_setting, which
+    # validates before saving.  Add a resolve_rawfilereader_setting like it, with
+    # the same "required" error.  The one real difference stays: Thermo's .NET
+    # DLLs load into this process, while Bruker's library runs in a subprocess
+    # per .d, so its path is returned and passed down to each run.
     if any(f.lower().endswith(".raw") for f in run_files):
         settings = load_settings()
 
