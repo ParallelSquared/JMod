@@ -68,8 +68,6 @@ def test_apex_score_prefers_the_scan_near_the_prediction(tmp_path):
     pick = lambda **kw: get_large_prec(f, condense_output=False, **kw)[1].set_index("seq").loc["PEPTIDEK", "rt_error"]
     assert pick() == -60.0                        # spectral PC1 alone: the interferer
     assert abs(pick(rt_sigma=20.0)) <= 1.0        # with the RT prior: the real peak
-    scans = pl.read_parquet(tmp_path / "apex_pc1_scans.parquet")
-    assert {"apex_pc1", "rt_logprior", "im_logprior", "apex_score"} <= set(scans.columns)
 
 
 def test_override_features_record_the_spectral_apex(tmp_path):

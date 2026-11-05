@@ -486,8 +486,6 @@ def get_large_prec(file,
                                               seed=config.RANDOM_SEED)
     decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
         quality_pca.main_apex_pc1_expr(loadings, apex_group_cols).alias("apex_pc1"))
-    logger.info("Apex PC1 loadings: " + ", ".join(
-        f"{c} {w:+.3f}" for (c, _), w in zip(quality_pca.MAIN_APEX_FEATURES, loadings)))
     # Apex score: the spectral PC1 plus log priors for agreement with the predicted
     # RT (Gaussian, the RT tolerance's core sigma) and IM (Laplace, the IM accuracy
     # fit's core scale).  PC1 alone has no RT/IM term, and putting rt_error into the
@@ -502,7 +500,6 @@ def get_large_prec(file,
         _rt_lp.alias("rt_logprior"), _im_lp.alias("im_logprior"))
     decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
         (pl.col("apex_pc1") + pl.col("rt_logprior") + pl.col("im_logprior")).alias("apex_score"))
-    logger.info(f"Apex score: PC1 + RT log prior (sigma {rt_sigma}) + IM log prior (scale {im_scale})")
     # What the priors overrode, as scoring features.  The spectral apex (max PC1)
     # and the chosen apex (max apex_score) come from the same PC1 values: for a
     # real peptide they usually agree; a null's best spectral evidence is anywhere
@@ -521,13 +518,6 @@ def get_large_prec(file,
          - pl.col("apex_pc1").sort_by(_chosen, descending=True).first().over(apex_group_cols))
         .alias("apex_pc1_cost"),
     )
-    # Every scan's apex terms, for inspecting apex choices along the gradient.
-    _apex_scans = os.path.join(os.path.dirname(os.path.abspath(file)), "apex_pc1_scans.parquet")
-    (decoy_coeffs_lf
-     .select(apex_group_cols + ["spec_id", "rt", "prec_im", "coeff", "rt_error",
-                                "im_error", "is_decoy", "apex_pc1", "rt_logprior",
-                                "im_logprior", "apex_score"])
-     .sink_parquet(_apex_scans))
     # Nearby-scan extrema around the apex PC1 scan, the scan the collapse below
     # keeps; not around the max-coefficient scan, which is a different scan for
     # about a third of precursors.
