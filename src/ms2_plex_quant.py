@@ -366,11 +366,16 @@ def add_plex_coeff(df, spectra, tag, ppm, im_tol, q_gate=0.01, n_threads=1):
     iso_cache = {}
     out = np.full((len(df), 4), np.nan)
 
-    def work(g):
-        out[idx[g]] = quantify_group(sub.iloc[g], spectra, tag, ppm, im_tol, iso_cache)
+    # Every group's rows are cut here, before the pool: slicing one shared
+    # DataFrame from many threads races in pandas' copy-on-write reference
+    # tracking on free-threaded Python (a segfault in BlockValuesRefs).
+    frames = [sub.iloc[g] for g in groups]
+
+    def work(g, rows):
+        out[idx[g]] = quantify_group(rows, spectra, tag, ppm, im_tol, iso_cache)
 
     with ThreadPoolExecutor(max_workers=max(1, int(n_threads))) as pool:
-        list(pool.map(work, groups))
+        list(pool.map(work, groups, frames))
     df["coeff_plex"], df["ms2_bg"], df["ms2_snr"], df["ms2_nfrag"] = out.T
     ok = np.isfinite(out[:, 0])
     logger.info(f"coeff_plex: {int(ok.sum()):,} of {len(idx):,} rows in {len(groups):,} plex groups; "
