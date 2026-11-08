@@ -11,7 +11,7 @@
     "num_timeplex": 0,
     "iso": true,
     "unmatched": "c",
-    "decoy": "rev",
+    "decoy": "rev_tag",
     "tag": "PSMtag_9plex",
     "num_iso": 3,
     "lib_frac": 0.5,

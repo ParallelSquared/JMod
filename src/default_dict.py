@@ -321,7 +321,10 @@ default_dict = {
     },
     'decoy': {
         'flags': ('--decoy',),
-        'default': 'rev',
+        # rev_tag: reversed with tagged positions (and the C-terminus) fixed, so
+        # every b/y ion carries the same number of tags in target and decoy.
+        # Without a tag nothing is anchored and it gives the same decoys as rev.
+        'default': 'rev_tag',
         'takes_value': True,
         'in_GUI': False,
         'type': 'str',

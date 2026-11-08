@@ -12,7 +12,7 @@
     "num_timeplex": 0,
     "iso": false,
     "unmatched": "c",
-    "decoy": "rev",
+    "decoy": "rev_tag",
     "mTRAQ": false,
     "tag": "None",
     "num_iso": 2,

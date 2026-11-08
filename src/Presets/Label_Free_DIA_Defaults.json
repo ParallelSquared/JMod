@@ -11,7 +11,7 @@
     "num_timeplex": 0,
     "iso": false,
     "unmatched": "c",
-    "decoy": "rev",
+    "decoy": "rev_tag",
     "tag": "None",
     "num_iso": 2,
     "lib_frac": 0.5,
