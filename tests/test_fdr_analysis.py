@@ -22,7 +22,7 @@ import pytest
 from src.utils.errors import JModError
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
                                compute_protein_FDR, log_df, untag_prec_qvalues,
-                               area, walk_to_local_max, gauss_r2_joint, ms1_quality)
+                               area, walk_to_local_max, gauss_r2_joint, ms1_quality, ms1_quality_pass)
 
 def test_score_model_minimal_fixed():
     # 12 samples, 2 classes
@@ -131,7 +131,8 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                         ))
 
     monkeypatch.setattr("src.fdr_analysis.ms1_quant",
-                        lambda *args, **kwargs: args[0].assign(plex_Area=[100.0, 0.0]))
+                        lambda *args, **kwargs: args[0].assign(plex_Area=[100.0, 0.0], plex_bg=[5.0, 5.0],
+                                                               plex_snr=[20.0, 0.0], plexfitMS1_p=[0.9, 0.1]))
 
     monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
                         lambda df, results_folder=None, **kwargs: df.assign(
@@ -268,10 +269,25 @@ def test_no_ms2_coefficients_means_no_fit():
 def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
     ids = pd.DataFrame({"PredVal": [0.9, 0.95, 0.99, 0.99],
                         "gauss_r2_joint": [0.5, 0.9, np.nan, 0.7],
+                        "plexfitMS1_p": [0.8, 0.8, 0.8, 0.8],
+                        "plex_snr": [1.0, 2.0, 3.0, 4.0],
                         "plex_Area": [10.0, 10.0, 10.0, 0.0]})
     qq = ms1_quality(ids)
-    # percentiles: PredVal 1/4, 2/4, 3.5/4, 3.5/4; gauss_r2_joint 1/3, 3/3, missing = 0, 2/3
-    assert np.allclose(qq, [np.sqrt(1 / 4 * 1 / 3), np.sqrt(2 / 4), 0.0, 0.01 * np.sqrt(3.5 / 4 * 2 / 3)])
+    # percentiles: PredVal 1/4, 2/4, 3.5/4, 3.5/4; plexfitMS1_p all tied at 2.5/4;
+    # plex_snr 1/4 .. 4/4; geometric mean of the three.  gauss_r2_joint (NaN in
+    # row 3) is not used.
+    g = lambda *p: np.prod(p) ** (1 / 3)
+    assert np.allclose(qq, [g(1 / 4, 2.5 / 4, 1 / 4), g(2 / 4, 2.5 / 4, 2 / 4), g(3.5 / 4, 2.5 / 4, 3 / 4),
+                            0.01 * g(3.5 / 4, 2.5 / 4, 1.0)])
+
+
+
+def test_ms1_quality_pass_fails_the_lowest_fifth_of_quantified_ids_and_all_unquantified():
+    ids = pd.DataFrame({"MS1_quality": np.r_[np.linspace(0.1, 1.0, 10), 0.005],
+                        "plex_Area": np.r_[np.full(10, 5.0), 0.0]})
+    ok = ms1_quality_pass(ids)
+    # the cut is the 20th percentile of the 10 quantified scores (0.28); the unquantified row always fails
+    assert ok.tolist() == [False, False] + [True] * 8 + [False]
 
 
 def test_full_parquet_keeps_types_and_stringifies_mixed_columns(tmp_path):

@@ -246,12 +246,22 @@ def walk_to_local_max(fitted, start_pos, apex_jitter=None, area_radius=1):
 # MS1 trace is plexfittrace_all over the MS1 fit window, the MS2 trace the run's
 # MS2 coefficients of the same precursor on those MS1 scans (matched on
 # Ms1_spec_id, 0 where there is none).
-# MS1_quality = sqrt(pct(PredVal) x pct(gauss_r2_joint)), percentiles within
-# the run's filtered IDs, a missing Gaussian fit counting as 0; x 0.01 when
-# plex_Area == 0, which puts IDs without an MS1 quant at the bottom.
+# MS1_quality = geometric mean of pct(PredVal), pct(plexfitMS1_p) and
+# pct(plex_snr) -- the ID's confidence, the plex fit's Pearson at the voted
+# apex and the quant's signal over the fitted on-grid background -- percentiles within the
+# run's filtered IDs, a missing value counting as 0; x 0.01 when plex_Area == 0,
+# which puts IDs without an MS1 quant at the bottom.  gauss_r2_joint is not in
+# it: it is fit to 3 MS1 scans plus the MS2 coefficients on them, and is NaN
+# for ~12% of quantified IDs that have no MS2 coefficient on those scans.
+# MS1_quality_pass: the MS1-quantified IDs above the run's
+# MS1_QUALITY_DROP_FRACTION quantile of MS1_quality.  On the 200pg 5plex the
+# yeast ratio slope rises from 0.84 to 0.88 over the first 15-20% removed and is
+# flat after that (0.89 at 50%), while the human IQR falls steadily (1.15 ->
+# 0.94 at 20%, 0.70 at 50%): past 20% a cut only trades IDs for spread.
 SIGMA_GRID = np.geomspace(0.3, 6.0, 40)   # Gaussian sigmas tried, in MS1 scans
 SHIFT_GRID = np.linspace(-2.0, 2.0, 41)   # centers tried, in scans from the MS1 apex
 NO_MS1_QUANT_FACTOR = 0.01                # MS1_quality factor when plex_Area == 0
+MS1_QUALITY_DROP_FRACTION = 0.2           # MS1_quality_pass: lowest fraction of MS1-quantified IDs failed
 _CHUNK = 10000  # rows scored at once, against the 1,640 Gaussians of the grid
 
 
@@ -342,12 +352,24 @@ def _gaussian_fit_r2(traces, lens, center):
 
 
 def ms1_quality(ids):
-    """MS1_quality of every row of ``ids``, one run's filtered IDs (pandas,
-    with PredVal, gauss_r2_joint and plex_Area)."""
+    """MS1_quality of every row of ``ids``, one run's filtered IDs (pandas, with
+    PredVal, plexfitMS1_p, plex_snr and plex_Area); see the
+    comment above NO_MS1_QUANT_FACTOR."""
     def pct(values):  # percentile within the run; NaN stays NaN
         return values.rank(method="average") / values.count()
-    score = np.sqrt(pct(ids["PredVal"]) * pct(ids["gauss_r2_joint"]).fillna(0.0)).to_numpy()
+    parts = [pct(ids["PredVal"]), pct(ids["plexfitMS1_p"].clip(lower=0)).fillna(0.0),
+             pct(ids["plex_snr"]).fillna(0.0)]
+    score = np.power(np.prod(parts, axis=0), 1.0 / len(parts))
     return np.where(ids["plex_Area"].to_numpy() == 0, score * NO_MS1_QUANT_FACTOR, score)
+
+
+def ms1_quality_pass(ids):
+    """MS1_quality_pass of every row of ``ids`` (with MS1_quality and plex_Area):
+    MS1-quantified and not in the run's lowest MS1_QUALITY_DROP_FRACTION."""
+    quantified = ids["plex_Area"].to_numpy() > 0
+    q = ids["MS1_quality"].to_numpy(dtype=float)
+    cut = np.quantile(q[quantified], MS1_QUALITY_DROP_FRACTION) if quantified.any() else np.inf
+    return quantified & (q >= cut)
 
 
 # lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=bool(params["timeplex"]))
@@ -471,6 +493,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     if fit_whole_MS1 is False:
         extracted_fitted = [group_fitted[linker_dict[key][0]][0][:,linker_dict[key][1]] for key in all_keys]
         extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in all_keys]
+        extracted_bg = [group_fitted[linker_dict[key][0]][5] for key in all_keys]
         extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in all_keys]
 
     else:
@@ -495,7 +518,9 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     
     
     fdc["plexfitMS1"] = [np.max(i) for i in extracted_fitted]
-    fdc["plexfitMS1_p"] = [j[np.argmax(i)].statistic  if type(j[np.argmax(i)])!=float else 0 for i,j in zip(extracted_fitted,extracted_fitted_p)]
+    # The plex fit's Pearson at the group's voted apex, the center of the fit
+    # window: one value for every channel of the group.
+    fdc["plexfitMS1_p"] = [j[len(i) // 2].statistic if type(j[len(i) // 2]) != float else 0 for i, j in zip(extracted_fitted, extracted_fitted_p)]
 
     plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
     plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
@@ -514,6 +539,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     # area() always has its full window.
     area_radius = int(config.args.plex_area_scan_radius)
     plex_areas = []
+    plex_bgs = []
     apex_scans = []
     for idx in range(len(fdc)):
         fitted = extracted_fitted[idx]
@@ -530,8 +556,16 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
             seed = center
         apex_pos = walk_to_local_max(fitted, seed, apex_jitter=int(config.args.apex_jitter), area_radius=area_radius)
         plex_areas.append(area(fitted, apex_pos, area_radius))
+        plex_bgs.append(area(extracted_bg[idx], apex_pos, area_radius) if fit_whole_MS1 is False else np.nan)
         apex_scans.append(int(specs[apex_pos]))
     fdc["plex_Area"] = plex_areas
+    # The fitted on-grid background per isotope row over the same scans, and
+    # the quant's signal-to-background.
+    # TODO: the MS1 quant columns (plex_Area, plex_bg, plex_snr, MS1_quality)
+    # are computed here in fdr_analysis; ms1_quant, process_ms1_quant and the
+    # quality scores belong in a quant module.
+    fdc["plex_bg"] = plex_bgs
+    fdc["plex_snr"] = np.asarray(plex_areas) / np.maximum(np.asarray(plex_bgs, dtype=float), 1.0)
     fdc["ms1_apex_scan"] = apex_scans
        
 
@@ -573,7 +607,7 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     selected_cols = [
         "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps",
         "plexfittrace_spec_all", "plexfittrace_all", "plexfittrace_ps_all",
-        "plex_Area", "ms1_apex_scan", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
+        "plex_Area", "plex_bg", "plex_snr", "ms1_apex_scan", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
         "all_ms1_specs", "MS1_Area"
     ] + [f"all_ms1_iso{i}vals" for i in range(config.num_iso_ms1)]
     
@@ -1477,8 +1511,10 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     _write_full_parquet(fdx_quant, results_folder+"/outputs/all_precursors.parquet")
     filtered = fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold)].copy()
     filtered["MS1_quality"] = ms1_quality(filtered)
+    filtered["MS1_quality_pass"] = ms1_quality_pass(filtered)
     # For the parquets written below (all_precursors.parquet is written): NaN outside the filtered IDs
     fdx_quant["MS1_quality"] = filtered["MS1_quality"]
+    fdx_quant["MS1_quality_pass"] = filtered["MS1_quality_pass"]
 
     # Decode packed int32 frag codes into "y5_1" / "b3-H2O_2" strings, only for
     # the FDR-passing rows since decoding is expensive. In-place reassignment
@@ -1499,7 +1535,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
-                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'plex_Area', 'plex_bg', 'plex_snr', 'MS1_quality', 'MS1_quality_pass', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")
