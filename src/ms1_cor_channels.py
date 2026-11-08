@@ -720,6 +720,10 @@ def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset, prec_im=None
     
     return all_isotope_traces
 
+# TODO: takes the single closest peak within tolerance. On raw (uncentroided)
+#  .d data one isotope is many ions across mobility scans, so the traces
+#  (ms1_cor, iso_cor, MS1_Int, MS1_Area) hold one arbitrary ion's intensity.
+#  Sum all peaks within tolerance, as get_matrix_to_fit_numba does.
 @nb.njit(cache=False)
 def get_trace_int_numba(spec_mz, spec_intens, mz_array, rtol, base):
     """

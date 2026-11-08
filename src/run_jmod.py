@@ -640,6 +640,14 @@ def _create_results_folder(mzml_file, results_parent):
     <data file>_results, in *results_parent* (the experiment folder, or an
     MBR experiment's first_pass/), with a datestamp added if the name is taken.
     """
+    # TODO: write scratch files to a local temporary directory, not the output
+    # folder, and put only the final results in the output folder.  The output
+    # folder is often a network share (SMB), which is slow and does not behave
+    # like local disk: the library memory maps (<experiment>/library_mmap)
+    # crashed a run there with SIGBUS, and the main search's per-batch parquets
+    # (decoylibsearch_coeffs_batch*.parquet, merged then deleted) are written and
+    # re-read over the network.  Also check what else is written mid-run, e.g.
+    # the Bruker calibration tables cached inside the .d (bruker_calibration/).
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
     os.makedirs(results_parent, exist_ok=True)
     results_folder_path = datestamped(os.path.join(results_parent, spec_file_name + "_results"))
@@ -859,6 +867,13 @@ def prepare_library(spectrumLibrary, work_dir, mass_tag, SILAC, library_tag_bool
 
     ######################################################
     #### Isotopes (after tagging: the tag changes each fragment's composition)
+    # TODO: make the library's in-memory layout the same with and without --iso.
+    # Only the non-iso branch memory-maps the large arrays (finalize_spectra,
+    # above 100M fragments); iso_library_multi rebuilds them in RAM, so the same
+    # library behaves differently depending on --iso, which makes problems hard
+    # to reproduce.  Either memory-map after iso_library_multi too, or not at all.
+    # The maps also go to <output folder>/library_mmap: on a network share (SMB)
+    # that crashed a run with SIGBUS (exit -10), so they belong on local disk.
     if config.args.iso:
         # iso_library_multi rebuilds spectra from frags and discards the
         # sort permutation -- it is the finalizer on iso runs.  The frags stay
@@ -1074,6 +1089,10 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     # all read config.args.ppm).  Other inputs keep --ppm.
     # TODO: calculate the MS2 tolerance from the first-search fragment errors
     # instead of borrowing the MS1 one, for every input type, and drop this gate.
+    # TODO: this overwrites --ppm unconditionally, so on .d input a user-set MS2
+    # tolerance (--ppm 15) is silently ignored; only --ms1_ppm reaches MS2, and it
+    # sets MS1 too.  Let an explicit --ppm win here (config.cli_args holds the
+    # typed options), or at least warn that it is ignored.
     if runState.file_name.rstrip("/\\").lower().endswith(".d"):
         config.args.ppm = round(float(runState.opt_ms1_tol) * 1e6, 5)
         logger.info(f"MS2 tolerance set to the MS1 tolerance: {config.args.ppm} ppm")

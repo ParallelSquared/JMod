@@ -112,6 +112,8 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # TODO: -d/--diaPASEF does nothing: nothing reads config.args.diaPASEF.
+    # timsTOF/diaPASEF handling keys off .d input instead.  Remove it.
     'diaPASEF': {
         'flags': ('-d', '--diaPASEF'),
         'default': False,
@@ -308,6 +310,10 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # TODO: --unmatched does nothing but label the ModelScore.png title
+    # (fdr_analysis).  The unmatched-fragment handling is fixed at type "c" (a
+    # zero-intensity penalty row per unmatched library fragment, in
+    # spectral_fitting._assemble_coo_jit); "a" and "b" no longer exist.  Remove it.
     'unmatched': {
         'flags': ('--unmatched',),
         'default': 'c',

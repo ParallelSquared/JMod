@@ -1850,6 +1850,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
 
     # Run a preliminary search returning results at the PSM level
     import src.preliminary_search as preliminary_search
+    # TODO: raise the first search's fragment tolerance (ms2_ppm_error) to 20 ppm,
+    # matching the MS1 lookup (ms1_ppm_error=20): there is no reason for the MS1
+    # window to be wider than the MS2 one.  Change the default in
+    # preliminary_search.fit_with_features to match.
     output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=10)
 
     # Calculate the elution width and add cluster_size column
