@@ -209,8 +209,9 @@ def ms1_cor_channels(all_spectra,
         # cut to that range and IM-gated once, and the cut peaks are shared by all
         # channels' traces and by the channel fit.
         apex_spectra = spectra_subset[lo:hi]
-        mz_lo = min(prec_mzs) - 1.5
-        mz_hi = max(prec_mzs) + (num_iso + 1) * 1.00336 / prec_z + 1.5
+        margin = max(1.5, (N_FLANK + 0.5) * ISOTOPE_SPACING_DA / prec_z)   # covers the background flanks
+        mz_lo = min(prec_mzs) - margin
+        mz_hi = max(prec_mzs) + (num_iso + 1) * ISOTOPE_SPACING_DA / prec_z + margin
         apex_peaks = [im_filtered_peaks(spec, _grp_im, im_tol, mz_lo, mz_hi) for spec in apex_spectra]
 
         ms1_traces, coeff_traces, is_traces, all_pearson, iso_ratios = ([] for _ in range(5))
@@ -246,11 +247,12 @@ def ms1_cor_channels(all_spectra,
 
         scans_to_search = apex_scans
 
-        group_pred, group_obs_peaks, group_matrices, group_fit_cor, group_kept_mz = ([] for _ in range(5))
+        group_pred, group_obs_peaks, group_matrices, group_fit_cor, group_kept_mz, group_bg = ([] for _ in range(6))
 
         for ms1_spec_idx, peaks in zip(scans_to_search, apex_peaks):
-            pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm,
+            pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz, background = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm,
                                                                                      prec_im=_grp_im, im_tol=im_tol, peaks=peaks)
+            group_bg.append(background)
             group_pred.append(pred_coeff)
             group_obs_peaks.append(obs_peaks)
             group_matrices.append(fit_matrix)
@@ -307,7 +309,7 @@ def ms1_cor_channels(all_spectra,
                     "scans": scans_info,
                 }
 
-        return ([np.array(group_pred), group_obs_peaks, group_matrices, group_fit_cor, scans_to_search],
+        return ([np.array(group_pred), group_obs_peaks, group_matrices, group_fit_cor, scans_to_search, np.array(group_bg)],
                 ms1_traces, coeff_traces, iso_ratios, all_pearson, group_keys)
 
     # Groups are independent: each reads the shared spectra and coefficient
@@ -943,7 +945,7 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
                            prec_im=None, im_tol=0.0, peaks=None):
     spec = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
 
-    pred_coeff, obs_peaks, fit_matrix, kept_mz = fit_channel_isotopes_numba(
+    pred_coeff, obs_peaks, fit_matrix, kept_mz, background = fit_channel_isotopes_numba(
         spec, group_iso, mz_ppm, prec_im=prec_im, im_tol=im_tol, peaks=peaks)
 
     if len(obs_peaks)==0:
@@ -953,7 +955,7 @@ def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, 
             warnings.simplefilter("ignore")
             fit_cor = np_pearson_cor(np.sum(fit_matrix*pred_coeff,1),obs_peaks)
 
-    return pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz
+    return pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz, background
 
 # def add_to_ms1_spec_dict(ms1_spec_dict, ms1_spectra, ms1_spec_idxs, group_iso, key, fdc_group, filtered_decoy_coeffs, tag, scans_to_search, fdc_group_idx, dummy_idx_list, fake_fdc_dict):
 #     """
@@ -1408,53 +1410,100 @@ def fit_channel_isotopes_numba(spec, all_iso, mz_ppm, prec_im=None, im_tol=0.0, 
     # inside the matching kernel.
     # peaks: this spectrum's (mz, intens), already cut and IM-gated by the caller
     _mz, _intens = peaks if peaks is not None else im_filtered_peaks(spec, prec_im, im_tol)
-    dia_spectrum = np.array([_mz, _intens], dtype=np.float64).T
+    return fit_channels_with_background(
+        ms1_iso_patterns, np.asarray(_mz, dtype=np.float64), np.asarray(_intens, dtype=np.float64),
+        mz_ppm, flank_mz(all_iso))
 
-    group_lengths = np.array([len(g) for g in all_iso])
 
-    dense_matrix, dia_spec_int, lib_peaks_matched, fdc_idxs, grp_lengths = get_matrix_to_fit_numba(ms1_iso_patterns, group_lengths, dia_spectrum, len(all_iso), mz_ppm)
+# Flank positions on each side of a plex group's envelopes, in isotope
+# spacings, used to anchor the on-grid background (see fit_channels_with_background)
+N_FLANK = 3
+# Peptide isotope spacing (averagine, as JrMod's ISOTOPE_SPACING_DA), not the
+# pure 13C step: the extra mass of M+1 averages over 13C, 15N, 2H and 18O
+ISOTOPE_SPACING_DA = 1.00235
 
-    # Exclude channels where neither of the two most intense expected peaks
-    # was observed.  ms1_iso_patterns[ch, :, 1] gives the theoretical
-    # intensities for channel ch; the top-2 indices into that array identify
-    # the two most intense peaks.  lib_peaks_matched is flat (one entry per
-    # peak across all channels), so we slice it per channel using group_lengths.
-    n_iso_per_ch = ms1_iso_patterns.shape[1]
-    offset = 0
-    for ch in range(len(all_iso)):
-        intensities = ms1_iso_patterns[ch, :, 1]
-        top2 = np.argsort(intensities)[-2:]  # indices of two most intense peaks
-        matched_slice = lib_peaks_matched[offset:offset + group_lengths[ch]]
-        if not np.any(matched_slice[top2]):
-            dense_matrix[:, ch] = 0.0
-        offset += group_lengths[ch]
 
-    # Replicate the spectrum windowing from get_matrix_to_fit_numba to get mz values
-    mz_full = dia_spectrum[:, 0]
-    lo = np.searchsorted(mz_full, ms1_iso_patterns[:, :, 0].min() - 1, side="right")
-    hi = np.searchsorted(mz_full, ms1_iso_patterns[:, :, 0].max() + 1, side="left")
-    windowed_mz = mz_full[lo:hi]
-    n_dummy = dense_matrix.shape[0] - len(windowed_mz)
-    all_mz = np.append(windowed_mz, np.zeros(max(0, n_dummy)))
+def flank_mz(all_iso):
+    """m/z of the empty grid positions N_FLANK isotope spacings below the
+    lightest monoisotope and above the heaviest last isotope of *all_iso*."""
+    z = abs(int(all_iso[0][0].charge)) or 1
+    sp = ISOTOPE_SPACING_DA / z
+    lo = min(iso[0].mz for iso in all_iso)
+    hi = max(p.mz for iso in all_iso for p in iso)
+    return [lo - j * sp for j in range(1, N_FLANK + 1)] + [hi + j * sp for j in range(1, N_FLANK + 1)]
 
-    # Keep rows with a library entry (regardless of observed signal)
-    keep = np.any(dense_matrix != 0, axis=1)
-    dense_matrix = dense_matrix[keep, :]
-    dia_spec_int = dia_spec_int[keep]
-    kept_mz = all_mz[keep]
 
-    if dense_matrix.shape[0] == 0:
-        return (
-            np.zeros(len(all_iso), dtype=float),
-            dia_spec_int,
-            dense_matrix,
-            kept_mz,
-        )
+def build_fit_system(ms1_iso_patterns, mz, intens, mz_ppm, flanks):
+    """Rows for the channel fit.
 
-    lib_coefficients, _ = optimize.nnls(dense_matrix, dia_spec_int)
-    lib_coefficients[lib_coefficients < 1] = 0.0
+    Theoretical peaks (of any channel) within *mz_ppm* of each other share one
+    row, so an isotope of one channel that overlaps an isotope of another is
+    modelled jointly, and every observed peak is counted in one row only.  The
+    flank positions become rows with no library entry.  Returns the design
+    matrix (rows x channels), the observed row intensities, the row m/z and a
+    mask of the flank rows.
+    """
+    K, N = ms1_iso_patterns.shape[:2]
+    peaks = [(ms1_iso_patterns[k, j, 0], k, ms1_iso_patterns[k, j, 1]) for k in range(K) for j in range(N)]
+    peaks += [(m, -1, 0.0) for m in flanks]
+    peaks.sort(key=lambda t: t[0])
+    groups, cur = [], [peaks[0]]
+    for t in peaks[1:]:
+        if t[0] - cur[-1][0] <= mz_ppm * t[0]:
+            cur.append(t)
+        else:
+            groups.append(cur)
+            cur = [t]
+    groups.append(cur)
+    M = np.zeros((len(groups), K))
+    y = np.zeros(len(groups))
+    row_mz = np.zeros(len(groups))
+    is_flank = np.zeros(len(groups), dtype=bool)
+    used = np.zeros(mz.size, dtype=bool)
+    for r, members in enumerate(groups):
+        sel = np.zeros(mz.size, dtype=bool)
+        for m0, k, rel in members:
+            if k >= 0:
+                M[r, k] += rel
+            else:
+                is_flank[r] = True
+            a, b = np.searchsorted(mz, [m0 * (1 - mz_ppm), m0 * (1 + mz_ppm)])
+            sel[a:b] = True
+        sel &= ~used
+        used |= sel
+        y[r] = intens[sel].sum()
+        row_mz[r] = np.mean([m[0] for m in members])
+    return M, y, row_mz, is_flank
 
-    return lib_coefficients, dia_spec_int, dense_matrix, kept_mz
+
+def fit_channels_with_background(ms1_iso_patterns, mz, intens, mz_ppm, flanks):
+    """NNLS of the channels plus a flat on-grid background.
+
+    In a dense MS1 other peptides' isotope ladders share this group's mass
+    defect grid, so every isotope row -- and the empty flank rows -- carries a
+    roughly constant extra intensity (on the 200pg 5plex it is ~30% of a
+    neighbouring channel's monoisotope).  Without it the fit assigns that
+    intensity to the faintest channels and compresses their ratios.  A
+    non-negative intercept, anchored by the flank rows, absorbs it.
+
+    Returns (coefficients per channel, observed rows minus background, design
+    matrix, row m/z, background per row); channels whose two most intense
+    isotopes both had no signal are set to zero.
+    """
+    K = ms1_iso_patterns.shape[0]
+    M, y, row_mz, is_flank = build_fit_system(ms1_iso_patterns, mz, intens, mz_ppm, flanks)
+    for ch in range(K):
+        top2 = np.argsort(ms1_iso_patterns[ch, :, 1])[-2:]
+        rows = [int(np.argmin(np.abs(row_mz - ms1_iso_patterns[ch, j, 0]))) for j in top2]
+        if not np.any(y[rows] > 0):
+            M[:, ch] = 0.0
+    A = np.c_[M, np.ones(len(y))]
+    coef, _ = optimize.nnls(A, y)
+    background = coef[K]
+    c = coef[:K]
+    c[c < 1] = 0.0
+    keep = ~is_flank & np.any(M != 0, axis=1)
+    return c, np.clip(y[keep] - background, 0, None), M[keep], row_mz[keep], background
 
 
 

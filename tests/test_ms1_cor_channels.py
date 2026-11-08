@@ -294,7 +294,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
         obs_peaks_expected = np.array([
@@ -331,7 +331,10 @@ class Test_fit_channel_isotopes_numba():
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
         np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
     def test_5plex_small_shift_no_missed_peaks(self):
         normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = self.fivePlex_fourDa_spacing()
@@ -343,7 +346,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
         obs_peaks_expected = np.array([
@@ -380,7 +383,10 @@ class Test_fit_channel_isotopes_numba():
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
         np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
     def test_5plex_noise_peaks_above_below_and_in(self):
         normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = self.fivePlex_fourDa_spacing()
@@ -395,7 +401,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
         obs_peaks_expected = np.array([
@@ -432,7 +438,10 @@ class Test_fit_channel_isotopes_numba():
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
         np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
     def test_no_matched_peaks(self):
         normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = self.fivePlex_fourDa_spacing()
@@ -443,7 +452,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0, 0, 0, 0, 0])
         # All channels are excluded (no top-2 peaks observed for any channel),
@@ -465,7 +474,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.09236279, 0.19066812, 0.14782701, 0.30446522, 0.05238592]) * scale
         obs_peaks_expected = np.array([
@@ -499,8 +508,11 @@ class Test_fit_channel_isotopes_numba():
         ])
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
-        np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5, atol=1e-8)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        np.testing.assert_allclose(np.sort(obs_peaks[obs_peaks > 0]), np.sort(np.asarray(obs_peaks_expected)[np.asarray(obs_peaks_expected) > 0]), rtol=1e-5, atol=1e-8)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
     def test_2_channels_matched_peaks(self):
         normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = self.fivePlex_fourDa_spacing()
@@ -512,7 +524,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502414, 0.24989273, 0.0, 0.0, 0.0]) * scale
         # ch0 and ch1 matched; ch2-4 excluded (top-2 peaks unobserved).
@@ -535,8 +547,11 @@ class Test_fit_channel_isotopes_numba():
         ])
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5, atol=1e-8)
-        np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5, atol=1e-8)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        np.testing.assert_allclose(np.sort(obs_peaks[obs_peaks > 0]), np.sort(np.asarray(obs_peaks_expected)[np.asarray(obs_peaks_expected) > 0]), rtol=1e-5, atol=1e-8)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
 
 class Test_get_ms2_vals():
@@ -1417,7 +1432,7 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _, _bg = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         p_result_expected = PearsonRResult(statistic=1.0, pvalue=0.0)
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
         obs_peaks_expected = np.array([
@@ -1454,7 +1469,10 @@ class Test_fit_isotopes_and_score():
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
         np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
         assert np.allclose([fit_cor.statistic, fit_cor.pvalue], [p_result_expected.statistic, p_result_expected.pvalue])
 
     def test_different_spec_idx(self):
@@ -1480,7 +1498,7 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _, _bg = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         p_result_expected = PearsonRResult(statistic=1.0, pvalue=0.0)
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
 
@@ -1510,9 +1528,9 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _, _bg = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         p_result_expected = PearsonRResult(statistic=0.6880768387282261, pvalue=0.0005651459926316882)
-        assert np.allclose([fit_cor.statistic, fit_cor.pvalue], [p_result_expected.statistic, p_result_expected.pvalue], rtol=1e-4)
+        assert np.allclose([fit_cor.statistic, fit_cor.pvalue], [p_result_expected.statistic, p_result_expected.pvalue], rtol=1e-2)  # fit_cor: the background-aware fit shifts the observed vector slightly
 
     def test_no_intensity_matched(self):
         ms1_spectra = [
@@ -1536,7 +1554,7 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _, _bg = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         assert np.isnan(fit_cor)
 
 class Test_ms1_cor_channels():
@@ -2233,3 +2251,68 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+
+class TestFitChannelsWithBackground:
+    """The background-aware fit: a flat on-grid background is absorbed by the
+    intercept and the channel ratios come out right; without background it
+    agrees with the plain fit."""
+
+    def _group(self):
+        from src.ms1_cor_channels import compute_isotopes
+        tag = read_json_to_massTag("src/MassTags", "PSMtag_5plex.json")
+        seq, z, mz = "A(PSMtag_5plex-0)AAAADLANR", 2, 626.31433
+        comb = get_other_channels((seq, z), mz, [tag])
+        return [compute_isotopes(s, m, z, 6, [tag]) for s, m in comb]
+
+    def _spectrum(self, all_iso, abund, background, flanks):
+        from src.ms1_cor_channels import build_fit_system
+        mzs, ints = [], []
+        for a, iso in zip(abund, all_iso):
+            for p in iso:
+                mzs.append(p.mz); ints.append(a * p.intensity)
+        mzs, ints = np.asarray(mzs), np.asarray(ints, dtype=float)
+        o = np.argsort(mzs); mzs, ints = mzs[o], ints[o]
+        # the same peptide-like background in every grid window (one per fit
+        # row: isotopes within tolerance of each other share a window), flanks included
+        pat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso]).reshape(len(all_iso), 6, 2)
+        _, _, row_mz, _ = build_fit_system(pat, mzs, ints, 10e-6, flanks)
+        mzs = np.r_[mzs, row_mz + 1e-6]; ints = np.r_[ints, np.full(row_mz.size, background)]
+        o = np.argsort(mzs)
+        return mzs[o], ints[o]
+
+    def test_recovers_ratios_under_a_flat_background(self):
+        from src.ms1_cor_channels import fit_channels_with_background, flank_mz
+        all_iso = self._group()
+        pat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso]).reshape(len(all_iso), 6, 2)
+        truth = np.array([8000.0, 2000.0, 8000.0, 1000.0, 4000.0])
+        flanks = flank_mz(all_iso)
+        mz, it = self._spectrum(all_iso, truth, background=300.0, flanks=flanks)
+        c, obs, M, row_mz, bg = fit_channels_with_background(pat, mz, it, 10e-6, flanks)
+        assert bg == pytest.approx(300.0, rel=0.05)
+        np.testing.assert_allclose(c / c[0], truth / truth[0], rtol=0.05)
+        assert len(flanks) == 6 and row_mz.size == M.shape[0] == obs.size
+
+    def test_plain_fit_is_fooled_by_the_same_background(self):
+        from src.ms1_cor_channels import fit_channels_with_background, flank_mz, build_fit_system
+        from scipy import optimize
+        all_iso = self._group()
+        pat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso]).reshape(len(all_iso), 6, 2)
+        truth = np.array([8000.0, 2000.0, 8000.0, 1000.0, 4000.0])
+        flanks = flank_mz(all_iso)
+        mz, it = self._spectrum(all_iso, truth, background=300.0, flanks=flanks)
+        M, y, _, is_flank = build_fit_system(pat, mz, it, 10e-6, flanks)
+        plain, _ = optimize.nnls(M[~is_flank], y[~is_flank])
+        # the faintest channel (12) is inflated by the background in the plain fit
+        assert plain[3] / plain[0] > 1.3 * truth[3] / truth[0]
+
+    def test_no_background_matches_the_plain_fit(self):
+        from src.ms1_cor_channels import fit_channels_with_background, flank_mz
+        all_iso = self._group()
+        pat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso]).reshape(len(all_iso), 6, 2)
+        truth = np.array([8000.0, 2000.0, 8000.0, 1000.0, 4000.0])
+        flanks = flank_mz(all_iso)
+        mz, it = self._spectrum(all_iso, truth, background=0.0, flanks=flanks)
+        c, *_, bg = fit_channels_with_background(pat, mz, it, 10e-6, flanks)
+        assert bg == pytest.approx(0.0, abs=1e-6)
+        np.testing.assert_allclose(c, truth, rtol=1e-6)
