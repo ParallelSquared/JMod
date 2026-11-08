@@ -23,6 +23,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import src.config as config 
 
 import tqdm
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from src.utils.misc_functions import  closest_ms1spec,np_pearson_cor
 from scipy.interpolate import interp1d
 from src.utils import misc_functions as mf
@@ -119,7 +121,12 @@ def ms1_cor_channels(all_spectra,
             tuple(row[:-2]): (int(row[-2]), int(row[-1]))
             for row in _bounds.iter_rows()
         }
-        dc_source = (decoy_coeffs, dc_offsets)
+        # The four columns get_ms2_vals reads, as numpy arrays: each channel's
+        # rows are then a zero-copy slice through dc_offsets, with no per-channel
+        # polars -> pandas conversion (which cost ~130 us per call and ran on
+        # Arrow's own thread pool, contending with the quant threads).
+        dc_arrays = {c: decoy_coeffs[c].to_numpy() for c in ("spec_id", "coeff", "rt", "Ms1_spec_id")}
+        dc_source = (dc_arrays, dc_offsets)
     else:
         # Legacy pandas path — kept for unit-test fixtures that pass small
         # pandas frames directly. These mutations are dead within this
@@ -150,22 +157,19 @@ def ms1_cor_channels(all_spectra,
     fake_fdc_dict = {}
 
 
-    GUI_print_idxs = [int(((len(fdc_group.groups)-1)/10)*y) for y in range(1,11)]
-    fdc_group_idx = -1
-    for key in tqdm.tqdm(list(fdc_group.groups)):
-        fdc_group_idx += 1
-        if config.ran_from_GUI:
-            if fdc_group_idx in GUI_print_idxs:
-                frac_done = (GUI_print_idxs.index(fdc_group_idx)+1) * 10
-                logger.info(f"Fitting - {frac_done}%")
+    def _quant_group(key):
+        """Quantify one precursor group (all channels of one peptide and
+        charge).  Reads only shared, read-only data, so groups run in parallel.
+        """
 
-        tag_group = fdc_group.get_group(key)
+        rows = group_rows[key]
+        tag_group = {c: a[rows] for c, a in fdc_cols.items()}
         # Observed IM for this precursor; gates the MS1 peaks used for both
         # the isotope traces and the channel fit below.  NaN disables the gate.
         _grp_im = group_prec_im(tag_group)
-        group_protein = tag_group["protein"].iloc[0] if "protein" in tag_group.columns else ""
+        group_protein = tag_group["protein"][0] if "protein" in tag_group else ""
 
-        prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC)
+        prec_seqs, prec_mzs, prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel = get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC, tag_group=tag_group)
         all_scans, spectra_subset = minmax_spec_window(largest_coeff_scans, ms1_spec_idxs, ms1_spectra, all_spectra, window_half_width)
 
         ### Gaussian-weighted voting: each channel contributes its max-coeff scan
@@ -176,11 +180,12 @@ def ms1_cor_channels(all_spectra,
         all_scans_arr = np.asarray(all_scans)
         positions = np.arange(len(all_scans_arr), dtype=np.float64)
         votes = np.zeros(len(all_scans_arr), dtype=np.float64)
-        for seq in tag_group["seq"].unique():
-            ch_rows = tag_group[tag_group["seq"] == seq]
-            best_row = ch_rows.loc[ch_rows["coeff"].idxmax()]
-            s_idx = float(np.searchsorted(all_scans_arr, int(best_row["Ms1_spec_id"])))
-            votes += float(best_row["coeff"]) * np.exp(-0.5 * ((positions - s_idx) / vote_sigma) ** 2)
+        g_seq, g_coeff, g_ms1 = tag_group["seq"], tag_group["coeff"], tag_group["Ms1_spec_id"]
+        for seq in dict.fromkeys(g_seq.tolist()):      # channels in first-seen order, like .unique()
+            ch = np.flatnonzero(g_seq == seq)
+            best = ch[np.nanargmax(g_coeff[ch])]       # first max, like idxmax
+            s_idx = float(np.searchsorted(all_scans_arr, int(g_ms1[best])))
+            votes += float(g_coeff[best]) * np.exp(-0.5 * ((positions - s_idx) / vote_sigma) ** 2)
         voted_apex_idx = int(np.argmax(votes))
         voted_apex = int(all_scans_arr[voted_apex_idx])
 
@@ -197,6 +202,17 @@ def ms1_cor_channels(all_spectra,
         hi = min(len(all_scans), apex_idx + fit_radius + 1)
         apex_scans = all_scans[lo:hi]
 
+        # Only the apex_scans' traces are kept, so they are the only ones built
+        # (until 2026-11 the whole ~33-scan window was traced and all but these
+        # dropped -- a leftover from the old trace-based peak finding).  Every
+        # channel's isotopes lie in [mz_lo, mz_hi], so each spectrum's peaks are
+        # cut to that range and IM-gated once, and the cut peaks are shared by all
+        # channels' traces and by the channel fit.
+        apex_spectra = spectra_subset[lo:hi]
+        mz_lo = min(prec_mzs) - 1.5
+        mz_hi = max(prec_mzs) + (num_iso + 1) * 1.00336 / prec_z + 1.5
+        apex_peaks = [im_filtered_peaks(spec, _grp_im, im_tol, mz_lo, mz_hi) for spec in apex_spectra]
+
         ms1_traces, coeff_traces, is_traces, all_pearson, iso_ratios = ([] for _ in range(5))
         obs_ratios, group_iso, group_keys, all_channel_scans, interp_funcs, best_coeff = ([] for _ in range(6))
 
@@ -208,8 +224,8 @@ def ms1_cor_channels(all_spectra,
             interp_func = build_ms2_interpolator(ms2_vals)
             interp_funcs.append(interp_func)
 
-            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, [tag,SILAC], all_scans, prec_mz, mz_ppm, spectra_subset, interp_func,
-                                                                                      prec_im=_grp_im, im_tol=im_tol)
+            all_ms1_vals, all_ms2_vals, all_iso_vals, isotopes, interp_func = get_isotopes_and_vals(prec_seq, prec_z, num_iso, [tag,SILAC], apex_scans, prec_mz, mz_ppm, apex_spectra, interp_func,
+                                                                                      prec_im=_grp_im, im_tol=im_tol, peaks=apex_peaks)
             group_iso.append(isotopes)
 
             ## filter to voted apex neighborhood
@@ -232,9 +248,9 @@ def ms1_cor_channels(all_spectra,
 
         group_pred, group_obs_peaks, group_matrices, group_fit_cor, group_kept_mz = ([] for _ in range(5))
 
-        for ms1_spec_idx in scans_to_search:
+        for ms1_spec_idx, peaks in zip(scans_to_search, apex_peaks):
             pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm,
-                                                                                     prec_im=_grp_im, im_tol=im_tol)
+                                                                                     prec_im=_grp_im, im_tol=im_tol, peaks=peaks)
             group_pred.append(pred_coeff)
             group_obs_peaks.append(obs_peaks)
             group_matrices.append(fit_matrix)
@@ -291,13 +307,46 @@ def ms1_cor_channels(all_spectra,
                     "scans": scans_info,
                 }
 
-        # all_fitted.append(vals)
-        all_fitted.append([np.array(group_pred),group_obs_peaks,group_matrices,group_fit_cor,scans_to_search])
-        all_ms1.append(ms1_traces)
-        all_coeff.append(coeff_traces)
-        all_iso.append(iso_ratios)
-        all_group_pearson.append(all_pearson)
-        all_group_keys.append(group_keys)
+        return ([np.array(group_pred), group_obs_peaks, group_matrices, group_fit_cor, scans_to_search],
+                ms1_traces, coeff_traces, iso_ratios, all_pearson, group_keys)
+
+    # Groups are independent: each reads the shared spectra and coefficient
+    # tables and returns its own results.  They run on a thread pool with a
+    # sliding window of submitted groups, and results are taken in submission
+    # order, so the lists below are built in exactly the serial order.  Each
+    # group's rows are split out here so workers never touch the groupby.
+    # dump_precursors writes to a shared dict, so it runs on one thread.
+    group_keys_all = list(fdc_group.groups)
+    group_rows = fdc_group.indices
+    # The filtered-ID columns each group reads, as numpy arrays; a group's rows
+    # are then fancy-indexed out of them instead of building a pandas sub-frame.
+    fdc_cols = {c: filtered_decoy_coeffs[c].to_numpy()
+                for c in ("seq", "mz", "coeff", "Ms1_spec_id", "rt", "prec_im", "protein")
+                if c in filtered_decoy_coeffs.columns}
+    n_threads = 1 if dump_precursors else min(10, os.cpu_count() or 1)
+    in_flight_max = 32 * n_threads
+    GUI_print_idxs = [int(((len(group_keys_all)-1)/10)*y) for y in range(1,11)]
+    with ThreadPoolExecutor(max_workers=n_threads) as pool, \
+            tqdm.tqdm(total=len(group_keys_all)) as bar:
+        in_flight = deque()
+        next_group = 0
+        done = 0
+        while next_group < len(group_keys_all) or in_flight:
+            while next_group < len(group_keys_all) and len(in_flight) < in_flight_max:
+                in_flight.append(pool.submit(_quant_group, group_keys_all[next_group]))
+                next_group += 1
+            fitted, ms1_traces, coeff_traces, iso_ratios, all_pearson, group_keys = \
+                in_flight.popleft().result()
+            all_fitted.append(fitted)
+            all_ms1.append(ms1_traces)
+            all_coeff.append(coeff_traces)
+            all_iso.append(iso_ratios)
+            all_group_pearson.append(all_pearson)
+            all_group_keys.append(group_keys)
+            if config.ran_from_GUI and done in GUI_print_idxs:
+                logger.info(f"Fitting - {(GUI_print_idxs.index(done)+1) * 10}%")
+            done += 1
+            bar.update(1)
 
     new_output_dict = {}
     # if fit_whole_MS1:
@@ -312,7 +361,7 @@ def ms1_cor_channels(all_spectra,
     return all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict
 
 
-def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC):
+def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC, tag_group=None):
     """
     Retrieve sequences, m/z values, charge, retention time, and scan information 
     for a given precursor group, optionally including timeplex channels.
@@ -349,33 +398,37 @@ def get_seqs_and_mzs(fdc_group, timeplex, tag, key, SILAC):
         Time channel index if timeplex is True; otherwise None.
     """
 
-    tag_group = fdc_group.get_group(key)
-    group_prec_mzs = tag_group["mz"]
-    group_prec_seqs = tag_group["seq"]
+    # tag_group: the group's rows when the caller has already split them out
+    # (ms1_cor_channels does, so its worker threads never use the groupby).
+    if tag_group is None:
+        tag_group = fdc_group.get_group(key)
+    # Columns as arrays, so a pandas group and a dict of numpy arrays behave the same
+    group_prec_mzs = np.asarray(tag_group["mz"])
+    group_prec_seqs = np.asarray(tag_group["seq"])
     group_prec_z = key[1]
     if timeplex:
         time_channel = key[2]
     else:
         time_channel = None
-    largest_id = np.argmax(tag_group["coeff"])
-    top_ms1_spec_idx = list(tag_group["Ms1_spec_id"])[largest_id]
-    prec_rt = list(tag_group["rt"])[largest_id]
+    largest_id = int(np.nanargmax(np.asarray(tag_group["coeff"])))   # skips NaN like Series.argmax
+    top_ms1_spec_idx = np.asarray(tag_group["Ms1_spec_id"]).tolist()[largest_id]
+    prec_rt = np.asarray(tag_group["rt"]).tolist()[largest_id]
     
     if (tag.name != "no_tag" and SILAC is not None):
         
-        all_comb = get_other_channels((group_prec_seqs.iloc[largest_id],group_prec_z), group_prec_mzs.iloc[largest_id], [tag,SILAC])
+        all_comb = get_other_channels((group_prec_seqs[largest_id],group_prec_z), group_prec_mzs[largest_id], [tag,SILAC])
         prec_seqs,prec_mzs = tuple(zip(*all_comb))
     elif tag.name != "no_tag":
-        all_comb = get_other_channels((group_prec_seqs.iloc[largest_id],group_prec_z), group_prec_mzs.iloc[largest_id], [tag])
+        all_comb = get_other_channels((group_prec_seqs[largest_id],group_prec_z), group_prec_mzs[largest_id], [tag])
         prec_seqs,prec_mzs = tuple(zip(*all_comb))
     elif SILAC is not None:
-        all_comb = get_other_channels((group_prec_seqs.iloc[largest_id],group_prec_z), group_prec_mzs.iloc[largest_id], [SILAC])
+        all_comb = get_other_channels((group_prec_seqs[largest_id],group_prec_z), group_prec_mzs[largest_id], [SILAC])
         prec_seqs,prec_mzs = tuple(zip(*all_comb))
     else:
-        prec_seqs = (group_prec_seqs.iloc[largest_id],)
-        prec_mzs = (group_prec_mzs.iloc[largest_id],)
+        prec_seqs = (group_prec_seqs[largest_id],)
+        prec_mzs = (group_prec_mzs[largest_id],)
 
-    largest_coeff_scans = list(tag_group["Ms1_spec_id"])
+    largest_coeff_scans = np.asarray(tag_group["Ms1_spec_id"]).tolist()
 
     return prec_seqs, prec_mzs, group_prec_z, prec_rt, top_ms1_spec_idx, largest_coeff_scans, time_channel
 
@@ -468,11 +521,13 @@ def _lookup_group(source, key):
     slice gets converted.
     """
     if isinstance(source, tuple):
-        polars_df, offsets = source
+        table, offsets = source
         if key not in offsets:
             return None
         start, n = offsets[key]
-        return polars_df.slice(start, n).to_pandas()
+        if isinstance(table, dict):     # {column: numpy array}: slice each column
+            return {c: a[start:start + n] for c, a in table.items()}
+        return table.slice(start, n).to_pandas()
     if key not in source.groups:
         return None
     return source.get_group(key)
@@ -537,22 +592,28 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
     group = _lookup_group(grouped_decoy_coeffs, channel_key)
     if group is not None:
 
-        # use coeff as rank score directly
-        highest_ranked_spec = group.loc[group["coeff"].idxmax(), "Ms1_spec_id"]
+        # use coeff as rank score directly.  Columns read as arrays so a pandas
+        # group and a dict of numpy slices behave the same; nanargmax skips NaN
+        # like pandas idxmax / Series.argmax.
+        group_coeff = np.asarray(group["coeff"])
+        group_rt = np.asarray(group["rt"])
+        best = int(np.nanargmax(group_coeff))
+        highest_ranked_spec = np.asarray(group["Ms1_spec_id"])[best]
 
         # ms2_rt_bool = np.abs(ms2_rt-prec_rt)<rt_tol
-        prec_rt = group.rt.iloc[np.argmax(group.coeff)]
+        prec_rt = group_rt[best]
         ms2_window_bool = np.logical_and(prec_mz+offset>bottom_of_window,prec_mz+offset<top_of_window)
         
-        min_rt = np.minimum(prec_rt-rt_tol,np.min(group.rt)*.99)
-        max_rt = np.maximum(prec_rt+rt_tol,np.max(group.rt)*1.01)
+        min_rt = np.minimum(prec_rt-rt_tol,np.min(group_rt)*.99)
+        max_rt = np.maximum(prec_rt+rt_tol,np.max(group_rt)*1.01)
         ms2_rt_bool = np.logical_and(ms2_rt>=min_rt,ms2_rt<=max_rt)
         
         ms2_bool = np.logical_and(ms2_window_bool,ms2_rt_bool)
         possible_ms2_scans = ms2_spec_idxs[ms2_bool]
         ms2_vals = {i:min_int for i in possible_ms2_scans}
     
-        for scan,c in zip(group["spec_id"],group["coeff"]):
+        # .tolist(): Python scalars, as iterating a pandas Series gives
+        for scan,c in zip(np.asarray(group["spec_id"]).tolist(), group_coeff.tolist()):
             ms2_vals[scan]=c
     else:
         highest_ranked_spec = None
@@ -561,7 +622,7 @@ def get_ms2_vals(prec_seq, prec_z, prec_rt, time_channel, timeplex, grouped_deco
 
 
 
-def im_filtered_peaks(spec, prec_im, im_tol):
+def im_filtered_peaks(spec, prec_im, im_tol, mz_lo=None, mz_hi=None):
     """(mz, intens) for this MS1 spectrum, restricted to peaks co-mobile with the precursor.
 
     MS1 frames are not IM-banded -- they carry per-peak mobility across the whole
@@ -570,6 +631,10 @@ def im_filtered_peaks(spec, prec_im, im_tol):
     (spectrum, precursor) keeps the downstream m/z matching kernels unchanged and
     is cheaper than gating per isotope.
 
+    With *mz_lo*/*mz_hi* the peaks are first cut to that m/z range (the
+    spectrum is m/z-sorted, so two binary searches); a raw MS1 frame holds
+    ~300k ions, of which a precursor group needs a few Th.
+
     Returns the spectrum's own arrays untouched when there is nothing to gate on
     (non-IM data, no fitted precursor IM, or no tolerance), so the non-IM path is
     bit-identical to before.  The mask preserves m/z order, which the kernels'
@@ -577,6 +642,11 @@ def im_filtered_peaks(spec, prec_im, im_tol):
     """
     mz, intens = spec.mz, spec.intens
     mob = getattr(spec, "mobility", None)
+    if mz_lo is not None:
+        a, b = np.searchsorted(mz, [mz_lo, mz_hi])
+        mz, intens = mz[a:b], intens[a:b]
+        if mob is not None:
+            mob = mob[a:b]
     if mob is None or im_tol is None or not im_tol > 0.0:
         return mz, intens
     if prec_im is None or not np.isfinite(prec_im):
@@ -599,10 +669,10 @@ def group_prec_im(tag_group):
 
 
 def get_isotopes_and_vals(prec_seq, prec_z, num_iso, tags, all_scans, prec_mz, mz_ppm, spectra_subset, interp_func,
-                          prec_im=None, im_tol=0.0):
+                          prec_im=None, im_tol=0.0, peaks=None):
     isotopes = compute_isotopes(prec_seq, prec_mz, prec_z, num_iso, tags)
     all_isotope_traces = get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset,
-                                                       prec_im=prec_im, im_tol=im_tol)
+                                                       prec_im=prec_im, im_tol=im_tol, peaks=peaks)
     all_ms2_vals = fill_scan_values(all_scans, interp_func, all_isotope_traces[0])
 
     return all_isotope_traces[0], all_ms2_vals, all_isotope_traces[1:], isotopes, interp_func
@@ -613,7 +683,7 @@ def build_ms2_interpolator(ms2_vals):
 
 
 
-def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset, prec_im=None, im_tol=0.0):
+def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset, prec_im=None, im_tol=0.0, peaks=None):
     """
     Get a trace of each isotopic peak across a set of MS1 spectra
 
@@ -640,8 +710,9 @@ def get_isotope_traces_vectorized(isotopes, mz_ppm, spectra_subset, prec_im=None
     """
     all_isotope_traces=[{} for _ in isotopes]
 
-    for spec in spectra_subset:
-        _mz, _intens = im_filtered_peaks(spec, prec_im, im_tol)
+    # peaks: the spectra's (mz, intens), already cut and IM-gated, in order
+    for k, spec in enumerate(spectra_subset):
+        _mz, _intens = peaks[k] if peaks is not None else im_filtered_peaks(spec, prec_im, im_tol)
         iso_ints = get_trace_int_numba(_mz, _intens, np.array([isotope.mz for isotope in isotopes]), mz_ppm, min_int)
         for i in range(len(isotopes)):
             all_isotope_traces[i][spec.scan_num] = iso_ints[i]
@@ -865,11 +936,11 @@ def select_scans_to_search(top_ms1_spec_idx, all_scans, all_channel_scans, windo
 
 
 def fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm,
-                           prec_im=None, im_tol=0.0):
+                           prec_im=None, im_tol=0.0, peaks=None):
     spec = ms1_spectra[np.where(ms1_spec_idxs==ms1_spec_idx)[0][0]]
 
     pred_coeff, obs_peaks, fit_matrix, kept_mz = fit_channel_isotopes_numba(
-        spec, group_iso, mz_ppm, prec_im=prec_im, im_tol=im_tol)
+        spec, group_iso, mz_ppm, prec_im=prec_im, im_tol=im_tol, peaks=peaks)
 
     if len(obs_peaks)==0:
         fit_cor = np.nan
@@ -1289,7 +1360,7 @@ def _compute_cooks_d(fit_matrix, obs_peaks, pred_coeff):
 
 
 
-def fit_channel_isotopes_numba(spec, all_iso, mz_ppm, prec_im=None, im_tol=0.0):
+def fit_channel_isotopes_numba(spec, all_iso, mz_ppm, prec_im=None, im_tol=0.0, peaks=None):
     """
     Takes observed peaks fom spectra and expected peaks from from all_iso for one plex-group and builds a matrix to fit them
 
@@ -1331,7 +1402,8 @@ def fit_channel_isotopes_numba(spec, all_iso, mz_ppm, prec_im=None, im_tol=0.0):
 
     # peak_list() drops mobility, so the IM gate is applied here rather than
     # inside the matching kernel.
-    _mz, _intens = im_filtered_peaks(spec, prec_im, im_tol)
+    # peaks: this spectrum's (mz, intens), already cut and IM-gated by the caller
+    _mz, _intens = peaks if peaks is not None else im_filtered_peaks(spec, prec_im, im_tol)
     dia_spectrum = np.array([_mz, _intens], dtype=np.float64).T
 
     group_lengths = np.array([len(g) for g in all_iso])
