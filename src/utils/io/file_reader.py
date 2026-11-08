@@ -259,6 +259,159 @@ def _centroid_d(d_path: str, peaks_path: str, sdk_path: str = None) -> None:
                 f"({perf_counter() - t0:.0f}s)")
 
 
+def _recalibrate_peaks_parquet(peaks_path: str, cal: dict) -> None:
+    """Set a peaks.parquet's m/z and 1/K0 from the SDK tables in *cal* (by each
+    peak's apex TOF index and scan), in place, if they differ."""
+    import pyarrow as pa, pyarrow.parquet as pq
+    src = pq.ParquetFile(peaks_path); schema = src.schema_arrow
+    head = src.read_row_group(0, columns=["tof", "scan", "mz", "im"])
+    mz_t, im_t = np.asarray(cal["mz_values"]), np.asarray(cal["mobility_values"])
+    if (np.allclose(head.column("mz").to_numpy(), mz_t[head.column("tof").to_numpy()], rtol=0, atol=1e-9)
+            and np.allclose(head.column("im").to_numpy(), im_t[head.column("scan").to_numpy()], rtol=0, atol=1e-9)):
+        return
+    tmp = peaks_path + ".sdk.partial"
+    with pq.ParquetWriter(tmp, schema) as w:
+        for k in range(src.metadata.num_row_groups):
+            t = src.read_row_group(k); cols = {n: t.column(n) for n in schema.names}
+            cols["mz"] = pa.array(mz_t[np.clip(t.column("tof").to_numpy(), 0, len(mz_t) - 1)])
+            cols["im"] = pa.array(im_t[np.clip(t.column("scan").to_numpy(), 0, len(im_t) - 1)])
+            w.write_table(pa.Table.from_arrays([cols[n] for n in schema.names], schema=schema))
+    os.replace(tmp, peaks_path)
+    logger.info(f"Set {peaks_path} m/z and 1/K0 from the Bruker SDK tables")
+
+
+def use_centroided_ms1(sf: SpectrumFile) -> SpectrumFile:
+    """Replace the MS1 peaks of a raw-read .d with its centroids, in place.
+
+    Not called at present (raw ions quantified better on the 200pg 5plex).
+    Identification runs on the raw ions, and once
+    the IDs are scored the MS1 spectra are swapped for centroided peaks for the
+    quantification.  Scan numbers, retention times, the MS2 spectra and the
+    MS2 -> MS1 map are untouched, so the IDs' Ms1_spec_id still point at the
+    same frames.
+
+    The centroids are the .d's peaks.parquet, made by the centroider when
+    missing.  It works in TOF-index and scan space and only labels each peak
+    with m/z and 1/K0 at its apex, so those are taken here from the Bruker SDK
+    tables the raw read already uses (bruker_calibration/): the same values an
+    SDK-centroided peaks.parquet holds, on every platform.
+    """
+    d_path = getattr(sf, "_raw_d_path", None)
+    if d_path is None:
+        raise JModError("centroided MS1 needs .d input read raw")
+    peaks_path = os.path.join(d_path, "peaks.parquet")
+    if not os.path.exists(peaks_path):
+        _centroid_d(d_path, peaks_path, None)
+    tables = os.path.join(d_path, _SDK_TABLES_DIR)
+    mz_table = np.load(os.path.join(tables, "mz.npy"))
+    ook0_table = np.load(os.path.join(tables, "ook0.npy"))
+
+    cal = sf._cal
+    is_ms1 = np.asarray(cal["ms_level"]) == 1
+    frame_rt = dict(zip(np.asarray(cal["frame_ids"])[is_ms1].tolist(),
+                        np.asarray(cal["rt_values"])[is_ms1].tolist()))
+    by_rt = {spec.RT: spec for spec in sf.ms1scans}
+
+    import pyarrow.dataset as pads
+    t = pads.dataset(peaks_path).to_table(
+        filter=pads.field("frame").isin(list(frame_rt)),
+        columns=["frame", "scan", "tof", "apex_intensity"])
+    frame = t.column("frame").to_numpy()
+    order = np.argsort(frame, kind="stable")
+    frame = frame[order]
+    scan = t.column("scan").to_numpy()[order]
+    tof = t.column("tof").to_numpy()[order]
+    intens = t.column("apex_intensity").to_numpy()[order]
+    starts = np.flatnonzero(np.r_[True, frame[1:] != frame[:-1]]) if frame.size else np.array([], int)
+    ends = np.r_[starts[1:], frame.size]
+
+    empty = (np.empty(0, PEAK_MZ_DTYPE), np.empty(0, PEAK_INT_DTYPE), np.empty(0, PEAK_MOB_DTYPE))
+    replaced = set()
+    for a, b in zip(starts, ends):
+        spec = by_rt.get(frame_rt[int(frame[a])])
+        if spec is None:
+            continue
+        mz = mz_table[np.clip(tof[a:b], 0, len(mz_table) - 1)].astype(PEAK_MZ_DTYPE)
+        o = np.argsort(mz, kind="stable")
+        spec.mz = mz[o]
+        spec.intens = intens[a:b][o].astype(PEAK_INT_DTYPE)
+        spec.mobility = ook0_table[np.clip(scan[a:b], 0, len(ook0_table) - 1)][o].astype(PEAK_MOB_DTYPE)
+        spec.TIC = float(spec.intens.sum(dtype=np.float64))
+        replaced.add(id(spec))
+    for spec in sf.ms1scans:          # frames without a centroid
+        if id(spec) not in replaced:
+            spec.mz, spec.intens, spec.mobility = empty
+            spec.TIC = 0.0
+    logger.info(f"MS1 quantified from centroids: {len(replaced)} of {len(sf.ms1scans)} "
+                f"MS1 spectra, {frame.size} peaks ({peaks_path})")
+    return sf
+
+
+def use_centroided_ms2(sf: SpectrumFile) -> SpectrumFile:
+    """Replace the MS2 peaks of a raw-read .d with its centroids, in place.
+
+    Not called at present.  After identification and MS1 quant: each MS2
+    spectrum (one isolation window of one frame, cut to one IM band) gets the
+    frame's centroids whose apex scan lies in that window's scan range and
+    whose 1/K0 lies in the band, by the same rules the raw ions were assigned
+    with (scan_begin <= scan < scan_end; im_lo <= 1/K0 < im_hi).  Scan numbers
+    and everything else are untouched.  m/z and 1/K0 come from the Bruker SDK
+    tables, as in use_centroided_ms1.
+    """
+    d_path = getattr(sf, "_raw_d_path", None)
+    if d_path is None:
+        raise JModError("centroided MS2 needs .d input read raw")
+    peaks_path = os.path.join(d_path, "peaks.parquet")
+    if not os.path.exists(peaks_path):
+        _centroid_d(d_path, peaks_path, None)
+    tables = os.path.join(d_path, _SDK_TABLES_DIR)
+    mz_table = np.load(os.path.join(tables, "mz.npy"))
+    ook0_table = np.load(os.path.join(tables, "ook0.npy"))
+
+    cal = sf._cal
+    frame_ids = np.asarray(cal["frame_ids"])
+    is_ms2 = np.asarray(cal["ms_level"]) == 2
+    rt_frame = dict(zip(np.asarray(cal["rt_values"])[is_ms2].tolist(), frame_ids[is_ms2].tolist()))
+    windows = {}                                   # (frame, prec_mz) -> (scan_begin, scan_end)
+    for frame, scan_begin, scan_end, prec_mz, _w, _ce in sf._dia_lookup.iter_rows():
+        windows[(int(frame), float(prec_mz))] = (int(scan_begin), int(scan_end))
+
+    import pyarrow.dataset as pads
+    t = pads.dataset(peaks_path).to_table(
+        filter=pads.field("frame").isin(list(rt_frame.values())),
+        columns=["frame", "scan", "tof", "apex_intensity"])
+    frame = t.column("frame").to_numpy()
+    order = np.argsort(frame, kind="stable")
+    frame = frame[order]
+    scan = t.column("scan").to_numpy()[order].astype(np.int64)
+    tof = t.column("tof").to_numpy()[order]
+    intens = t.column("apex_intensity").to_numpy()[order]
+    del t
+    mob = ook0_table[np.clip(scan, 0, len(ook0_table) - 1)].astype(PEAK_MOB_DTYPE)
+    mz_all = mz_table[np.clip(tof, 0, len(mz_table) - 1)].astype(PEAK_MZ_DTYPE)
+    starts = np.flatnonzero(np.r_[True, frame[1:] != frame[:-1]]) if frame.size else np.array([], int)
+    span = {int(frame[a]): (a, b) for a, b in zip(starts, np.r_[starts[1:], frame.size])}
+
+    n_peaks = 0
+    for spec in sf.ms2scans:
+        f = rt_frame.get(spec.RT)
+        w = windows.get((f, float(spec.prec_mz))) if f is not None else None
+        a, b = span.get(f, (0, 0)) if w is not None else (0, 0)
+        m64 = mob[a:b].astype(np.float64)
+        keep = ((scan[a:b] >= w[0]) & (scan[a:b] < w[1]) & (spec.im_lo <= m64) & (m64 < spec.im_hi)
+                if b > a else np.zeros(0, bool))
+        mz = mz_all[a:b][keep]
+        o = np.argsort(mz, kind="stable")
+        spec.mz = mz[o]
+        spec.intens = intens[a:b][keep][o].astype(PEAK_INT_DTYPE)
+        spec.mobility = mob[a:b][keep][o]
+        spec.TIC = float(spec.intens.sum(dtype=np.float64))
+        n_peaks += spec.mz.size
+    logger.info(f"MS2 quantified from centroids: {len(sf.ms2scans)} MS2 spectra, "
+                f"{n_peaks} peaks ({peaks_path})")
+    return sf
+
+
 def _load_d(filepath: str, bruker_sdk_path: str = None) -> SpectrumFile:
     """Load timsTOF .d data.
 
@@ -280,7 +433,12 @@ def _load_d(filepath: str, bruker_sdk_path: str = None) -> SpectrumFile:
     # Always read the raw, uncentroided ions with Bruker's calibration; a
     # peaks.parquet in the .d is ignored and the centroider is not used.
     # raw = not os.path.exists(peaks_path)
+    # TODO: the centroided path below (the centroider's peaks.parquet, m/z and
+    # 1/K0 set from the SDK tables by _recalibrate_peaks_parquet) is kept but
+    # not reachable; on the 200pg 5plex raw ions quantified better.
     raw = True
+    if not raw and not os.path.exists(peaks_path):
+        _centroid_d(d_path, peaks_path, None)
     if raw and not os.path.exists(bin_path):
         raise FileNotFoundError(
             f"Neither {peaks_path} nor {bin_path} exists; there are no peaks "
@@ -299,11 +457,15 @@ def _load_d(filepath: str, bruker_sdk_path: str = None) -> SpectrumFile:
     logger.info(f"Computed {len(im_bins)} overlapping IM bins "
                 f"[{cal['im_range_lower']:.4f}, {cal['im_range_upper']:.4f}]")
 
-    sf = _build_spectrum_file(filepath, None, cal, dia_lookup, im_bins,
-                              raw_d_path=d_path)
-    # else:
-    #     logger.info(f"Reading peaks from {peaks_path}")
-    #     sf = _build_spectrum_file(filepath, peaks_path, cal, dia_lookup, im_bins)
+    if raw:
+        sf = _build_spectrum_file(filepath, None, cal, dia_lookup, im_bins,
+                                  raw_d_path=d_path)
+    else:
+        _load_sdk_tables(_sdk_calibration_tables(d_path, bruker_sdk_path), cal)
+        _recalibrate_peaks_parquet(peaks_path, cal)
+        logger.info(f"Reading peaks from {peaks_path}")
+        sf = _build_spectrum_file(filepath, peaks_path, cal, dia_lookup, im_bins)
+        sf._raw_d_path = d_path
 
     logger.info(f"Loaded {len(sf.ms1scans)} MS1 spectra, {len(sf.ms2scans)} MS2 spectra")
     return sf
