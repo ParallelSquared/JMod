@@ -295,27 +295,28 @@ def test_linux_and_windows_run_the_sdk_natively(tmp_path, monkeypatch, capture_r
 
 
 def test_macos_runs_the_windows_sdk_under_wine(tmp_path, monkeypatch, capture_run):
-    import shutil
     from src.utils.io import file_reader as fr
+    wine = tmp_path / "wine"; wine.write_text("")
+    py = tmp_path / "python.exe"; py.write_text("")
+    monkeypatch.setattr(fr, "_WINE", str(wine))
+    monkeypatch.setattr(fr, "_WINE_PYTHON", str(py))
+    monkeypatch.setattr(fr, "_WINE_PREFIX", str(tmp_path / "prefix"))
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/wine" if name == "wine" else None)
     d = tmp_path / "run.d"; d.mkdir()
     fr._sdk_calibration_tables(str(d), str(tmp_path / "sdk" / "timsdata.dll"))
     cmd = capture_run["cmd"]
-    assert cmd[:2] == ["/usr/local/bin/wine", "python"]
+    assert cmd[:2] == [str(wine), str(py)]
     assert cmd[3] == fr._wine_path(str(tmp_path / "sdk" / "timsdata.dll"))
-    assert "WINEPREFIX" not in capture_run["env"] or capture_run["env"]["WINEPREFIX"] == os.environ.get("WINEPREFIX")
+    assert capture_run["env"]["WINEPREFIX"] == str(tmp_path / "prefix")
 
 
 def test_macos_without_wine_fails(tmp_path, monkeypatch, capture_run):
-    import shutil
     from src.utils.io import file_reader as fr
+    monkeypatch.setattr(fr, "_WINE", str(tmp_path / "no-wine"))
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(shutil, "which", lambda name: None)
     d = tmp_path / "run.d"; d.mkdir()
-    with pytest.raises(JModError) as exc:
+    with pytest.raises(FileNotFoundError):
         fr._sdk_calibration_tables(str(d), "/sdk/timsdata.dll")
-    assert "wine" in str(exc.value)
     assert "cmd" not in capture_run
 
 

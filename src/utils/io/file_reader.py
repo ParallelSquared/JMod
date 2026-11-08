@@ -478,10 +478,13 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 _SDK_TABLES_SCRIPT = os.path.join(_REPO_ROOT, "scripts", "bruker_calibration_tables.py")
 
 # macOS: Bruker ships no macOS library, so the Windows timsdata.dll from
-# --bruker_sdk_path runs under Wine, which the user installs (never bundled,
-# LGPL).  JMod only calls it: `wine` must be on PATH, and its prefix (WINEPREFIX
-# or Wine's default) must have a Windows Python on its PATH as `python`.  The
-# helper script needs only the standard library.
+# --bruker_sdk_path runs under Wine with a Windows Python (never bundled; Wine is
+# LGPL).  Hardcoded to this machine's setup; see MONO_D_CALIBRATION_PLAN.md for
+# how these were installed.  The helper script needs only the standard library.
+_WINE = os.path.expanduser(
+    "~/Applications/Wine Devel.app/Contents/Resources/wine/bin/wine")
+_WINE_PREFIX = os.path.expanduser("~/.wine-jmod")
+_WINE_PYTHON = os.path.expanduser("~/.wine-jmod-py/python.exe")
 
 
 def _wine_path(path: str) -> str:
@@ -511,14 +514,13 @@ def _sdk_calibration_tables(d_path: str, bruker_sdk_path: str = None) -> str:
         _fail_bruker(f"No peaks.parquet in {d_path}, and reading it raw needs "
                      f"Bruker's calibration")
     if sys.platform == "darwin":
-        import shutil
-        wine = shutil.which("wine")
-        if wine is None:
-            _fail_bruker("On macOS, Bruker's Windows timsdata library runs under Wine, "
-                         "but `wine` is not on PATH")
-        cmd = [wine, "python", _wine_path(_SDK_TABLES_SCRIPT),
+        for p in (_WINE, _WINE_PYTHON):
+            if not os.path.exists(p):
+                raise FileNotFoundError(
+                    f"Cannot compute Bruker calibration for {d_path}: {p} is missing")
+        cmd = [_WINE, _WINE_PYTHON, _wine_path(_SDK_TABLES_SCRIPT),
                _wine_path(bruker_sdk_path), _wine_path(d_path), _wine_path(tmp_dir)]
-        env = dict(os.environ, WINEDEBUG="-all")
+        env = dict(os.environ, WINEPREFIX=_WINE_PREFIX, WINEDEBUG="-all")
     else:
         cmd = [sys.executable, _SDK_TABLES_SCRIPT, bruker_sdk_path, d_path, tmp_dir]
         env = None
