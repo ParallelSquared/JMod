@@ -39,6 +39,8 @@ through them, never by imported name.
 
 import threading
 
+import numpy as np
+
 _installed = False
 _lock = threading.Lock()
 
@@ -82,3 +84,99 @@ def make_compile_timers_thread_safe():
         ev.unregister = unregister
         ev.broadcast = broadcast
         _installed = True
+
+
+# --- numba's argument-type cache ---------------------------------------------
+#
+# Every call into a jitted function types its arguments in C.  Plain numbers
+# and plain arrays (aligned, writable, a basic dtype) use fixed tables; every
+# other argument -- a read-only array (the frozen spectral library, read-only
+# memory maps), an unaligned array, a 0-d array, None, a bool -- goes through
+# one process-wide hash table, keyed by a fingerprint (for an array: ndim,
+# layout, writable, dtype).  The first argument with a new fingerprint inserts
+# it.  The table has no lock, which under the GIL was fine; on free-threaded
+# Python an insert that resizes it while another thread reads or inserts
+# corrupts the heap (numba 0.68 _typeof.cpp; a 2ng 5plex run crashed in
+# _Numba_hashtable_set on 2026-11-07, as the main search's workers started).
+#
+# The fix: insert every fingerprint the run can produce before any worker
+# thread exists.  Workers then only read the table, and concurrent reads are
+# safe.  For arrays that set is small and closed: each basic dtype, ndim 0-3,
+# C/F/A layout, read-only or writable.  Tuples and lists are fingerprinted by
+# their contents and are not covered; no jitted function is called with one.
+
+_primed = False
+
+_PRIME_DTYPES = ("?", "i1", "i2", "i4", "i8", "u1", "u2", "u4", "u8",
+                 "f4", "f8", "c8", "c16")
+
+
+def _layouts(make):
+    """0-d, then C, F and non-contiguous arrays of ndim 1-3, from *make(shape)*."""
+    out = [make(())]
+    for ndim in (1, 2, 3):
+        c = make((3,) * ndim)
+        out.append(c)
+        if ndim > 1:
+            out.append(c.T)                                    # F
+        wide = make((3,) * (ndim - 1) + (6,))
+        out.append(wide[(slice(None),) * (ndim - 1) + (slice(None, None, 2),)])  # A
+    return out
+
+
+def _unaligned(dtype):
+    """make(shape): writable arrays of *dtype* whose data starts one byte off
+    alignment, so numba types them through the fingerprint table."""
+    def make(shape):
+        n = int(np.prod(shape)) if shape else 1
+        buf = bytearray(n * dtype.itemsize + 1)
+        return np.frombuffer(buf, dtype=dtype, count=n, offset=1).reshape(shape)
+    return make
+
+
+def _read_only(arrays):
+    out = []
+    for a in arrays:
+        a = a.view()
+        a.flags.writeable = False
+        out.append(a)
+    return out
+
+
+def _prime_args():
+    """The probe calls' arguments, one tuple per call: every fingerprint the
+    type cache can be asked for with arrays of a basic dtype, plus None and
+    bool."""
+    calls = [(None, True)]
+    for code in _PRIME_DTYPES:
+        dtype = np.dtype(code)
+        arrays = _layouts(lambda shape: np.zeros(shape, dtype))
+        args = _read_only(arrays)
+        if dtype.itemsize > 1:
+            # writable arrays are typed without the table unless unaligned
+            # (or 0-d); itemsize-1 dtypes cannot be unaligned
+            unaligned = _layouts(_unaligned(dtype))
+            args += unaligned + _read_only(unaligned)
+        else:
+            args.append(arrays[0])                             # writable 0-d
+        calls.append(tuple(args))
+    return calls
+
+
+def prime_type_cache():
+    """Insert every argument fingerprint into numba's type cache, on this
+    thread, before worker threads call jitted functions.  Idempotent; call it
+    with no other thread running numba.  Takes about a second."""
+    global _primed
+    with _lock:
+        if _primed:
+            return
+        from numba import njit
+
+        @njit(cache=False)
+        def _probe(*args):
+            return 0
+
+        for args in _prime_args():
+            _probe(*args)
+        _primed = True

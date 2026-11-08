@@ -32,6 +32,7 @@ import platform
 from src import _version
 from src.utils.io import file_reader
 from src.utils.set_seeds import set_seeds
+from src.utils.numba_threads import prime_type_cache
 from src.models.spec_lib import spec_lib
 from src.spectral_fitting import fit_to_lib2, hits_to_arrow, protein_column
 from src.rt_alignment import MZRTfit, MZRTfit_timeplex, aligned_library_im
@@ -56,6 +57,8 @@ def main(GUI_config_json=None):
     --combine_results only combine its runs again, or with --inspect_library
     only report a library's modifications."""
     try:
+        # Before any worker thread calls numba (see numba_threads)
+        prime_type_cache()
         if config.args.inspect_library:
             run_inspect_library(config.args.inspect_library)
         elif config.args.make_library:

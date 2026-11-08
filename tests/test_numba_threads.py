@@ -82,3 +82,38 @@ def test_concurrent_first_compiles():
         [t.start() for t in threads]
         [t.join() for t in threads]
     assert errors == []
+
+
+def test_primed_fingerprints_cover_the_arrays_jmod_passes(tmp_path):
+    """Every read-only, unaligned or 0-d array -- the arguments numba types
+    through its unlocked fingerprint table -- has a fingerprint that
+    prime_type_cache inserts, so worker threads never insert one."""
+    import numpy as np
+    from numba._dispatcher import compute_fingerprint
+    from src.utils.numba_threads import _prime_args
+
+    primed = {compute_fingerprint(a) for args in _prime_args() for a in args}
+
+    def frozen(a):
+        a = a.view()
+        a.flags.writeable = False
+        return a
+
+    np.save(tmp_path / "x.npy", np.arange(10, dtype=np.float32))
+    mapped = np.load(tmp_path / "x.npy", mmap_mode="r")        # library_mmap
+    table = frozen(np.zeros((5, 4)))                           # frozen library
+    cases = [mapped, mapped[2:7], mapped[::3], table, table[:, 1], table[1], table.T,
+             frozen(np.zeros(0, dtype=np.int64)), frozen(np.zeros((), dtype=np.uint32)),
+             np.frombuffer(b"\0" * 17, dtype=np.int64, count=2, offset=1),   # read-only, unaligned
+             np.frombuffer(bytearray(17), dtype=np.float64, count=2, offset=1),
+             np.zeros((), dtype=np.int32), frozen(np.zeros((2, 3, 4), dtype=np.bool_)),
+             None, True, False]
+    for a in cases:
+        assert compute_fingerprint(a) in primed, (getattr(a, "dtype", a), getattr(a, "shape", None))
+
+
+def test_prime_type_cache_runs_and_is_idempotent():
+    from src.utils import numba_threads
+    numba_threads.prime_type_cache()
+    numba_threads.prime_type_cache()
+    assert numba_threads._primed
