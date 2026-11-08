@@ -2316,3 +2316,63 @@ class TestFitChannelsWithBackground:
         c, *_, bg = fit_channels_with_background(pat, mz, it, 10e-6, flanks)
         assert bg == pytest.approx(0.0, abs=1e-6)
         np.testing.assert_allclose(c, truth, rtol=1e-6)
+
+
+class TestMs2PlexQuant:
+    """coeff_plex on a synthetic plex group: fragments with a flat on-grid
+    background, two isolation windows, channels' ratios recovered."""
+
+    def _setup(self, background):
+        from src.utils.frag_encoding import encode_frag_names
+        import types
+        from src.ms1_cor_channels import compute_isotopes
+        from src.ms2_plex_quant import build_group, observe, fit_scan
+        tag = read_json_to_massTag("src/MassTags", "PSMtag_5plex.json")
+        pep, z = "AAAADLANK", 2
+        combos = get_other_channels((f"(PSMtag_5plex-0){pep}(PSMtag_5plex-0)", z), 700.0, [tag])
+        rng = np.random.default_rng(0)
+        # a fragment ladder: b-ions carry the N-terminal tag (channel-specific), y-ions carry the K tag
+        names = ["b3_1", "b4_1", "b5_1", "y3_1", "y4_1", "y5_1"]
+        lib = np.array([0.4, 0.8, 0.6, 1.0, 0.7, 0.5])
+        rows = []
+        base_b = np.array([300.17, 371.21, 486.24]); base_y = np.array([340.22, 455.25, 526.28])
+        for k, (seq, _) in enumerate(combos):
+            step = (tag.mass_dict[f"PSMtag_5plex-{[0,4,8,12,16][k]}"] - tag.mass_dict["PSMtag_5plex-0"])
+            mz = np.r_[base_b + step, base_y + step]
+            rows.append(dict(seq=seq, channel=[0, 4, 8, 12, 16][k], frag_names=encode_frag_names(names), frag_mz=mz, frag_int=lib,
+                             spec_id=1, coeff=1.0, prec_im=1.0, untag_prec=pep, is_decoy=False, BestChannel_Qvalue=0.001))
+        df = pd.DataFrame(rows)
+        truth = np.array([8000.0, 2000.0, 8000.0, 1000.0, 4000.0])
+        M, meta = build_group(df, tag, 10e-6, {})
+        mzs, ints = [], []
+        for r, mem in enumerate(meta["members"]):
+            m0 = float(np.mean(mem)); mzs.append(m0 + 1e-6); ints.append(float((M[r] * truth).sum()) + background)
+        # one background peak per distinct grid window (windows of different
+        # fragments/channels coincide on the grid)
+        # one background peak per distinct window: windows of different
+        # fragments/channels that coincide within tolerance share a peak
+        placed = []
+        for q in sorted(q for wins in meta["bg_windows"].values() for q in wins):
+            if not placed or q - placed[-1] > 10e-6 * q:
+                placed.append(q); mzs.append(q + 1e-6); ints.append(background)
+        o = np.argsort(mzs)
+        spec = types.SimpleNamespace(mz=np.asarray(mzs)[o], intens=np.asarray(ints)[o], mobility=None, RT=10.0, prec_mz=700.0, im_lo=0.9)
+        return M, meta, spec, truth
+
+    def test_ratios_recovered_under_background(self):
+        from src.ms2_plex_quant import observe, fit_scan
+        M, meta, spec, truth = self._setup(background=250.0)
+        y, bg = observe(spec, meta, 10e-6, np.nan, 0.0)
+        # the per-fragment median background is robust to the few windows that
+        # capture two of the synthetic peaks
+        assert np.median(bg) == pytest.approx(250.0, rel=1e-6)
+        assert (np.abs(bg - 250.0) < 1.0).mean() > 0.8
+        c, total = fit_scan(M, y, bg)
+        np.testing.assert_allclose(c / c[0], truth / truth[0], rtol=0.03)
+
+    def test_no_background_is_exact(self):
+        from src.ms2_plex_quant import observe, fit_scan
+        M, meta, spec, truth = self._setup(background=0.0)
+        y, bg = observe(spec, meta, 10e-6, np.nan, 0.0)
+        c, _ = fit_scan(M, y, bg)
+        np.testing.assert_allclose(c, truth, rtol=1e-5)

@@ -1501,6 +1501,14 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     if "__fdc_idx" in fdx_quant.columns:
         fdx_quant = fdx_quant.drop(columns=["__fdc_idx"])
 
+    # MS2 quant of each plex group at its voted apex, every channel read from
+    # its own isolation window, background-aware (src/ms2_plex_quant.py)
+    if mass_tag is not None:
+        logger.info("MS2 plex quantification")
+        from src.ms2_plex_quant import add_plex_coeff
+        fdx_quant = add_plex_coeff(fdx_quant, spectra, mass_tag, mz_ppm, im_tol,
+                                   q_gate=config.fdr_threshold, n_threads=config.args.threads)
+
     fdx_quant["gauss_r2_joint"] = gauss_r2_joint(fdx_quant, dc, timeplex)
 
     logger.info("")
@@ -1512,6 +1520,10 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     filtered = fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold)].copy()
     filtered["MS1_quality"] = ms1_quality(filtered)
     filtered["MS1_quality_pass"] = ms1_quality_pass(filtered)
+    if mass_tag is not None:
+        from src.ms2_plex_quant import ms2_quant_quality
+        filtered["MS2_quant_quality"] = ms2_quant_quality(filtered)
+        fdx_quant["MS2_quant_quality"] = filtered["MS2_quant_quality"]
     # For the parquets written below (all_precursors.parquet is written): NaN outside the filtered IDs
     fdx_quant["MS1_quality"] = filtered["MS1_quality"]
     fdx_quant["MS1_quality_pass"] = filtered["MS1_quality_pass"]
@@ -1535,7 +1547,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
-                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'plex_Area', 'plex_bg', 'plex_snr', 'MS1_quality', 'MS1_quality_pass', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'plex_Area', 'plex_bg', 'plex_snr', 'MS1_quality', 'MS1_quality_pass', 'coeff_plex', 'ms2_bg', 'ms2_snr', 'ms2_nfrag', 'MS2_quant_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")

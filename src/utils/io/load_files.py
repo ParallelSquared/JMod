@@ -523,6 +523,21 @@ class SpectrumFile:
         elif level==2:
             return self.ms2scans[level_idx]
 
+    def index_ms2_windows(self):
+        """Index the MS2 spectra by (isolation window m/z, IM band) for
+        ms2_window_scans; a no-op once built."""
+        if getattr(self, "_ms2_windows", None) is not None:
+            return
+        windows = {}
+        for i, s in enumerate(self.ms2scans):
+            windows.setdefault((round(float(s.prec_mz), 3), round(float(getattr(s, "im_lo", 0.0) or 0.0), 5)), []).append(i)
+        self._ms2_windows = {k: np.array(v) for k, v in windows.items()}
+
+    def ms2_window_scans(self, prec_mz, im_lo):
+        """Indices into ms2scans of one isolation window and IM band, in acquisition order."""
+        self.index_ms2_windows()
+        return self._ms2_windows.get((round(float(prec_mz), 3), round(float(im_lo or 0.0), 5)), np.array([], dtype=int))
+
     def build_ms2_to_ms1_map(self):
         """Precompute the nearest-RT MS1 scan index for each MS2 scan.
 
