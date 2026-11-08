@@ -148,8 +148,8 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                  ms1_tol=20e-6, rt_tol=1.0, im_tol=0.01, target_decoy_ratio=1.0)
 
     expected_files = [
-        "outputs/all_IDs.csv",
-        "filtered_IDs.csv",
+        "outputs/all_precursors.parquet",
+        "filtered_precursors.parquet",
         "outputs/all_IDs_filtered.parquet",
     ]
 
@@ -158,10 +158,10 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
     # Label-free: each untagged precursor is one row, so its q-value is the row's
     written = pd.read_parquet(tmp_path.parent / "outputs/all_IDs_filtered.parquet")
     assert written["untag_prec_Qvalue"].tolist() == written["Qvalue"].tolist()
-    # gauss_r2_joint in all_IDs.csv; MS1_quality only with the filtered IDs
-    assert "gauss_r2_joint" in pd.read_csv(tmp_path.parent / "outputs/all_IDs.csv").columns
-    assert "MS1_quality" not in pd.read_csv(tmp_path.parent / "outputs/all_IDs.csv").columns
-    assert "MS1_quality" in pd.read_csv(tmp_path.parent / "filtered_IDs.csv").columns
+    # gauss_r2_joint in all_precursors.parquet; MS1_quality only with the filtered IDs
+    assert "gauss_r2_joint" in pd.read_parquet(tmp_path.parent / "outputs/all_precursors.parquet").columns
+    assert "MS1_quality" not in pd.read_parquet(tmp_path.parent / "outputs/all_precursors.parquet").columns
+    assert "MS1_quality" in pd.read_parquet(tmp_path.parent / "filtered_precursors.parquet").columns
     assert "MS1_quality" in pd.read_parquet(tmp_path.parent / "filtered_IDs.parquet").columns
 
 
@@ -272,3 +272,29 @@ def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
     qq = ms1_quality(ids)
     # percentiles: PredVal 1/4, 2/4, 3.5/4, 3.5/4; gauss_r2_joint 1/3, 3/3, missing = 0, 2/3
     assert np.allclose(qq, [np.sqrt(1 / 4 * 1 / 3), np.sqrt(2 / 4), 0.0, 0.01 * np.sqrt(3.5 / 4 * 2 / 3)])
+
+
+def test_full_parquet_keeps_types_and_stringifies_mixed_columns(tmp_path):
+    """_write_full_parquet: list and numeric columns keep their types; a column mixing
+    numbers and strings (plexfittrace) is written as strings, nulls kept."""
+    import numpy as np
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from src.fdr_analysis import _write_full_parquet
+    df = pd.DataFrame({
+        "seq": ["PEPTIDEK", "PEPTIDER", "PEPK"],
+        "coeff": [1.5, 2.0, np.nan],
+        "is_decoy": [False, True, False],
+        "frag_errors": [np.array([1.0, 2.0]), None, np.array([3.0])],
+        "plexfittrace": pd.Series([0, "235502.4;189496.8", np.nan], dtype=object),
+    })
+    path = tmp_path / "precursors.parquet"
+    _write_full_parquet(df, str(path))
+    t = pq.read_table(path)
+    assert t.schema.field("coeff").type == pa.float64()
+    assert t.schema.field("is_decoy").type == pa.bool_()
+    assert pa.types.is_list(t.schema.field("frag_errors").type)
+    assert t.schema.field("plexfittrace").type == pa.string()
+    assert t.column("plexfittrace").to_pylist() == ["0", "235502.4;189496.8", None]
+    assert t.column("frag_errors").to_pylist() == [[1.0, 2.0], None, [3.0]]

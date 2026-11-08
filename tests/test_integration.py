@@ -156,8 +156,8 @@ class TestJModIntegration:
         expected_files = [
             # 'ms2scans.csv',
             'outputs/decoylibsearch_coeffs.parquet',
-            'outputs/all_IDs.csv',
-            'filtered_IDs.csv',
+            'outputs/all_precursors.parquet',
+            'filtered_precursors.parquet',
             'outputs/params.txt'
         ]
 
@@ -170,31 +170,31 @@ class TestJModIntegration:
         results_folder = pipeline_results['results_folder']
         assert results_folder is not None, "No results folder"
 
-        # Check all_IDs.csv has expected columns
-        all_ids_path = os.path.join(results_folder, 'outputs/all_IDs.csv')
-        assert os.path.exists(all_ids_path), "all_IDs.csv not found"
+        # Check all_precursors.parquet has expected columns
+        all_ids_path = os.path.join(results_folder, 'outputs/all_precursors.parquet')
+        assert os.path.exists(all_ids_path), "all_precursors.parquet not found"
 
-        df = pd.read_csv(all_ids_path)
-        assert len(df) > 0, "outputs/all_IDs.csv is empty"
+        df = pd.read_parquet(all_ids_path)
+        assert len(df) > 0, "outputs/all_precursors.parquet is empty"
 
         # Check for key columns
         expected_columns = ['seq', 'z', 'coeff']
         for col in expected_columns:
-            assert col in df.columns, f"Expected column '{col}' not in all_IDs.csv"
+            assert col in df.columns, f"Expected column '{col}' not in all_precursors.parquet"
 
     def test_filtered_ids_subset_of_all_ids(self, pipeline_results):
         """Test that filtered_IDs is a subset of all_IDs."""
         results_folder = pipeline_results['results_folder']
         assert results_folder is not None, "No results folder"
 
-        all_ids_path = os.path.join(results_folder, 'outputs/all_IDs.csv')
-        filtered_ids_path = os.path.join(results_folder, 'filtered_IDs.csv')
+        all_ids_path = os.path.join(results_folder, 'outputs/all_precursors.parquet')
+        filtered_ids_path = os.path.join(results_folder, 'filtered_precursors.parquet')
 
-        assert os.path.exists(all_ids_path), "outputs/all_IDs.csv not found"
-        assert os.path.exists(filtered_ids_path), "filtered_IDs.csv not found"
+        assert os.path.exists(all_ids_path), "outputs/all_precursors.parquet not found"
+        assert os.path.exists(filtered_ids_path), "filtered_precursors.parquet not found"
 
-        all_ids = pd.read_csv(all_ids_path)
-        filtered_ids = pd.read_csv(filtered_ids_path)
+        all_ids = pd.read_parquet(all_ids_path)
+        filtered_ids = pd.read_parquet(filtered_ids_path)
 
         # Filtered should have fewer or equal rows
         assert len(filtered_ids) <= len(all_ids), \
@@ -205,10 +205,10 @@ class TestJModIntegration:
         results_folder = pipeline_results['results_folder']
         assert results_folder is not None, "No results folder"
 
-        filtered_ids_path = os.path.join(results_folder, 'filtered_IDs.csv')
-        assert os.path.exists(filtered_ids_path), "filtered_IDs.csv not found"
+        filtered_ids_path = os.path.join(results_folder, 'filtered_precursors.parquet')
+        assert os.path.exists(filtered_ids_path), "filtered_precursors.parquet not found"
 
-        filtered_ids = pd.read_csv(filtered_ids_path)
+        filtered_ids = pd.read_parquet(filtered_ids_path)
 
         if 'is_decoy' in filtered_ids.columns:
             decoy_count = filtered_ids['is_decoy'].sum()
@@ -289,8 +289,8 @@ class TestSILACIntegration:
         expected_files = [
            # 'ms2scans.csv',
             'outputs/decoylibsearch_coeffs.parquet',
-            'outputs/all_IDs.csv',
-            'filtered_IDs.csv',
+            'outputs/all_precursors.parquet',
+            'filtered_precursors.parquet',
             'outputs/params.txt'
         ]
 

@@ -1288,6 +1288,30 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     return result_df
 
 
+def _write_full_parquet(df, path):
+    """Write *df* to Parquet, column by column.
+
+    Each column keeps the type pyarrow infers (lists stay lists).  A column
+    pyarrow cannot type -- an object column mixing numbers with strings, such
+    as plexfittrace's ';'-joined values next to numeric placeholders -- is
+    written as strings, as the CSV this replaces wrote everything.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    def _is_null(v):
+        return v is None or (isinstance(v, float) and np.isnan(v))
+
+    arrays = []
+    for col in df.columns:
+        try:
+            arrays.append(pa.array(df[col], from_pandas=True))
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
+            arrays.append(pa.array([None if _is_null(v) else str(v) for v in df[col]],
+                                   type=pa.string()))
+    pq.write_table(pa.Table.from_arrays(arrays, names=[str(c) for c in df.columns]), path)
+
+
 def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
                  mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0,
                  im_accuracy=None):
@@ -1448,10 +1472,12 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
-    fdx_quant.to_csv(results_folder+"/outputs/all_IDs.csv",index=False)
+    # Every scored precursor, targets and decoys.  Parquet rather than CSV: it
+    # writes faster and far smaller, and the fragment list columns stay lists.
+    _write_full_parquet(fdx_quant, results_folder+"/outputs/all_precursors.parquet")
     filtered = fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold)].copy()
     filtered["MS1_quality"] = ms1_quality(filtered)
-    # For the parquets (all_IDs.csv is written): NaN outside the filtered IDs
+    # For the parquets written below (all_precursors.parquet is written): NaN outside the filtered IDs
     fdx_quant["MS1_quality"] = filtered["MS1_quality"]
 
     # Decode packed int32 frag codes into "y5_1" / "b3-H2O_2" strings, only for
@@ -1466,7 +1492,9 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
             if codes is not None and len(codes) > 0 else []
             for codes in filtered["frag_names"]
         ]
-    filtered.to_csv(results_folder+"/filtered_IDs.csv",index=False)
+    # The filtered precursors with every column.  Parquet: the CSV this replaced
+    # took ~50 s and ~1 GB on a 9-plex run.
+    _write_full_parquet(filtered, results_folder+"/filtered_precursors.parquet")
     # fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
 
     ### select minimum columns for parquet

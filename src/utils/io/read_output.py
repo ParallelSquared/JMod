@@ -643,8 +643,8 @@ def read_results(file,
 
     results_folder = os.path.dirname(file)
 
-    all_fdx = pd.read_csv(results_folder+"/all_IDs.csv")
-    filtered_fdx = pd.read_csv(results_folder+"/filtered_IDs.csv")
+    all_fdx = pd.read_parquet(results_folder+"/all_precursors.parquet")
+    filtered_fdx = pd.read_parquet(os.path.join(os.path.dirname(results_folder), "filtered_precursors.parquet"))
 
     return decoy_coeffs,all_fdx,filtered_fdx
 
