@@ -117,3 +117,38 @@ def test_prime_type_cache_runs_and_is_idempotent():
     numba_threads.prime_type_cache()
     numba_threads.prime_type_cache()
     assert numba_threads._primed
+
+
+def test_prime_type_cache_fills_the_table_so_first_calls_do_not_insert():
+    """After priming, a new jitted function's first call with a read-only array,
+    an unaligned array, None or a numpy bool finds its typecode in the table:
+    numba's Python fallback (typeof_pyval) is not called from the C dispatcher.
+    Run in a fresh process: the table is process-wide."""
+    import subprocess, sys, textwrap
+    code = textwrap.dedent("""
+        import numpy as np, traceback
+        from numba import njit
+        from numba.core.dispatcher import _DispatcherBase
+        from src.utils.numba_threads import prime_type_cache
+        prime_type_cache()
+        misses = []
+        orig = _DispatcherBase.typeof_pyval
+        def hook(self, v):
+            if not any("_compile_for_args" in f.name for f in traceback.extract_stack()):
+                misses.append(repr(type(v)))
+            return orig(self, v)
+        _DispatcherBase.typeof_pyval = hook
+        @njit
+        def f(a):
+            return 0
+        ro = np.arange(6, dtype=np.int64); ro.setflags(write=False)
+        rof = np.zeros((3, 3), np.float32); rof.setflags(write=False)
+        buf = bytearray(8 * 4 + 1); un = np.frombuffer(buf, np.float64, count=4, offset=1)
+        for v in (ro, rof.T, un, None, np.bool_(True)):
+            f(v)
+        print("MISSES", misses)
+    """)
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "NUMBA_DISABLE_JIT"}   # conftest disables the JIT
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env).stdout
+    assert "MISSES []" in out, out

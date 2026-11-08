@@ -148,6 +148,8 @@ def _prime_args():
     type cache can be asked for with arrays of a basic dtype, plus None and
     bool."""
     calls = [(None, True)]
+    # numpy scalars: numbers take a fixed table, but np.bool_ is fingerprinted
+    calls.append(tuple(np.dtype(code).type(0) for code in _PRIME_DTYPES))
     for code in _PRIME_DTYPES:
         dtype = np.dtype(code)
         arrays = _layouts(lambda shape: np.zeros(shape, dtype))
@@ -166,17 +168,27 @@ def _prime_args():
 def prime_type_cache():
     """Insert every argument fingerprint into numba's type cache, on this
     thread, before worker threads call jitted functions.  Idempotent; call it
-    with no other thread running numba.  Takes about a second."""
+    with no other thread running numba.
+
+    The probe takes one fixed argument and has a fixed signature, so no call
+    compiles: the C dispatcher computes each value's typecode -- inserting its
+    fingerprint -- and then fails to match, which is the TypeError swallowed
+    here.  (A ``*args`` probe primes nothing: numba types star-arg calls in
+    Python and never touches the table.)"""
     global _primed
     with _lock:
         if _primed:
             return
         from numba import njit
 
-        @njit(cache=False)
-        def _probe(*args):
-            return 0
+        @njit("void(int8)", cache=False)
+        def _probe(a):
+            pass
 
         for args in _prime_args():
-            _probe(*args)
+            for a in args:
+                try:
+                    _probe(a)
+                except TypeError:
+                    pass
         _primed = True
