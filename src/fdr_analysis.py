@@ -253,15 +253,18 @@ def walk_to_local_max(fitted, start_pos, apex_jitter=None, area_radius=1):
 # which puts IDs without an MS1 quant at the bottom.  gauss_r2_joint is not in
 # it: it is fit to 3 MS1 scans plus the MS2 coefficients on them, and is NaN
 # for ~12% of quantified IDs that have no MS2 coefficient on those scans.
-# MS1_quality_pass: the MS1-quantified IDs above the run's
-# MS1_QUALITY_DROP_FRACTION quantile of MS1_quality.  On the 200pg 5plex the
-# yeast ratio slope rises from 0.84 to 0.88 over the first 15-20% removed and is
-# flat after that (0.89 at 50%), while the human IQR falls steadily (1.15 ->
-# 0.94 at 20%, 0.70 at 50%): past 20% a cut only trades IDs for spread.
+# MS1_quality_pass: MS1-quantified and plexfitMS1_p >= MS1_PASS_MIN_PEARSON.
+# A fixed cut on an absolute quantity, so it means the same in every run
+# (MS1_quality is made of within-run ranks, so any cut on it is a fixed
+# fraction).  plexfitMS1_p is plex-level, one value per group, so the cut
+# drops whole peptides and cannot favour a group's brighter channels; a cut on
+# plex_snr does (yeast slope 0.72 at plex_snr >= 1).  On the 200pg 5plex
+# plexfitMS1_p >= 0.5 removed 16% of the quantified IDs: yeast ratio slope 0.83
+# -> 0.88, human IQR 1.15 -> 1.05.
 SIGMA_GRID = np.geomspace(0.3, 6.0, 40)   # Gaussian sigmas tried, in MS1 scans
 SHIFT_GRID = np.linspace(-2.0, 2.0, 41)   # centers tried, in scans from the MS1 apex
 NO_MS1_QUANT_FACTOR = 0.01                # MS1_quality factor when plex_Area == 0
-MS1_QUALITY_DROP_FRACTION = 0.2           # MS1_quality_pass: lowest fraction of MS1-quantified IDs failed
+MS1_PASS_MIN_PEARSON = 0.5                # MS1_quality_pass: minimum plexfitMS1_p
 _CHUNK = 10000  # rows scored at once, against the 1,640 Gaussians of the grid
 
 
@@ -364,12 +367,9 @@ def ms1_quality(ids):
 
 
 def ms1_quality_pass(ids):
-    """MS1_quality_pass of every row of ``ids`` (with MS1_quality and plex_Area):
-    MS1-quantified and not in the run's lowest MS1_QUALITY_DROP_FRACTION."""
-    quantified = ids["plex_Area"].to_numpy() > 0
-    q = ids["MS1_quality"].to_numpy(dtype=float)
-    cut = np.quantile(q[quantified], MS1_QUALITY_DROP_FRACTION) if quantified.any() else np.inf
-    return quantified & (q >= cut)
+    """MS1_quality_pass of every row of ``ids`` (with plexfitMS1_p and
+    plex_Area): MS1-quantified and plexfitMS1_p >= MS1_PASS_MIN_PEARSON."""
+    return (ids["plex_Area"].to_numpy() > 0) & (ids["plexfitMS1_p"].to_numpy(dtype=float) >= MS1_PASS_MIN_PEARSON)
 
 
 # lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=bool(params["timeplex"]))

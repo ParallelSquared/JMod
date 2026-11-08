@@ -282,12 +282,11 @@ def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
 
 
 
-def test_ms1_quality_pass_fails_the_lowest_fifth_of_quantified_ids_and_all_unquantified():
-    ids = pd.DataFrame({"MS1_quality": np.r_[np.linspace(0.1, 1.0, 10), 0.005],
-                        "plex_Area": np.r_[np.full(10, 5.0), 0.0]})
-    ok = ms1_quality_pass(ids)
-    # the cut is the 20th percentile of the 10 quantified scores (0.28); the unquantified row always fails
-    assert ok.tolist() == [False, False] + [True] * 8 + [False]
+def test_ms1_quality_pass_is_a_fixed_pearson_cut_on_quantified_ids():
+    ids = pd.DataFrame({"plexfitMS1_p": [0.2, 0.49, 0.5, 0.9, 0.95],
+                        "plex_Area": [5.0, 5.0, 5.0, 5.0, 0.0]})
+    # >= 0.5 passes; a row with no MS1 quant fails whatever its Pearson
+    assert ms1_quality_pass(ids).tolist() == [False, False, True, True, False]
 
 
 def test_full_parquet_keeps_types_and_stringifies_mixed_columns(tmp_path):
