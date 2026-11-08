@@ -615,7 +615,7 @@ def process_prelim_search(fit_outputs,
     all_frag_errors = [unstring_floats(mz) for mz in all_output_df.frag_errors]
     all_median  = np.median(np.concatenate([i for i in all_frag_errors]))
     all_output_df["med_frag_error"] = [np.median(np.abs(all_median-i)) for i in all_frag_errors]
-    all_output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in all_output_df["seq"]])
+    all_output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub(r"\(.*?\)","",i)) for i in all_output_df["seq"]])
     all_output_df["last_aa"]=[i[-1] for i in all_output_df.stripped_seq]
 
     #output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
@@ -633,7 +633,7 @@ def process_prelim_search(fit_outputs,
     median  = np.median(np.concatenate([i for i in frag_errors]))
     output_df["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
     
-    output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in output_df["seq"]])
+    output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub(r"\(.*?\)","",i)) for i in output_df["seq"]])
     output_df["last_aa"]=[i[-1] for i in output_df.stripped_seq]
 
     return output_df, all_output_df, id_keys, feature_mzs
