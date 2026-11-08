@@ -19,6 +19,7 @@ import re
 from functools import partial
 from tqdm.auto import tqdm
 from numpy import linalg as la
+from numba import njit
 
 from src.config import diann_mods
 from src.logger import logger
@@ -203,18 +204,9 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
         .alias("mz")
     )
 
-    # 3. MS1 Lookup (The non-vectorized bottleneck, handled in a dedicated function)
-    # Convert Polars DF to Python lists, run the loop, and convert result back to Polars.
+    # 3. MS1 Lookup: each PSM's precursor peak in its nearest MS1 scan
     logger.info("Looking up MS1 data")
-    ms1_data_list = lookup_ms1_data_list(df, dia_spectra, ms1_ppm_error)
-    # Explicit schema: rows without an MS1 peak carry None, and when the first
-    # rows are all None (centroided .d input) polars would infer a Null column.
-    ms1_df = pl.DataFrame(ms1_data_list, schema={
-        "Ms1_spec_id": pl.Int64,
-        "closest_peak_mz_ms1": pl.Float64,
-        "closest_peak_intensity_ms1": pl.Float64,
-        "precursor_mobility": pl.Float64,
-    })
+    ms1_df = lookup_ms1_data(df, dia_spectra, ms1_ppm_error)
 
     # Add the MS1 data columns back to the main DataFrame
     # Since the data was iterated in order, we can just horizontally stack (hstack)
@@ -264,64 +256,8 @@ def fit_with_features(dia_spectra, library_spectra, mass_tag, SILAC, ms1_ppm_err
     # Semi-join to keep only rows where (seq, z) exists in the library
     df = df.join(valid_keys_df, on=["seq", "z"], how="semi")
 
-    logger.info("Computing spectral angle")
-
-    # Apply the Polars UDF
-    # Note: We must include the fragment columns by their new names
-    df = df.with_columns(
-        pl.struct([
-            'frag_charges',
-            'frag_kinds',
-            'frag_fragment_ordinals',
-            'frag_intensities',
-            'frag_losses',
-            'seq',
-            'z'
-        ])
-        .map_elements(
-            partial(spectral_angle_polars_udf, fragment_library_map=fragment_library_map),
-            return_dtype=pl.Float64
-        )
-        .alias('spectral_contrast_angle')
-    )
-
-    for _udf, _name in ((hellinger_score_polars_udf, 'hellinger_score'),
-                        (scribe_score_polars_udf, 'scribe_score')):
-        logger.info(f"Computing {_name}")
-        df = df.with_columns(
-            pl.struct([
-                'frag_charges',
-                'frag_kinds',
-                'frag_fragment_ordinals',
-                'frag_intensities',
-                'frag_losses',
-                'seq',
-                'z',
-            ])
-            .map_elements(
-                partial(_udf, fragment_library_map=fragment_library_map),
-                return_dtype=pl.Float64
-            )
-            .alias(_name)
-        )
-
-    logger.info("Computing matched library intensity percentage")
-    df = df.with_columns(
-        pl.struct([
-            'frag_charges',
-            'frag_kinds',
-            'frag_fragment_ordinals',
-            'frag_intensities',
-            'frag_losses',
-            'seq',
-            'z',
-        ])
-        .map_elements(
-            partial(matched_lib_intensity_pct_udf, fragment_library_map=fragment_library_map),
-            return_dtype=pl.Float64
-        )
-        .alias('matched_lib_pct')
-    )
+    logger.info("Computing spectral angle, Hellinger, Scribe and matched library intensity")
+    df = df.with_columns(score_psms(df, fragment_library_map))
 
     # Drop rows the score UDFs could not score. Those three return -999 when
     # _align_to_library fails or the intensities sum to zero -- a sentinel meaning
@@ -572,6 +508,174 @@ def matched_lib_intensity_pct_udf(r: dict, fragment_library_map: dict) -> float:
 
 
 
+# ---- first-search PSM scores, compiled -----------------------------------
+# The four *_polars_udf scores above, computed for every PSM by one compiled
+# kernel instead of four map_elements passes (~136 s for 2.4M PSMs in a run;
+# Python per row, one thread).  Same rules: the last of duplicate observed ions
+# wins, spectral angle over the sorted union in float32, Hellinger over the
+# library ions in library order, Scribe over the sorted intersection, matched %
+# with sequential sums.  Not bit-identical to the Python versions: numpy's
+# pairwise sums and BLAS float32 dot products add in a different order (seen
+# on 2.4M PSMs: matched % identical, Hellinger/Scribe within 4e-15, spectral
+# angle within 2.1e-6).  matched % uses CPython's compensated sum() and is exact.  Fragment keys (kind, ordinal, charge, loss) are encoded
+# as one int64 that sorts like the tuple.
+
+@njit(nogil=True, cache=False)
+def _psm_scores_jit(lo, hi, obs_off, obs_code, obs_int, lib_idx, lib_off, lib_code, lib_int, out):
+    for h in range(lo, hi):
+        li = lib_idx[h]
+        if li < 0:
+            out[h, 0] = 0.0; out[h, 1] = -999.0; out[h, 2] = -999.0; out[h, 3] = -999.0
+            continue
+        # observed: unique codes, the last occurrence of a duplicate wins (dict comprehension)
+        a, b = obs_off[h], obs_off[h + 1]
+        oc = obs_code[a:b]; oi = obs_int[a:b]
+        order = np.argsort(oc, kind="mergesort")
+        n = 0
+        uc = np.empty(b - a, np.int64); ui = np.empty(b - a, np.float32)
+        for k in range(order.size):
+            c = oc[order[k]]
+            if n > 0 and uc[n - 1] == c:
+                ui[n - 1] = oi[order[k]]          # stable sort: later index overrides
+            else:
+                uc[n] = c; ui[n] = oi[order[k]]; n += 1
+        uc = uc[:n]; ui = ui[:n]
+        la, lb = lib_off[li], lib_off[li + 1]
+        lc = lib_code[la:lb]; lv = lib_int[la:lb]
+        lorder = np.argsort(lc, kind="mergesort")
+        # --- spectral angle over the sorted union, float32 ---
+        dot = np.float32(0.0); na = np.float32(0.0); nb = np.float32(0.0)
+        i = 0; j = 0
+        while i < n or j < lc.size:
+            if j >= lc.size or (i < n and uc[i] < lc[lorder[j]]):
+                av = np.sqrt(np.float32(ui[i])); bv = np.float32(0.0); i += 1
+            elif i >= n or lc[lorder[j]] < uc[i]:
+                av = np.float32(0.0); bv = np.sqrt(np.float32(lv[lorder[j]])); j += 1
+            else:
+                av = np.sqrt(np.float32(ui[i])); bv = np.sqrt(np.float32(lv[lorder[j]])); i += 1; j += 1
+            dot += av * bv; na += av * av; nb += bv * bv
+        nA = np.sqrt(na); nB = np.sqrt(nb)
+        if nA == 0.0 or nB == 0.0:
+            out[h, 0] = 0.0
+        else:
+            cosv = dot / (nA * nB)
+            cosv = min(max(cosv, np.float32(-1.0)), np.float32(1.0))
+            out[h, 0] = 1.0 - 2.0 * np.arccos(np.float64(cosv)) / np.pi
+        # observed value at each library key (library order)
+        A = np.zeros(lc.size); B = np.empty(lc.size)
+        for t in range(lc.size):
+            B[t] = lv[t]
+            p = np.searchsorted(uc, lc[t])
+            if p < n and uc[p] == lc[t]:
+                A[t] = np.float64(ui[p])
+        # --- Hellinger over the library keys ---
+        sA = A.sum(); sB = B.sum()
+        if sA == 0.0 or sB == 0.0:
+            out[h, 1] = -999.0
+        else:
+            sse = 0.0
+            for t in range(lc.size):
+                d = np.sqrt(A[t] / sA) - np.sqrt(B[t] / sB); sse += d * d
+            out[h, 1] = 25.0 if sse <= 1e-12 else -np.log(sse)
+        # --- Scribe over the sorted intersection ---
+        m = 0
+        xa = np.empty(lc.size); xb = np.empty(lc.size)
+        for jj in range(lc.size):
+            t = lorder[jj]
+            p = np.searchsorted(uc, lc[t])
+            if p < n and uc[p] == lc[t]:
+                xa[m] = np.sqrt(max(np.float64(ui[p]), 0.0)); xb[m] = np.sqrt(max(lv[t], 0.0)); m += 1
+        if m == 0:
+            out[h, 2] = -999.0
+        else:
+            sa = xa[:m].sum(); sb = xb[:m].sum()
+            if sa == 0.0 or sb == 0.0:
+                out[h, 2] = -999.0
+            else:
+                sse = 0.0
+                for t in range(m):
+                    d = xa[t] / sa - xb[t] / sb; sse += d * d
+                out[h, 2] = 25.0 if sse <= 1e-12 else -np.log(sse)
+        # --- matched library intensity %, library order; Python's sum() is
+        # compensated (Neumaier, CPython >= 3.12), so the sums are too ---
+        matched = 0.0; c_m = 0.0; total = 0.0; c_t = 0.0
+        for t in range(lc.size):
+            x = lv[t]
+            s_ = total + x
+            c_t += (total - s_) + x if abs(total) >= abs(x) else (x - s_) + total
+            total = s_
+            if A[t] > 0.0:
+                s_ = matched + x
+                c_m += (matched - s_) + x if abs(matched) >= abs(x) else (x - s_) + matched
+                matched = s_
+        if c_t != 0.0 and np.isfinite(c_t):
+            total += c_t
+        if c_m != 0.0 and np.isfinite(c_m):
+            matched += c_m
+        out[h, 3] = -999.0 if total <= 0.0 else (matched / total) * 100.0
+
+
+
+def _flatten_for_scoring(df, fmap):
+    kinds_u = df["frag_kinds"].explode().str.to_uppercase()
+    names = sorted(set(kinds_u.drop_nulls().unique().to_list()) | {"B", "Y"})
+    kcode = {k: i for i, k in enumerate(names)}
+    ch = df["frag_charges"].explode().to_numpy().astype(np.int64)
+    od = df["frag_fragment_ordinals"].explode().to_numpy().astype(np.int64)
+    # Libraries with no loss ions report a zero per fragment; tolerate the column
+    # being absent, as _align_to_library does
+    ls = (df["frag_losses"].explode().fill_null(0).to_numpy().astype(np.int64) if "frag_losses" in df.columns
+          else np.zeros(int(df["frag_charges"].list.len().fill_null(0).clip(1, None).sum()), np.int64))
+    kc = kinds_u.replace_strict(list(kcode), list(kcode.values()), return_dtype=pl.Int64).to_numpy()
+    lens = df["frag_charges"].list.len().fill_null(0).to_numpy()
+    good = lens > 0
+    # explode gives one null row for an empty list; drop those
+    keep = np.repeat(good, np.where(good, lens, 1))
+    ch, od, ls, kc = ch[keep], od[keep], ls[keep], kc[keep]
+    oi = df["frag_intensities"].explode().to_numpy()[keep].astype(np.float32)
+    obs_off = np.zeros(df.height + 1, np.int64); obs_off[1:] = np.cumsum(lens)
+    # library: insertion order kept
+    keys = list(fmap.keys())
+    lib_off = np.zeros(len(keys) + 1, np.int64)
+    lcode, lint = [], []
+    for e, k in enumerate(keys):
+        v = fmap[k]
+        for (t, o, c, l), x in v.items():
+            lcode.append((kcode[t], o, c, l)); lint.append(x)
+        lib_off[e + 1] = len(lint)
+    lcode = np.array(lcode, np.int64); lint = np.array(lint, np.float64)
+    K1 = int(max(od.max(initial=0), lcode[:, 1].max()) + 1); K2 = int(max(ch.max(initial=0), lcode[:, 2].max()) + 1)
+    K3 = int(max(ls.max(initial=0), lcode[:, 3].max()) + 1)
+    enc = lambda k, o, c, l: ((k * K1 + o) * K2 + c) * K3 + l
+    obs_code = enc(kc, od, ch, ls)
+    lib_code = enc(lcode[:, 0], lcode[:, 1], lcode[:, 2], lcode[:, 3])
+    # charges compared as numbers, as the dict lookup does (2 == 2.0)
+    kf = pl.DataFrame({"seq": [k[0] for k in keys], "z": [float(k[1]) for k in keys], "lib_idx": np.arange(len(keys))},
+                      schema={"seq": pl.String, "z": pl.Float64, "lib_idx": pl.Int64})
+    lib_idx = (df.select("seq", pl.col("z").cast(pl.Float64)).join(kf, on=["seq", "z"], how="left", maintain_order="left")
+               ["lib_idx"].fill_null(-1).to_numpy())
+    return obs_off, obs_code, oi, lib_idx, lib_off, lib_code, lint
+
+
+
+def score_psms(df: pl.DataFrame, fragment_library_map: dict, n_threads: int = None) -> list:
+    """spectral_contrast_angle, hellinger_score, scribe_score and matched_lib_pct
+    of every PSM in *df*, as polars Series (see the block comment above)."""
+    from concurrent.futures import ThreadPoolExecutor
+    from src import config
+    arrs = _flatten_for_scoring(df, fragment_library_map)
+    n = df.height
+    out = np.empty((n, 4), dtype=np.float64)
+    n_threads = n_threads or max(1, int(getattr(config.args, "threads", 1) or 1))
+    step = max(1, -(-n // (n_threads * 8)))
+    with ThreadPoolExecutor(max_workers=n_threads) as pool:
+        for f in [pool.submit(_psm_scores_jit, lo, min(lo + step, n), *arrs, out)
+                  for lo in range(0, n, step)]:
+            f.result()
+    return [pl.Series(name, out[:, j], dtype=pl.Float64) for j, name in
+            enumerate(("spectral_contrast_angle", "hellinger_score", "scribe_score", "matched_lib_pct"))]
+
+
 def _most_intense_ms1_peak(ms1_scan, theo_mz, ppm, im_lo=None, im_hi=None):
     """Index of the most intense MS1 peak within *ppm* of *theo_mz*, or None.
 
@@ -596,65 +700,123 @@ def _most_intense_ms1_peak(ms1_scan, theo_mz, ppm, im_lo=None, im_hi=None):
     return int(idx[np.argmax(ms1_scan.intens[idx])])
 
 
-def lookup_ms1_data_list(df: pl.DataFrame, dia_spectra, ms1_ppm_error):
+@njit(nogil=True)
+def _most_intense_ms1_peaks_jit(mz, intens, mob, theo, ppm, gate, im_lo, im_hi, out):
+    """_most_intense_ms1_peak for every query *theo[k]* against one MS1 scan:
+    *out[k]* is the peak index, or -1.  *gate[k]* applies the mobility band
+    (*im_lo*, *im_hi*, already in *mob*'s dtype, as numpy compares them)."""
+    for k in range(theo.size):
+        t = theo[k]
+        tol = t * ppm * 1e-6
+        lo = np.searchsorted(mz, t - tol, side="left")
+        hi = np.searchsorted(mz, t + tol, side="right")
+        best = -1
+        for j in range(lo, hi):
+            if gate[k] and not (mob[j] >= im_lo[k] and mob[j] <= im_hi[k]):
+                continue
+            if best == -1 or intens[j] > intens[best]:      # ties: lowest m/z
+                best = j
+        out[k] = best
+
+
+def lookup_ms1_data(df: pl.DataFrame, dia_spectra, ms1_ppm_error) -> pl.DataFrame:
     """
-    Performs the non-vectorized MS1 scan lookup and precursor peak finding
-    in a dedicated Python loop.
+    The precursor peak of every PSM: Ms1_spec_id, closest_peak_mz_ms1,
+    closest_peak_intensity_ms1 and precursor_mobility, in *df*'s row order.
 
-    For each PSM, the precursor peak is the most intense peak of the nearest
-    MS1 scan within *ms1_ppm_error* of the theoretical m/z and, on ion
-    mobility data, within the mobility band of the PSM's MS2 spectrum (see
-    _most_intense_ms1_peak).  PSMs with no such peak get the same placeholder
-    as PSMs with no MS1 scan, and fit_with_features then drops them with the
-    other PSMs outside *ms1_ppm_error*.
+    The precursor peak is the most intense peak of the nearest MS1 scan within
+    *ms1_ppm_error* of the theoretical m/z and, on ion mobility data, within
+    the mobility band of the PSM's MS2 spectrum (see _most_intense_ms1_peak).
+    PSMs with no such peak get the same placeholder as PSMs with no MS1 scan
+    (m/z and intensity 0, no mobility), and fit_with_features then drops them
+    with the other PSMs outside *ms1_ppm_error*.
 
-    Returns a list of dictionaries with the MS1 data to be converted back
-    to a Polars DataFrame.
+    Each MS2 spectrum's MS1 scan and band are looked up once, and the PSMs are
+    then matched one MS1 scan at a time.
     """
-    ms1_data = []
-    missing = {
-        'Ms1_spec_id': None,
-        "closest_peak_mz_ms1": 0.0,
-        "closest_peak_intensity_ms1": 0.0,
-        "precursor_mobility": None,
-    }
+    n = df.height
+    ids = df["spec_id"]
+    unique_ids = ids.unique().sort()
+    psm_spec = ids.rank("dense").to_numpy().astype(np.int64) - 1   # row -> unique_ids position
+    theo_all = df["mz"].to_numpy().astype(np.float64)
 
-    # We must extract the columns and iterate in Python because the underlying
-    # dia_spectra methods are not vectorized.
-    spec_ids = df['spec_id'].to_list()
-    theo_mzs = df['mz'].to_list()
-
-    for spec_id, theo_mz in tqdm(
-            zip(spec_ids, theo_mzs),
-            desc="MS1 Peak Finding",
-            total=len(spec_ids),
-            leave=False
-    ):
+    # Per MS2 spectrum: its MS1 scan (position in ms1_list, -1 for none) and band
+    ms1_list, ms1_pos = [], {}
+    spec_ms1 = np.full(len(unique_ids), -1, dtype=np.int64)
+    spec_lo = np.full(len(unique_ids), np.nan)
+    spec_hi = np.full(len(unique_ids), np.nan)
+    spec_band = np.zeros(len(unique_ids), dtype=np.bool_)
+    for u, spec_id in enumerate(unique_ids.to_list()):
         ms1_scan = dia_spectra.get_nearest_ms1_for_scan(spec_id)
         if not ms1_scan:
-            ms1_data.append(dict(missing))
             continue
-
+        spec_ms1[u] = ms1_pos.setdefault(id(ms1_scan), len(ms1_list))
+        if spec_ms1[u] == len(ms1_list):
+            ms1_list.append(ms1_scan)
         # spec_id is a scan number (.d) or a native ID string (mzML), as
         # get_nearest_ms1_for_scan accepts it
         scan_num = (int(re.search(r"scan=(\d+)", spec_id).group(1))
                     if isinstance(spec_id, str) else spec_id)
         ms2_scan = dia_spectra.ms2scans[dia_spectra.ms2_by_id[scan_num]]
-        idx = _most_intense_ms1_peak(ms1_scan, theo_mz, ms1_ppm_error,
-                                     getattr(ms2_scan, "im_lo", None),
-                                     getattr(ms2_scan, "im_hi", None))
-        if idx is None:
-            ms1_data.append(dict(missing, Ms1_spec_id=ms1_scan.scan_num))
-            continue
-        mob = float(ms1_scan.mobility[idx]) if ms1_scan.mobility is not None else None
-        ms1_data.append({
-            'Ms1_spec_id': ms1_scan.scan_num,
-            "closest_peak_mz_ms1": float(ms1_scan.mz[idx]),
-            "closest_peak_intensity_ms1": float(ms1_scan.intens[idx]),
-            "precursor_mobility": mob,
-        })
+        im_lo = getattr(ms2_scan, "im_lo", None)
+        if im_lo is not None and ms1_scan.mobility is not None:
+            spec_band[u] = True
+            spec_lo[u] = im_lo
+            spec_hi[u] = getattr(ms2_scan, "im_hi", None)
 
-    return ms1_data
+    psm_ms1 = spec_ms1[psm_spec]
+    ms1_id = np.zeros(n, dtype=np.int64)
+    has_ms1 = psm_ms1 >= 0
+    peak_mz = np.zeros(n, dtype=np.float64)
+    peak_int = np.zeros(n, dtype=np.float64)
+    peak_mob = np.full(n, np.nan)
+    has_mob = np.zeros(n, dtype=np.bool_)
+
+    order = np.argsort(psm_ms1, kind="stable")
+    bounds = np.searchsorted(psm_ms1[order], np.arange(len(ms1_list) + 1))
+    for m, ms1_scan in enumerate(tqdm(ms1_list, desc="MS1 Peak Finding", leave=False)):
+        rows = order[bounds[m]:bounds[m + 1]]
+        if rows.size == 0:
+            continue
+        ms1_id[rows] = ms1_scan.scan_num
+        mz, intens = np.asarray(ms1_scan.mz), np.asarray(ms1_scan.intens)
+        mob = ms1_scan.mobility
+        mob_arr = np.asarray(mob) if mob is not None else np.zeros(1, dtype=np.float32)
+        spec = psm_spec[rows]
+        gate = spec_band[spec]
+        lo = spec_lo[spec].astype(mob_arr.dtype)
+        hi = spec_hi[spec].astype(mob_arr.dtype)
+        idx = np.empty(rows.size, dtype=np.int64)
+        _most_intense_ms1_peaks_jit(mz, intens, mob_arr, theo_all[rows], float(ms1_ppm_error),
+                                    gate, lo, hi, idx)
+        hit = idx >= 0
+        r, i = rows[hit], idx[hit]
+        peak_mz[r] = mz[i]
+        peak_int[r] = intens[i]
+        if mob is not None:
+            peak_mob[r] = mob_arr[i]
+            has_mob[r] = True
+
+    # Explicit schema: rows without an MS1 peak carry None, and when the first
+    # rows are all None (centroided .d input) polars would infer a Null column.
+    return pl.DataFrame({
+        "Ms1_spec_id": pl.Series(ms1_id, dtype=pl.Int64).scatter(np.flatnonzero(~has_ms1), None),
+        "closest_peak_mz_ms1": pl.Series(peak_mz, dtype=pl.Float64),
+        "closest_peak_intensity_ms1": pl.Series(peak_int, dtype=pl.Float64),
+        "precursor_mobility": pl.Series(peak_mob, dtype=pl.Float64).scatter(np.flatnonzero(~has_mob), None),
+    })
+
+
+def _by_distinct_value(expr: pl.Expr, values: pl.Series, fn, dtype) -> pl.Expr:
+    """*expr* with each value replaced by fn(value).
+
+    fn is called once per distinct value in *values* (the values *expr* can
+    take) rather than once per row: map_elements on 3M first-search rows cost
+    ~3 min, nearly all of it polars building and iterating a Series per row,
+    while these columns hold a few thousand distinct values at most.
+    """
+    distinct = values.drop_nulls().unique()
+    return expr.replace_strict(distinct, [fn(v) for v in distinct.to_list()], return_dtype=dtype)
 
 
 def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict,
@@ -663,20 +825,12 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict,
     Performs column normalization and peptide sequence reconstruction using Polars.
     """
 
-    # Wrapper for map_mod_list (requires rev_map lookup)
-    def map_mod_list_wrapper(mod_list: list[float]) -> list[str]:
-        out = []
-        for m in mod_list:
-            if m != 0.0:
-                name = rev_map.get(round(m, 4))
-                out.append(name if name is not None else "")
-            else:
-                out.append("")
-        return out
-
-    # Wrapper for library RT lookup
-    def map_rt_wrapper(seq: str) -> float:
-        return lib_rts.get(seq, np.nan)
+    # One modification mass -> its name ("" for no modification or an unknown mass)
+    def mod_name(m: float) -> str:
+        if m != 0.0:
+            name = rev_map.get(round(m, 4))
+            return name if name is not None else ""
+        return ""
 
     # Rename columns
     df = df.rename({
@@ -687,15 +841,15 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict,
 
     # Make matching spec_id column
     df = df.with_columns(
-        pl.col('spec_name')
-        .map_elements(lambda s: Spectrum.extract_scannum(s), return_dtype=pl.UInt32)
+        _by_distinct_value(pl.col('spec_name'), df['spec_name'],
+                           Spectrum.extract_scannum, pl.UInt32)
         .alias('spec_id')
     )
 
     # Reconstruct modification names
     df = df.with_columns(
         pl.col("modifications")
-        .map_elements(map_mod_list_wrapper, return_dtype=pl.List(pl.Utf8))
+        .list.eval(_by_distinct_value(pl.element(), df["modifications"].explode(), mod_name, pl.Utf8))
         .alias("modification_names")
     )
 
@@ -704,9 +858,8 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict,
 
     # Grab library rts based on seq
     df = df.with_columns(
-        pl.col("seq")
-          .map_elements(map_rt_wrapper, return_dtype=pl.Float64)
-          .alias("lib_rt")
+        _by_distinct_value(pl.col("seq"), df["seq"], lambda s: lib_rts.get(s, np.nan), pl.Float64)
+        .alias("lib_rt")
     )
 
     # Grab library ion mobilities based on seq.  Mirrors lib_rt above; stays all-NaN
@@ -714,9 +867,8 @@ def adapt_output_df(df: pl.DataFrame, lib_rts: dict, rev_map: dict,
     # "no library IM" rather than an error.
     if lib_ims is not None:
         df = df.with_columns(
-            pl.col("seq")
-              .map_elements(lambda s: lib_ims.get(s, np.nan), return_dtype=pl.Float64)
-              .alias("lib_im")
+            _by_distinct_value(pl.col("seq"), df["seq"], lambda s: lib_ims.get(s, np.nan), pl.Float64)
+            .alias("lib_im")
         )
 
     return df

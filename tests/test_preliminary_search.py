@@ -30,7 +30,7 @@ from src.preliminary_search import (
     fit_with_features,
     hellinger_score_polars_udf,
     library_entries_for,
-    lookup_ms1_data_list,
+    lookup_ms1_data,
     peptide_to_mod_array,
     scribe_score_polars_udf,
 )
@@ -90,7 +90,7 @@ class TestMostIntenseMs1Peak:
         assert _most_intense_ms1_peak(_Scan([499.999, 500.001], [5.0, 5.0]), 500.0, 20) == 0
 
 
-class TestLookupMs1DataList:
+class TestLookupMs1Data:
     class _Spectra:
         def __init__(self, ms1, ms2):
             self.ms1, self.ms2scans, self.ms2_by_id = ms1, [ms2], {7: 0}
@@ -101,26 +101,81 @@ class TestLookupMs1DataList:
     def test_reports_the_band_gated_most_intense_peak(self):
         ms1 = _Scan([499.995, 500.004], [50.0, 300.0], mobility=[1.0, 0.7], scan_num=3)
         ms2 = _Scan([], [], im_lo=0.95, im_hi=1.05)
-        out = lookup_ms1_data_list(pl.DataFrame({"spec_id": [7], "mz": [500.0]}),
-                                   self._Spectra(ms1, ms2), 20)
-        assert out == [{"Ms1_spec_id": 3, "closest_peak_mz_ms1": 499.995,
-                        "closest_peak_intensity_ms1": 50.0, "precursor_mobility": 1.0}]
+        out = lookup_ms1_data(pl.DataFrame({"spec_id": [7], "mz": [500.0]}),
+                              self._Spectra(ms1, ms2), 20)
+        assert out.to_dicts() == [{"Ms1_spec_id": 3, "closest_peak_mz_ms1": 499.995,
+                                   "closest_peak_intensity_ms1": 50.0, "precursor_mobility": 1.0}]
 
     def test_native_id_spec_ids(self):
         """mzML PSMs carry the native ID string, not the scan number."""
         ms1 = _Scan([500.001], [50.0], scan_num=3)
-        out = lookup_ms1_data_list(
+        out = lookup_ms1_data(
             pl.DataFrame({"spec_id": ["controllerType=0 controllerNumber=1 scan=7"], "mz": [500.0]}),
             self._Spectra(ms1, _Scan([], [])), 20)
-        assert out[0]["closest_peak_mz_ms1"] == 500.001
+        assert out["closest_peak_mz_ms1"][0] == 500.001
 
     def test_no_peak_in_window_gives_the_placeholder(self):
         ms1 = _Scan([500.5], [50.0], mobility=[1.0], scan_num=3)
         ms2 = _Scan([], [], im_lo=0.95, im_hi=1.05)
-        out = lookup_ms1_data_list(pl.DataFrame({"spec_id": [7], "mz": [500.0]}),
-                                   self._Spectra(ms1, ms2), 20)
-        assert out[0]["closest_peak_mz_ms1"] == 0.0
-        assert out[0]["precursor_mobility"] is None
+        out = lookup_ms1_data(pl.DataFrame({"spec_id": [7], "mz": [500.0]}),
+                              self._Spectra(ms1, ms2), 20)
+        assert out.to_dicts() == [{"Ms1_spec_id": 3, "closest_peak_mz_ms1": 0.0,
+                                   "closest_peak_intensity_ms1": 0.0, "precursor_mobility": None}]
+
+    def test_no_ms1_scan_gives_the_placeholder_without_a_scan(self):
+        spectra = self._Spectra(None, _Scan([], []))
+        out = lookup_ms1_data(pl.DataFrame({"spec_id": [7], "mz": [500.0]}), spectra, 20)
+        assert out.to_dicts() == [{"Ms1_spec_id": None, "closest_peak_mz_ms1": 0.0,
+                                   "closest_peak_intensity_ms1": 0.0, "precursor_mobility": None}]
+        assert out.schema == {"Ms1_spec_id": pl.Int64, "closest_peak_mz_ms1": pl.Float64,
+                              "closest_peak_intensity_ms1": pl.Float64,
+                              "precursor_mobility": pl.Float64}
+
+    def test_matches_the_per_psm_lookup(self):
+        """Many PSMs over several float32 MS1 scans, bands and ties: the same
+        peak as _most_intense_ms1_peak for every row, in row order."""
+        from src.utils.io.load_files import PEAK_MZ_DTYPE, PEAK_INT_DTYPE, PEAK_MOB_DTYPE
+        rng = np.random.default_rng(0)
+
+        class Spectra:
+            pass
+
+        sp = Spectra()
+        ms1 = []
+        for k in range(4):
+            mz = np.sort(rng.uniform(499.9, 500.1, 400)).astype(PEAK_MZ_DTYPE)
+            intens = rng.integers(1, 20, 400).astype(PEAK_INT_DTYPE)       # many ties
+            mob = rng.uniform(0.6, 1.4, 400).astype(PEAK_MOB_DTYPE)
+            ms1.append(_Scan(mz, intens, mobility=mob, scan_num=100 + k))
+            ms1[-1].mz, ms1[-1].intens, ms1[-1].mobility = mz, intens, mob
+        sp.ms2scans, sp.ms2_by_id, nearest = [], {}, {}
+        for s_num in range(1, 41):
+            lo = rng.uniform(0.6, 1.2)
+            band = (lo, lo + 0.1) if s_num % 3 else (None, None)
+            sp.ms2_by_id[s_num] = len(sp.ms2scans)
+            sp.ms2scans.append(_Scan([], [], im_lo=band[0], im_hi=band[1]))
+            nearest[s_num] = None if s_num == 40 else ms1[s_num % 4]
+        sp.get_nearest_ms1_for_scan = lambda sid: nearest[sid]
+
+        spec_ids = rng.integers(1, 41, 3000)
+        theo = rng.uniform(499.95, 500.05, 3000)
+        out = lookup_ms1_data(pl.DataFrame({"spec_id": spec_ids, "mz": theo}), sp, 20)
+
+        for row, (sid, t) in enumerate(zip(spec_ids.tolist(), theo.tolist())):
+            scan = nearest[sid]
+            got = out.row(row, named=True)
+            if scan is None:
+                assert got["Ms1_spec_id"] is None and got["closest_peak_mz_ms1"] == 0.0
+                continue
+            ms2 = sp.ms2scans[sp.ms2_by_id[sid]]
+            idx = _most_intense_ms1_peak(scan, t, 20, ms2.im_lo, ms2.im_hi)
+            assert got["Ms1_spec_id"] == scan.scan_num
+            if idx is None:
+                assert got["closest_peak_mz_ms1"] == 0.0 and got["precursor_mobility"] is None
+            else:
+                assert got["closest_peak_mz_ms1"] == float(scan.mz[idx])
+                assert got["closest_peak_intensity_ms1"] == float(scan.intens[idx])
+                assert got["precursor_mobility"] == float(scan.mobility[idx])
 
 
 class TestPeptideToModArray:
@@ -364,3 +419,41 @@ class TestScribeAndHellScores:
         # would otherwise yield NaN and pass silently through empirical_fit's filter.
         lib, row = _lib([100.0, 50.0, 10.0]), _row([90.0, -5.0, 20.0])
         assert not np.isnan(scribe_score_polars_udf(row, lib))
+
+
+class TestScorePsms:
+    """The compiled scores match the per-row UDFs (up to summation order)."""
+
+    def test_matches_the_row_udfs(self):
+        from functools import partial
+        from src.preliminary_search import (score_psms, spectral_angle_polars_udf, hellinger_score_polars_udf,
+                                            scribe_score_polars_udf, matched_lib_intensity_pct_udf)
+        rng = np.random.default_rng(3)
+        fmap = {}
+        for p in range(40):
+            keys = {(str(rng.choice(["B", "Y"])), int(rng.integers(1, 12)), int(rng.integers(1, 3)), int(rng.choice([0, 0, 1])))
+                    for _ in range(rng.integers(1, 15))}
+            fmap[(f"PEP{p}K", float(2 + p % 2))] = {k: float(rng.choice([0.0, rng.uniform(0, 1)])) for k in keys}
+        rows = []
+        for i in range(600):
+            p = int(rng.integers(0, 45))                          # 40+ have no library entry
+            n = int(rng.integers(0, 12))
+            rows.append(dict(seq=f"PEP{p}K", z=2 + p % 2,
+                             frag_charges=[int(x) for x in rng.integers(1, 3, n)],
+                             frag_kinds=[str(x) for x in rng.choice(["B", "Y", "b", "y", "C"], n)],
+                             frag_fragment_ordinals=[int(x) for x in rng.integers(1, 12, n)],
+                             frag_intensities=[float(x) for x in rng.choice([0.0, 5.0, 17.5, 300.0], n)],
+                             frag_losses=[int(x) for x in rng.choice([0, 0, 1], n)]))
+        df = pl.DataFrame(rows, schema={"seq": pl.String, "z": pl.Int32, "frag_charges": pl.List(pl.Int32),
+                                        "frag_kinds": pl.List(pl.String), "frag_fragment_ordinals": pl.List(pl.Int32),
+                                        "frag_intensities": pl.List(pl.Float32), "frag_losses": pl.List(pl.Int32)})
+        got = {s.name: s.to_numpy() for s in score_psms(df, fmap, n_threads=3)}
+        cols = ["frag_charges", "frag_kinds", "frag_fragment_ordinals", "frag_intensities", "frag_losses", "seq", "z"]
+        for name, udf, tol in (("spectral_contrast_angle", spectral_angle_polars_udf, 1e-5),
+                               ("hellinger_score", hellinger_score_polars_udf, 1e-12),
+                               ("scribe_score", scribe_score_polars_udf, 1e-12),
+                               ("matched_lib_pct", matched_lib_intensity_pct_udf, 0.0)):
+            ref = df.select(pl.struct(cols).map_elements(partial(udf, fragment_library_map=fmap),
+                                                         return_dtype=pl.Float64)).to_series().to_numpy()
+            assert np.array_equal(ref == -999.0, got[name] == -999.0), name
+            np.testing.assert_allclose(got[name], ref, rtol=0, atol=tol, err_msg=name)

@@ -2304,7 +2304,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
             # held-out error sets the IM candidate gate (opt_im_accuracy).
             #
             # Observed IM = median of the matched fragments' 1/K0, not
-            # `precursor`.  The MS1 value comes from lookup_ms1_data_list,
+            # `precursor`.  The MS1 value comes from lookup_ms1_data,
             # which took the nearest-m/z MS1 peak with no mobility
             # constraint, so on IM-unbanded MS1 frames it frequently picked
             # a co-isolated ion at an unrelated mobility (observed values
