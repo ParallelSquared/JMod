@@ -294,7 +294,10 @@ def quantify_group(rows, spectra, tag, ppm, im_tol, iso_cache):
     # over the channels' apex scans (ms1_cor_channels._quant_group), written to
     # every row as ms1_apex_scan.  The channels co-elute, so the group is read
     # at one time.
-    apex = int(np.median(rows["ms1_apex_scan"].to_numpy(dtype=float)))
+    # (the middle element, not the median: with --apex_jitter or --free_apex the
+    # channels' apexes can differ, and the median of an even count can fall
+    # between two MS1 scans)
+    apex = int(np.sort(rows["ms1_apex_scan"].to_numpy(dtype=np.int64))[len(rows) // 2])
     ref_rt = spectra.ms1scans[scan_pos[apex][1]].RT
     # The channels' isolation windows / IM bands: each gets its own 5 scans
     # nearest the reference scan.  A window is fitted with only the channels
