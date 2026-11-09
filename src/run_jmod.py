@@ -573,7 +573,7 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, res
     del funcs, target_iRT, rt_models_data, im_spl
 
     decoylib_search_path = main_search(DIAspectra, searchLibrary, rt_mz, in_window,
-                                       runState.results_folder, runState)
+                                       runState.results_folder, runState, mass_tag=mass_tag)
     del rt_mz, in_window
     gc.collect()
 
@@ -779,18 +779,14 @@ def load_library(lib_file, mass_tag, mod_edits):
     if config.args.test_mode:
         # Pre-filter the library to speed up processing
         # Note: This is a rough filter that will be refined after RT alignment
-        filtered_library = {}
-        rt_tolerance = config.rt_tol * 2  # Use a wider tolerance initially
+        # (the loop over entries used to build a plain dict, which has no relabel_tag;
+        # subset the store instead)
         mz_tolerance = (config.args.ppm * 1e-6) * 2
-        
-        for key, entry in spectrumLibrary.items():
-            #if (config.args.test_rt_min - rt_tolerance <= entry["iRT"] <= config.args.test_rt_max + rt_tolerance and
-            #    config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
-            if (config.args.test_mz_min - mz_tolerance*entry["prec_mz"] <= entry["prec_mz"] <= config.args.test_mz_max + mz_tolerance*entry["prec_mz"]):
-                filtered_library[key] = entry
-        
-        logger.info(f"Pre-filtered library to {len(filtered_library)} out of {len(spectrumLibrary)} entries for test mode")
-        spectrumLibrary = filtered_library
+        _pmz = np.asarray(spectrumLibrary.prec_mz, dtype=np.float64)
+        _keep = (config.args.test_mz_min - mz_tolerance*_pmz <= _pmz) & (_pmz <= config.args.test_mz_max + mz_tolerance*_pmz)
+        _n_all = len(_pmz)
+        spectrumLibrary = spectrumLibrary.subset_entries(_keep)
+        logger.info(f"Pre-filtered library to {int(_keep.sum())} out of {_n_all} entries for test mode")
 
     # A pre-tagged library: its tag becomes the closest channel of mass_tag
     if mass_tag and library_tag_bool:
@@ -1041,7 +1037,7 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
     return search_library, rt_mz, in_window
 
 
-def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_path, runState):
+def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_path, runState, mass_tag=None):
     """Fit every MS2 spectrum against the calibrated library.
 
     Builds the fragment index, writes the search parameters, fits the spectra
@@ -1133,8 +1129,25 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     # column of rt_mz is all NaN and the gate stays off
     _im_accuracy = runState.opt_im_accuracy if np.isfinite(rt_mz[:, 2]).any() else None
 
+    # --split_win: per-run window templates and the window-above scan of each MS2 scan
+    split_ctx = None
+    if getattr(config.args, "split_win", False):
+        if DIAspectra.has_ion_mobility:
+            logger.warning("--split_win is not supported for ion-mobility data. Running without it.")
+        elif not config.args.iso:
+            logger.warning("--split_win needs --iso. Running without it.")
+        else:
+            from src import split_windows
+            split_ctx = split_windows.build_templates(spectrumLibrary, rt_mz, spectra_to_fit,
+                                                      DIAspectra.ms1scans, mass_tag,
+                                                      float(config.args.split_min_frac))
+            if split_ctx is not None:
+                split_windows.attach_neighbours(split_ctx, spectra_to_fit,
+                                                float(config.args.split_max_dt))
+
     # Constant across every spectrum and every batch, so build the kwargs once.
     _fit_kwargs = dict(library=spectrumLibrary,
+                       split_ctx=split_ctx,
                        rt_mz=rt_mz,
                        all_keys=all_keys,
                        dino_features=None,
@@ -1221,7 +1234,7 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     # Free large objects no longer needed after search (keep spectrumLibrary
     # alive for fragment correlation features computed inside process_data).
     # _fit_kwargs holds the frag index too, so it has to go for the index to.
-    del _fit_kwargs, frag_index, _ms1_rt, _im_bin_ms1, spectra_to_fit, all_keys
+    del _fit_kwargs, frag_index, _ms1_rt, _im_bin_ms1, spectra_to_fit, all_keys, split_ctx
     gc.collect()
 
     # Merge batch parquets into single file (streaming, one batch at a time)

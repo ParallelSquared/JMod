@@ -317,6 +317,8 @@ def _compute_hyperscores_jit(all_intensities, all_codes, offsets,
 
         for k in range(start, end):
             code = all_codes[k]
+            if (code >> 21) & 1:
+                continue   # --split_win: peak predicted in the window above
             ion_type = (code >> ION_SHIFT) & ION_MASK
             iso = (code >> ISO_SHIFT) & ISO_MASK
             idx = (code >> IDX_SHIFT) & IDX_MASK
@@ -2391,7 +2393,9 @@ def fit_to_lib2(dia_spec,
                output_folder=None,
                frag_index=None,
                ms1_rt=None,
-               im_bin_ms1=None):
+               im_bin_ms1=None,
+               split_ctx=None):
+    # split_ctx: split_windows.SplitWindowTemplates (--split_win), or None
     # spec_idx,dia_spec,library = inputs
     # im_tol: fragment IM tolerance (the run's fitted precision).
     # im_accuracy: widening of the IM candidate gate (the run's fitted library-IM
@@ -2429,6 +2433,9 @@ def fit_to_lib2(dia_spec,
     # Per-peak ion mobility (timsTOF); zeros for non-IM data (merged_mob unused).
     _has_im = getattr(spec, "mobility", None) is not None
     _im_tol = im_tol if _has_im else 0.0
+    # --split_win is m/z-only (not on the timsTOF (m/z, IM) path)
+    _split = split_ctx is not None and not (_has_im and _im_tol > 0.0)
+    _nb_spec = split_ctx.upper.get(spec.scan_num) if _split else None
     if _has_im and _im_tol > 0.0:
         # timsTOF: bin DIA peaks by (m/z, IM) so same-m/z peaks at different
         # mobility stay separate; the summed bin intensity is the NNLS observation.
@@ -2441,6 +2448,16 @@ def fit_to_lib2(dia_spec,
         centroid_breaks = np.zeros(0, dtype=np.float64)
         bin_centers = _bin_mz
     else:
+        # --split_win: fit this scan jointly with the scan of the window directly
+        # above it (same cycle).  Its peaks join the spectrum with m/z * SCALE
+        # (ppm matching unchanged, never overlapping this scan's peaks).
+        if _nb_spec is not None:
+            _nb = np.stack(_nb_spec.peak_list(), 1)
+            from src import split_windows as _sw
+            _raw_mz = np.concatenate([dia_spectrum[:, 0], _nb[:, 0] * _sw.SCALE])
+            _raw_int = np.concatenate([dia_spectrum[:, 1], _nb[:, 1]])
+            _ord = np.argsort(_raw_mz, kind='stable')
+            dia_spectrum = np.stack([_raw_mz[_ord], _raw_int[_ord]], axis=1)
         _dia_mob = np.zeros(dia_spectrum.shape[0], dtype=np.float64)
         merged_mz, merged_int, centroid_breaks, bin_centers, _merged_mob = _dia_prep_jit(
             dia_spectrum[:, 0].copy(), dia_spectrum[:, 1].copy(), _dia_mob, mz_tol)
@@ -2460,41 +2477,85 @@ def fit_to_lib2(dia_spec,
         _im_gate_lo = spec.im_lo - im_accuracy
         _im_gate_hi = spec.im_hi + im_accuracy
 
-    if frag_index is not None and not ms1_mz:
-        win_lo = prec_mz - windowWidth / 2
-        win_hi = prec_mz + windowWidth / 2
-        all_window_idxs = frag_index.query(
-            dia_spectrum[:, 0], win_lo, win_hi,
-            prec_rt, rt_tol, atleast_m,
-            im_gate_lo=_im_gate_lo, im_gate_hi=_im_gate_hi
-        )
-    else:
-        if ms1_mz:
-            _bool = (np.abs(rt_mz[:,1]-ms1_mz)/ms1_mz)<ms1_tol
+    if _split:
+        # Candidates for the joint fit: precursors with M0 in this window (also found
+        # through the window above when most of their envelope is there), the
+        # window below's precursors whose upper part lands here, and the window
+        # above's own precursors.  Kinds in split_windows (KIND_*)
+        from src import split_windows as _sw
+        _jm = dia_spectrum[:, 0]
+        _a_mz = np.ascontiguousarray(_jm[_jm < _sw.UNSCALE_ABOVE])
+        _b_mz = np.ascontiguousarray(_jm[_jm > _sw.UNSCALE_ABOVE] / _sw.SCALE) if _nb_spec is not None else None
+        _wl, _wh = prec_mz - windowWidth / 2, prec_mz + windowWidth / 2
+        if _nb_spec is not None:
+            _wwB = window_width(_nb_spec)
+            _lo_B, _hi_B = _nb_spec.prec_mz - _wwB / 2, _nb_spec.prec_mz + _wwB / 2
         else:
-            if rt_filter:
-                _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
-            else:
-                _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
-        if np.isfinite(_im_gate_lo):
-            # Mirror the index gate. NaN IM (library without mobility) is not a
-            # rejection, so it is explicitly admitted rather than compared.
-            _im = rt_mz[:, 2]
-            _bool = np.logical_and(
-                _bool,
-                np.isnan(_im) | ((_im >= _im_gate_lo) & (_im <= _im_gate_hi)),
+            _lo_B = _hi_B = 0.0
+        if frag_index is not None and not ms1_mz:
+            def _q(mzs, lo, hi):
+                return frag_index.query(mzs, lo, hi, prec_rt, rt_tol, atleast_m,
+                                        im_gate_lo=_im_gate_lo, im_gate_hi=_im_gate_hi)
+        else:
+            def _q(mzs, lo, hi):
+                sel = (rt_mz[:, 1] >= lo) & (rt_mz[:, 1] <= hi)
+                if rt_filter:
+                    sel &= np.abs(rt_mz[:, 0] - prec_rt) < rt_tol
+                return np.where(sel)[0]
+        window_idxs, _t_kind, decoy_window_idxs, _d_kind = _sw.gather_candidates(
+            split_ctx, _q, _a_mz, _b_mz, _wl, _wh, _lo_B, _hi_B,
+            split_ctx.scan_grid.get(spec.scan_num, -1), library.n_targets)
+        if not decoy:
+            decoy_window_idxs, _d_kind = decoy_window_idxs[:0], _d_kind[:0]
+        n_targets = library.n_targets
+    else:
+        if frag_index is not None and not ms1_mz:
+            win_lo = prec_mz - windowWidth / 2
+            win_hi = prec_mz + windowWidth / 2
+            all_window_idxs = frag_index.query(
+                dia_spectrum[:, 0], win_lo, win_hi,
+                prec_rt, rt_tol, atleast_m,
+                im_gate_lo=_im_gate_lo, im_gate_hi=_im_gate_hi
             )
-        all_window_idxs = np.where(_bool)[0]
+        else:
+            if ms1_mz:
+                _bool = (np.abs(rt_mz[:,1]-ms1_mz)/ms1_mz)<ms1_tol
+            else:
+                if rt_filter:
+                    _bool = np.logical_and(np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2),np.abs(rt_mz[:,0]-prec_rt)<rt_tol)
+                else:
+                    _bool = np.abs(rt_mz[:,1]-prec_mz)<(windowWidth/2)
+            if np.isfinite(_im_gate_lo):
+                # Mirror the index gate. NaN IM (library without mobility) is not a
+                # rejection, so it is explicitly admitted rather than compared.
+                _im = rt_mz[:, 2]
+                _bool = np.logical_and(
+                    _bool,
+                    np.isnan(_im) | ((_im >= _im_gate_lo) & (_im <= _im_gate_hi)),
+                )
+            all_window_idxs = np.where(_bool)[0]
 
-    # Split into target and decoy candidates
-    # TODO: unify target/decoy processing paths to eliminate this split
-    n_targets = library.n_targets
-    target_mask = all_window_idxs < n_targets
-    window_idxs = all_window_idxs[target_mask]
-    decoy_window_idxs = all_window_idxs[~target_mask] if decoy else np.empty(0, dtype=all_window_idxs.dtype)
+        # Split into target and decoy candidates
+        # TODO: unify target/decoy processing paths to eliminate this split
+        n_targets = library.n_targets
+        target_mask = all_window_idxs < n_targets
+        window_idxs = all_window_idxs[target_mask]
+        decoy_window_idxs = all_window_idxs[~target_mask] if decoy else np.empty(0, dtype=all_window_idxs.dtype)
 
     mass_window_candidates = [all_keys[i] for i in window_idxs]
     _ref_idxs = library.resolve_indices(mass_window_candidates)
+    if _split:
+        # per-candidate template spectra on the joint (this scan + scaled window-above) axis
+        _tj = _sw.build_joint_library(np.asarray(window_idxs, dtype=np.int64), _t_kind,
+                                      library.spectrum_mz, split_ctx.int_A, split_ctx.int_B,
+                                      library.spectrum_offsets, library.spectrum_lengths,
+                                      split_ctx.codes, int(top_n), float(_sw.SCALE), _sw.B_FLAG)
+        _t_src = (_tj[0], _tj[1], _tj[3], _tj[4], _tj[5], _tj[6], _tj[7],
+                  np.arange(len(window_idxs), dtype=np.int64))
+    else:
+        _t_src = (library.spectrum_mz, library.spectrum_int, library.spectrum_offsets,
+                  library.spectrum_lengths, library.top_n_data, library.top_n_offsets,
+                  library.top_n_lengths, _ref_idxs)
 
     spec_frags = None
 
@@ -2511,14 +2572,14 @@ def fit_to_lib2(dia_spec,
         ref_ms1_error, \
         ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_passing, ref_prec_im = create_entries_direct(
                                         centroid_breaks=centroid_breaks,
-                                        spec_data_mz=library.spectrum_mz,
-                                        spec_data_int=library.spectrum_int,
-                                        spec_offsets=library.spectrum_offsets,
-                                        spec_lengths=library.spectrum_lengths,
-                                        topn_data=library.top_n_data,
-                                        topn_offsets=library.top_n_offsets,
-                                        topn_lengths=library.top_n_lengths,
-                                        candidate_indices=_ref_idxs,
+                                        spec_data_mz=_t_src[0],
+                                        spec_data_int=_t_src[1],
+                                        spec_offsets=_t_src[2],
+                                        spec_lengths=_t_src[3],
+                                        topn_data=_t_src[4],
+                                        topn_offsets=_t_src[5],
+                                        topn_lengths=_t_src[6],
+                                        candidate_indices=_t_src[7],
                                         mass_window_candidates=mass_window_candidates,
                                         atleast_m=atleast_m,
                                         prec_mzs=rt_mz[:,1][window_idxs],
@@ -2541,7 +2602,19 @@ def fit_to_lib2(dia_spec,
         # Decoy candidates already extracted from unified index above
         mass_window_decoy_candidates = [all_keys[i] for i in decoy_window_idxs]
         _decoy_idxs = library.resolve_indices(mass_window_decoy_candidates)
-        converted_frag_codes = library.get_frag_codes_batch(_decoy_idxs)
+        if _split:
+            _dj = _sw.build_joint_library(np.asarray(decoy_window_idxs, dtype=np.int64), _d_kind,
+                                          library.spectrum_mz, split_ctx.int_A, split_ctx.int_B,
+                                          library.spectrum_offsets, library.spectrum_lengths,
+                                          split_ctx.codes, int(top_n), float(_sw.SCALE), _sw.B_FLAG)
+            _d_src = (_dj[0], _dj[1], _dj[3], _dj[4], _dj[5], _dj[6], _dj[7],
+                      np.arange(len(decoy_window_idxs), dtype=np.int64))
+            converted_frag_codes = [_dj[2][_dj[3][i]:_dj[3][i] + _dj[4][i]] for i in range(len(decoy_window_idxs))]
+        else:
+            _d_src = (library.spectrum_mz, library.spectrum_int, library.spectrum_offsets,
+                      library.spectrum_lengths, library.top_n_data, library.top_n_offsets,
+                      library.top_n_lengths, _decoy_idxs)
+            converted_frag_codes = library.get_frag_codes_batch(_decoy_idxs)
         # Decoy m/z offset already pre-applied in rt_mz
         decoy_mz = rt_mz[:,1][decoy_window_idxs]
 
@@ -2560,14 +2633,14 @@ def fit_to_lib2(dia_spec,
                                 decoy_ms1_error, \
                                     dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_passing, dec_prec_im = create_entries_direct(
                                                                     centroid_breaks=centroid_breaks,
-                                                                    spec_data_mz=library.spectrum_mz,
-                                                                    spec_data_int=library.spectrum_int,
-                                                                    spec_offsets=library.spectrum_offsets,
-                                                                    spec_lengths=library.spectrum_lengths,
-                                                                    topn_data=library.top_n_data,
-                                                                    topn_offsets=library.top_n_offsets,
-                                                                    topn_lengths=library.top_n_lengths,
-                                                                    candidate_indices=_decoy_idxs,
+                                                                    spec_data_mz=_d_src[0],
+                                                                    spec_data_int=_d_src[1],
+                                                                    spec_offsets=_d_src[2],
+                                                                    spec_lengths=_d_src[3],
+                                                                    topn_data=_d_src[4],
+                                                                    topn_offsets=_d_src[5],
+                                                                    topn_lengths=_d_src[6],
+                                                                    candidate_indices=_d_src[7],
                                                                     mass_window_candidates=mass_window_decoy_candidates,
                                                                     atleast_m=atleast_m,
                                                                     prec_mzs=decoy_mz,
@@ -2600,9 +2673,14 @@ def fit_to_lib2(dia_spec,
         lib_frag_mz = [ref_pep_cand_list[i][:,0][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
         lib_frag_int = [ref_pep_cand_list[i][:,1][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
         obs_frag_int = [dia_spectrum[ref_spec_row_indices_split[i],1] for i in range(len(ref_spec_row_indices_split))]
-        _ref_surv_idxs = library.resolve_indices(ref_pep_cand)
-        _ref_surv_frag_codes = library.get_frag_codes_batch(_ref_surv_idxs)
-        frag_name_codes = [_ref_surv_frag_codes[i][j] for i,j in enumerate(lib_peaks_matched)]
+        if _split:
+            frag_name_codes = [_tj[2][_tj[3][c]:_tj[3][c] + _tj[4][c]][m]
+                               for c, m in zip(ref_peaks_in_dia, lib_peaks_matched)]
+            lib_frag_mz = [_sw.unscale_mz(x) for x in lib_frag_mz]
+        else:
+            _ref_surv_idxs = library.resolve_indices(ref_pep_cand)
+            _ref_surv_frag_codes = library.get_frag_codes_batch(_ref_surv_idxs)
+            frag_name_codes = [_ref_surv_frag_codes[i][j] for i,j in enumerate(lib_peaks_matched)]
         frag_matched_intensities = [ref_pep_cand_list[idx][:,1][j] for idx,j in enumerate(lib_peaks_matched)]
 
         decoy_col_offset = np.max(ref_spec_col_indices)+1
@@ -2628,6 +2706,8 @@ def fit_to_lib2(dia_spec,
         decoy_lib_frag_int = [decoy_pep_cand_list[i][:,1][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
         decoy_obs_frag_int = [dia_spectrum[decoy_spec_row_indices_split[i],1] for i in range(len(decoy_spec_row_indices_split))]
         decoy_frag_name_codes = [converted_frag_codes[i][decoy_lib_peaks_matched[idx]] for idx,i in enumerate(decoy_peaks_in_dia)]
+        if _split:
+            decoy_lib_frag_mz = [_sw.unscale_mz(x) for x in decoy_lib_frag_mz]
         decoy_frag_matched_intensities = [decoy_pep_cand_list[idx][:,1][decoy_lib_peaks_matched[idx]] for idx in range(len(decoy_peaks_in_dia))]
     else:
         decoy_spec_row_indices_split=[] ## needs to be improved
@@ -2760,6 +2840,19 @@ def fit_to_lib2(dia_spec,
             unique_frags_int_decoy = [i[j] for i,j in zip(decoy_obs_frag_int,unique_row_indices_split_decoy)]
 
         ####################################
+
+    if _split and len(lib_coefficients) > 0:
+        # Competitor columns (other windows' precursors) shaped the fit but are
+        # reported from their own window's fit, not here
+        _rep = np.zeros(len(lib_coefficients), dtype=bool)
+        _nt = len(ref_peaks_in_dia)
+        if _nt:
+            _rep[:_nt] = _t_kind[np.asarray(ref_peaks_in_dia, dtype=np.int64)] <= _sw.KIND_AB
+        if decoy and len(decoy_flat_rows) > 0:
+            _nd = len(decoy_peaks_in_dia)
+            _rep[decoy_col_offset:decoy_col_offset + _nd] = \
+                _d_kind[np.asarray(decoy_peaks_in_dia, dtype=np.int64)] <= _sw.KIND_AB
+        lib_coefficients = np.where(_rep, np.asarray(lib_coefficients), 0.0)
 
     #Select non-zero coeffs
     # Note: many coeffs are non-zero but essentially zero!! Perhaps set less than 1e-7??

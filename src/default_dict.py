@@ -364,6 +364,46 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    'split_win': {
+        # Fit each MS2 scan jointly with the scan of the window directly above it (same
+        # cycle), so a precursor whose isotope envelope straddles the two windows gets one
+        # coefficient fitted to both (src/split_windows.py).  Needs --iso.
+        'flags': ('--split_win',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': False,
+        'type': '',
+        'widget': 'checkbutton',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
+    'split_min_frac': {
+        # --split_win: a precursor's window-above part is modelled when that window
+        # isolates at least this fraction of its isotope envelope
+        'flags': ('--split_min_frac',),
+        'default': 0.4,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'float',
+        'widget': 'entry',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+<1'
+    },
+    'split_max_dt': {
+        # --split_win: the window above is fitted jointly only when its scan was acquired
+        # within this many seconds of this one (methods may interleave windows)
+        'flags': ('--split_max_dt',),
+        'default': 0.2,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'float',
+        'widget': 'entry',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
+    },
     'lib_frac': {
         'flags': ('--lib_frac',),
         'default': 0.5,
