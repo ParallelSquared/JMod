@@ -127,3 +127,26 @@ for i in range(4):
     assert np.all(np.diff(top) <= 0) and tnl[i] == min(10, ln[i])
 assert np.allclose(sw.unscale_mz(mz[seg(3)]), mz[seg(0)])
 print('build_joint_library layout OK')
+
+# soft (measured) transmission: factors = sum_j tau_j * P_complement(j - k)
+trans = (-0.95, 0.10, 1.05, 0.20)
+ctx2 = sw.build_templates(lib, rt_mz, scans, [], tag, 0.4, trans=trans)
+worst = 0.0
+for e, (ms, spec, z, pos) in enumerate(peps):
+    R = residues(spec); prec = R.sum(0) + H2O; Pp = exact_env(prec)
+    mz0 = mz0s[e]; lo = np.floor(mz0 / 2) * 2
+    j = np.arange(len(Pp)); isomz = mz0 + j * ISO / z
+    tA = sw.transmission(isomz - (lo + 1.0), trans); tB = sw.transmission(isomz - (lo + 3.0), trans)
+    tA[sw.NB:] = 0; tB[sw.NB:] = 0
+    assert abs(ctx2.f_A[e] - (tA * Pp).sum()) < 1e-5 and abs(ctx2.f_B[e] - (tB * Pp).sum()) < 1e-5
+    s, L = offs[e], lens[e]
+    for p in range(s, s + L):
+        c = int(lib.frag_names_data[p]); t, ix, k = c & 7, (c >> 3) & 0xFF, (c >> 17) & 0xF
+        frag = R[:ix].sum(0) if t == 0 else R[::-1][:ix].sum(0) + H2O
+        Pc = exact_env(prec - frag)
+        a = sum(tA[jj] * Pc[jj - k] for jj in range(k, sw.NB))
+        b = sum(tB[jj] * Pc[jj - k] for jj in range(k, sw.NB))
+        worst = max(worst, abs(ctx2.int_A[p] / lib.spectrum_int[p] - a), abs(ctx2.int_B[p] / lib.spectrum_int[p] - b))
+    print(f'{ms:42s} z={z}: soft f_A {ctx2.f_A[e]:.3f} f_B {ctx2.f_B[e]:.3f} (box {ctx.f_A[e]:.3f} / {ctx.f_B[e]:.3f})')
+assert worst < 1e-5, worst
+print(f'soft-transmission factors match (max abs diff {worst:.1e})')

@@ -404,6 +404,20 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    'split_transmission': {
+        # --split_win: 'measure' fits this run's window transmission edges from MS1 isotope
+        # clusters and their unfragmented isotopologues in MS2 (falls back to the box when the
+        # fit fails its checks); 'box' uses the nominal isolation window
+        'flags': ('--split_transmission',),
+        'default': 'measure',
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': 'entry',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': ['measure', 'box']
+    },
     'lib_frac': {
         'flags': ('--lib_frac',),
         'default': 0.5,

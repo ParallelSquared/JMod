@@ -114,58 +114,237 @@ def _env(c, pC, pH, pN, pO, pS, out):
 
 
 @njit(nogil=True, cache=False)
-def _window_factors(comp_c, iso_k, ent, jA_hi, jB_lo, jB_hi, lib_int, pC, pH, pN, pO, pS, int_A, int_B, dst):
-    """Per library peak: template intensity in the M0 window (isotopes 0..jA_hi) and in the
-    upper window (isotopes jB_lo..jB_hi), = lib_int * P(complement heavy count in [a-k, b-k])."""
+def _window_factors(comp_c, iso_k, ent, tauA, tauB, lib_int, pC, pH, pN, pO, pS, int_A, int_B, dst):
+    """Per library peak: template intensity in the M0 window (A) and in the window above (B).
+    tauX[e, j] = transmission of precursor isotope j of entry e in window X.  Fragment isotope k
+    arises from precursor isotope j >= k with the complement carrying j-k heavy atoms, so
+    int_X = lib_int * sum_j tauX[e, j] * P_complement(j - k)."""
     env = np.zeros(NB)
-    cdf = np.zeros(NB)
     for i in range(comp_c.shape[0]):
         _env(comp_c[i], pC, pH, pN, pO, pS, env)
-        s = 0.0
-        for k in range(NB):
-            s += env[k]
-            cdf[k] = s
         k = iso_k[i]
         e = ent[i]
-        # window A: precursor isotopes 0..jA_hi -> complement in [0, jA_hi - k]
-        hi = jA_hi[e] - k
         fa = 0.0
-        if hi >= 0:
-            fa = cdf[min(hi, NB - 1)]
-        int_A[dst[i]] = lib_int[i] * fa
-        # window B: precursor isotopes jB_lo..jB_hi -> complement in [jB_lo - k, jB_hi - k]
         fb = 0.0
-        if jB_lo[e] <= jB_hi[e]:
-            hi = jB_hi[e] - k
-            lo = jB_lo[e] - k
-            if hi >= 0:
-                up = cdf[min(hi, NB - 1)]
-                if lo - 1 < 0:
-                    dn = 0.0
-                elif lo - 1 >= NB:
-                    dn = 1.0
-                else:
-                    dn = cdf[lo - 1]
-                fb = up - dn
-                if fb < 0.0:
-                    fb = 0.0
+        for j in range(k, NB):
+            fa += tauA[e, j] * env[j - k]
+            fb += tauB[e, j] * env[j - k]
+        int_A[dst[i]] = lib_int[i] * fa
         int_B[dst[i]] = lib_int[i] * fb
 
 
 @njit(nogil=True, cache=False)
-def _prec_fracs(comp_p, jA_hi, jB_lo, jB_hi, pC, pH, pN, pO, pS, f_A, f_B):
+def _prec_fracs(comp_p, tauA, tauB, pC, pH, pN, pO, pS, f_A, f_B):
     env = np.zeros(NB)
     for i in range(comp_p.shape[0]):
         _env(comp_p[i], pC, pH, pN, pO, pS, env)
         a = 0.0
-        for j in range(0, min(jA_hi[i], NB - 1) + 1):
-            a += env[j]
         b = 0.0
-        if jB_lo[i] <= jB_hi[i]:
-            for j in range(jB_lo[i], min(jB_hi[i], NB - 1) + 1):
-                b += env[j]
+        for j in range(NB):
+            a += tauA[i, j] * env[j]
+            b += tauB[i, j] * env[j]
         f_A[i] = a
         f_B[i] = b
+
+
+def transmission(o, params):
+    """Window transmission at offset o (Th) from the window centre.  params = (l, wl, h, wh):
+    soft edges T = Phi((o - l)/wl) * Phi((h - o)/wh)."""
+    from scipy.special import ndtr
+    l, wl, h, wh = params
+    return ndtr((o - l) / wl) * ndtr((h - o) / wh)
+
+
+# ---------------------------------------------------------------------------
+# Per-run transmission measurement (--split_transmission measure)
+#
+# Bright MS1 isotope clusters (M0, M1, M2 at one charge, z = 2 or 3; no M-1 peak; M1/M0 within
+# 1.6x of a peptide of that mass).  In the MS2 scan of each window near a cluster (nearest in
+# RT), the unfragmented precursor isotopologues survive with the same efficiency, so for two
+# isotopologues r (reference) and p (probe):  (MS2_p / MS2_r) / (MS1_p / MS1_r) = T(o_p) / T(o_r),
+# o = offset from that window's centre.  Cell medians over (o_r, o_p) are fitted with
+# T = Phi((o - l)/wl) * Phi((h - o)/wh) without assuming where the flat top is, so a displaced
+# passband is measured too.  MS2 vs MS1 m/z offset is estimated locally along the run.
+# ---------------------------------------------------------------------------
+
+@njit(nogil=True, cache=False)
+def _clusters(mz, it, max_pk, tol):
+    n = len(mz)
+    out = np.zeros((4 * n + 1, 3))
+    m = 0
+    if n < 10:
+        return out[:0]
+    thr = np.sort(it)[max(0, n - max_pk)]
+    for i in range(n):
+        if it[i] < thr:
+            continue
+        for z in (2, 3):
+            pk1 = -1
+            pk2 = -1
+            for dk in (1, 2):
+                q = mz[i] + dk * ISO_DIFF / z
+                j = np.searchsorted(mz, q)
+                for k in (j - 1, j):
+                    if 0 <= k < n and abs(mz[k] - q) / q < tol:
+                        if dk == 1:
+                            pk1 = k
+                        else:
+                            pk2 = k
+            if pk1 < 0 or pk2 < 0:
+                continue
+            qm = mz[i] - ISO_DIFF / z
+            jm = np.searchsorted(mz, qm)
+            prev = False
+            for k in (jm - 1, jm):
+                if 0 <= k < n and abs(mz[k] - qm) / qm < tol and it[k] > 0.3 * it[i]:
+                    prev = True
+            if prev:
+                continue
+            exp1 = mz[i] * z * 0.000549
+            r = it[pk1] / it[i]
+            if r > 1.6 * exp1 or r < exp1 / 1.6:
+                continue
+            for pk in (pk1, pk2):
+                out[m, 0] = mz[i]
+                out[m, 1] = mz[pk]
+                out[m, 2] = it[pk] / it[i]
+                m += 1
+    return out[:m]
+
+
+@njit(nogil=True, cache=False)
+def _nearest_int(mz, it, q, tol):
+    j = np.searchsorted(mz, q)
+    best = tol
+    bi = 0.0
+    for k in (j - 1, j):
+        if 0 <= k < len(mz):
+            d = abs(mz[k] - q) / q
+            if d <= best:
+                best = d
+                bi = it[k]
+    return bi
+
+
+def measure_transmission(ms1scans, ms2scans, n_ms1=600, tol_ms1=5e-6, tol_ms2=6e-6, max_pk=400):
+    """Fit this run's window transmission (see the block comment).  Returns
+    (params (l, wl, h, wh) or None, info string)."""
+    from scipy.optimize import least_squares
+    from scipy.special import ndtr
+    t0 = time.time()
+    ms1 = sorted([s for s in ms1scans if s.mz is not None and len(s.mz) > 10], key=lambda s: s.RT)
+    if len(ms1) < 50:
+        return None, "too few MS1 scans"
+    by_lo = {}
+    for s in ms2scans:
+        by_lo.setdefault((round(float(s.ms1window[0]), 3), round(float(s.ms1window[1]), 3)), []).append(s)
+    wins = sorted(by_lo)
+    w_lo = np.array([w[0] for w in wins]); w_hi = np.array([w[1] for w in wins])
+    w_scans = [sorted(by_lo[w], key=lambda s: s.RT) for w in wins]
+    w_rt = [np.array([s.RT for s in lst]) for lst in w_scans]
+
+    def nearest_scan(w, rt):
+        r = w_rt[w]
+        j = int(np.searchsorted(r, rt))
+        best = None
+        for k in (j - 1, j):
+            if 0 <= k < len(r) and (best is None or abs(r[k] - rt) < abs(r[best] - rt)):
+                best = k
+        return w_scans[w][best] if best is not None else None
+
+    sel = [ms1[i] for i in np.linspace(len(ms1) * 0.1, len(ms1) * 0.9, min(n_ms1, len(ms1))).astype(int)]
+    # local MS2 - MS1 m/z offset along the run
+    loc = []
+    for s1 in sel:
+        diffs = []
+        mz1, it1 = np.asarray(s1.mz, np.float64), np.asarray(s1.intens, np.float64)
+        for k in np.argsort(-it1)[:30]:
+            x = mz1[k]
+            w = int(np.searchsorted(w_lo, x, side='right')) - 1
+            if w < 0 or x >= w_hi[w]:
+                continue
+            s2 = nearest_scan(w, s1.RT)
+            if s2 is None or len(s2.mz) == 0:
+                continue
+            mz2 = np.asarray(s2.mz, np.float64)
+            j = int(np.searchsorted(mz2, x))
+            for kk in (j - 1, j):
+                if 0 <= kk < len(mz2) and abs(mz2[kk] - x) / x < 30e-6:
+                    diffs.append(mz2[kk] / x - 1)
+        loc.append(np.median(diffs) if len(diffs) >= 5 else np.nan)
+    loc = np.array(loc)
+    if np.isfinite(loc).sum() < 10:
+        return None, "could not estimate the MS2 vs MS1 m/z offset"
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        sm = np.array([np.nanmedian(loc[max(0, k - 7):k + 8]) for k in range(len(loc))])
+    sm = np.where(np.isfinite(sm), sm, np.nanmedian(loc))
+
+    samples = []
+    floors = {}
+    for s1, sh in zip(sel, sm):
+        mz1, it1 = np.asarray(s1.mz, np.float64), np.asarray(s1.intens, np.float64)
+        cl = _clusters(mz1, it1, max_pk, tol_ms1)
+        if len(cl) == 0:
+            continue
+        for xi, xj, r1 in cl:
+            w0 = int(np.searchsorted(w_lo, xi - 1.8)) - 1
+            for w in range(max(0, w0), len(w_lo)):
+                if w_lo[w] > xj + 1.8:
+                    break
+                if w_hi[w] < xi - 1.8:
+                    continue
+                s2 = nearest_scan(w, s1.RT)
+                if s2 is None or len(s2.mz) == 0:
+                    continue
+                c = 0.5 * (w_lo[w] + w_hi[w])
+                oi, oj = xi - c, xj - c
+                if abs(oi) > 1.0 and abs(oj) > 1.0:
+                    continue
+                mz2 = np.asarray(s2.mz, np.float64); it2 = np.asarray(s2.intens, np.float64)
+                fl = floors.get(id(s2))
+                if fl is None:
+                    fl = float(np.quantile(it2, 0.05)); floors[id(s2)] = fl
+                Ii = _nearest_int(mz2, it2, xi * (1 + sh), tol_ms2)
+                Ij = _nearest_int(mz2, it2, xj * (1 + sh), tol_ms2)
+                if abs(oi) <= 1.0 and Ii > 0 and Ii * r1 > 20 * fl:
+                    samples.append((oj, (Ij / Ii) / r1, oi))
+                if abs(oj) <= 1.0 and Ij > 0 and Ij / r1 > 20 * fl:
+                    samples.append((oi, (Ii / Ij) * r1, oj))
+    if len(samples) < 2000:
+        return None, f"only {len(samples)} isotopologue ratios"
+    d = np.array(samples)
+    key = np.round(d[:, 2] / 0.1).astype(np.int64) * 1000 + np.round(d[:, 0] / 0.05).astype(np.int64)
+    order = np.argsort(key, kind='stable')
+    ks, starts, cnt = np.unique(key[order], return_index=True, return_counts=True)
+    keep = cnt >= 25
+    med, ro, po = [], [], []
+    for st, c_ in zip(starts[keep], cnt[keep]):
+        blk = d[order[st:st + c_]]
+        med.append(np.median(np.clip(blk[:, 1], 0, 5))); ro.append(np.median(blk[:, 2])); po.append(np.median(blk[:, 0]))
+    med, ro, po, nn = np.array(med), np.array(ro), np.array(po), cnt[keep].astype(float)
+    if len(med) < 60:
+        return None, f"only {len(med)} offset cells with >= 25 ratios"
+    eps = 0.02
+    T = lambda p, o: ndtr((o - p[0]) / p[1]) * ndtr((p[2] - o) / p[3])
+
+    def resid(p):
+        return (np.log(med + eps) - np.log(T(p, po) + eps) + np.log(T(p, ro) + eps)) * np.sqrt(nn)
+    best = None
+    for l0 in (-1.1, -0.8, -0.5):
+        for h0 in (0.8, 1.0, 1.2):
+            f = least_squares(resid, [l0, 0.1, h0, 0.1], bounds=([-1.6, 0.01, 0.3, 0.01], [-0.3, 0.6, 1.6, 0.6]),
+                              loss='soft_l1')
+            if best is None or f.cost < best.cost:
+                best = f
+    p = tuple(float(x) for x in best.x)
+    fit_err = float(np.median(np.abs(np.log(med + eps) - np.log((T(p, po) + eps) / (T(p, ro) + eps)))))
+    info = (f"low edge {p[0]:+.3f} Th (width {p[1]:.3f}), high edge {p[2]:+.3f} Th (width {p[3]:.3f}) from the window "
+            f"centre; {len(d):,} isotopologue ratios, {len(med)} cells, median |log error| {fit_err:.2f}, {time.time() - t0:.0f}s")
+    if fit_err > 0.7 or p[2] - p[0] < 1.0:
+        return None, "fit rejected: " + info
+    return p, info
 
 
 class SplitWindowTemplates:
@@ -226,7 +405,7 @@ def _residue_vectors(mod_seqs, tag):
         yield np.array([rv(r) for r in parse_peptide(ms)], dtype=np.int32)
 
 
-def build_templates(library, rt_mz, ms2scans, ms1scans, tag, min_frac):
+def build_templates(library, rt_mz, ms2scans, ms1scans, tag, min_frac, trans=None):
     """Build the split-window templates for this run.  Returns None (split search off) when
     the run's windows overlap or the library has no isotope expansion."""
     t0 = time.time()
@@ -252,11 +431,19 @@ def build_templates(library, rt_mz, ms2scans, ms1scans, tag, min_frac):
     adj = ok & (wa + 1 < len(lo)) & (np.abs(lo[nxt] - hi[np.clip(wa, 0, len(hi) - 1)]) < 0.05)
     wb[adj] = nxt[adj]
     sp = ISO_DIFF / z
-    jA_hi = np.where(ok, np.floor((hi[np.clip(wa, 0, len(hi) - 1)] - mz0) / sp), NB - 1)
-    jA_hi = np.clip(jA_hi, 0, NB - 1).astype(np.int64)
-    jB_lo = np.where(wb >= 0, jA_hi + 1, NB).astype(np.int64)
-    jB_hi = np.where(wb >= 0, np.floor((hi[np.clip(wb, 0, len(hi) - 1)] - mz0) / sp), -1)
-    jB_hi = np.clip(jB_hi, -1, NB - 1).astype(np.int64)
+    iso_mz = mz0[:, None] + np.arange(NB)[None, :] * sp[:, None]          # (n, NB)
+    waC, wbC = np.clip(wa, 0, len(hi) - 1), np.clip(wb, 0, len(hi) - 1)
+    if trans is None:
+        # nominal box: isotope j isolated when lo <= m/z < hi
+        tauA = ((iso_mz >= lo[waC][:, None]) & (iso_mz < hi[waC][:, None])).astype(np.float64)
+        tauB = ((iso_mz >= lo[wbC][:, None]) & (iso_mz < hi[wbC][:, None])).astype(np.float64)
+    else:
+        # measured soft edges, offsets from each window's centre
+        cA = 0.5 * (lo[waC] + hi[waC]); cB = 0.5 * (lo[wbC] + hi[wbC])
+        tauA = transmission(iso_mz - cA[:, None], trans)
+        tauB = transmission(iso_mz - cB[:, None], trans)
+    tauA[~ok, :] = 1.0          # outside every window: the plain library template is kept (set below)
+    tauB[wb < 0] = 0.0
 
     so, sl = library.spectrum_offsets, library.spectrum_lengths
     lib_int_all = np.asarray(library.spectrum_int, dtype=np.float64)
@@ -283,7 +470,7 @@ def build_templates(library, rt_mz, ms2scans, ms1scans, tag, min_frac):
         if not buf_c:
             return
         _window_factors(np.vstack(buf_c).astype(np.int64), np.concatenate(buf_k), np.concatenate(buf_e),
-                        jA_hi, jB_lo, jB_hi, np.concatenate(buf_i), *_POW, int_A, int_B, np.concatenate(buf_d))
+                        tauA, tauB, np.concatenate(buf_i), *_POW, int_A, int_B, np.concatenate(buf_d))
         buf_c.clear(); buf_k.clear(); buf_e.clear(); buf_i.clear(); buf_d.clear()
 
     for e, R in enumerate(_residue_vectors(library.mod_seq[:n], tag)):
@@ -314,7 +501,7 @@ def build_templates(library, rt_mz, ms2scans, ms1scans, tag, min_frac):
 
     f_A = np.zeros(n)
     f_B = np.zeros(n)
-    _prec_fracs(comp_p, jA_hi, jB_lo, jB_hi, *_POW, f_A, f_B)
+    _prec_fracs(comp_p, tauA, tauB, *_POW, f_A, f_B)
     has_B = (wb >= 0) & (f_B >= min_frac)
     # entries outside every window keep the plain library template
     for e in np.where(~ok)[0]:
@@ -323,7 +510,7 @@ def build_templates(library, rt_mz, ms2scans, ms1scans, tag, min_frac):
     ctx = SplitWindowTemplates(int_A, int_B, f_A.astype(np.float32), f_B.astype(np.float32), has_B,
                                wa.astype(np.int32), wb.astype(np.int32), lo, hi, codes_all, min_frac)
     nt = library.n_targets
-    logger.info(f"--split_win: {len(grid)} windows; templates for {n:,} entries in {time.time() - t0:.0f}s. "
+    logger.info(f"--split_win: {len(grid)} windows ({'measured' if trans is not None else 'box'} transmission); templates for {n:,} entries in {time.time() - t0:.0f}s. "
                 f"Targets: mean envelope fraction isolated in the M0 window {f_A[:nt][ok[:nt]].mean():.3f}; "
                 f"{100 * has_B[:nt].mean():.1f}% have >= {min_frac:g} of it in the window above"
                 + (f"; {n_unk} non-b/y peaks treated as b" if n_unk else ""))

@@ -1138,9 +1138,16 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
             logger.warning("--split_win needs --iso. Running without it.")
         else:
             from src import split_windows
+            trans = None
+            if getattr(config.args, "split_transmission", "measure") == "measure":
+                trans, _info = split_windows.measure_transmission(DIAspectra.ms1scans, spectra_to_fit)
+                if trans is None:
+                    logger.warning(f"--split_win: window transmission not measured ({_info}); using the nominal box")
+                else:
+                    logger.info(f"--split_win: measured window transmission: {_info}")
             split_ctx = split_windows.build_templates(spectrumLibrary, rt_mz, spectra_to_fit,
                                                       DIAspectra.ms1scans, mass_tag,
-                                                      float(config.args.split_min_frac))
+                                                      float(config.args.split_min_frac), trans=trans)
             if split_ctx is not None:
                 split_windows.attach_neighbours(split_ctx, spectra_to_fit,
                                                 float(config.args.split_max_dt))
