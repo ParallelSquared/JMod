@@ -1118,7 +1118,8 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     else:
         _im_bin_ms1 = None
 
-    _pl_schema = get_parquet_schema(timeplex=config.args.timeplex)
+    _ms1_env_on = bool(getattr(config.args, "ms1_envelope", False))
+    _pl_schema = get_parquet_schema(timeplex=config.args.timeplex, ms1_env=_ms1_env_on)
     _pa_schema = pl.DataFrame(schema=_pl_schema).to_arrow().schema
     _BUFFER_SIZE = 1000  # results to buffer before flushing to disk
 
@@ -1152,9 +1153,20 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
                 split_windows.attach_neighbours(split_ctx, spectra_to_fit,
                                                 float(config.args.split_max_dt))
 
+    # --ms1_envelope: theoretical M0..M3 per library entry for the MS1 envelope features
+    ms1_env = None
+    if _ms1_env_on:
+        from src import ms1_envelope
+        _t0 = time.time()
+        ms1_env = ms1_envelope.precursor_envelopes(spectrumLibrary, mass_tag)
+        logger.info(f"--ms1_envelope: theoretical envelopes for {len(ms1_env):,} entries in {time.time() - _t0:.0f}s; "
+                    f"features from the nearest MS1 scan and {int(config.args.ms1_envelope_scans)} either side")
+
     # Constant across every spectrum and every batch, so build the kwargs once.
     _fit_kwargs = dict(library=spectrumLibrary,
                        split_ctx=split_ctx,
+                       ms1_env=ms1_env,
+                       ms1_env_nb=int(getattr(config.args, "ms1_envelope_scans", 2)),
                        rt_mz=rt_mz,
                        all_keys=all_keys,
                        dino_features=None,
@@ -1241,7 +1253,7 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     # Free large objects no longer needed after search (keep spectrumLibrary
     # alive for fragment correlation features computed inside process_data).
     # _fit_kwargs holds the frag index too, so it has to go for the index to.
-    del _fit_kwargs, frag_index, _ms1_rt, _im_bin_ms1, spectra_to_fit, all_keys, split_ctx
+    del _fit_kwargs, frag_index, _ms1_rt, _im_bin_ms1, spectra_to_fit, all_keys, split_ctx, ms1_env
     gc.collect()
 
     # Merge batch parquets into single file (streaming, one batch at a time)

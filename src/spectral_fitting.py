@@ -2394,7 +2394,9 @@ def fit_to_lib2(dia_spec,
                frag_index=None,
                ms1_rt=None,
                im_bin_ms1=None,
-               split_ctx=None):
+               split_ctx=None,
+               ms1_env=None,
+               ms1_env_nb=2):
     # split_ctx: split_windows.SplitWindowTemplates (--split_win), or None
     # spec_idx,dia_spec,library = inputs
     # im_tol: fragment IM tolerance (the run's fitted precision).
@@ -2838,6 +2840,20 @@ def fit_to_lib2(dia_spec,
             unique_row_indices_split_decoy = [single_match_lookup[peak_idx_lookup[i]] for i in decoy_spec_row_indices_split]
             unique_frags_decoy = [i[j] for i,j in zip(decoy_lib_frag_mz,unique_row_indices_split_decoy)]
             unique_frags_int_decoy = [i[j] for i,j in zip(decoy_obs_frag_int,unique_row_indices_split_decoy)]
+
+        if ms1_env is not None:
+            # --ms1_envelope: M0..M3 envelope features from the nearest MS1 scans
+            from src import ms1_envelope as _me
+            _nt = len(ref_peaks_in_dia)
+            _wi = np.asarray(window_idxs, dtype=np.int64)[np.asarray(ref_peaks_in_dia, dtype=np.int64)] if _nt else np.empty(0, np.int64)
+            _ft = _me.features(_wi, rt_mz[_wi, 1], library, ms1_env, ms1_spectra, ms1_rt, prec_rt, ms1_tol, ms1_env_nb)
+            features = np.hstack([np.asarray(features, dtype=np.float64).reshape(_nt, -1), _ft])
+            if decoy:
+                _nd = len(decoy_peaks_in_dia)
+                _di = np.asarray(decoy_window_idxs, dtype=np.int64)[np.asarray(decoy_peaks_in_dia, dtype=np.int64)] if _nd else np.empty(0, np.int64)
+                _fd = _me.features(_di, np.asarray(decoy_mz)[np.asarray(decoy_peaks_in_dia, dtype=np.int64)] if _nd else np.zeros(0),
+                                   library, ms1_env, ms1_spectra, ms1_rt, prec_rt, ms1_tol, ms1_env_nb)
+                decoy_features = np.hstack([np.asarray(decoy_features, dtype=np.float64).reshape(_nd, -1), _fd])
 
         ####################################
 

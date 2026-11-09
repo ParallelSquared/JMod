@@ -172,9 +172,16 @@ _SCHEMA_SPEC = [
 ]
 
 
-def get_parquet_schema(timeplex=False):
-    """Return an ordered dict of {col_name: pl_dtype} for parquet output."""
+def get_parquet_schema(timeplex=False, ms1_env=False):
+    """Return an ordered dict of {col_name: pl_dtype} for parquet output.
+    ms1_env: add the --ms1_envelope feature columns after im_error."""
     schema = {name: dtype for name, dtype, _ in _SCHEMA_SPEC}
+    if ms1_env:
+        from src.ms1_envelope import FEATURES as _MS1ENV
+        items = list(schema.items())
+        k = [n for n, _ in items].index("im_error") + 1
+        items = items[:k] + [(f, pl.Float32) for f in _MS1ENV] + items[k:]
+        schema = dict(items)
     if timeplex:
         items = list(schema.items())
         items.insert(5, ("time_channel", pl.Float32))

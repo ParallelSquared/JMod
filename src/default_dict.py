@@ -418,6 +418,31 @@ default_dict = {
         'special_upload': False,
         'values': ['measure', 'box']
     },
+    'ms1_envelope': {
+        # MS1 isotope-envelope features (M0..M3 vs the theoretical envelope, nearest MS1
+        # scan and neighbours) as extra scoring features (src/ms1_envelope.py)
+        'flags': ('--ms1_envelope',),
+        'default': False,
+        'takes_value': False,
+        'in_GUI': False,
+        'type': '',
+        'widget': 'checkbutton',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
+    'ms1_envelope_scans': {
+        # --ms1_envelope: MS1 scans either side of the nearest one
+        'flags': ('--ms1_envelope_scans',),
+        'default': 2,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': 'entry',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': '+'
+    },
     'lib_frac': {
         'flags': ('--lib_frac',),
         'default': 0.5,
