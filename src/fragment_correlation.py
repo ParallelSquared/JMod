@@ -35,6 +35,8 @@ thread-independent, and setup is safe to run concurrently.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import numba as nb
 import pandas as pd
@@ -120,7 +122,7 @@ _IDX_IM_PAIRWISE = FEATURE_COLUMNS.index("im_mean_frag_corr")
 # Every IM-derived column is a suffix of FEATURE_COLUMNS, starting here.
 _N_NON_IM_FEATURES = _IDX_IM_MEAN
 
-# Gaussian width on the mobility axis for the grid-free kernel, as a fraction
+# Gaussian width on the mobility axis for the pairwise IM kernel, as a fraction
 # of the fitted IM tolerance. opt_im_precision is the 99% coverage of the Laplace
 # core, b*ln(100), and the core SD is b*sqrt(2), so sigma = sqrt(2)/ln(100).
 # Expressed as a fraction so it tracks the fitted tolerance instead of being a
@@ -254,6 +256,9 @@ def _build_window_csr(scan_rt, scan_win_lo, scan_win_hi):
         win_scan_offsets[w + 1] = cursor
 
     return win_lo, win_hi, win_scan_offsets, win_scan_idx, win_scan_rt
+
+
+_ROWS_PER_TASK = 2000   # rows per thread-pool task in compute_fragment_correlations
 
 
 # ---------------------------------------------------------------------------
@@ -653,22 +658,34 @@ def _pairwise_corr_and_features_numba(matrix, out_features):
 @nb.njit(cache=False, nogil=True)
 def _kernel_pairwise_numba(peaks_mz, peaks_int, peaks_mob,
                            scans, n_scans, queries, mz_tol, sigma_im,
-                           out_features, prec_out):
-    """Grid-free RT x IM similarity between ions, and its feature block.
+                           band_lo, band_hi, out_features, prec_out):
+    """RT x IM similarity between ions, and its feature block.
 
-    No binning.  Fragments of one precursor are recorded in the *same* MS2
-    spectra, so their RT coordinates coincide exactly -- peaks are paired only
-    within a scan, with no RT kernel.  On the mobility axis, where two peaks of
-    the same ion differ by measurement jitter, pairs are weighted by a Gaussian
-    of width ``sigma_im``:
+    Fragments of one precursor are recorded in the *same* MS2 spectra, so their
+    RT coordinates coincide exactly -- peaks are paired only within a scan, with
+    no RT kernel.  On the mobility axis, where two peaks of the same ion differ by
+    measurement jitter, pairs are weighted by a Gaussian of width ``sigma_im``:
 
         <A,B> = sum_scans sum_{i in A(s)} sum_{j in B(s)} wi*wj*exp(-dIM^2 / 2s^2)
         sim   = <A,B> / sqrt(<A,A> * <B,B>)
 
     That is a cosine similarity in the kernel's feature space: bounded [0,1],
-    invariant to intensity scale, and free of the bin-edge artefacts a grid
-    introduces (two peaks 1e-4 apart can straddle a bin boundary while two
-    0.005 apart share one).
+    invariant to intensity scale, and free of the bin-edge artefacts of a coarse
+    grid.
+
+    The pair sum is not taken pair by pair (that is quadratic in the peaks in the
+    two m/z windows, which grows with load on raw timsTOF data).  The Gaussian
+    kernel is the overlap of two Gaussians of width sigma_im / sqrt(2):
+
+        exp(-d^2 / 2 sigma^2) = (1 / (sqrt(pi) s)) * int g(x - mi) g(x - mj) dx,
+        g(u) = exp(-u^2 / 2 s^2),  s = sigma_im / sqrt(2)
+
+    so each query's peaks are spread onto a mobility grid (step s / 2, over the
+    apex scan's band ``[band_lo, band_hi]`` plus 8 s either side, each peak's
+    Gaussian cut at 8 s) and <A,B> is the dot product of two grid profiles, per
+    scan.  The constant factor cancels in ``sim``.  At step s / 2 the sum of a
+    Gaussian on the grid matches its integral to ~exp(-8 pi^2), and the 8 s cut
+    drops < 1e-13, so the result equals the pairwise sum to rounding.
 
     ``queries[0]`` is the precursor; ``queries[1:]`` the fragments.  Pairwise
     features are computed over the fragments only; ``prec_out`` receives the
@@ -676,9 +693,15 @@ def _kernel_pairwise_numba(peaks_mz, peaks_int, peaks_mob,
     """
     n_q = queries.shape[0]
     gram = np.zeros((n_q, n_q), dtype=np.float64)
-    inv2s2 = 1.0 / (2.0 * sigma_im * sigma_im)
-    p0 = np.empty(n_q, dtype=np.int64)
-    p1 = np.empty(n_q, dtype=np.int64)
+    s_g = sigma_im / np.sqrt(2.0)
+    step = 0.5 * s_g
+    reach = 8.0 * s_g
+    inv2s2 = 1.0 / (2.0 * s_g * s_g)
+    g0 = band_lo - reach
+    n_grid = int(np.ceil((band_hi + reach - g0) / step)) + 1
+    prof = np.zeros((n_q, n_grid), dtype=np.float64)
+    k_lo = np.empty(n_q, dtype=np.int64)
+    k_hi = np.empty(n_q, dtype=np.int64)
 
     for si in range(n_scans):
         sc = scans[si]
@@ -690,24 +713,43 @@ def _kernel_pairwise_numba(peaks_mz, peaks_int, peaks_mob,
         for j in range(n_q):
             q = queries[j]
             tol = q * mz_tol
-            p0[j] = np.searchsorted(scan_mz, q - tol)
-            p1[j] = np.searchsorted(scan_mz, q + tol, side="right")
+            p0 = np.searchsorted(scan_mz, q - tol)
+            p1 = np.searchsorted(scan_mz, q + tol, side="right")
+            k_lo[j] = n_grid
+            k_hi[j] = -1
+            for i in range(p0, p1):
+                m = scan_mob[i]
+                w = scan_int[i]
+                a0 = int(np.floor((m - reach - g0) / step))
+                a1 = int(np.ceil((m + reach - g0) / step))
+                if a0 < 0:
+                    a0 = 0
+                if a1 > n_grid - 1:
+                    a1 = n_grid - 1
+                for k in range(a0, a1 + 1):
+                    d = g0 + k * step - m
+                    prof[j, k] += w * np.exp(-d * d * inv2s2)
+                if a0 < k_lo[j]:
+                    k_lo[j] = a0
+                if a1 > k_hi[j]:
+                    k_hi[j] = a1
         for a in range(n_q):
-            if p1[a] <= p0[a]:
+            if k_hi[a] < 0:
                 continue
             for b in range(a, n_q):
-                if p1[b] <= p0[b]:
+                if k_hi[b] < 0:
                     continue
+                lo = k_lo[a] if k_lo[a] > k_lo[b] else k_lo[b]
+                hi = k_hi[a] if k_hi[a] < k_hi[b] else k_hi[b]
                 acc = 0.0
-                for i in range(p0[a], p1[a]):
-                    mi = scan_mob[i]
-                    wi = scan_int[i]
-                    for k in range(p0[b], p1[b]):
-                        d = mi - scan_mob[k]
-                        acc += wi * scan_int[k] * np.exp(-d * d * inv2s2)
+                for k in range(lo, hi + 1):
+                    acc += prof[a, k] * prof[b, k]
                 gram[a, b] += acc
                 if b != a:
                     gram[b, a] += acc
+        for j in range(n_q):
+            for k in range(k_lo[j], k_hi[j] + 1):
+                prof[j, k] = 0.0
 
     n_frag = n_q - 1
     max_pairs = n_frag * (n_frag - 1) // 2
@@ -907,6 +949,7 @@ def compute_fragment_correlations(
     min_obs=3,
     im_tol=0.0,
     prec_im=None,
+    n_threads=None,
 ):
     """Compute pairwise fragment-ion correlation features for every row of ``fdc``.
 
@@ -935,6 +978,8 @@ def compute_fragment_correlations(
     min_obs : int, default 3
         Fragment columns with fewer than this many non-zero entries are dropped
         before correlation.
+    n_threads : int or None, default None
+        Worker threads for the per-row loop; ``config.args.threads`` when None.
 
     Returns
     -------
@@ -995,18 +1040,20 @@ def compute_fragment_correlations(
 
     rt_halfwidth = float(fwhm_multiplier) * float(fwhm)
 
-    # Bound for the scan-index scratch buffer: a precursor cannot match more
-    # scans than there are MS2 scans total.
-    scan_buf = np.empty(len(ms2scans), dtype=np.int64)
     # Derived from the precursor slot's position, not the total column count, so
     # appending feature columns cannot shift it.
     _n_pairwise_feats = _IDX_PREC_MEAN - 2
-    feat_scratch = np.empty(_n_pairwise_feats, dtype=np.float64)
-    im_feat_scratch = np.empty(_n_pairwise_feats, dtype=np.float64)
-    im_prec_scratch = np.empty(2, dtype=np.float64)
-    prec_corr_mean = np.empty(1, dtype=np.float64)
-    prec_corr_max = np.empty(1, dtype=np.float64)
-    sparse_scratch = np.empty(2, dtype=np.float64)
+
+    def _scratch():
+        # One set per worker thread: the kernels write into these.  scan_buf is
+        # bounded by the run's MS2 scan count (no precursor can match more).
+        return (np.empty(len(ms2scans), dtype=np.int64),
+                np.empty(_n_pairwise_feats, dtype=np.float64),
+                np.empty(_n_pairwise_feats, dtype=np.float64),
+                np.empty(2, dtype=np.float64),
+                np.empty(1, dtype=np.float64),
+                np.empty(1, dtype=np.float64),
+                np.empty(2, dtype=np.float64))
     # Elution profile width: the run's FWHM as a Gaussian sigma (seconds)
     _profile_sigma = float(fwhm) / 2.3548200450309493
 
@@ -1022,24 +1069,29 @@ def compute_fragment_correlations(
     frag_names = library.frag_names_data
     prec_mz_arr = library.prec_mz
 
-    for row in tqdm.tqdm(range(n_rows)):
+    # Each row is independent and writes only its own row of ``out``, so rows
+    # are processed on a thread pool (free-threaded Python; the kernels are
+    # nogil), each worker with its own scratch buffers.  Same results as the
+    # serial loop.
+    def _row(row, scan_buf, feat_scratch, im_feat_scratch, im_prec_scratch,
+             prec_corr_mean, prec_corr_max, sparse_scratch):
         if not (coeffs[row] > 0) or not np.isfinite(rts[row]):
-            continue
+            return
         key = (seqs[row], int(zs[row]))
         lib_idx = key_to_idx.get(key)
         if lib_idx is None:
-            continue
+            return
 
         off = int(spec_off[lib_idx])
         ln = int(spec_len[lib_idx])
         if ln == 0:
-            continue
+            return
 
         frag_mz = spec_mz[off:off + ln]
         frag_codes = frag_names[off:off + ln]
         keep_mask = ~is_isotope(frag_codes)
         if not keep_mask.any():
-            continue
+            return
         frag_mz_kept = np.ascontiguousarray(frag_mz[keep_mask], dtype=np.float64)
 
         prec_mz = float(prec_mz_arr[lib_idx])
@@ -1051,7 +1103,7 @@ def compute_fragment_correlations(
         )
         out[row, 0] = float(n_scans)
         if n_scans == 0:
-            continue
+            return
 
         n_frags_kept = frag_mz_kept.shape[0]
 
@@ -1075,7 +1127,7 @@ def compute_fragment_correlations(
                 use_scans = np.ascontiguousarray(cov[order][first])
             out[row, 0] = float(use_scans.shape[0])
             if use_scans.shape[0] == 0:
-                continue
+                return
             n_use = use_scans.shape[0]
             matrix = np.empty((n_use, n_frags_kept), dtype=np.float64)
             _mob_scratch = np.empty((n_use, n_frags_kept), dtype=np.float64)
@@ -1110,7 +1162,7 @@ def compute_fragment_correlations(
         n_frags_final = int(keep_cols.sum())
         out[row, 1] = float(n_frags_final)
         if n_frags_final < 2:
-            continue
+            return
 
         sub_matrix = np.ascontiguousarray(matrix[:, keep_cols])
         _pairwise_corr_and_features_numba(sub_matrix, feat_scratch)
@@ -1171,7 +1223,7 @@ def compute_fragment_correlations(
                 _band_scans = np.ascontiguousarray(use_scans[_same_band])
                 _n_band = int(_band_scans.shape[0])
                 if _n_band == 0:
-                    continue
+                    return
                 # queries[0] is the precursor so the kernel can produce both the
                 # pairwise block and the precursor-vs-fragment pair in one pass
                 # over the peaks.
@@ -1183,11 +1235,27 @@ def compute_fragment_correlations(
                     _kernel_pairwise_numba(
                         peaks_mz, peaks_int, peaks_mob,
                         _band_scans, _n_band, _q, float(mz_tol), _sigma_im,
-                        im_feat_scratch, im_prec_scratch,
+                        band_lo, band_hi, im_feat_scratch, im_prec_scratch,
                     )
                     out[row, _IDX_IM_MEAN] = im_prec_scratch[0]
                     out[row, _IDX_IM_MAX] = im_prec_scratch[1]
                     out[row, _IDX_IM_PAIRWISE:_IDX_IM_PAIRWISE + _n_pairwise_feats] = \
                         im_feat_scratch
+
+
+    def _chunk(rows):
+        scr = _scratch()
+        for row in rows:
+            _row(row, *scr)
+        return len(rows)
+
+    if n_threads is None:
+        from src import config
+        n_threads = int(config.args.threads)
+    chunks = [range(i, min(i + _ROWS_PER_TASK, n_rows)) for i in range(0, n_rows, _ROWS_PER_TASK)]
+    with ThreadPoolExecutor(max_workers=max(1, n_threads)) as pool, \
+            tqdm.tqdm(total=n_rows) as bar:
+        for done in pool.map(_chunk, chunks):
+            bar.update(done)
 
     return pd.DataFrame(out, index=fdc.index, columns=columns)
