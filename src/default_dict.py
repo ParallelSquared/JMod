@@ -382,7 +382,7 @@ default_dict = {
         # --split_win: a precursor's window-above part is modelled when that window
         # isolates at least this fraction of its isotope envelope
         'flags': ('--split_min_frac',),
-        'default': 0.4,
+        'default': 0.1,
         'takes_value': True,
         'in_GUI': False,
         'type': 'float',
@@ -393,9 +393,10 @@ default_dict = {
     },
     'split_max_dt': {
         # --split_win: the window above is fitted jointly only when its scan was acquired
-        # within this many seconds of this one (methods may interleave windows)
+        # within this many seconds of this one.  Default 10 s = always the nearest scan of the
+        # window above, even when an interleaved method acquires it half a cycle later
         'flags': ('--split_max_dt',),
-        'default': 0.2,
+        'default': 10.0,
         'takes_value': True,
         'in_GUI': False,
         'type': 'float',
