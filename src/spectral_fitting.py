@@ -2847,13 +2847,13 @@ def fit_to_lib2(dia_spec,
             _nt = len(ref_peaks_in_dia)
             _wi = np.asarray(window_idxs, dtype=np.int64)[np.asarray(ref_peaks_in_dia, dtype=np.int64)] if _nt else np.empty(0, np.int64)
             _ft = _me.features(_wi, rt_mz[_wi, 1], library, ms1_env, ms1_spectra, ms1_rt, prec_rt, ms1_tol, ms1_env_nb)
-            features = np.hstack([np.asarray(features, dtype=np.float64).reshape(_nt, -1), _ft])
+            features = np.hstack([_me.as_2d(features, _nt), _ft])
             if decoy:
                 _nd = len(decoy_peaks_in_dia)
                 _di = np.asarray(decoy_window_idxs, dtype=np.int64)[np.asarray(decoy_peaks_in_dia, dtype=np.int64)] if _nd else np.empty(0, np.int64)
                 _fd = _me.features(_di, np.asarray(decoy_mz)[np.asarray(decoy_peaks_in_dia, dtype=np.int64)] if _nd else np.zeros(0),
                                    library, ms1_env, ms1_spectra, ms1_rt, prec_rt, ms1_tol, ms1_env_nb)
-                decoy_features = np.hstack([np.asarray(decoy_features, dtype=np.float64).reshape(_nd, -1), _fd])
+                decoy_features = np.hstack([_me.as_2d(decoy_features, _nd), _fd])
 
         ####################################
 

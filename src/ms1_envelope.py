@@ -145,6 +145,14 @@ def _features(pmz, pz, env, scan_mz, scan_int, scan_off, centre, tol, out):
         out[i, 6] = best_li
 
 
+def as_2d(a, n, n_base=28):
+    """get_features output as an (n, n_base) float array (it can come back empty and 1-D)."""
+    a = np.asarray(a, dtype=np.float64)
+    if a.size == 0:
+        return np.zeros((n, n_base))
+    return a.reshape(n, -1)
+
+
 def features(lib_idx, pmz, library, env, ms1_spectra, ms1_rt, prec_rt, tol, n_nb):
     """Feature matrix (len(lib_idx), len(FEATURES)) for candidates at library indices lib_idx,
     precursor m/z pmz (calibrated, decoy offset applied), for the MS2 scan at prec_rt."""
