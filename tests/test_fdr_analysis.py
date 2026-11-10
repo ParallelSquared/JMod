@@ -70,6 +70,45 @@ def test_score_precursors_minimal_fixed(tmp_path):
     assert len(out) == len(fdc)
 
 
+def test_score_precursors_scores_the_decoy_channel_but_never_trains_on_or_counts_it(monkeypatch):
+    import xgboost
+    np.random.seed(0)
+    n = 60
+    fdc = pd.DataFrame({
+        "is_decoy": [False, True] * (n // 2),
+        "is_decoy_channel": [False] * 40 + [True] * 20,
+        "stripped_seq": [f"SEQ{i % 30}" for i in range(n)],
+        "rt_error": np.random.uniform(0.0, 1.0, n),
+        "mz_error": np.random.uniform(0.0, 0.1, n),
+        "feature1": np.random.uniform(1.0, 5.0, n),
+    })
+    trained = []
+    real_train = xgboost.train
+    def spy(params, dtrain, **kwargs):
+        trained.append(dtrain.num_row())
+        assert "is_decoy_channel" not in dtrain.feature_names
+        return real_train(params, dtrain, **kwargs)
+    monkeypatch.setattr("src.fdr_analysis.xgb.train", spy)
+
+    out = score_precursors(fdc, model_type="xg", target_decoy_ratio=1.0)
+
+    real = ~fdc["is_decoy_channel"].to_numpy()
+    # the first iteration's five folds train on each real row four times, never on the decoy channel
+    assert sum(trained[:5]) == 4 * real.sum()
+    assert all(sum(trained[i:i + 5]) <= 4 * real.sum() for i in (5, 10))
+    assert out["PredVal"].notna().all()                                      # scored
+    assert out.loc[~real, "Qvalue"].isna().all()                            # not counted
+    # the real rows' Qvalue counts them alone
+    sub = out.loc[real]
+    order = np.argsort(-sub["PredVal"].to_numpy(), kind="stable")
+    decoy = sub["is_decoy"].to_numpy()[order]
+    with np.errstate(divide="ignore"):
+        q_ordered = np.minimum.accumulate(((1 + np.cumsum(decoy)) / np.cumsum(~decoy))[::-1])[::-1]
+    expected = np.empty(order.size)
+    expected[order] = q_ordered
+    assert np.allclose(sub["Qvalue"].to_numpy(), expected)
+
+
 def test_add_median_based_features_basic():
     # minimal dummy dataframe
     df = pd.DataFrame({
@@ -176,7 +215,40 @@ def test_untag_prec_qvalues_rank_each_plex_set_by_its_best_channel():
     })
     q = untag_prec_qvalues(fdx, target_decoy_ratio=1.0)
     assert q.tolist() == pytest.approx([0.5, 0.5, 0.5, 0.5, 2 / 3, 2 / 3, 2 / 3, 2 / 3])
-        
+
+
+def test_untag_prec_qvalues_leave_out_the_decoy_channel():
+    # P1's best is its decoy channel (0.95), so it ranks by its real 0.4; P2 is
+    # seen only in the decoy channel.  Ranked: P3 0.9, D1 0.6, P1 0.4 -> 1/1, 2/1, 2/2
+    fdx = pd.DataFrame({
+        "file_name": ["f"] * 6,
+        "untag_prec": ["P1_2", "P1_2", "P2_2", "P3_2", "D1_2", "D1_2"],
+        "is_decoy": [False, False, False, False, True, True],
+        "is_decoy_channel": [False, True, True, False, False, True],
+        "PredVal": [0.4, 0.95, 0.99, 0.9, 0.6, 0.97],
+    })
+    q = untag_prec_qvalues(fdx, target_decoy_ratio=1.0)
+    assert q.iloc[[0, 1, 3, 4, 5]].tolist() == pytest.approx([1.0, 1.0, 1.0, 1.0, 1.0])
+    assert np.isnan(q.iloc[2])
+
+
+def test_id_counts_and_summary_leave_out_the_decoy_channel(monkeypatch, tmp_path):
+    from src import config
+    monkeypatch.setattr(config.args, "plexDIA", True)
+    df = pd.DataFrame({
+        "file_name": ["A"] * 4, "channel": [0, 0, 8, 8], "silac_channel": [0] * 4,
+        "Qvalue": [0.001, 0.002, np.nan, np.nan], "BestChannel_Qvalue": [0.001, 0.002, 0.001, 0.002],
+        "PredVal": [0.9, 0.8, 0.95, 0.85], "is_decoy": [False] * 4,
+        "is_decoy_channel": [False, False, True, True],
+        "protein": ["P1", "P2", "P1", "P2"], "untag_prec": ["p1", "p2", "p1", "p2"],
+    })
+    compute_protein_FDR(df, results_folder=str(tmp_path), target_decoy_ratio=1.0)
+    summary = (tmp_path / "Summary.txt").read_text()
+    # the precursors at Qvalue and at BestChannel_Qvalue (too few proteins for a protein FDR)
+    assert summary.count("All Channels: 2") == 2
+    rows = [line.split() for line in summary.splitlines() if line.split()[:1] == ["A"]]
+    assert rows and {row[1] for row in rows} == {"0"}                         # no channel 8
+
         
 def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
     fake_args = types.SimpleNamespace(plexDIA=False)
