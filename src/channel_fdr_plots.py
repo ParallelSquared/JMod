@@ -13,6 +13,7 @@ on its own, on any written feature table, making all of them:
 
     python -m src.channel_fdr_plots <run>/channel_fdr/channel_features.parquet [KR]
 """
+import multiprocessing
 import os
 import sys
 
@@ -38,6 +39,10 @@ SPLITS = ("all", "KR")
 # fractions count every value
 CLIP_PCT = 99.5
 DPI = 120
+# An ECDF panel's size, and the figure's margins (left, right, bottom, top, and
+# between the panels), in inches
+ECDF_PANEL_SIZE = (8.0, 5.0)
+ECDF_MARGINS = (0.75, 0.25, 0.65, 0.75, 0.85)
 
 
 def feature_columns(features):
@@ -95,7 +100,10 @@ def ks_distance(a, b):
 
 def _legend(ax, groups):
     """The legend, titled with the KS distance between the real channels pooled
-    and the decoy channel."""
+    and the decoy channel; a note instead in a panel with nothing drawn."""
+    if not any(v.size for _, _, v, _ in groups):
+        ax.text(0.5, 0.5, "no values", transform=ax.transAxes, ha="center", va="center", color="grey")
+        return
     real = [v for _, decoy, v, _ in groups if not decoy]
     decoy = [v for _, is_decoy, v, _ in groups if is_decoy]
     ks = ks_distance(np.concatenate(real) if real else np.zeros(0),
@@ -126,9 +134,21 @@ def _draw_ecdf(ax, groups, x_range):
 
 def _ecdf_figure(column, panel_groups, x_range, path):
     """*column*'s ECDFs, one panel per entry of *panel_groups* [(title,
-    groups)], side by side on the same x axis."""
-    fig, axes = plt.subplots(1, len(panel_groups), figsize=(8 * len(panel_groups), 5), squeeze=False,
-                             sharex=True)
+    groups)], side by side on the same x axis, into *path*.  Returns None, or
+    why the file could not be written (the caller logs it: this runs in a
+    worker process).
+
+    The layout is fixed, not tight_layout's, which took half of the time: the
+    y axis is always 0 to 1, so its labels are always as wide, and the x
+    axis's, with any offset ("1e-6"), fit the bottom margin.
+    """
+    n = len(panel_groups)
+    width = ECDF_PANEL_SIZE[0] * n
+    left, right, bottom, top, gap = ECDF_MARGINS
+    fig, axes = plt.subplots(1, n, figsize=(width, ECDF_PANEL_SIZE[1]), squeeze=False, sharex=True)
+    fig.subplots_adjust(left=left / width, right=1 - right / width, bottom=bottom / ECDF_PANEL_SIZE[1],
+                        top=1 - top / ECDF_PANEL_SIZE[1],
+                        wspace=gap * n / (width - left - right - gap * (n - 1)))
     for ax, (title, groups) in zip(axes[0], panel_groups):
         _draw_ecdf(ax, groups, x_range)
         ax.set_xlabel(column)
@@ -136,8 +156,17 @@ def _ecdf_figure(column, panel_groups, x_range, path):
             ax.set_title(title, fontsize=10)
         _legend(ax, groups)
     fig.suptitle(column)
-    fig.tight_layout()
-    _save(fig, path)
+    try:
+        fig.savefig(path, dpi=DPI)
+        return None
+    except OSError as error:
+        return f"{path} ({error})"
+    finally:
+        plt.close(fig)
+
+
+def _ecdf_job(job):
+    return _ecdf_figure(*job)
 
 
 def _split(split):
@@ -149,11 +178,13 @@ def _split(split):
     return known
 
 
-def plot_feature_ecdfs(features, folder, split="all"):
+def plot_feature_ecdfs(features, folder, split="all", workers=1):
     """An ECDF of every feature of *features* (the table run_channel_fdr
     writes), into *folder*/ECDF.  *split*: "all", or "KR" for the K- and
     R-ending peptides as two panels.  A feature with no value in any panel is
-    skipped.  Returns the number of features plotted."""
+    skipped.  With *workers* > 1 the figures are drawn and saved in that many
+    processes (the saving is most of the time).  Returns the number of
+    features plotted."""
     split = _split(split)
     if split is None:
         return 0
@@ -165,20 +196,28 @@ def plot_feature_ecdfs(features, folder, split="all"):
         if n_other:
             logger.info(f"Channel feature plots: {n_other} precursor-channels ending in neither K nor R "
                         f"are in neither panel")
-    empty = []
+    jobs, empty = [], []
     for column in feature_columns(features):
         panel_groups = [(title, _by_channel(rows, column)) for title, rows in parts]
         values = [v for _, groups in panel_groups for _, _, v, _ in groups if v.size]
-        if not values:
+        if values:
+            jobs.append((column, panel_groups, _range(np.concatenate(values)),
+                         os.path.join(ecdf_folder, f"{column}.png")))
+        else:
             empty.append(column)
-            continue
-        _ecdf_figure(column, panel_groups, _range(np.concatenate(values)),
-                     os.path.join(ecdf_folder, f"{column}.png"))
+    workers = max(1, min(workers, os.cpu_count() or 1, len(jobs)))
+    if workers == 1:
+        errors = [_ecdf_job(job) for job in jobs]
+    else:
+        with multiprocessing.get_context("spawn").Pool(workers) as pool:
+            errors = pool.map(_ecdf_job, jobs)
+    for error in filter(None, errors):
+        logger.warning(f"Channel FDR: could not write {error}")      # e.g. open in a viewer
     if empty:
         logger.info(f"Channel feature plots: no values to plot for {', '.join(empty)}")
-    n = len(feature_columns(features)) - len(empty)
-    logger.info(f"Channel feature ECDFs ({split}) for {n} features written to {os.path.abspath(ecdf_folder)}")
-    return n
+    logger.info(f"Channel feature ECDFs ({split}) for {len(jobs)} features written to "
+                f"{os.path.abspath(ecdf_folder)}")
+    return len(jobs)
 
 
 IMPORTANCE_PLOT = "feature_importance.png"
@@ -352,17 +391,19 @@ def plot_ids_retained(features, folder, split="all", fdr_threshold=0.01):
     _save(fig, os.path.join(folder, RETAINED_PLOT))
 
 
-def plot_channel_fdr(features, folder, importance=None, split="all", fdr_threshold=0.01, ecdfs=True):
+def plot_channel_fdr(features, folder, importance=None, split="all", fdr_threshold=0.01, ecdfs=True,
+                     workers=1):
     """The channel-FDR plots of a run into *folder*: the best channel by
     PredVal, IDs vs Channel_Qvalue, the IDs it retains at *fdr_threshold*, the
-    feature importance if there is one, and with *ecdfs* each feature's ECDF.
-    *split*: "all", or "KR" for the K- and R-ending peptides as two panels (not
-    the feature importance, which is one model's)."""
+    feature importance if there is one, and with *ecdfs* each feature's ECDF,
+    drawn in *workers* processes.  *split*: "all", or "KR" for the K- and
+    R-ending peptides as two panels (not the feature importance, which is one
+    model's)."""
     split = _split(split)
     if split is None:
         return
     if ecdfs:
-        plot_feature_ecdfs(features, folder, split=split)
+        plot_feature_ecdfs(features, folder, split=split, workers=workers)
     plot_best_channel(features, folder, split=split)
     plot_ids_vs_channel_qvalue(features, folder, split=split, fdr_threshold=fdr_threshold)
     plot_ids_retained(features, folder, split=split, fdr_threshold=fdr_threshold)
@@ -377,4 +418,4 @@ if __name__ == "__main__":
     folder = os.path.dirname(os.path.abspath(parquet))
     # with the fit's feature importance, if it was written beside the table
     plot_channel_fdr(pl.read_parquet(parquet), folder, importance=read_feature_importance(folder),
-                     split=_ARGS[1] if len(_ARGS) == 2 else "all")
+                     split=_ARGS[1] if len(_ARGS) == 2 else "all", workers=os.cpu_count() or 1)

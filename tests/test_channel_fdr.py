@@ -645,6 +645,16 @@ class TestPlots:
         assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == ["cosine_chan.png",
                                                                           "n_chan_frags.png"]
 
+    def test_in_worker_processes(self, tmp_path):
+        k, r = (_AMINO_ACIDS.index(aa) for aa in "KR")
+        features = pl.DataFrame({
+            "channel": [0.0, 20.0, 0.0, 20.0], "is_decoy_channel": [False, True, False, True],
+            "last_aa_code": [k, k, r, r], "cosine_chan": [0.9, 0.2, 0.8, 0.1],
+            "shared_frag_error": [None, None, 1e-6, 2e-6]})          # nothing in the K panel
+        assert plot_feature_ecdfs(features, str(tmp_path), split="KR", workers=2) == 3
+        assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == [
+            "cosine_chan.png", "last_aa_code.png", "shared_frag_error.png"]
+
     def test_split_by_the_c_terminal_residue(self, tmp_path):
         k, r, a = (_AMINO_ACIDS.index(aa) for aa in "KRA")
         features = pl.DataFrame({
@@ -668,7 +678,7 @@ class TestPlots:
         import src.channel_fdr_plots
         calls = []
         monkeypatch.setattr(src.channel_fdr_plots, "plot_channel_fdr",
-                            lambda features, folder, importance, split, fdr_threshold, ecdfs:
+                            lambda features, folder, importance, split, fdr_threshold, ecdfs, workers:
                             calls.append((features.height, folder, importance, split, fdr_threshold,
                                           ecdfs)))
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()

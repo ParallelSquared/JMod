@@ -1440,7 +1440,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     from src.channel_fdr import channel_qvalues, run_channel_fdr
     channel_features = run_channel_fdr(fdx_quant, fdc_list_cols, dc, spectra, library, mass_tag,
                                        results_folder, config.fdr_threshold,
-                                       plots=config.args.channel_fdr_plots)
+                                       plots=config.args.channel_fdr_plots, workers=config.args.threads)
     # Into every output; nothing is filtered by it.  Only with a decoy channel
     if channel_features is not None:
         fdx_quant["Channel_Qvalue"] = channel_qvalues(fdx_quant, channel_features)

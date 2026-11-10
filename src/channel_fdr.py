@@ -586,7 +586,7 @@ def model_columns(features):
 
 
 def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, results_folder, fdr_threshold,
-                    plots="off"):
+                    plots="off", workers=1):
     """The channel-level FDR for one run, into <results_folder>/channel_fdr/.
 
     Builds the channel feature table (build_channel_features), fits the model
@@ -597,7 +597,8 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
       - the best channel by PredVal, IDs vs Channel_Qvalue, the IDs retained
         at *fdr_threshold* and the feature importance
         (channel_fdr_plots.plot_channel_fdr)
-      - unless *plots* is "off", every column's ECDF too, and
+      - unless *plots* is "off", every column's ECDF too (in *workers*
+        processes), and
         with "KR" every plot but the importance split by the C-terminal
         residue
 
@@ -635,7 +636,7 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
         from src.channel_fdr_plots import plot_channel_fdr
         ecdfs = str(plots).lower() != "off"
         plot_channel_fdr(features, folder, importance=importance, split=plots if ecdfs else "all",
-                         fdr_threshold=fdr_threshold, ecdfs=ecdfs)
+                         fdr_threshold=fdr_threshold, ecdfs=ecdfs, workers=workers)
     return features
 
 
