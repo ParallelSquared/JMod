@@ -21,7 +21,8 @@ import pytest
 
 from src.utils.errors import JModError
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
-                               compute_protein_FDR, id_counts, id_table_lines, untag_prec_qvalues,
+                               compute_protein_FDR, id_counts, id_table_lines, target_decoy_qvalues,
+                               untag_prec_qvalues,
                                area, walk_to_local_max, gauss_r2_joint, ms1_quality)
 
 def test_score_model_minimal_fixed():
@@ -107,6 +108,27 @@ def test_score_precursors_scores_the_decoy_channel_but_never_trains_on_or_counts
     expected = np.empty(order.size)
     expected[order] = q_ordered
     assert np.allclose(sub["Qvalue"].to_numpy(), expected)
+
+
+def test_target_decoy_qvalues_is_jmods_estimator():
+    # ranked: T T D T D T -> (1 + decoys) / targets, then the minimum from below
+    score = np.array([6.0, 5.0, 4.0, 3.0, 2.0, 1.0])
+    is_decoy = np.array([False, False, True, False, True, False])
+    raw = np.array([1 / 1, 1 / 2, 2 / 2, 2 / 3, 3 / 3, 3 / 4])
+    assert target_decoy_qvalues(score, is_decoy) == pytest.approx(np.minimum.accumulate(raw[::-1])[::-1])
+    # by score: T(3) D(2) T(1)
+    assert target_decoy_qvalues(np.array([1.0, 3.0, 2.0]), np.array([False, False, True]),
+                                target_decoy_ratio=2.0) == pytest.approx([2.0, 2.0, 2.0])
+
+
+def test_target_decoy_qvalues_of_a_subset():
+    score = np.array([6.0, 5.0, 4.0, 3.0])
+    is_decoy = np.array([False, True, False, False])
+    rows = np.array([True, False, True, True])            # the decoy left out
+    q = target_decoy_qvalues(score, is_decoy, rows=rows)
+    # as the rows ranked alone: no decoy, so 1/1, 1/2, 1/3, the lowest from below
+    assert np.isnan(q[1]) and q[rows] == pytest.approx([1 / 3] * 3)
+    assert q[rows] == pytest.approx(target_decoy_qvalues(score[rows], is_decoy[rows]))
 
 
 def test_add_median_based_features_basic():

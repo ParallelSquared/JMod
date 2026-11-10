@@ -8,12 +8,12 @@ import pytest
 
 from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, FEATURE_IMPORTANCE_FILE, MIN_DECOYS,
                              build_channel_features, channel_qvalues, channel_specific_mask, fit_channel_fdr,
-                             model_columns, model_matrix, per_channel_pep, per_channel_qvalues, qvalues,
+                             model_columns, model_matrix, per_channel_pep, per_channel_qvalues,
                              first_of_each, frag_error_features, longest_consecutive_scans, ms1_features, ms2_cycles, null_placeholders,
                              read_feature_importance, run_channel_fdr, tag_sites, write_feature_importance, _CARRIED_FEATURES,
                              _row_features)
 from src.channel_fdr_plots import BEST_CHANNEL_PLOT
-from src.fdr_analysis import estimate_pep
+from src.fdr_analysis import estimate_pep, target_decoy_qvalues
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.utils.frag_encoding import encode_frag_names
@@ -629,20 +629,7 @@ class TestWriteChannelFeatures:
         assert read_feature_importance(str(tmp_path / "elsewhere")) is None
 
 
-class TestQvalues:
-    def test_the_score_precursors_estimator(self):
-        # ranked: T T D T D T -> (1 + decoys) / targets, then the minimum from below
-        score = np.array([6.0, 5.0, 4.0, 3.0, 2.0, 1.0])
-        is_decoy = np.array([False, False, True, False, True, False])
-        raw = np.array([1 / 1, 1 / 2, 2 / 2, 2 / 3, 3 / 3, 3 / 4])
-        assert qvalues(score, is_decoy) == pytest.approx(np.minimum.accumulate(raw[::-1])[::-1])
-
-    def test_ratio_and_order(self):
-        score = np.array([1.0, 3.0, 2.0])
-        is_decoy = np.array([False, False, True])
-        # by score: T(3) D(2) T(1)
-        assert qvalues(score, is_decoy, ratio=2.0) == pytest.approx([2.0, 2.0, 2.0])
-
+class TestPerChannelQvalues:
     def test_each_channel_against_the_whole_decoy_channel(self):
         channel = np.array([0.0, 0.0, 4.0, 4.0, 20.0, 20.0])
         is_decoy = channel == 20
@@ -650,8 +637,8 @@ class TestQvalues:
         q = per_channel_qvalues(channel, score, is_decoy)
         assert np.isnan(q[is_decoy]).all()
         # channel 0 alone with the decoys: 9 T, 5 D, 2 D, 1 T
-        assert q[:2] == pytest.approx(qvalues(np.array([9.0, 1.0, 5.0, 2.0]),
-                                              np.array([False, False, True, True]))[:2])
+        assert q[:2] == pytest.approx(target_decoy_qvalues(np.array([9.0, 1.0, 5.0, 2.0]),
+                                                           np.array([False, False, True, True]))[:2])
         # channel 4 is not ranked against channel 0: 8 T, 7 T, 5 D, 2 D
         assert q[2:4] == pytest.approx([0.5, 0.5])
 

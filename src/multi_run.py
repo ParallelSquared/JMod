@@ -27,6 +27,7 @@ import polars as pl
 
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
+from src.fdr_analysis import target_decoy_qvalues
 from src.logger import logger
 from src.utils.parse_peptides import untag_sequences
 from src.utils.errors import JModError
@@ -250,7 +251,9 @@ def global_qvalues(df, key, target_decoy_ratio, qvalue_name):
     is_decoy with its best score, the run it came from (BestRun) and that run's
     channel (Best_channel and so on, one per channel column), the number of runs
     and of (run, channel) units it was scored in, and the q-value, named
-    *qvalue_name*.
+    *qvalue_name*: JMod's estimator (fdr_analysis.target_decoy_qvalues), with
+    tied scores ranked targets first, then by *key*, so the order never depends
+    on the runs' row order.
     """
     channel_columns = [c for c in _CHANNEL_COLUMNS if c in df.collect_schema().names()]
     # Ties go to the earliest run, then the lowest channel
@@ -269,36 +272,11 @@ def global_qvalues(df, key, target_decoy_ratio, qvalue_name):
         )
     )
 
-    global_qs = (
-        scores
-        .sort("MaxPredVal", descending=True)
-        .with_columns(
-            (~pl.col("is_decoy")).cast(pl.Int64).cum_sum().alias("n_target"),
-            pl.col("is_decoy").cast(pl.Int64).cum_sum().alias("n_decoy"),
-        )
-        # Tied scores are a single threshold step: give every key in a tie the
-        # counts from its end, so the q-value doesn't depend on row order
-        .with_columns(
-            pl.col("n_target").max().over("MaxPredVal"),
-            pl.col("n_decoy").max().over("MaxPredVal"),
-        )
-    )
-
-    return (
-        global_qs
-        .with_columns(
-            # As the per-run q-value (fdr_analysis.score_precursors)
-            ((1 + pl.col("n_decoy")) / pl.col("n_target") * target_decoy_ratio).alias("FDR")
-        )
-        .with_columns(
-            pl.col("FDR")
-            .reverse()
-            .cum_min()
-            .reverse()
-            .alias(qvalue_name)
-        )
-        .collect()
-    )
+    # group_by's order is arbitrary: fixed first, as the estimator's ties keep the row order
+    scores = scores.sort("is_decoy", key).collect()
+    qvalues = target_decoy_qvalues(scores["MaxPredVal"].to_numpy(), scores["is_decoy"].to_numpy(),
+                                   target_decoy_ratio)
+    return scores.with_columns(pl.Series(qvalue_name, qvalues))
 
 
 def precursors_per_run(df, units, fdr_threshold):

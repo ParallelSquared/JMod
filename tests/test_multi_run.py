@@ -62,11 +62,12 @@ class TestGlobalQvalue:
         [("AAA", False, 0.9, 0.001), ("DDD", True, 0.9, 0.5)],
         [("DDD", True, 0.9, 0.5), ("AAA", False, 0.9, 0.001)],
     ], ids=["target_first", "decoy_first"])
-    def test_tied_scores_share_a_q_value(self, tmp_path, rows):
-        # One target and one decoy at the same score: (1 + 1) / 1, whichever comes first
+    def test_tied_scores_rank_targets_first_whatever_the_row_order(self, tmp_path, rows):
+        # One target and one decoy at the same score, as the per-run q-value ranks
+        # a spectrum's target before its decoy: (1 + 0) / 1, then (1 + 1) / 1
         _, precursors, _ = collect_results({1: _write_run(tmp_path, "a", rows)},
                                         target_decoy_ratio=1.0, fdr_threshold=0.01)
-        assert _global_q(precursors) == {"AAA_2": 2.0, "DDD_2": 2.0}
+        assert _global_q(precursors) == {"AAA_2": 1.0, "DDD_2": 2.0}
 
 
 class TestGlobalProteinQvalue:

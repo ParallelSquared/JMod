@@ -885,12 +885,18 @@ class score_model():
         return np.concatenate(self.predictions)[rev_order]
 
 
-def subset_qvalues(scores, is_decoy, target_decoy_ratio, rows):
-    """Target-decoy q-values of the *rows* (a mask) alone, ranked by *scores*:
+def target_decoy_qvalues(scores, is_decoy, target_decoy_ratio=1.0, rows=None):
+    """JMod's target-decoy q-values, ranked by *scores* (highest first):
     (1 + decoys at or above) / (targets at or above) x *target_decoy_ratio*,
-    monotonized.  NaN for every other row."""
+    monotonized, so each is the lowest at or below it.  Ties keep the order of
+    the rows (a stable sort).  Every q-value JMod reports is this: Qvalue,
+    untag_prec_Qvalue, Protein_Qvalue, Channel_Qvalue and the experiment's
+    global q-values (multi_run.global_qvalues).
+
+    With *rows* (a mask), of those rows alone, NaN for every other.
+    """
     q = np.full(len(scores), np.nan)
-    idx = np.flatnonzero(rows)
+    idx = np.arange(len(scores)) if rows is None else np.flatnonzero(rows)
     order = idx[np.argsort(-np.asarray(scores)[idx], kind="stable")]
     decoy = np.asarray(is_decoy, bool)[order]
     with np.errstate(divide="ignore"):   # no target yet at the very top: inf, monotonized away
@@ -1007,7 +1013,7 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
             pred = sc_model.run_model_filtered(X, y, keep_mask, y_filtered, groups=fdc.stripped_seq)
 
         # Compute q-values for this iteration
-        fdc_qvalues = subset_qvalues(pred, is_decoy, target_decoy_ratio, real)
+        fdc_qvalues = target_decoy_qvalues(pred, is_decoy, target_decoy_ratio, real)
 
     model_name = model_type
 
@@ -1017,7 +1023,7 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
         output = pred
 
     ## Use the scores to estimate the #IDs as 1% FDR
-    qvalues = subset_qvalues(output, is_decoy, target_decoy_ratio, real)
+    qvalues = target_decoy_qvalues(output, is_decoy, target_decoy_ratio, real)
     # the score at 1% FDR, for the plots
     real_order = np.flatnonzero(real)[np.argsort(-output[real], kind='stable')]
     T = output[real_order[min(len(real_order)-1, np.searchsorted(qvalues[real_order], 0.01))]]
@@ -1218,7 +1224,7 @@ def untag_prec_qvalues(fdx, target_decoy_ratio):
         predval = predval.where(~fdx["is_decoy_channel"].astype(bool))
     best = predval.groupby(group).max().to_numpy()                        # NaN: only the decoy channel
     is_decoy = fdx["is_decoy"].groupby(group).first().to_numpy().astype(bool)
-    q = subset_qvalues(best, is_decoy, target_decoy_ratio, ~np.isnan(best))
+    q = target_decoy_qvalues(best, is_decoy, target_decoy_ratio, ~np.isnan(best))
     return pd.Series(q[group], index=fdx.index)
 
 
@@ -1232,12 +1238,9 @@ def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
     df_seqchargeqvals["maxPredval"] = df_seqchargeqvals.groupby(["protein", "is_decoy"])["PredVal"].transform("max")
     df_seqchargeqvals = df_seqchargeqvals.drop_duplicates(subset=["protein", "is_decoy"]).reset_index(drop=True)
 
-    # Rank by descending maxPredval and compute accum_decoys & Protein_Qvalue
-    df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False, kind="stable").reset_index(drop=True)
-    df_seqchargeqvals["prot_rank"] = df_seqchargeqvals.index + 1  # Equivalent to row_number()
-    df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["is_decoy"].cumsum()
-    df_seqchargeqvals["Protein_Qvalue"] = (1 + df_seqchargeqvals["accum_decoys"]) / (~df_seqchargeqvals["is_decoy"]).cumsum() * target_decoy_ratio
-    df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["Protein_Qvalue"].iloc[::-1].cummin().iloc[::-1]  # Monotonize: q-value = min of downstream q-values
+    # Each protein, target and decoy apart, ranked by its best precursor
+    df_seqchargeqvals["Protein_Qvalue"] = target_decoy_qvalues(
+        df_seqchargeqvals["maxPredval"].to_numpy(), df_seqchargeqvals["is_decoy"].to_numpy(), target_decoy_ratio)
     
     # Filter for non-decoy proteins and select distinct protein values
     df_seqchargeqvals_distinct = (

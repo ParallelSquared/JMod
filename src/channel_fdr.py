@@ -617,27 +617,16 @@ GROUP_COLUMN = "untag_seq"
 _NAN_MODELS = ("xg", "rf")
 
 
-def qvalues(score, is_decoy, ratio=1.0):
-    """Target-decoy q-values, the estimator score_precursors uses for Qvalue:
-    (1 + decoys at or above) / (targets at or above) x *ratio*, made monotone."""
-    order = np.argsort(-score, kind="stable")
-    decoy = is_decoy[order]
-    with np.errstate(divide="ignore"):   # no target yet at the very top: inf, monotonized away
-        q = (1 + np.cumsum(decoy)) / np.cumsum(~decoy) * ratio
-    q = np.minimum.accumulate(q[::-1])[::-1]
-    out = np.empty(q.size)
-    out[order] = q
-    return out
-
-
 def per_channel_qvalues(channel, score, is_decoy, ratio=1.0):
-    """Each real channel's q-values against the whole decoy channel; NaN for the
-    decoy channel, which has none."""
+    """Each real channel's q-values against the whole decoy channel (JMod's
+    estimator, fdr_analysis.target_decoy_qvalues); NaN for the decoy channel,
+    which has none."""
+    from src.fdr_analysis import target_decoy_qvalues   # here, so the plots' worker processes need not load the models
     q = np.full(channel.size, np.nan)
     for ch in np.unique(channel[~is_decoy]):
-        rows = np.flatnonzero((channel == ch) | is_decoy)
-        in_channel = ~is_decoy[rows]
-        q[rows[in_channel]] = qvalues(score[rows], is_decoy[rows], ratio)[in_channel]
+        rows = (channel == ch) | is_decoy
+        in_channel = rows & ~is_decoy
+        q[in_channel] = target_decoy_qvalues(score, is_decoy, ratio, rows)[in_channel]
     return q
 
 
