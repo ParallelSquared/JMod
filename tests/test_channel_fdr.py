@@ -1,10 +1,13 @@
+import re
+
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 
 from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, build_channel_features, channel_specific_mask,
-                             first_of_each, tag_sites, write_channel_features, _row_features)
+                             first_of_each, frag_error_features, longest_consecutive_scans, ms1_features, ms2_cycles, null_placeholders,
+                             tag_sites, write_channel_features, _CARRIED_FEATURES, _row_features)
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.utils.frag_encoding import encode_frag_names
@@ -85,11 +88,23 @@ class TestRowFeatures:
         assert row["frac_shared_frags_matched"] == pytest.approx(1 / 1)
         assert row["frac_frags_matched"] == pytest.approx(2 / 3)
 
-    def test_intensity_sums_with_and_without_isotopes(self, row):
-        assert row["chan_frag_int_sum"] == pytest.approx(10.0)
-        assert row["shared_frag_int_sum"] == pytest.approx(26.0)        # y3 + its isotope
-        assert row["chan_frag_int_mono_sum"] == pytest.approx(10.0)
-        assert row["shared_frag_int_mono_sum"] == pytest.approx(20.0)
+    def test_no_intensities_only_fractions_of_them(self, row):
+        assert not [k for k in row if k.endswith("_sum")]
+
+    def test_median_intensity_fraction_is_per_fragment(self):
+        # three channel-specific b ions at 10 each, one shared y at 30: the sums
+        # split 30 / 30, the typical fragment 10 / 30; isotopes left out
+        codes = _codes("b2_1", "b3_1", "b4_1", "y3_1", "y3_1_iso1")
+        obs = np.array([10.0, 10.0, 10.0, 30.0, 500.0])
+        row = _row_features(codes, np.ones(5), codes, obs, 8, 0, 0)
+        assert row["chan_mono_intensity_fraction"] == pytest.approx(30 / 60)
+        assert row["chan_median_intensity_fraction"] == pytest.approx(10 / 40)
+
+    def test_median_intensity_fraction_needs_both_classes(self, row):
+        assert row["chan_median_intensity_fraction"] == pytest.approx(10 / 30)     # b2; y3
+        codes = _codes("b2_1", "y3_1")
+        nothing_shared = _row_features(codes, np.ones(2), codes[:1], np.array([5.0]), 8, 0, 0)
+        assert np.isnan(nothing_shared["chan_median_intensity_fraction"])
 
     def test_channel_specific_fractions(self, row):
         assert row["chan_frag_fraction"] == pytest.approx(1 / 2)               # b2 of b2, y3
@@ -128,6 +143,42 @@ class TestRowFeatures:
         assert row["cosine_all"] == pytest.approx(_cos([5, 5, 0, 0], [1, 1, 1, 1]))
 
 
+class TestFragErrorFeatures:
+    """PEPTIDER with nK: b ions are channel-specific, y ions shared.  Errors
+    measured from a run calibration of +2."""
+
+    def test_median_distance_from_the_calibration_each_side(self):
+        codes = _codes("b2_1", "b3_1", "b4_1", "y2_1", "y3_1")
+        errors = np.array([-6.0, 10.0, 2.0, 3.0, 1.0])
+        f = frag_error_features(codes, errors, 8, 0, 0, centre=2.0)
+        assert f["chan_frag_error"] == pytest.approx(8.0)       # |−8|, |8|, |0|
+        assert f["shared_frag_error"] == pytest.approx(1.0)     # |1|, |−1|
+        assert f["chan_minus_shared_frag_error"] == pytest.approx(7.0)
+
+    def test_monoisotopic_only(self):
+        codes = _codes("b2_1", "b2_1_iso1", "y2_1")
+        f = frag_error_features(codes, np.array([2.0, 50.0, 2.0]), 8, 0, 0, centre=2.0)
+        assert f["chan_frag_error"] == 0.0
+
+    def test_a_side_with_nothing_matched_is_null(self):
+        f = frag_error_features(_codes("y2_1", "y3_1"), np.array([1.0, 3.0]), 8, 0, 0, centre=2.0)
+        assert np.isnan(f["chan_frag_error"]) and np.isnan(f["chan_minus_shared_frag_error"])
+        assert f["shared_frag_error"] == pytest.approx(1.0)
+
+    def test_in_the_table_centred_on_the_whole_runs_errors(self):
+        # the calibration is the median over every row of the list columns: 4.
+        # A third row, not scored, still counts towards it
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001),
+                    ("(PSMtag_5plex-20)PEPTIDER", 20, False, True, 0.001)])
+        list_cols = _list_cols([(["b2_1", "y3_1"], [1.0, 1.0], [4.0, 5.0]),
+                                (["b2_1", "y3_1"], [1.0, 1.0], [12.0, 4.0]),
+                                (["y2_1"], [1.0], [3.0])])
+        features = _features(ids, list_cols, _store(), available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
+        assert features["chan_frag_error"].to_list() == [0.0, 8.0]
+        assert features["shared_frag_error"].to_list() == [1.0, 0.0]
+        assert features["chan_minus_shared_frag_error"].to_list() == [-1.0, 8.0]
+
+
 def _store():
     """Library entries for PEPTIDER in channels 0 and 20 (the decoy channel)."""
     frags = {"b2_1": (227.1, 0.5), "b3_1": (324.1, 0.2), "y3_1": (400.2, 1.0)}
@@ -135,27 +186,77 @@ def _store():
     return SpectrumLibraryStore.from_dict({(s, 2.0): _entry(s, "PEPTIDER", 500.0, 2, frags) for s in seqs})
 
 
+def _last_aa(seq):
+    """JMod's last_aa: the last letter of the stripped sequence."""
+    return re.sub(r"\(.*?\)", "", seq)[-1]
+
+
 def _ids(rows):
-    """*rows*: (seq, channel, is_decoy, is_decoy_channel, BestChannel_Qvalue)."""
+    """*rows*: (seq, channel, is_decoy, is_decoy_channel, BestChannel_Qvalue).
+    Every carried feature is 1 (a real value for each of them) unless a test
+    sets it; the plex set has two channels and the precursor three scans."""
     return pd.DataFrame({
-        "file_name": "f", "seq": [r[0] for r in rows], "z": 2,
+        **{c: 1.0 for c in _CARRIED_FEATURES},
+        "n_scans": 3, "n_corr_frags": 5, "channels_matched": 2, "plexfitMS1": 4.0,
+        "last_aa": [_last_aa(r[0]) for r in rows], "file_name": "f", "seq": [r[0] for r in rows], "z": 2,
         "untag_seq": "PEPTIDER", "untag_prec": "PEPTIDER_2",
         "channel": [r[1] for r in rows], "is_decoy": [r[2] for r in rows],
         "is_decoy_channel": [r[3] for r in rows], "Qvalue": 0.001,
-        "BestChannel_Qvalue": [r[4] for r in rows], "PredVal": 0.9,
+        "BestChannel_Qvalue": [r[4] for r in rows], "PredVal": 0.9, "rt": 61.5,
+        # ms1_quant's outputs: one MS1 fit window of five scans, a peak in the middle
+        "plexfittrace_all": "0;1;4;1;0", "plexfittrace_ps_all": "0.9;0.9;0.9;0.9;0.9",
+        "plexfittrace_spec_all": "10;31;52;73;94", "ms1_apex_scan": 52, "Ms1_spec_id": 52,
+        "gauss_r2_joint": 0.8,
         "__fdc_idx": list(range(len(rows))),
     })
 
 
 def _list_cols(matched):
-    """*matched*: per __fdc_idx, (fragment names, observed intensities), written in
-    reverse so a join that loses the order would put them on the wrong rows."""
+    """*matched*: per __fdc_idx, (fragment names, observed intensities[, mass
+    errors, 0 if not given]), written in reverse so a join that loses the order
+    would put them on the wrong rows."""
     rows = list(enumerate(matched))[::-1]
     return pl.DataFrame({"__fdc_idx": [i for i, _ in rows],
-                         "frag_names": [encode_frag_names(names).tolist() for _, (names, _) in rows],
-                         "obs_int": [list(obs) for _, (_, obs) in rows]},
+                         "frag_names": [encode_frag_names(m[0]).tolist() for _, m in rows],
+                         "obs_int": [list(m[1]) for _, m in rows],
+                         "frag_errors": [list(m[2]) if len(m) > 2 else [0.0] * len(m[0]) for _, m in rows]},
                         schema={"__fdc_idx": pl.UInt32, "frag_names": pl.List(pl.Int32),
-                                "obs_int": pl.List(pl.Float64)})
+                                "obs_int": pl.List(pl.Float64), "frag_errors": pl.List(pl.Float64)})
+
+
+# The run's MS2 scans: two isolation windows, A and B, each visited once a
+# cycle for five cycles (MS1 scans in between, which do not matter).  PEPTIDER
+# in channel 0 was fitted in A in cycles 0, 1, 2 and 4, and in B in cycle 1 (its
+# m/z is in both); in channel 20, in A in cycle 3 only
+WINDOW_A, WINDOW_B = (500.0, 520.0), (518.0, 538.0)
+MS2_SCANS = [(101 + 22 * k + w, window) for k in range(5) for w, window in enumerate((WINDOW_A, WINDOW_B))]
+
+
+def _scan_cycles():
+    return ms2_cycles([scan for scan, _ in MS2_SCANS], [window for _, window in MS2_SCANS])
+
+
+def _dc():
+    rows = [("(PSMtag_5plex-0)PEPTIDER", 101), ("(PSMtag_5plex-0)PEPTIDER", 123),
+            ("(PSMtag_5plex-0)PEPTIDER", 124), ("(PSMtag_5plex-0)PEPTIDER", 145),
+            ("(PSMtag_5plex-0)PEPTIDER", 189), ("(PSMtag_5plex-20)PEPTIDER", 167)]
+    return pl.DataFrame({"seq": [s for s, _ in rows], "z": [2.0] * len(rows),
+                         "coeff": [1.0] * len(rows), "spec_id": [m for _, m in rows]},
+                        schema_overrides={"z": pl.Float32})
+
+
+class _Spectra:
+    ms2scans = [type("Spectrum", (), {"scan_num": scan, "ms1window": window})()
+                for scan, window in MS2_SCANS]
+
+
+def _features(ids, list_cols, library, mass_tag, fdr_threshold):
+    return build_channel_features(ids, list_cols, _dc(), _scan_cycles(), library, mass_tag, fdr_threshold)
+
+
+def _write(ids, list_cols, library, mass_tag, results_folder, fdr_threshold):
+    return write_channel_features(ids, list_cols, _dc(), _Spectra(), library, mass_tag, results_folder,
+                                  fdr_threshold)
 
 
 class TestBuildChannelFeatures:
@@ -167,7 +268,7 @@ class TestBuildChannelFeatures:
                     ("Decoy_(PSMtag_5plex-0)PEPTIDER", 0, True, False, 0.001),   # library decoy: not
                     ("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.5)])         # failed the FDR: not
         matched = [(["b2_1"], [1.0])] * 4
-        features = build_channel_features(ids, _list_cols(matched), _store(), self.tag, 0.01)
+        features = _features(ids, _list_cols(matched), _store(), self.tag, 0.01)
         assert features.select("channel", "is_decoy_channel").rows() == [(0, False), (20, True)]
 
     def test_each_row_keeps_its_own_fragments(self):
@@ -175,14 +276,14 @@ class TestBuildChannelFeatures:
                     ("(PSMtag_5plex-20)PEPTIDER", 20, False, True, 0.001)])
         matched = [(["b2_1", "b3_1", "y3_1"], [1.0, 1.0, 1.0]),    # every fragment
                    (["y3_1"], [1.0])]                               # the shared one only
-        features = build_channel_features(ids, _list_cols(matched), _store(), self.tag, 0.01)
+        features = _features(ids, _list_cols(matched), _store(), self.tag, 0.01)
         assert features["n_chan_frags"].to_list() == [2, 0]
         assert features["n_shared_frags"].to_list() == [1, 1]
 
     def test_a_precursor_missing_from_the_library_is_null_throughout(self):
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001),
                     ("(PSMtag_5plex-0)NOTINLIB", 0, False, False, 0.001)])
-        features = build_channel_features(ids, _list_cols([(["b2_1"], [1.0])] * 2),
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])] * 2),
                                           _store(), self.tag, 0.01)
         assert features["n_lib_chan_frags"].to_list() == [2, None]
         assert features["cosine_all"].is_null()[1] or np.isnan(features["cosine_all"][1])
@@ -197,7 +298,7 @@ class TestBuildChannelFeatures:
     ])
     def test_peptide_context(self, seq, context):
         ids = _ids([(seq, 0, False, False, 0.001)])
-        features = build_channel_features(ids, _list_cols([(["b2_1"], [1.0])]), _store(), self.tag, 0.01)
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])]), _store(), self.tag, 0.01)
         assert features.select("n_tags", "pep_len", "first_tag_from_n", "last_tag_from_c").row(0) == context
 
     def test_untagged_precursors_are_not_scored(self):
@@ -205,7 +306,7 @@ class TestBuildChannelFeatures:
         channels to tell apart."""
         ids = _ids([("PEPK(K_6C13-0)TIDE", 0, False, False, 0.001),
                     ("PEPTIDER", float("nan"), False, False, 0.001)])
-        features = build_channel_features(ids, _list_cols([(["b2_1"], [1.0])] * 2), _store(),
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])] * 2), _store(),
                                           available_tags["K_6C13"].with_decoy_channel(), 0.01)
         assert features["seq"].to_list() == ["PEPK(K_6C13-0)TIDE"]
 
@@ -224,7 +325,7 @@ class TestTaggedOtherThanByTheRules:
         frags = {"b2_1": (227.1, 0.5), "b3_1": (324.1, 0.2), "y2_1": (300.2, 1.0), "y3_1": (401.2, 0.8)}
         store = SpectrumLibraryStore.from_dict({(self.seq, 2.0): _entry(self.seq, "PEPTIDEK", 500.0, 2, frags)})
         ids = _ids([(self.seq, 0, False, False, 0.001)])
-        return build_channel_features(ids, _list_cols([(["b2_1", "y2_1"], [4.0, 6.0])]), store,
+        return _features(ids, _list_cols([(["b2_1", "y2_1"], [4.0, 6.0])]), store,
                                       available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01).row(0, named=True)
 
     def test_the_split_follows_the_sequence(self, features):
@@ -239,6 +340,193 @@ class TestTaggedOtherThanByTheRules:
         assert features["n_tags"] == 1
         assert features["first_tag_from_n"] == 7      # b1..b7 tag-free
         assert features["last_tag_from_c"] == 0
+
+
+class TestMS1Features:
+    """A channel's MS1 plex-fit coefficients across its set's fit window.  The
+    symmetric trace 0, 1, 4, 1, 0 has its weighted mean at cycle 2 and weighted
+    variance (1 + 0 + 1) / 6 = 1/3."""
+
+    peak, specs = "0;1;4;1;0", "10;31;52;73;94"
+
+    def test_gaussian_moments_and_spread(self):
+        f = ms1_features(self.peak, "0.9;0.9;0.9;0.9;0.9", self.specs, 52, 31)
+        assert f["ms1_trace_nonzero"] == 1.0
+        assert f["plexfit_sigma"] == pytest.approx(np.sqrt(1 / 3))
+        assert f["plexfit_trace_cv"] == pytest.approx(np.sqrt(2.16) / 1.2)   # population std / mean
+        assert f["ms1_ms2_apex_delta"] == 52 - 31
+
+    def test_a_peak_fits_a_gaussian_better_than_noise(self):
+        peak = ms1_features("0.1;1;5;9;5;1;0.1", "1;1;1;1;1;1;1", "1;2;3;4;5;6;7", 4, 4)
+        noise = ms1_features("5;0;6;0;5;0;6", "1;1;1;1;1;1;1", "1;2;3;4;5;6;7", 4, 4)
+        assert peak["plexfit_gauss_r2"] > 0.95
+        assert noise["plexfit_gauss_r2"] < 0.2
+
+    def test_fit_quality_at_the_apex_and_weighted_by_the_coefficients(self):
+        # quality per scan 0.1 0.2 0.9 0.3 nan: the apex is scan 2; the weights are
+        # the coefficients, the unknown fifth scan left out
+        f = ms1_features(self.peak, "0.1;0.2;0.9;0.3;nan", self.specs, 52, 52)
+        assert f["plexfit_ps_at_apex"] == pytest.approx(0.9)
+        assert f["plexfit_ps_weighted"] == pytest.approx((1 * 0.2 + 4 * 0.9 + 1 * 0.3) / 6)
+
+    def test_no_fit_window_is_null_throughout(self):
+        """ms1_quant merges its outputs with fillna(0): a 0 is no window, not a
+        flat trace, and 0 - Ms1_spec_id is not an apex delta."""
+        f = ms1_features(0, 0, 0, 0, 52)
+        assert all(np.isnan(v) for v in f.values())
+
+    def test_too_few_points_or_a_flat_trace(self):
+        short = ms1_features("0;4;0", "1;1;1", "1;2;3", 2, 2)
+        flat = ms1_features("0;0;0;0;0", "1;1;1;1;1", self.specs, 52, 52)
+        assert short["ms1_trace_nonzero"] == 1.0 and np.isnan(short["plexfit_sigma"])
+        assert flat["ms1_trace_nonzero"] == 0.0 and np.isnan(flat["plexfit_gauss_r2"])
+        assert short["ms1_ms2_apex_delta"] == 0 and flat["ms1_ms2_apex_delta"] == 0
+
+    def test_fit_quality_must_cover_the_trace(self):
+        with pytest.raises(ValueError, match="points for a trace of"):
+            ms1_features(self.peak, "0.9;0.9", self.specs, 52, 52)
+
+    def test_in_the_table_without_the_traces(self):
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])]), _store(),
+                                          available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
+        assert features["plexfit_sigma"].to_list() == [pytest.approx(np.sqrt(1 / 3))]
+        assert not {"plexfittrace_all", "plexfittrace_ps_all", "plexfittrace_spec_all"} & set(features.columns)
+
+    def test_the_joint_ms1_ms2_fit_is_carried_from_all_ids(self):
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])]), _store(),
+                                          available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
+        assert features["gauss_r2_joint"].to_list() == [0.8]
+        assert "MS1_quality" not in features.columns      # missing for the decoy channel: a label leak
+
+    def test_a_missing_input_fails_loudly(self):
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)]).drop(columns="gauss_r2_joint")
+        with pytest.raises(KeyError, match="gauss_r2_joint"):
+            _features(ids, _list_cols([(["b2_1"], [1.0])]), _store(),
+                                   available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
+
+
+class TestLongestConsecutiveScans:
+    """Consecutive DIA cycles with an MS2 coefficient; JMod writes no zero
+    coefficients, so a missing cycle is the gap."""
+
+    def test_a_cycle_is_a_visit_to_the_scans_own_window(self):
+        # each window's k-th scan is cycle k, however the two are interleaved
+        cycles = dict(_scan_cycles().iter_rows())
+        assert [cycles[101 + 22 * k] for k in range(5)] == [0, 1, 2, 3, 4]     # window A
+        assert [cycles[102 + 22 * k] for k in range(5)] == [0, 1, 2, 3, 4]     # window B
+        # two MS1 scans a cycle: the window comes round every second MS1 scan, and
+        # it is still one cycle per visit
+        assert dict(ms2_cycles([30, 52, 74], [WINDOW_A] * 3).iter_rows()) == {30: 0, 52: 1, 74: 2}
+
+    def test_runs_of_cycles(self):
+        longest = longest_consecutive_scans(_dc(), _scan_cycles(), ["seq", "z"])
+        # cycles 0, 1, 2 then 4; cycle 1 seen in both windows counts once
+        assert longest[("(PSMtag_5plex-0)PEPTIDER", 2.0)] == 3
+        assert longest[("(PSMtag_5plex-20)PEPTIDER", 2.0)] == 1     # one scan
+
+    def test_a_cycle_where_nothing_was_fitted_is_still_a_gap(self):
+        # without channel 20's row no coefficient is in cycle 3, but the cycles
+        # come from the run's scans, not from the coefficients
+        only_zero = _dc().filter(pl.col("seq") == "(PSMtag_5plex-0)PEPTIDER")
+        assert longest_consecutive_scans(only_zero, _scan_cycles(), ["seq", "z"]) == {
+            ("(PSMtag_5plex-0)PEPTIDER", 2.0): 3}
+
+    def test_in_the_table(self):
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001),
+                    ("(PSMtag_5plex-20)PEPTIDER", 20, False, True, 0.001),
+                    ("(PSMtag_5plex-0)NOTSCANNED", 0, False, False, 0.001)])
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])] * 3), _store(),
+                             available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
+        assert features["longest_consecutive_scans"].to_list() == [3, 1, None]
+
+
+def _carried(**values):
+    """One row of every carried feature at a real value, with *values* set."""
+    row = {c: 1.0 for c in _CARRIED_FEATURES}
+    row.update(n_scans=3, n_corr_frags=5, channels_matched=2, plexfitMS1=4.0)
+    row.update(values)
+    return null_placeholders(pl.DataFrame([row])).row(0, named=True)
+
+
+class TestPlaceholders:
+    """JMod's stand-ins for undefined values become null; real values that look
+    like them stay.  ms1_quant merges with fillna(0) over every column, so most
+    are 0s."""
+
+    def test_pairwise_correlation_summaries_need_two_fragments(self):
+        assert _carried(n_corr_frags=1, mean_frag_corr=0.0)["mean_frag_corr"] is None
+        # with two or more, a 0 is real: the spread of a single pair
+        assert _carried(n_corr_frags=2, std_frag_corr=0.0)["std_frag_corr"] == 0.0
+
+    def test_ranked_slots_beyond_the_fragments_there_are(self):
+        row = _carried(top10_pair_corr=-1.0, top9_pair_corr=0.4)
+        assert row["top10_pair_corr"] is None and row["top9_pair_corr"] == 0.4
+
+    @pytest.mark.parametrize("column", ["mean_prec_frag_corr", "max_prec_frag_corr", "ms1_cor", "iso_cor",
+                                        "traceproduct"])
+    def test_a_correlation_of_exactly_zero_is_fillna(self, column):
+        assert _carried(**{column: 0.0})[column] is None
+
+    def test_a_perfect_traceproduct_is_not_zero(self):
+        # log10(1 * 1 * 1 + 1e-6): every correlation perfect
+        assert _carried(traceproduct=4.3e-7)["traceproduct"] == 4.3e-7
+
+    def test_single_scan_precursors(self):
+        single = _carried(n_scans=1, smoothness=0.0, apex_pc1=0.0)
+        assert single["smoothness"] is None and single["apex_pc1"] is None
+        assert _carried(n_scans=2, smoothness=0.0)["smoothness"] == 0.0
+
+    def test_single_channel_sets(self):
+        alone = _carried(channels_matched=1, median_gof_stats=0.0, diff_gof_stats_from_median=0.0,
+                         frac_shared_intensity=-1.0)
+        assert alone["median_gof_stats"] is None and alone["diff_gof_stats_from_median"] is None
+        assert alone["frac_shared_intensity"] is None
+        # in a set of three, the median channel's distance from the median is a real 0
+        assert _carried(channels_matched=3, diff_gof_stats_from_median=0.0)["diff_gof_stats_from_median"] == 0.0
+        assert _carried(frac_shared_intensity=0.0)["frac_shared_intensity"] == 0.0     # nothing shared
+
+    @pytest.mark.parametrize("column", ["mz_error", "im_error", "med_frag_error"])
+    def test_fillna_zeros(self, column):
+        # no MS1 peak in tolerance; no ion mobility; no fragment errors
+        assert _carried(**{column: 0.0})[column] is None
+
+    def test_plex_fit_quality_needs_a_plex_fit(self):
+        # no MS1 coefficient for the channel: argmax lands on the window's first
+        # scan, whatever its quality
+        assert _carried(plexfitMS1=0.0, plexfitMS1_p=0.7)["plexfitMS1_p"] is None
+        assert _carried(plexfitMS1_p=0.0)["plexfitMS1_p"] is None
+        # a Pearson r: negative is real
+        assert _carried(plexfitMS1_p=-0.3)["plexfitMS1_p"] == -0.3
+
+    def test_in_the_table_and_the_rule_columns_are_not(self):
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)]).assign(n_scans=1, smoothness=0.0)
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])]), _store(),
+                             available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
+        assert features["smoothness"].to_list() == [None]
+        assert features["n_scans"].to_list() == [1]
+        assert not {"channels_matched", "plexfitMS1"} & set(features.columns)
+
+
+class TestRunScoreAndSequence:
+    def test_predval_and_rt_are_carried_and_qvalue_is_not(self):
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])]), _store(),
+                             available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
+        assert features["PredVal"].to_list() == [0.9] and features["rt"].to_list() == [61.5]
+        assert "Qvalue" not in features.columns and "BestChannel_Qvalue" in features.columns
+        assert features["z"].to_list() == [2]
+
+    def test_last_aa_code(self):
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001),
+                    ("(PSMtag_5plex-0)PEPTIDEK(PSMtag_5plex-0)", 0, False, False, 0.001),
+                    ("(PSMtag_5plex-0)PEPTIDEX", 0, False, False, 0.001)])
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])] * 3), _store(),
+                             available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
+        # R and K by their place in the alphabet; a non-standard residue is -1
+        assert features["last_aa_code"].to_list() == [14, 8, -1]
+        assert "last_aa" not in features.columns
 
 
 class TestRepeatedFragmentIdentities:
@@ -264,7 +552,7 @@ class TestRepeatedFragmentIdentities:
                 return np.append(store.get_frag_intensities(idx), 0.9)
 
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
-        features = build_channel_features(ids, _list_cols([(["b2_1"], [1.0])]), Repeating(),
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])]), Repeating(),
                                           available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
         assert features["n_lib_chan_frags"].to_list() == [2]          # b2 and b3, not b2 twice
         assert any("more than once" in r.getMessage() for r in app_log)
@@ -274,12 +562,12 @@ class TestWriteChannelFeatures:
     def test_written_to_the_channel_fdr_folder(self, tmp_path):
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
-        write_channel_features(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
+        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
         written = pl.read_parquet(tmp_path / FEATURE_FOLDER / FEATURE_FILE)
         assert written["n_chan_frags"].to_list() == [1]
 
     def test_nothing_without_a_decoy_channel(self, tmp_path):
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
-        assert write_channel_features(ids, _list_cols([(["b2_1"], [1.0])]), _store(),
+        assert _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(),
                                       available_tags["PSMtag_5plex"], str(tmp_path), 0.01) is None
         assert not (tmp_path / FEATURE_FOLDER).exists()

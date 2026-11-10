@@ -1429,11 +1429,16 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder,
                                     target_decoy_ratio=target_decoy_ratio)
 
+    # Before the channel features, which use it.  It reads only ms1_quant's
+    # traces, seq/z and dc, so it is the same here as after the list-column
+    # merge below (a left join on a unique key: same rows, same order)
+    fdx_quant["gauss_r2_joint"] = gauss_r2_joint(fdx_quant, dc, timeplex)
+
     # Channel-level evidence, before the list columns are merged back: it reads
     # the apex scan's fragments straight from polars, and needs ms1_quant's
     # outputs, so it sits between the two
     from src.channel_fdr import write_channel_features
-    write_channel_features(fdx_quant, fdc_list_cols, library, mass_tag, results_folder,
+    write_channel_features(fdx_quant, fdc_list_cols, dc, spectra, library, mass_tag, results_folder,
                            config.fdr_threshold)
 
     # Re-attach the list columns we held back from fdc through the heavy
@@ -1447,8 +1452,6 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
         _gc_attach.collect()
     if "__fdc_idx" in fdx_quant.columns:
         fdx_quant = fdx_quant.drop(columns=["__fdc_idx"])
-
-    fdx_quant["gauss_r2_joint"] = gauss_r2_joint(fdx_quant, dc, timeplex)
 
     logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
