@@ -141,19 +141,19 @@ def fit_channel_fdr(features, columns, n_iterations=N_ITERATIONS, train_q=TRAIN_
         raise ValueError(f"Channel FDR: null {GROUP_COLUMN} in the channel features")
 
     X, dead = model_matrix(features, columns)
-    if dead:
-        logger.info(f"Channel FDR: {len(dead)} features with no information on this run left out: "
-                    f"{', '.join(dead)}")
     model_type = model_type or config.score_model
     if model_type not in _NAN_MODELS:
         logger.warning(f"Channel FDR: the {model_type!r} model cannot take missing features; using 'xg'")
         model_type = "xg"
+    left_out = f" ({len(dead)} left out, no information on this run: {', '.join(dead)})" if dead else ""
+    logger.info(f"{X.shape[1]} features{left_out}")
     y = (~is_decoy).astype(int)
-    logger.info(f"Channel FDR: {int((~is_decoy).sum())} real-channel vs {int(is_decoy.sum())} "
-                f"decoy-channel precursors, {X.shape[1]} features, {model_type} model")
 
+    # Logged as score_precursors logs its iterations; run_model logs the first's samples
+    logger.info("Scoring Channel IDs")
     score = q = model = None
     for iteration in range(n_iterations):
+        logger.info(f"  scoring iteration {iteration + 1}/{n_iterations}")
         fitter = score_model(model_type)
         if iteration == 0:
             score = fitter.run_model(X, y, groups=groups)
@@ -168,9 +168,7 @@ def fit_channel_fdr(features, columns, n_iterations=N_ITERATIONS, train_q=TRAIN_
                 logger.warning(f"Channel FDR: iteration {iteration + 1} would train on one class; "
                                f"keeping iteration {iteration}")
                 break
-            logger.info(f"Channel FDR iteration {iteration + 1}: training on {int(keep.sum())} of "
-                        f"{keep.size}: {int(confident.sum())} confident real-channel, {int(mined.sum())} "
-                        f"relabelled as decoys")
+            logger.info(f"    Kept {int(keep.sum())}/{keep.size} samples, relabeled {int(mined.sum())} as decoys")
             score = fitter.run_model_filtered(X, y, keep, y_refit, groups=groups)
         model = fitter
         q = per_channel_qvalues(channel, score, is_decoy)

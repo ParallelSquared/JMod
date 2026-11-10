@@ -194,8 +194,8 @@ def plot_feature_ecdfs(features, folder, split="all", workers=1):
     if split == "KR":
         n_other = features.height - sum(rows.height for _, rows in parts)
         if n_other:
-            logger.info(f"Channel feature plots: {n_other} precursor-channels ending in neither K nor R "
-                        f"are in neither panel")
+            logger.debug(f"Channel feature plots: {n_other} precursor-channels ending in neither K nor R "
+                         f"are in neither panel")
     jobs, empty = [], []
     for column in feature_columns(features):
         panel_groups = [(title, _by_channel(rows, column)) for title, rows in parts]
@@ -214,9 +214,8 @@ def plot_feature_ecdfs(features, folder, split="all", workers=1):
     for error in filter(None, errors):
         logger.warning(f"Channel FDR: could not write {error}")      # e.g. open in a viewer
     if empty:
-        logger.info(f"Channel feature plots: no values to plot for {', '.join(empty)}")
-    logger.info(f"Channel feature ECDFs ({split}) for {len(jobs)} features written to "
-                f"{os.path.abspath(ecdf_folder)}")
+        logger.debug(f"Channel feature plots: no values to plot for {', '.join(empty)}")
+    logger.info(f"Plotted ECDFs ({split}) of {len(jobs)} channel features")
     return len(jobs)
 
 

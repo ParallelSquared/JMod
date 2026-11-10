@@ -21,7 +21,7 @@ import pytest
 
 from src.utils.errors import JModError
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
-                               compute_protein_FDR, log_df, untag_prec_qvalues,
+                               compute_protein_FDR, id_counts, id_table_lines, untag_prec_qvalues,
                                area, walk_to_local_max, gauss_r2_joint, ms1_quality)
 
 def test_score_model_minimal_fixed():
@@ -243,11 +243,13 @@ def test_id_counts_and_summary_leave_out_the_decoy_channel(monkeypatch, tmp_path
         "protein": ["P1", "P2", "P1", "P2"], "untag_prec": ["p1", "p2", "p1", "p2"],
     })
     compute_protein_FDR(df, results_folder=str(tmp_path), target_decoy_ratio=1.0)
-    summary = (tmp_path / "Summary.txt").read_text()
-    # the precursors at Qvalue and at BestChannel_Qvalue (too few proteins for a protein FDR)
-    assert summary.count("All Channels: 2") == 2
-    rows = [line.split() for line in summary.splitlines() if line.split()[:1] == ["A"]]
-    assert rows and {row[1] for row in rows} == {"0"}                         # no channel 8
+    # the precursors at Qvalue and at BestChannel_Qvalue; too few proteins for a protein FDR
+    assert (tmp_path / "Summary.txt").read_text().splitlines() == [
+        "IDs at 1% FDR, A",
+        "          Precursors              Proteins",
+        "channel   Qvalue   best channel   Qvalue   best channel",
+        "      0        2              2        0              0",
+        "  total        2              2        0              0"]               # no channel 8
 
         
 def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
@@ -271,28 +273,41 @@ def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
     assert out.shape[0] == 2  # still same number of rows
 
 
-def test_log_df_smoke():
-    """Smoke test for log_df function - just verify it runs without error."""
-    df = pd.DataFrame({
-        "file_name": ["sample1_001", "sample1_002", "sample2_001"],
-        "metric1": [1.0, 2.0, 3.0],
-        "metric2": [4.0, 5.0, 6.0],
-    })
-
-    # log_df should run without raising exceptions
-    # It just logs to the logger, so we verify it doesn't crash
-    log_df(df)
+def _counted(file_name, channels, silac_channels=None):
+    n = len(channels)
+    df = pd.DataFrame({"file_name": file_name, "channel": channels,
+                       "silac_channel": silac_channels if silac_channels is not None else [np.nan] * n,
+                       "is_decoy": False, "Qvalue": 0.001, "BestChannel_Qvalue": 0.001,
+                       "Protein_Qvalue": 0.001, "untag_prec": [f"p{i}" for i in range(n)],
+                       "protein": [f"P{i}" for i in range(n)]})
+    df["run_chan"] = df["file_name"] + df["channel"].astype(str) + df["silac_channel"].astype(str)
+    return df
 
 
-def test_log_df_multiple_files():
-    """Test log_df with multiple different file prefixes."""
-    df = pd.DataFrame({
-        "file_name": ["fileA_01", "fileA_02", "fileB_01", "fileC_01"],
-        "value": [10, 20, 30, 40],
-    })
+def test_id_table_label_free_is_one_level():
+    lines = id_table_lines(id_counts(_counted("C:/data/run.mzML", [0, 0, 0])))
+    assert lines == ["IDs at 1% FDR, run.mzML",
+                     "channel   Precursors   Proteins",
+                     "      0            3          3",
+                     "  total            3          3"]
 
-    # Should handle multiple unique file prefixes
-    log_df(df)
+
+def test_id_table_sorts_the_channels_as_numbers_and_splits_timeplex():
+    table = id_counts(_counted("f", ["1_4", "0_12", "0_4", "0_4"]), plexDIA=True)
+    lines = id_table_lines(table, timeplex=True)
+    rows = [line.split() for line in lines[3:]]
+    assert lines[2].split() == ["time", "channel", "Qvalue", "best", "channel", "Qvalue", "best", "channel"]
+    assert rows == [["0", "4", "2", "2", "2", "2"], ["0", "12", "1", "1", "1", "1"],
+                    ["1", "4", "1", "1", "1", "1"], ["total", "4", "4", "4", "4"]]
+
+
+def test_id_table_one_per_file_and_silac():
+    df = pd.concat([_counted("a", [0, 0, 0], [0.0, 1.0, np.nan]), _counted("b", [4], [0.0])])
+    lines = id_table_lines(id_counts(df), silac=True)
+    assert [line for line in lines if line.startswith("IDs")] == ["IDs at 1% FDR, a", "IDs at 1% FDR, b"]
+    assert lines[1].split() == ["channel", "SILAC", "Precursors", "Proteins"]
+    assert [line.split()[:2] for line in lines[2:5]] == [["0", "0"], ["0", "1"], ["0", "-"]]   # no label: "-"
+    assert id_table_lines(id_counts(df.iloc[:0])) == ["IDs at 1% FDR: none"]
 
 
 def test_plex_area_sums_the_scan_radius_on_either_side_of_the_apex():

@@ -493,7 +493,7 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
     sites = [tag_sites(seq, mass_tag.name) for seq in scored["seq"]]
     tagged = np.array([n_tags > 0 for _, n_tags, _ in sites], dtype=bool)
     if not tagged.all():
-        logger.info(f"Channel features: {int((~tagged).sum())} untagged precursors left out")
+        logger.info(f"{int((~tagged).sum())} untagged precursors left out")
         scored = scored[tagged]
         sites = [s for s, keep_it in zip(sites, tagged) if keep_it]
     if scored.empty:
@@ -522,8 +522,7 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
     lib_idx = [library.key_to_idx.get(k) for k in keys]
     n_missing = sum(i is None for i in lib_idx)
     if n_missing:
-        logger.warning(f"{n_missing} of {len(lib_idx)} scored precursors are not in the library: "
-                       f"their fragment features are null")
+        logger.warning(f"{n_missing} of {len(lib_idx)} scored precursors are not in the library: their fragment features are null")
 
     # A precursor is one per time channel on timeplex
     scan_keys = ["seq", "z"] + (["time_channel"] if "time_channel" in scan_coeffs.columns else [])
@@ -563,8 +562,7 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
         rows.append(_row_features(lib_codes, lib_int, codes, obs,
                                   n_residues, residues[0], residues[-1]))
     if n_repeated:
-        logger.warning(f"{n_repeated} scored precursors list a fragment identity more than once "
-                       f"in the library: the first is used")
+        logger.warning(f"{n_repeated} scored precursors list a fragment identity more than once in the library: the first is used")
 
     carried = null_placeholders(
         pl.from_pandas(scored.drop(columns=["__fdc_idx", "last_aa"] + _MS1_COLUMNS).reset_index(drop=True))
@@ -610,6 +608,8 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
     """
     if mass_tag is None or mass_tag.decoy_channel is None or list_cols is None:
         return None
+    logger.info("")
+    logger.info("Computing Channel FDR")
     scan_cycles = ms2_cycles([spectrum.scan_num for spectrum in spectra.ms2scans],
                              [spectrum.ms1window for spectrum in spectra.ms2scans])
     features = build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, mass_tag,
@@ -628,10 +628,7 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
             features = features.with_columns(pl.Series("ChannelScore", score, dtype=pl.Float64),
                                              pl.Series("Channel_Qvalue", q, dtype=pl.Float64).fill_nan(None))
             write_feature_importance(importance, folder)
-    path = os.path.join(folder, FEATURE_FILE)
-    features.write_parquet(path)
-    logger.info(f"Channel features for {len(features)} precursor-channels written to "
-                f"{os.path.abspath(path)}")
+    features.write_parquet(os.path.join(folder, FEATURE_FILE))
     if features.height:
         from src.channel_fdr_plots import plot_channel_fdr
         ecdfs = str(plots).lower() != "off"

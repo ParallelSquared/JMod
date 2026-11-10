@@ -1113,16 +1113,92 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
     return fdc
 
 
-def log_df(df):
-    filenames = df.iloc[:, 0].unique()
-    filenames = [fn.rstrip("0123456789") for fn in filenames]
-    filenames = list(set(filenames))
-    for fn in filenames:
-        logger.info(f"File: {fn}")
+# The ID counts' FDR, in the log and Summary.txt
+ID_COUNT_FDR = 0.01
+_ID_COUNT_KEYS = ["file_name", "channel", "silac_channel"]
 
-    df_no_first = df.iloc[:, 1:]
-    for line in df_no_first.to_string(index=False).splitlines():
-        logger.info(line)
+
+def id_counts(df, plexDIA=False):
+    """The run's IDs at ID_COUNT_FDR, one row per (file, channel, SILAC
+    channel): precursors and proteins, each at Qvalue and, with *plexDIA*, at
+    BestChannel_Qvalue.  Columns (kind, q-value), kind "Precursors" or
+    "Proteins".  The real channels only: the decoy channel's IDs are none."""
+    real = ~df["is_decoy_channel"].astype(bool) if "is_decoy_channel" in df.columns else True
+    targets = (df["is_decoy"] == False) & real
+    levels = [("Qvalue", "Qvalue")] + ([("BestChannel_Qvalue", "best channel")] if plexDIA else [])
+    counts = {}
+    for kind, unit in (("Precursors", "untag_prec"), ("Proteins", "protein")):
+        for column, label in levels:
+            passing = targets & (df[column] < ID_COUNT_FDR)
+            if kind == "Proteins":
+                passing &= df["Protein_Qvalue"] < ID_COUNT_FDR
+            counts[(kind, label)] = (df[passing].drop_duplicates(subset=["run_chan", unit])
+                                     .groupby(_ID_COUNT_KEYS, dropna=False).size())
+    return pd.DataFrame(counts).fillna(0).astype(int)
+
+
+def _key_text(value):
+    """A channel as it reads: 4, not 4.0; "-" for none (a row with no SILAC label)."""
+    if isinstance(value, float):
+        if np.isnan(value):
+            return "-"
+        if value.is_integer():
+            return str(int(value))
+    return str(value)
+
+
+def _channel_columns(channel, silac_channel, timeplex, silac):
+    """The key columns of one ID-count row: ([names], [texts]).  A tagged
+    timeplex channel is "<time channel>_<tag channel>": two columns."""
+    channel = _key_text(channel)
+    if timeplex and "_" in channel:
+        names, values = ["time", "channel"], channel.split("_", 1)
+    else:
+        names, values = (["time"] if timeplex else ["channel"]), [channel]
+    if silac:
+        names, values = names + ["SILAC"], values + [_key_text(silac_channel)]
+    return names, values
+
+
+def _sort_key(texts):
+    return tuple((0, float(t), "") if t.replace(".", "", 1).lstrip("-").isdigit() else (1, 0.0, t)
+                 for t in texts)
+
+
+def id_table_lines(table, timeplex=False, silac=False, gap=3):
+    """*table* (id_counts) as the lines of a text table, one per file: its
+    channels sorted as numbers, the totals last, and over each kind's columns
+    the kind ("Precursors", "Proteins") when it has more than one."""
+    if table.empty:
+        return [f"IDs at {ID_COUNT_FDR:.0%} FDR: none"]
+    columns = list(table.columns)
+    two_levels = any(sum(k == kind for k, _ in columns) > 1 for kind, _ in columns)
+    lines = []
+    for file_name, rows in table.groupby(level="file_name", sort=False):
+        keys = [_channel_columns(channel, silac_channel, timeplex, silac)
+                for _, channel, silac_channel in rows.index]
+        key_names = keys[0][0]
+        body = sorted(([*values, *map(str, counts)] for (_, values), counts in zip(keys, rows.to_numpy())),
+                      key=lambda row: _sort_key(row[:len(key_names)]))
+        total = ["total"] + [""] * (len(key_names) - 1) + [str(int(n)) for n in rows.sum()]
+        header = key_names + [label if two_levels else kind for kind, label in columns]
+        widths = [max(len(row[i]) for row in [header, total, *body]) for i in range(len(header))]
+
+        def line(cells):
+            return (" " * gap).join(cell.rjust(width) for cell, width in zip(cells, widths)).rstrip()
+
+        lines.append(f"IDs at {ID_COUNT_FDR:.0%} FDR, {os.path.basename(str(file_name))}")
+        if two_levels:
+            # each kind's name over its columns, from the first of them
+            spans, at = [], len(key_names)
+            for kind in dict.fromkeys(kind for kind, _ in columns):
+                n = sum(k == kind for k, _ in columns)
+                spans.append((kind, sum(widths[at:at + n]) + gap * (n - 1)))
+                at += n
+            lead = sum(widths[:len(key_names)]) + gap * len(key_names)
+            lines.append((" " * lead + (" " * gap).join(kind.ljust(width) for kind, width in spans)).rstrip())
+        lines += [line(header), *map(line, body), line(total), ""]
+    return lines[:-1]
 
 def untag_prec_qvalues(fdx, target_decoy_ratio):
     """Each row's untag_prec_Qvalue: the run's q-value of its untagged
@@ -1173,98 +1249,14 @@ def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
     df = df.drop(columns=["Protein_Qvalue"], errors="ignore")
     df = df.merge(df_seqchargeqvals_distinct, on="protein", how="left")
 
-    # The ID counts are of the real channels: the decoy channel's IDs are none
-    real = ~df["is_decoy_channel"].astype(bool) if "is_decoy_channel" in df.columns else True
-        
-    df_counts_prec = (
-        df[(df["is_decoy"] == False) & (df["Qvalue"] < 0.01) & real]
-        .drop_duplicates(subset=["run_chan", "untag_prec"])
-        .groupby(["file_name", "channel", "silac_channel"])
-        .size()
-        .reset_index(name="Precursor_IDs")
-        .sort_values("channel")
-    )    
+    table = id_counts(df, plexDIA=config.args.plexDIA)
+    lines = id_table_lines(table, timeplex=config.args.timeplex, silac=config.args.SILAC is not None)
     logger.info("")
-    logger.info("Number of precursors at 1% FDR:")
-    logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
-    log_df(df_counts_prec)
-    
-
-    df_counts_prots = (
-        df[(df["Protein_Qvalue"] < 0.01) & (df["is_decoy"] == False) & (df["Qvalue"] < 0.01) & real]
-        .drop_duplicates(subset=["run_chan", "protein"])
-        .groupby(["file_name", "channel", "silac_channel"])
-        .size()
-        .reset_index(name="Protein_IDs")
-        .sort_values("channel")
-        )
-    logger.info("")
-    logger.info("Number of proteins at 1% FDR:")
-    logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
-    log_df(df_counts_prots)
-
+    for line in lines:
+        logger.info(line)
     if results_folder is not None:
-        with open(results_folder+'/Summary.txt', 'a') as f:
-            print("Number of precursors at 1% FDR:", file=f)
-            print("All Channels:",np.sum(df_counts_prec.Precursor_IDs), file=f)
-            print(df_counts_prec.to_string(index=False), file=f)
-            
-            print("\nNumber of proteins at 1% FDR:", file=f)
-            print("All Channels:",np.sum(df_counts_prots.Protein_IDs), file=f)
-            print(df_counts_prots.to_string(index=False), file=f)
-    
-    # if config.args.plexDIA:
-    #     if config.args.timeplex:
-    #         df["BestChannel_Protein_Qvalue"] = df.groupby(["time_channel", "protein", "decoy"])["Protein_Qvalue"].transform("min")
-    #     else:
-    #         df["BestChannel_Protein_Qvalue"] = df.groupby(["file_name", "protein", "decoy"])["Protein_Qvalue"].transform("min")
-
-    if config.args.plexDIA:
-        logger.info("")
-        logger.info("After plexDIA identification propagation based on best channel Q-value:")
-        
-        # Compute number of precursor IDs at 1% FDR
-        df_counts_prec = (
-            df[(df["is_decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01) & real]
-            .drop_duplicates(subset=["run_chan", "untag_prec"])
-            .groupby(["file_name", "channel", "silac_channel"])
-            .size()
-            .reset_index(name="Precursor_IDs")
-            .sort_values("channel")
-        )
-        
-        # Print precursor ID counts
-        logger.info("")
-        logger.info("Number of precursors at 1% FDR (best channel):")
-        logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
-        log_df(df_counts_prec)
-        
-        # Compute number of protein IDs at 1% FDR
-        df_counts_prots = (
-            df[(df["Protein_Qvalue"] < 0.01) & (df["is_decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01) & real]
-            .drop_duplicates(subset=["run_chan", "protein"])
-            .groupby(["file_name", "channel", "silac_channel"])
-            .size()
-            .reset_index(name="Protein_IDs")
-            .sort_values("channel")
-        )
-        
-        # Print protein ID counts
-        logger.info("")
-        logger.info("Number of proteins at 1% FDR (best channel):")
-        logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
-        log_df(df_counts_prots)
-        
-        if results_folder is not None:
-            with open(results_folder+'/Summary.txt', 'a') as f:
-                print("Number of precursors at 1% FDR (best channel):", file=f)
-                print("All Channels:",np.sum(df_counts_prec.Precursor_IDs), file=f)
-                print(df_counts_prec.to_string(index=False), file=f)
-                
-                print("\nNumber of proteins at 1% FDR (best channel):", file=f)
-                print("All Channels:",np.sum(df_counts_prots.Protein_IDs), file=f)
-                print(df_counts_prots.to_string(index=False), file=f)
-
+        with open(results_folder + '/Summary.txt', 'a') as f:
+            print(*lines, sep="\n", file=f)
 
     return df
 
