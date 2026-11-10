@@ -32,6 +32,9 @@ def _add_arguments(parser, suppress_defaults=False):
         if value['takes_value'] is False:
             parser.add_argument(*value['flags'], action='store_true' if value['default'] is False else 'store_false',
                                 default=default)
+        elif value.get('const') is not None:
+            # The value is optional: the flag alone gives *const*
+            parser.add_argument(*value['flags'], nargs='?', const=value['const'], default=default, type=str)
         elif value.get('multiple', False):
             # Repeatable flag: each use appends, giving a list (None if never given)
             parser.add_argument(*value['flags'], action='append', default=default, type=str)

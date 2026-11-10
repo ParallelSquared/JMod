@@ -109,6 +109,11 @@ _CARRIED_FEATURES = [
 ]
 # Read for the placeholder rules only, not written
 _RULE_COLUMNS = ["channels_matched", "plexfitMS1"]
+# Carried under another name.  JMod's cosine is the apex scan's whole fit --
+# observed against predicted at the peaks of every candidate with a coefficient
+# above 1, one value for the scan -- not this channel's match to its library,
+# which is cosine_all
+_RENAMED = {"cosine": "scan_fit_cosine"}
 # The last residue (JMod's, off the stripped sequence), written as last_aa_code:
 # its place in _AMINO_ACIDS, -1 for anything else.  An ordinal, as the reference
 # had it: a tree can still split off any one residue
@@ -556,7 +561,7 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
 
     carried = null_placeholders(
         pl.from_pandas(scored.drop(columns=["__fdc_idx", "last_aa"] + _MS1_COLUMNS).reset_index(drop=True))
-    ).drop(_RULE_COLUMNS)
+    ).drop(_RULE_COLUMNS).rename(_RENAMED)
     # hstack: one row each, so unequal heights are an error, not padding
     return (carried
             .hstack([pl.Series("longest_consecutive_scans", longest, dtype=pl.Int64)])
@@ -568,8 +573,11 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
 
 
 def write_channel_features(ids, list_cols, scan_coeffs, spectra, library, mass_tag, results_folder,
-                           fdr_threshold):
-    """build_channel_features, written to <results_folder>/channel_fdr/.
+                           fdr_threshold, plots="off"):
+    """build_channel_features, written to <results_folder>/channel_fdr/, with
+    every feature's histogram and ECDF beside it unless *plots* is "off"
+    (channel_fdr_plots.plot_channel_features: "all", or "KR" to split by the
+    C-terminal residue).
 
     Does nothing without a decoy channel: the features exist for the
     channel-level FDR, which has nothing to measure against without one (label
@@ -588,4 +596,7 @@ def write_channel_features(ids, list_cols, scan_coeffs, spectra, library, mass_t
     features.write_parquet(path)
     logger.info(f"Channel features for {len(features)} precursor-channels written to "
                 f"{os.path.abspath(path)}")
+    if str(plots).lower() != "off" and features.height:
+        from src.channel_fdr_plots import plot_channel_features
+        plot_channel_features(features, folder, split=plots)
     return features

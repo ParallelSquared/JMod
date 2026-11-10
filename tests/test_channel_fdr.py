@@ -1,3 +1,4 @@
+import os
 import re
 
 import numpy as np
@@ -8,6 +9,9 @@ import pytest
 from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, build_channel_features, channel_specific_mask,
                              first_of_each, frag_error_features, longest_consecutive_scans, ms1_features, ms2_cycles, null_placeholders,
                              tag_sites, write_channel_features, _CARRIED_FEATURES, _row_features)
+from src.channel_fdr import _AMINO_ACIDS
+from src.channel_fdr_plots import (ECDF_FOLDER, HIST_FOLDER, feature_columns, ks_distance, panels,
+                                   plot_channel_features)
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.utils.frag_encoding import encode_frag_names
@@ -254,9 +258,9 @@ def _features(ids, list_cols, library, mass_tag, fdr_threshold):
     return build_channel_features(ids, list_cols, _dc(), _scan_cycles(), library, mass_tag, fdr_threshold)
 
 
-def _write(ids, list_cols, library, mass_tag, results_folder, fdr_threshold):
+def _write(ids, list_cols, library, mass_tag, results_folder, fdr_threshold, plots="off"):
     return write_channel_features(ids, list_cols, _dc(), _Spectra(), library, mass_tag, results_folder,
-                                  fdr_threshold)
+                                  fdr_threshold, plots=plots)
 
 
 class TestBuildChannelFeatures:
@@ -516,6 +520,8 @@ class TestRunScoreAndSequence:
                              available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
         assert features["PredVal"].to_list() == [0.9] and features["rt"].to_list() == [61.5]
         assert "Qvalue" not in features.columns and "BestChannel_Qvalue" in features.columns
+        # JMod's cosine is the scan's fit, so it is carried under that name
+        assert features["scan_fit_cosine"].to_list() == [1.0] and "cosine" not in features.columns
         assert features["z"].to_list() == [2]
 
     def test_last_aa_code(self):
@@ -571,3 +577,70 @@ class TestWriteChannelFeatures:
         assert _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(),
                                       available_tags["PSMtag_5plex"], str(tmp_path), 0.01) is None
         assert not (tmp_path / FEATURE_FOLDER).exists()
+
+    def test_no_plots_unless_asked(self, tmp_path):
+        tag = available_tags["PSMtag_5plex"].with_decoy_channel()
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
+        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
+        assert sorted(p.name for p in (tmp_path / FEATURE_FOLDER).iterdir()) == [FEATURE_FILE]
+
+
+class TestPlots:
+    def test_a_histogram_and_an_ecdf_of_every_feature(self, tmp_path):
+        features = pl.DataFrame({
+            "seq": ["A", "A", "B", "B"], "channel": [0.0, 20.0, 0.0, 20.0],
+            "is_decoy_channel": [False, True, False, True],
+            "cosine_chan": [0.9, 0.2, 0.8, None],            # continuous, a null
+            "n_chan_frags": [5, 1, 4, 0],                    # integer
+            "im_error": [None, None, None, None]})           # nothing to plot
+        assert plot_channel_features(features, str(tmp_path)) == 2
+        for folder in (HIST_FOLDER, ECDF_FOLDER):
+            assert sorted(p.name for p in (tmp_path / folder).iterdir()) == ["cosine_chan.png",
+                                                                             "n_chan_frags.png"]
+
+    def test_split_by_the_c_terminal_residue(self, tmp_path):
+        k, r, a = (_AMINO_ACIDS.index(aa) for aa in "KRA")
+        features = pl.DataFrame({
+            "seq": list("KKRRA"), "channel": [0.0, 20.0, 0.0, 20.0, 0.0],
+            "is_decoy_channel": [False, True, False, True, False],
+            "last_aa_code": [k, k, r, r, a], "cosine_chan": [0.9, 0.2, 0.8, 0.1, 0.5]})
+        (k_title, k_rows), (r_title, r_rows) = panels(features, "KR")
+        assert (k_title, k_rows["seq"].to_list()) == ("C-terminal K", ["K", "K"])
+        assert (r_title, r_rows["seq"].to_list()) == ("C-terminal R", ["R", "R"])     # not A
+        assert panels(features, "all")[0][1].height == 5
+        assert plot_channel_features(features, str(tmp_path), split="kr") == 2       # any case
+        assert sorted(p.name for p in (tmp_path / HIST_FOLDER).iterdir()) == ["cosine_chan.png",
+                                                                          "last_aa_code.png"]
+
+    def test_an_unknown_split_plots_nothing(self, tmp_path):
+        features = pl.DataFrame({"channel": [0.0], "is_decoy_channel": [False], "cosine_chan": [0.9]})
+        assert plot_channel_features(features, str(tmp_path), split="KQ") == 0
+        assert not (tmp_path / HIST_FOLDER).exists()
+
+    def test_written_beside_the_table_when_asked(self, tmp_path, monkeypatch):
+        import src.channel_fdr_plots
+        calls = []
+        monkeypatch.setattr(src.channel_fdr_plots, "plot_channel_features",
+                            lambda features, folder, split: calls.append((features.height, folder, split)))
+        tag = available_tags["PSMtag_5plex"].with_decoy_channel()
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
+        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01, plots="KR")
+        assert calls == [(1, os.path.join(str(tmp_path), FEATURE_FOLDER), "KR")]
+
+    def test_the_flag_alone_is_all(self):
+        import argparse
+        from src.config import _add_arguments
+        parser = argparse.ArgumentParser()
+        _add_arguments(parser)
+        assert parser.parse_args([]).channel_fdr_plots == "off"
+        assert parser.parse_args(["--channel_fdr_plots"]).channel_fdr_plots == "all"
+        assert parser.parse_args(["--channel_fdr_plots", "KR"]).channel_fdr_plots == "KR"
+
+    def test_only_the_identity_columns_are_not_features(self):
+        columns = ["seq", "z", "channel", "is_decoy_channel", "BestChannel_Qvalue", "PredVal", "cosine_chan"]
+        assert feature_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
+
+    def test_ks_distance(self):
+        assert ks_distance(np.array([1.0, 2.0]), np.array([1.0, 2.0])) == 0.0
+        assert ks_distance(np.array([1.0, 2.0]), np.array([3.0, 4.0])) == 1.0
+        assert np.isnan(ks_distance(np.array([1.0]), np.zeros(0)))

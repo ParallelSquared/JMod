@@ -1439,7 +1439,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # outputs, so it sits between the two
     from src.channel_fdr import write_channel_features
     write_channel_features(fdx_quant, fdc_list_cols, dc, spectra, library, mass_tag, results_folder,
-                           config.fdr_threshold)
+                           config.fdr_threshold, plots=config.args.channel_fdr_plots)
 
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge
