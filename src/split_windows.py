@@ -460,6 +460,7 @@ def build_templates(library, rt_mz, ms2scans, ms1scans, tag, min_frac, trans=Non
             3: np.array([0, 3, 0, 4, 0], np.int32)}
     loss_vec = np.stack([LOSS.get(i, LOSS[0]) for i in range(8)])
     H2O = np.array([0, 2, 0, 1, 0], np.int32)
+    CO = np.array([1, 0, 0, 1, 0], np.int32)
 
     CH = 20000
     buf_c, buf_k, buf_e, buf_i, buf_d = [], [], [], [], []
@@ -486,7 +487,8 @@ def build_templates(library, rt_mz, ms2scans, ms1scans, tag, min_frac, trans=Non
         cumy = np.cumsum(R[::-1], 0) + H2O
         ixc = np.clip(ix - 1, 0, nres - 1)
         frag = np.where((it == 0)[:, None], cumb[ixc], np.where((it == 1)[:, None], cumy[ixc], cumb[ixc]))
-        n_unk += int(((it != 0) & (it != 1)).sum())
+        frag = frag - CO[None, :] * (it == 2)[:, None]          # a_k = b_k - CO
+        n_unk += int(((it != 0) & (it != 1) & (it != 2)).sum())
         frag = frag - loss_vec[loss[sl_]]
         buf_c.append(prec[None, :] - frag)
         buf_k.append(isok[sl_])

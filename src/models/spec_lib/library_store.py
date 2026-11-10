@@ -1819,7 +1819,7 @@ class SpectrumLibraryStore:
         PROTON = nist_mass['H+'][0][0]
         ion_delta = {
             it: sum(nist_mass[el][0][0] * num for el, num in std_ion_comp[it].items())
-            for it in ('b', 'y')
+            for it in ('b', 'y', 'a')
         }
         # Loss codes 0-3 are the only encodable losses (frag_encoding._INT_TO_LOSS)
         loss_table = np.array([0.0, calculate_mass('H2O'), calculate_mass('NH3'),
@@ -1838,14 +1838,16 @@ class SpectrumLibraryStore:
         del gather
 
         ion = get_ion_type(codes)
-        if total_frags > 0 and not np.all((ion == 0) | (ion == 1)):
-            raise ValueError("Decoy generation only supports b/y fragment ions")
-        is_b = ion == 0
+        if total_frags > 0 and not np.all((ion == 0) | (ion == 1) | (ion == 2)):
+            raise ValueError("Decoy generation only supports a/b/y fragment ions")
+        # a ions are N-terminal like b (a_k = b_k - CO): same prefix sums, own ion delta
+        is_a = ion == 2
+        is_b = (ion == 0) | is_a        # prefix (N-terminal) ions
         del ion
 
         frag_prec = np.repeat(np.arange(M, dtype=np.int64), d_frag_counts)
         # index into the [prefix | suffix] concatenations: prefix half for
-        # b ions, suffix half for y ions
+        # a/b ions, suffix half for y ions
         tok_idx = decoys.token_offsets[frag_prec] + (get_index(codes).astype(np.int64) - 1)
         tok_idx[~is_b] += len(decoys.prefix_aa)
 
@@ -1856,7 +1858,8 @@ class SpectrumLibraryStore:
         z = get_charge(codes).astype(np.float64)
         m = np.concatenate([decoys.prefix_aa, decoys.suffix_aa])[tok_idx]
         m += H2O
-        m[is_b] += ion_delta['b']
+        m[is_b & ~is_a] += ion_delta['b']
+        m[is_a] += ion_delta['a']
         m[~is_b] += ion_delta['y']
         tmp = z * PROTON
         m += tmp
