@@ -6,16 +6,14 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, FEATURE_IMPORTANCE_FILE, build_channel_features,
-                             channel_qvalues, channel_specific_mask, model_columns,
+from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, FEATURE_IMPORTANCE_FILE, MIN_DECOYS,
+                             build_channel_features, channel_qvalues, channel_specific_mask, fit_channel_fdr,
+                             model_columns, model_matrix, per_channel_pep, per_channel_qvalues, qvalues,
                              first_of_each, frag_error_features, longest_consecutive_scans, ms1_features, ms2_cycles, null_placeholders,
                              read_feature_importance, run_channel_fdr, tag_sites, write_feature_importance, _CARRIED_FEATURES,
                              _row_features)
-from src.channel_fdr import _AMINO_ACIDS
-from src.channel_fdr_plots import (BEST_CHANNEL_PLOT, ECDF_FOLDER, IDS_PLOT, IMPORTANCE_PLOT,
-                                   RETAINED_PLOT, best_channel_counts, feature_columns, ks_distance, panels,
-                                   plot_channel_fdr, plot_feature_ecdfs, plot_feature_importance,
-                                   retained_counts)
+from src.channel_fdr_plots import BEST_CHANNEL_PLOT
+from src.fdr_analysis import estimate_pep
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.utils.frag_encoding import encode_frag_names
@@ -568,6 +566,10 @@ class TestRepeatedFragmentIdentities:
         assert any("more than once" in r.getMessage() for r in app_log)
 
 
+_IMPORTANCE = pd.DataFrame({"share_of_gain": [0.6, 0.4], "share_of_gain_sd": [0.05, 0.02]},
+                           index=pd.Index(["ms1_cor", "z"], name="feature"))
+
+
 class TestWriteChannelFeatures:
     def test_written_to_the_channel_fdr_folder(self, tmp_path):
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()
@@ -605,6 +607,141 @@ class TestWriteChannelFeatures:
         assert sorted(p.name for p in (tmp_path / FEATURE_FOLDER).iterdir()) == [BEST_CHANNEL_PLOT,
                                                                                   FEATURE_FILE]
 
+    def test_written_beside_the_table_when_asked(self, tmp_path, monkeypatch):
+        import src.channel_fdr_plots
+        calls = []
+        monkeypatch.setattr(src.channel_fdr_plots, "plot_channel_fdr",
+                            lambda features, folder, importance, split, fdr_threshold, ecdfs, workers:
+                            calls.append((features.height, folder, importance, split, fdr_threshold,
+                                          ecdfs)))
+        tag = available_tags["PSMtag_5plex"].with_decoy_channel()
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
+        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01, plots="KR")
+        # too few decoys to fit: no importance
+        assert calls == [(1, os.path.join(str(tmp_path), FEATURE_FOLDER), None, "KR", 0.01, True)]
+        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
+        assert calls[1][3:] == ("all", 0.01, False)                    # off: no ECDFs, one panel
+
+    def test_feature_importance_round_trips_through_its_file(self, tmp_path):
+        write_feature_importance(_IMPORTANCE, str(tmp_path))
+        back = read_feature_importance(str(tmp_path))
+        pd.testing.assert_frame_equal(back, _IMPORTANCE)
+        assert read_feature_importance(str(tmp_path / "elsewhere")) is None
+
+
+class TestQvalues:
+    def test_the_score_precursors_estimator(self):
+        # ranked: T T D T D T -> (1 + decoys) / targets, then the minimum from below
+        score = np.array([6.0, 5.0, 4.0, 3.0, 2.0, 1.0])
+        is_decoy = np.array([False, False, True, False, True, False])
+        raw = np.array([1 / 1, 1 / 2, 2 / 2, 2 / 3, 3 / 3, 3 / 4])
+        assert qvalues(score, is_decoy) == pytest.approx(np.minimum.accumulate(raw[::-1])[::-1])
+
+    def test_ratio_and_order(self):
+        score = np.array([1.0, 3.0, 2.0])
+        is_decoy = np.array([False, False, True])
+        # by score: T(3) D(2) T(1)
+        assert qvalues(score, is_decoy, ratio=2.0) == pytest.approx([2.0, 2.0, 2.0])
+
+    def test_each_channel_against_the_whole_decoy_channel(self):
+        channel = np.array([0.0, 0.0, 4.0, 4.0, 20.0, 20.0])
+        is_decoy = channel == 20
+        score = np.array([9.0, 1.0, 8.0, 7.0, 5.0, 2.0])
+        q = per_channel_qvalues(channel, score, is_decoy)
+        assert np.isnan(q[is_decoy]).all()
+        # channel 0 alone with the decoys: 9 T, 5 D, 2 D, 1 T
+        assert q[:2] == pytest.approx(qvalues(np.array([9.0, 1.0, 5.0, 2.0]),
+                                              np.array([False, False, True, True]))[:2])
+        # channel 4 is not ranked against channel 0: 8 T, 7 T, 5 D, 2 D
+        assert q[2:4] == pytest.approx([0.5, 0.5])
+
+
+class TestPerChannelPep:
+    def test_each_channel_against_the_whole_decoy_channel(self):
+        rng = np.random.default_rng(1)
+        channel = np.repeat([0.0, 4.0, 20.0], 50)
+        is_decoy = channel == 20
+        score = rng.normal(size=channel.size) + np.where(channel == 0, 1.0, 0.0)
+        pep = per_channel_pep(channel, score, is_decoy)
+        assert np.isnan(pep[is_decoy]).all()
+        alone = (channel == 0) | is_decoy
+        assert pep[channel == 0] == pytest.approx(estimate_pep(score[alone], is_decoy[alone])[:50])
+        # channel 4 does not change channel 0's
+        moved = score.copy()
+        moved[channel == 4] += 10
+        assert per_channel_pep(channel, moved, is_decoy)[channel == 0] == pytest.approx(pep[channel == 0])
+
+    def test_not_pooled(self):
+        # two real channels, both pure null: each is as decoy-like as the decoy
+        # channel itself, which pooling them would halve
+        rng = np.random.default_rng(2)
+        channel = np.repeat([0.0, 4.0, 20.0], 400)
+        is_decoy = channel == 20
+        score = rng.normal(size=channel.size)
+        assert (np.median(per_channel_pep(channel, score, is_decoy)[~is_decoy])
+                > 1.5 * np.median(estimate_pep(score, is_decoy)[~is_decoy]))
+
+
+class TestModelMatrix:
+    def test_columns_with_no_information_are_left_out(self):
+        features = pl.DataFrame({"a": [1.0, 2.0, None], "constant": [3.0, 3.0, 3.0],
+                                 "empty": [None, None, None], "n": [1, 2, 3]},
+                                schema_overrides={"empty": pl.Float64})
+        X, dead = model_matrix(features, ["a", "constant", "empty", "n"])
+        assert list(X.columns) == ["a", "n"] and dead == ["constant", "empty"]
+        assert np.isnan(X["a"].iloc[2])                       # a missing value stays missing
+
+    def test_infinite_values_are_an_error(self):
+        with pytest.raises(ValueError, match="infinite"):
+            model_matrix(pl.DataFrame({"a": [1.0, np.inf, 2.0]}), ["a"])
+
+
+def _fit_run(n_peptides=150, seed=0):
+    """A synthetic run: each peptide in real channels 0 and 4 and the decoy
+    channel 20.  A real channel is there for half the peptides, and then its
+    "signal" is high; an empty one (and the decoy) draws from the null."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for p in range(n_peptides):
+        for channel in (0.0, 4.0, 20.0):
+            present = channel != 20 and p % 2 == 0
+            rows.append({"untag_seq": f"PEP{p}", "channel": channel, "is_decoy_channel": channel == 20,
+                         "present": present, "signal": rng.normal(4.0 if present else 0.0, 1.0),
+                         "noise": rng.normal(), "constant": 1.0})
+    return pl.DataFrame(rows)
+
+
+@pytest.fixture(scope="module")
+def fitted():
+    features = _fit_run()
+    return features, fit_channel_fdr(features, ["signal", "noise", "constant"])
+
+
+class TestFit:
+    def test_channels_that_are_there_pass_and_empty_ones_do_not(self, fitted):
+        features, (score, q, _) = fitted
+        present = features["present"].to_numpy()
+        real = ~features["is_decoy_channel"].to_numpy()
+        assert np.median(q[present]) < 0.05
+        assert np.median(q[real & ~present]) > 0.3
+        assert score.shape == q.shape == (features.height,)
+
+    def test_the_decoy_channel_has_no_qvalue(self, fitted):
+        features, (_, q, _) = fitted
+        assert np.isnan(q[features["is_decoy_channel"].to_numpy()]).all()
+        assert np.isfinite(q[~features["is_decoy_channel"].to_numpy()]).all()
+
+    def test_importance_is_the_evidence(self, fitted):
+        _, (_, _, importance) = fitted
+        assert importance.index[0] == "signal"
+        assert "constant" not in importance.index                 # left out, no information
+        assert importance["share_of_gain"].sum() == pytest.approx(1.0)
+        assert (importance["share_of_gain_sd"] >= 0).all()           # over the folds
+
+    def test_too_few_decoys_is_no_fit(self):
+        features = _fit_run(n_peptides=MIN_DECOYS - 1)
+        assert fit_channel_fdr(features, ["signal", "noise"]) is None
+
 
 class TestChannelQvalues:
     """Channel_Qvalue back onto the run's IDs, by tagged sequence and charge."""
@@ -630,129 +767,3 @@ class TestChannelQvalues:
                                  "Channel_Qvalue": [0.1, 0.2]})
         with pytest.raises(ValueError, match="repeat"):
             channel_qvalues(self._ids(), features)
-
-
-class TestPlots:
-    def test_an_ecdf_of_every_feature(self, tmp_path):
-        features = pl.DataFrame({
-            "seq": ["A", "A", "B", "B"], "channel": [0.0, 20.0, 0.0, 20.0],
-            "is_decoy_channel": [False, True, False, True],
-            "cosine_chan": [0.9, 0.2, 0.8, None],            # continuous, a null
-            "n_chan_frags": [5, 1, 4, 0],                    # integer
-            "im_error": [None, None, None, None]})           # nothing to plot
-        assert plot_feature_ecdfs(features, str(tmp_path)) == 2
-        assert sorted(p.name for p in tmp_path.iterdir()) == [ECDF_FOLDER]
-        assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == ["cosine_chan.png",
-                                                                          "n_chan_frags.png"]
-
-    def test_in_worker_processes(self, tmp_path):
-        k, r = (_AMINO_ACIDS.index(aa) for aa in "KR")
-        features = pl.DataFrame({
-            "channel": [0.0, 20.0, 0.0, 20.0], "is_decoy_channel": [False, True, False, True],
-            "last_aa_code": [k, k, r, r], "cosine_chan": [0.9, 0.2, 0.8, 0.1],
-            "shared_frag_error": [None, None, 1e-6, 2e-6]})          # nothing in the K panel
-        assert plot_feature_ecdfs(features, str(tmp_path), split="KR", workers=2) == 3
-        assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == [
-            "cosine_chan.png", "last_aa_code.png", "shared_frag_error.png"]
-
-    def test_split_by_the_c_terminal_residue(self, tmp_path):
-        k, r, a = (_AMINO_ACIDS.index(aa) for aa in "KRA")
-        features = pl.DataFrame({
-            "seq": list("KKRRA"), "channel": [0.0, 20.0, 0.0, 20.0, 0.0],
-            "is_decoy_channel": [False, True, False, True, False],
-            "last_aa_code": [k, k, r, r, a], "cosine_chan": [0.9, 0.2, 0.8, 0.1, 0.5]})
-        (k_title, k_rows), (r_title, r_rows) = panels(features, "KR")
-        assert (k_title, k_rows["seq"].to_list()) == ("C-terminal K", ["K", "K"])
-        assert (r_title, r_rows["seq"].to_list()) == ("C-terminal R", ["R", "R"])     # not A
-        assert panels(features, "all")[0][1].height == 5
-        assert plot_feature_ecdfs(features, str(tmp_path), split="kr") == 2          # any case
-        assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == ["cosine_chan.png",
-                                                                          "last_aa_code.png"]
-
-    def test_an_unknown_split_plots_nothing(self, tmp_path):
-        features = pl.DataFrame({"channel": [0.0], "is_decoy_channel": [False], "cosine_chan": [0.9]})
-        assert plot_feature_ecdfs(features, str(tmp_path), split="KQ") == 0
-        assert not (tmp_path / ECDF_FOLDER).exists()
-
-    def test_written_beside_the_table_when_asked(self, tmp_path, monkeypatch):
-        import src.channel_fdr_plots
-        calls = []
-        monkeypatch.setattr(src.channel_fdr_plots, "plot_channel_fdr",
-                            lambda features, folder, importance, split, fdr_threshold, ecdfs, workers:
-                            calls.append((features.height, folder, importance, split, fdr_threshold,
-                                          ecdfs)))
-        tag = available_tags["PSMtag_5plex"].with_decoy_channel()
-        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
-        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01, plots="KR")
-        # too few decoys to fit: no importance
-        assert calls == [(1, os.path.join(str(tmp_path), FEATURE_FOLDER), None, "KR", 0.01, True)]
-        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
-        assert calls[1][3:] == ("all", 0.01, False)                    # off: no ECDFs, one panel
-
-    def test_the_flag_alone_is_all(self):
-        import argparse
-        from src.config import _add_arguments
-        parser = argparse.ArgumentParser()
-        _add_arguments(parser)
-        assert parser.parse_args([]).channel_fdr_plots == "off"
-        assert parser.parse_args(["--channel_fdr_plots"]).channel_fdr_plots == "all"
-        assert parser.parse_args(["--channel_fdr_plots", "KR"]).channel_fdr_plots == "KR"
-
-    def _scored(self):
-        # two sets; in B channels 0 and 20 tie for the highest PredVal
-        return pl.DataFrame({
-            "untag_prec": ["A", "A", "A", "B", "B", "B"], "seq": list("abcdef"),
-            "channel": [0.0, 4.0, 20.0, 0.0, 4.0, 20.0],
-            "is_decoy_channel": [False, False, True, False, False, True],
-            "PredVal": [0.9, 0.99, 0.5, 1.0, 0.7, 1.0],
-            "Channel_Qvalue": [0.02, 0.001, None, 0.005, 0.3, None]})
-
-    def test_best_channel_by_predval_shares_a_tie(self):
-        assert best_channel_counts(self._scored()) == {0.0: 0.5, 4.0: 1.0, 20.0: 0.5}
-
-    def test_retained_counts_leave_out_the_decoy_channel(self):
-        assert retained_counts(self._scored(), 0.01) == {0.0: (1, 2), 4.0: (1, 2)}
-        assert retained_counts(self._scored(), 0.5) == {0.0: (2, 2), 4.0: (2, 2)}
-
-    def test_every_channel_fdr_plot(self, tmp_path):
-        plot_channel_fdr(self._scored(), str(tmp_path), importance=self._importance())
-        for name in (BEST_CHANNEL_PLOT, IDS_PLOT, RETAINED_PLOT, IMPORTANCE_PLOT):
-            assert (tmp_path / name).exists()
-        assert (tmp_path / ECDF_FOLDER / "PredVal.png").exists()
-
-    def test_without_ecdfs(self, tmp_path):
-        plot_channel_fdr(self._scored(), str(tmp_path), ecdfs=False)
-        assert (tmp_path / BEST_CHANNEL_PLOT).exists() and not (tmp_path / ECDF_FOLDER).exists()
-
-    def test_no_ids_plot_without_channel_qvalues(self, tmp_path):
-        plot_channel_fdr(self._scored().drop("Channel_Qvalue"), str(tmp_path))
-        assert (tmp_path / BEST_CHANNEL_PLOT).exists() and not (tmp_path / IDS_PLOT).exists()
-        assert not (tmp_path / RETAINED_PLOT).exists() and not (tmp_path / IMPORTANCE_PLOT).exists()
-
-    def test_an_unknown_split_makes_no_plots(self, tmp_path):
-        plot_channel_fdr(self._scored(), str(tmp_path), split="KQ")
-        assert not list(tmp_path.iterdir())
-
-    @staticmethod
-    def _importance():
-        return pd.DataFrame({"share_of_gain": [0.6, 0.3, 0.1], "share_of_gain_sd": [0.05, 0.02, 0.01]},
-                            index=pd.Index(["ms1_cor", "cosine_chan", "z"], name="feature"))
-
-    def test_feature_importance(self, tmp_path):
-        plot_feature_importance(self._importance(), str(tmp_path), top=2)
-        assert (tmp_path / IMPORTANCE_PLOT).exists()
-
-    def test_feature_importance_round_trips_through_its_file(self, tmp_path):
-        write_feature_importance(self._importance(), str(tmp_path))
-        back = read_feature_importance(str(tmp_path))
-        pd.testing.assert_frame_equal(back, self._importance())
-        assert read_feature_importance(str(tmp_path / "elsewhere")) is None
-
-    def test_only_the_identity_columns_are_not_features(self):
-        columns = ["seq", "z", "channel", "is_decoy_channel", "BestChannel_Qvalue", "PredVal", "cosine_chan"]
-        assert feature_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
-
-    def test_ks_distance(self):
-        assert ks_distance(np.array([1.0, 2.0]), np.array([1.0, 2.0])) == 0.0
-        assert ks_distance(np.array([1.0, 2.0]), np.array([3.0, 4.0])) == 1.0
-        assert np.isnan(ks_distance(np.array([1.0]), np.zeros(0)))

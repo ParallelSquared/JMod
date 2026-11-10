@@ -226,7 +226,7 @@ TOP_FEATURES = 30
 
 
 def plot_feature_importance(importance, folder, top=TOP_FEATURES):
-    """The *top* features of *importance* (channel_fdr_fit.feature_importance's
+    """The *top* features of *importance* (channel_fdr.feature_importance's
     table), the most important at the top: each one's mean share of the gain
     over the CV folds' models, with their standard deviation as error bars.  In
     the style of the run's own scoring plots (score_model), which draw one of
