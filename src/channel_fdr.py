@@ -35,6 +35,7 @@ entry has is set by --num_iso, not by evidence.  Intensities come both ways.
 import os
 
 import numpy as np
+import pandas as pd
 import polars as pl
 
 from src.logger import logger
@@ -47,6 +48,12 @@ _NTERM_IONS = (0, 2, 3)
 
 FEATURE_FOLDER = "channel_fdr"
 FEATURE_FILE = "channel_features.parquet"
+FEATURE_IMPORTANCE_FILE = "feature_importance.csv"
+# Each feature's share of the model's gain, over the CV folds: mean and spread
+IMPORTANCE_COLUMN = "share_of_gain"
+IMPORTANCE_SPREAD_COLUMN = "share_of_gain_sd"
+# The channel FDR's outputs, written into the feature table after the fit
+SCORE_COLUMNS = ["ChannelScore", "Channel_Qvalue"]
 
 # Carried into the feature table so it stands on its own: the row's identity and
 # the set-level score the rows were kept by.  The row's own score is PredVal, a
@@ -572,17 +579,33 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
             .hstack(pl.DataFrame(ms1, schema={name: pl.Float64 for name in _MS1_FEATURES})))
 
 
-def write_channel_features(ids, list_cols, scan_coeffs, spectra, library, mass_tag, results_folder,
-                           fdr_threshold, plots="off"):
-    """build_channel_features, written to <results_folder>/channel_fdr/, with
-    every feature's histogram and ECDF beside it unless *plots* is "off"
-    (channel_fdr_plots.plot_channel_features: "all", or "KR" to split by the
-    C-terminal residue).
+def model_columns(features):
+    """The columns of the channel feature table the channel FDR is fitted on:
+    every one but the identity columns and its own outputs."""
+    return [c for c in features.columns if c not in _ID_COLUMNS + SCORE_COLUMNS]
 
-    Does nothing without a decoy channel: the features exist for the
-    channel-level FDR, which has nothing to measure against without one (label
-    free, a tag searching one channel, or --decoy_channel none).  Also nothing
-    when the apex scan's fragments were not kept apart (*list_cols* None).
+
+def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, results_folder, fdr_threshold,
+                    plots="off"):
+    """The channel-level FDR for one run, into <results_folder>/channel_fdr/.
+
+    Builds the channel feature table (build_channel_features), fits the model
+    on it (channel_fdr_fit.fit_channel_fdr), adds its ChannelScore and
+    Channel_Qvalue to the table, and writes:
+      - FEATURE_FILE: the table
+      - FEATURE_IMPORTANCE_FILE: each feature's share of the model's gain
+      - the best channel by PredVal, IDs vs Channel_Qvalue, the IDs retained
+        at *fdr_threshold* and the feature importance
+        (channel_fdr_plots.plot_channel_fdr)
+      - unless *plots* is "off", every column's histogram and ECDF too, and
+        with "KR" every plot but the importance split by the C-terminal
+        residue
+
+    Returns the table, for channel_qvalues to put Channel_Qvalue onto the run's
+    IDs.  Without a decoy channel there is nothing to measure the channels
+    against (label free, a tag searching one channel, or --decoy_channel none),
+    so it does nothing and returns None; likewise when the apex scan's
+    fragments were not kept apart (*list_cols* None).
     """
     if mass_tag is None or mass_tag.decoy_channel is None or list_cols is None:
         return None
@@ -592,11 +615,64 @@ def write_channel_features(ids, list_cols, scan_coeffs, spectra, library, mass_t
                                       fdr_threshold)
     folder = os.path.join(results_folder, FEATURE_FOLDER)
     os.makedirs(folder, exist_ok=True)
+    importance = None
+    if features.height:
+        from src.channel_fdr_fit import fit_channel_fdr
+        fitted = fit_channel_fdr(features, model_columns(features))
+        if fitted is None:
+            features = features.with_columns(pl.lit(None, pl.Float64).alias(c) for c in SCORE_COLUMNS)
+        else:
+            score, q, importance = fitted
+            # the decoy channel has no q-value: null, not NaN
+            features = features.with_columns(pl.Series("ChannelScore", score, dtype=pl.Float64),
+                                             pl.Series("Channel_Qvalue", q, dtype=pl.Float64).fill_nan(None))
+            write_feature_importance(importance, folder)
     path = os.path.join(folder, FEATURE_FILE)
     features.write_parquet(path)
     logger.info(f"Channel features for {len(features)} precursor-channels written to "
                 f"{os.path.abspath(path)}")
-    if str(plots).lower() != "off" and features.height:
-        from src.channel_fdr_plots import plot_channel_features
-        plot_channel_features(features, folder, split=plots)
+    if features.height:
+        from src.channel_fdr_plots import plot_channel_fdr
+        histograms = str(plots).lower() != "off"
+        plot_channel_fdr(features, folder, importance=importance, split=plots if histograms else "all",
+                         fdr_threshold=fdr_threshold, histograms=histograms)
     return features
+
+
+def write_feature_importance(importance, folder):
+    """*importance* (channel_fdr_fit.feature_importance's table) to
+    *folder*/FEATURE_IMPORTANCE_FILE."""
+    importance.to_csv(os.path.join(folder, FEATURE_IMPORTANCE_FILE))
+
+
+def read_feature_importance(folder):
+    """write_feature_importance's file back as its table, or None if there is none."""
+    path = os.path.join(folder, FEATURE_IMPORTANCE_FILE)
+    if not os.path.exists(path):
+        return None
+    return pd.read_csv(path, index_col="feature")
+
+
+def channel_qvalues(ids, features):
+    """Copies Channel_Qvalue from the channel feature table onto the run's IDs.
+
+    *ids* is every row of the run (pandas: fdx_quant); *features* only the rows
+    the channel FDR scored, so this is a lookup of each *ids* row in
+    *features*: by its tagged sequence and charge (and time channel, on
+    timeplex), which name one precursor-channel in a run -- a left join.
+    Returns one value per *ids* row, in its order and with its index: the row's
+    Channel_Qvalue if it was scored, null if not (decoys, the untagged, the
+    sets that failed the run's FDR, the decoy channel, which has none) or if
+    nothing was fitted.  A precursor-channel listed twice in *features* is an
+    error, as the lookup would be ambiguous.
+    """
+    if features is None or "Channel_Qvalue" not in features.columns:
+        return pd.Series(np.nan, index=ids.index)
+    keys = ["seq", "z"] + (["time_channel"] if "time_channel" in features.columns else [])
+    q = features.select(keys + ["Channel_Qvalue"]).to_pandas()
+    if q.duplicated(keys).any():
+        raise ValueError(f"Channel FDR: the channel features repeat a precursor-channel ({', '.join(keys)})")
+    q["z"] = q["z"].astype(ids["z"].dtype)
+    # a left merge keeps the left frame's rows, in their order
+    merged = ids[keys].merge(q, on=keys, how="left")
+    return pd.Series(merged["Channel_Qvalue"].to_numpy(dtype=float), index=ids.index)

@@ -6,12 +6,16 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, build_channel_features, channel_specific_mask,
+from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, FEATURE_IMPORTANCE_FILE, build_channel_features,
+                             channel_qvalues, channel_specific_mask, model_columns,
                              first_of_each, frag_error_features, longest_consecutive_scans, ms1_features, ms2_cycles, null_placeholders,
-                             tag_sites, write_channel_features, _CARRIED_FEATURES, _row_features)
+                             read_feature_importance, run_channel_fdr, tag_sites, write_feature_importance, _CARRIED_FEATURES,
+                             _row_features)
 from src.channel_fdr import _AMINO_ACIDS
-from src.channel_fdr_plots import (ECDF_FOLDER, HIST_FOLDER, feature_columns, ks_distance, panels,
-                                   plot_channel_features)
+from src.channel_fdr_plots import (BEST_CHANNEL_PLOT, ECDF_FOLDER, HIST_FOLDER, IDS_PLOT, IMPORTANCE_PLOT,
+                                   RETAINED_PLOT, best_channel_counts, feature_columns, ks_distance, panels,
+                                   plot_channel_fdr, plot_channel_features, plot_feature_importance,
+                                   retained_counts)
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from src.utils.frag_encoding import encode_frag_names
@@ -259,7 +263,7 @@ def _features(ids, list_cols, library, mass_tag, fdr_threshold):
 
 
 def _write(ids, list_cols, library, mass_tag, results_folder, fdr_threshold, plots="off"):
-    return write_channel_features(ids, list_cols, _dc(), _Spectra(), library, mass_tag, results_folder,
+    return run_channel_fdr(ids, list_cols, _dc(), _Spectra(), library, mass_tag, results_folder,
                                   fdr_threshold, plots=plots)
 
 
@@ -578,11 +582,54 @@ class TestWriteChannelFeatures:
                                       available_tags["PSMtag_5plex"], str(tmp_path), 0.01) is None
         assert not (tmp_path / FEATURE_FOLDER).exists()
 
-    def test_no_plots_unless_asked(self, tmp_path):
+    def test_too_few_decoys_for_a_fit_leaves_the_scores_null(self, tmp_path):
+        tag = available_tags["PSMtag_5plex"].with_decoy_channel()
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001),
+                    ("(PSMtag_5plex-20)PEPTIDER", 20, False, True, 0.001)])
+        _write(ids, _list_cols([(["b2_1"], [1.0])] * 2), _store(), tag, str(tmp_path), 0.01)
+        written = pl.read_parquet(tmp_path / FEATURE_FOLDER / FEATURE_FILE)
+        assert written["ChannelScore"].to_list() == [None, None]
+        assert written["Channel_Qvalue"].to_list() == [None, None]
+        assert not (tmp_path / FEATURE_FOLDER / FEATURE_IMPORTANCE_FILE).exists()
+
+    def test_the_model_is_fitted_on_the_features_only(self):
+        columns = ["seq", "z", "channel", "is_decoy_channel", "BestChannel_Qvalue", "untag_seq", "PredVal",
+                   "cosine_chan", "ChannelScore", "Channel_Qvalue"]
+        assert model_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
+
+    def test_no_histograms_unless_asked(self, tmp_path):
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
         _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
-        assert sorted(p.name for p in (tmp_path / FEATURE_FOLDER).iterdir()) == [FEATURE_FILE]
+        # the other plots always (here no fit, so no importance or IDs vs q-value)
+        assert sorted(p.name for p in (tmp_path / FEATURE_FOLDER).iterdir()) == [BEST_CHANNEL_PLOT,
+                                                                                  FEATURE_FILE]
+
+
+class TestChannelQvalues:
+    """Channel_Qvalue back onto the run's IDs, by tagged sequence and charge."""
+
+    def _ids(self):
+        return pd.DataFrame({"seq": ["(PSMtag_5plex-0)PEPTIDER", "Decoy_(PSMtag_5plex-0)REDITPEP",
+                                     "(PSMtag_5plex-4)PEPTIDER", "(PSMtag_5plex-0)PEPTIDER"],
+                             "z": [2, 2, 2, 3]}, index=[10, 11, 12, 13])
+
+    def test_onto_its_rows_and_null_elsewhere(self):
+        features = pl.DataFrame({"seq": ["(PSMtag_5plex-4)PEPTIDER", "(PSMtag_5plex-0)PEPTIDER"],
+                                 "z": [2, 2], "Channel_Qvalue": [0.2, 0.001]})
+        q = channel_qvalues(self._ids(), features)
+        assert list(q.index) == [10, 11, 12, 13]
+        assert q.iloc[0] == 0.001 and q.iloc[2] == 0.2
+        assert np.isnan(q.iloc[1]) and np.isnan(q.iloc[3])        # a decoy; another charge
+
+    def test_nothing_fitted(self):
+        assert channel_qvalues(self._ids(), pl.DataFrame()).isna().all()
+
+    def test_a_repeated_precursor_channel_is_an_error(self):
+        features = pl.DataFrame({"seq": ["(PSMtag_5plex-0)PEPTIDER"] * 2, "z": [2, 2],
+                                 "Channel_Qvalue": [0.1, 0.2]})
+        with pytest.raises(ValueError, match="repeat"):
+            channel_qvalues(self._ids(), features)
 
 
 class TestPlots:
@@ -620,12 +667,17 @@ class TestPlots:
     def test_written_beside_the_table_when_asked(self, tmp_path, monkeypatch):
         import src.channel_fdr_plots
         calls = []
-        monkeypatch.setattr(src.channel_fdr_plots, "plot_channel_features",
-                            lambda features, folder, split: calls.append((features.height, folder, split)))
+        monkeypatch.setattr(src.channel_fdr_plots, "plot_channel_fdr",
+                            lambda features, folder, importance, split, fdr_threshold, histograms:
+                            calls.append((features.height, folder, importance, split, fdr_threshold,
+                                          histograms)))
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
         _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01, plots="KR")
-        assert calls == [(1, os.path.join(str(tmp_path), FEATURE_FOLDER), "KR")]
+        # too few decoys to fit: no importance
+        assert calls == [(1, os.path.join(str(tmp_path), FEATURE_FOLDER), None, "KR", 0.01, True)]
+        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
+        assert calls[1][3:] == ("all", 0.01, False)                    # off: no histograms, one panel
 
     def test_the_flag_alone_is_all(self):
         import argparse
@@ -635,6 +687,56 @@ class TestPlots:
         assert parser.parse_args([]).channel_fdr_plots == "off"
         assert parser.parse_args(["--channel_fdr_plots"]).channel_fdr_plots == "all"
         assert parser.parse_args(["--channel_fdr_plots", "KR"]).channel_fdr_plots == "KR"
+
+    def _scored(self):
+        # two sets; in B channels 0 and 20 tie for the highest PredVal
+        return pl.DataFrame({
+            "untag_prec": ["A", "A", "A", "B", "B", "B"], "seq": list("abcdef"),
+            "channel": [0.0, 4.0, 20.0, 0.0, 4.0, 20.0],
+            "is_decoy_channel": [False, False, True, False, False, True],
+            "PredVal": [0.9, 0.99, 0.5, 1.0, 0.7, 1.0],
+            "Channel_Qvalue": [0.02, 0.001, None, 0.005, 0.3, None]})
+
+    def test_best_channel_by_predval_shares_a_tie(self):
+        assert best_channel_counts(self._scored()) == {0.0: 0.5, 4.0: 1.0, 20.0: 0.5}
+
+    def test_retained_counts_leave_out_the_decoy_channel(self):
+        assert retained_counts(self._scored(), 0.01) == {0.0: (1, 2), 4.0: (1, 2)}
+        assert retained_counts(self._scored(), 0.5) == {0.0: (2, 2), 4.0: (2, 2)}
+
+    def test_every_channel_fdr_plot(self, tmp_path):
+        plot_channel_fdr(self._scored(), str(tmp_path), importance=self._importance())
+        for name in (BEST_CHANNEL_PLOT, IDS_PLOT, RETAINED_PLOT, IMPORTANCE_PLOT):
+            assert (tmp_path / name).exists()
+        assert (tmp_path / HIST_FOLDER / "PredVal.png").exists()
+
+    def test_without_histograms(self, tmp_path):
+        plot_channel_fdr(self._scored(), str(tmp_path), histograms=False)
+        assert (tmp_path / BEST_CHANNEL_PLOT).exists() and not (tmp_path / HIST_FOLDER).exists()
+
+    def test_no_ids_plot_without_channel_qvalues(self, tmp_path):
+        plot_channel_fdr(self._scored().drop("Channel_Qvalue"), str(tmp_path))
+        assert (tmp_path / BEST_CHANNEL_PLOT).exists() and not (tmp_path / IDS_PLOT).exists()
+        assert not (tmp_path / RETAINED_PLOT).exists() and not (tmp_path / IMPORTANCE_PLOT).exists()
+
+    def test_an_unknown_split_makes_no_plots(self, tmp_path):
+        plot_channel_fdr(self._scored(), str(tmp_path), split="KQ")
+        assert not list(tmp_path.iterdir())
+
+    @staticmethod
+    def _importance():
+        return pd.DataFrame({"share_of_gain": [0.6, 0.3, 0.1], "share_of_gain_sd": [0.05, 0.02, 0.01]},
+                            index=pd.Index(["ms1_cor", "cosine_chan", "z"], name="feature"))
+
+    def test_feature_importance(self, tmp_path):
+        plot_feature_importance(self._importance(), str(tmp_path), top=2)
+        assert (tmp_path / IMPORTANCE_PLOT).exists()
+
+    def test_feature_importance_round_trips_through_its_file(self, tmp_path):
+        write_feature_importance(self._importance(), str(tmp_path))
+        back = read_feature_importance(str(tmp_path))
+        pd.testing.assert_frame_equal(back, self._importance())
+        assert read_feature_importance(str(tmp_path / "elsewhere")) is None
 
     def test_only_the_identity_columns_are_not_features(self):
         columns = ["seq", "z", "channel", "is_decoy_channel", "BestChannel_Qvalue", "PredVal", "cosine_chan"]

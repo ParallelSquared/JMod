@@ -1,13 +1,15 @@
-"""Histograms and ECDFs of every channel feature, one line per channel, the
-decoy channel set apart: a look at which features tell a channel that is there
-from one that is not, before anything is fitted.
+"""The channel-FDR plots of a run, into <run>/channel_fdr/.
 
-Written by the pipeline with --channel_fdr_plots, into <run>/channel_fdr/
-histograms and <run>/channel_fdr/ECDF: "all" (the flag alone) plots every
-precursor together, "KR" plots the peptides ending in K and in R side by side --
-under a K-tagging tag every y ion of a K-ending peptide carries the tag, so
-the two behave differently.  Also runs on its own, on any written feature
-table:
+Always: the best channel by PredVal in each plex set, IDs vs Channel_Qvalue,
+each channel's IDs retained at the FDR threshold, and the fitted model's
+feature importance.  With --channel_fdr_plots also a
+histogram and an ECDF of every channel feature (into histograms/ and ECDF/),
+one line per channel, the decoy channel set apart: a look at which features
+tell a channel that is there from one that is not.  "all" (the flag alone)
+plots every precursor together, "KR" the peptides ending in K and in R side by
+side, in every plot but the importance -- under a K-tagging tag every y ion of
+a K-ending peptide carries the tag, so the two behave differently.  Also runs
+on its own, on any written feature table, making all of them:
 
     python -m src.channel_fdr_plots <run>/channel_fdr/channel_features.parquet [KR]
 """
@@ -25,7 +27,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from src.channel_fdr import _AMINO_ACIDS, _ID_COLUMNS
+from src.channel_fdr import (IMPORTANCE_COLUMN, IMPORTANCE_SPREAD_COLUMN, _AMINO_ACIDS, _ID_COLUMNS,
+                             read_feature_importance)
 from src.logger import logger
 
 HIST_FOLDER = "histograms"
@@ -156,19 +159,26 @@ def _figure(column, panel_groups, draw, path):
         _legend(ax, groups)
     fig.suptitle(column)
     fig.tight_layout()
-    fig.savefig(path, dpi=DPI)
-    plt.close(fig)
+    _save(fig, path)
+
+
+def _split(split):
+    """*split* as one of SPLITS, whatever its case; None, with a warning, if it is none of them."""
+    known = next((s for s in SPLITS if s.lower() == str(split).lower()), None)
+    if known is None:
+        logger.warning(f"Channel FDR plots: not made, the split must be one of {', '.join(SPLITS)}, "
+                       f"not {split!r}")
+    return known
 
 
 def plot_channel_features(features, folder, split="all"):
     """A histogram and an ECDF of every feature of *features* (the table
-    write_channel_features writes), into *folder*/histograms and *folder*/ECDF.
+    run_channel_fdr writes), into *folder*/histograms and *folder*/ECDF.
     *split*: "all", or "KR" for the K- and R-ending peptides as two panels.  A
     feature with no value in any panel is skipped.  Returns the number of
     features plotted."""
-    split = next((s for s in SPLITS if s.lower() == str(split).lower()), None)
+    split = _split(split)
     if split is None:
-        logger.warning(f"Channel feature plots: not made, the split must be one of {', '.join(SPLITS)}")
         return 0
     hist_folder, ecdf_folder = os.path.join(folder, HIST_FOLDER), os.path.join(folder, ECDF_FOLDER)
     os.makedirs(hist_folder, exist_ok=True)
@@ -200,9 +210,201 @@ def plot_channel_features(features, folder, split="all"):
     return n
 
 
+IMPORTANCE_PLOT = "feature_importance.png"
+# The importance plot shows this many features, the most important; the rest
+# are in the CSV
+TOP_FEATURES = 30
+
+
+def plot_feature_importance(importance, folder, top=TOP_FEATURES):
+    """The *top* features of *importance* (channel_fdr_fit.feature_importance's
+    table), the most important at the top: each one's mean share of the gain
+    over the CV folds' models, with their standard deviation as error bars.  In
+    the style of the run's own scoring plots (score_model), which draw one of
+    these per fold.  Into *folder*/IMPORTANCE_PLOT."""
+    shown = importance.sort_values(IMPORTANCE_COLUMN, ascending=False).head(top).iloc[::-1]
+    fig, ax = plt.subplots(figsize=(8, max(3.0, len(shown) * 0.3)))
+    ax.barh(shown.index, shown[IMPORTANCE_COLUMN], xerr=shown[IMPORTANCE_SPREAD_COLUMN], capsize=2,
+            error_kw=dict(elinewidth=0.8))
+    ax.set_title("Feature Importance" + (f" (top {len(shown)} of {len(importance)})"
+                                         if len(shown) < len(importance) else ""))
+    ax.set_xlabel("Share of gain, mean +/- SD over the CV folds")
+    fig.tight_layout()
+    path = os.path.join(folder, IMPORTANCE_PLOT)
+    _save(fig, path)
+    return path
+
+
+def _save(fig, path):
+    try:
+        fig.savefig(path, dpi=DPI)
+    except OSError as error:
+        # e.g. the file is open in a viewer on Windows
+        logger.warning(f"Channel FDR: could not write {path} ({error})")
+    finally:
+        plt.close(fig)
+
+
+BEST_CHANNEL_PLOT = "best_channel_by_predval.png"
+IDS_PLOT = "ids_vs_channel_qvalue.png"
+RETAINED_PLOT = "ids_retained_at_channel_qvalue.png"
+# The x axis of IDS_PLOT runs from 0 to this
+Q_RANGE = 0.1
+
+
+def _set_keys(features):
+    """The columns that name a plex set: its untagged precursor (in a time
+    channel, on timeplex)."""
+    return ["untag_prec"] + (["time_channel"] if "time_channel" in features.columns else [])
+
+
+def best_channel_counts(features):
+    """{channel: the number of plex sets in which it has the highest PredVal}.
+    A set where several channels tie for it (PredVal saturates near 1) counts
+    1/k for each of the k, so the counts add up to the number of sets."""
+    best = (features
+            .with_columns(pl.col("PredVal").max().over(_set_keys(features)).alias("__best"))
+            .filter(pl.col("PredVal") == pl.col("__best"))
+            .with_columns((1.0 / pl.len().over(_set_keys(features))).alias("__credit")))
+    totals = best.group_by("channel").agg(pl.col("__credit").sum())
+    return {channel: credit for channel, credit in sorted(totals.iter_rows())}
+
+
+def plot_best_channel(features, folder, split="all"):
+    """Bars: in how many plex sets each channel has the highest PredVal, of the
+    sets the channel FDR scored.  If one channel wins far more often than the
+    others, PredVal carries which channel a row is, as well as whether it is
+    there.  Into *folder*/BEST_CHANNEL_PLOT."""
+    parts = panels(features, split)
+    fig, axes = plt.subplots(1, len(parts), figsize=(7 * len(parts), 4.5), squeeze=False)
+    for ax, (title, rows) in zip(axes[0], parts):
+        groups = _by_channel(rows, "PredVal")
+        counts = best_channel_counts(rows)
+        n_sets = sum(counts.values())
+        for i, ((channel, decoy, _, _), style) in enumerate(zip(groups, _styles(groups))):
+            count = counts.get(channel, 0.0)
+            ax.bar(i, count, color="white" if decoy else style["color"], edgecolor="black" if decoy else None,
+                   hatch="//" if decoy else None, linewidth=1.2 if decoy else 0)
+            ax.text(i, count, f"{count / n_sets:.0%}" if n_sets else "", ha="center", va="bottom", fontsize=8)
+        ax.set_xticks(range(len(groups)),
+                      [f"{channel:g}{' (decoy)' if decoy else ''}" for channel, decoy, _, _ in groups])
+        ax.set_xlabel("Channel")
+        ax.set_ylabel("Plex sets where it has the highest PredVal")
+        ax.set_title(f"{title + ': ' if title else ''}{n_sets:.0f} sets", fontsize=10)
+    fig.suptitle("Best channel by PredVal")
+    fig.tight_layout()
+    _save(fig, os.path.join(folder, BEST_CHANNEL_PLOT))
+
+
+def plot_ids_vs_channel_qvalue(features, folder, split="all", fdr_threshold=0.01):
+    """Each real channel's number of precursors at Channel_Qvalue <= q, against
+    q, with the run's threshold marked.  Into *folder*/IDS_PLOT; nothing if
+    there are no channel q-values."""
+    if not _has_channel_qvalues(features):
+        logger.info("Channel FDR plots: no Channel_Qvalue, so no IDs vs Channel_Qvalue plot")
+        return
+    parts = panels(features, split)
+    fig, axes = plt.subplots(1, len(parts), figsize=(7 * len(parts), 4.5), squeeze=False, sharey=True)
+    for ax, (title, rows) in zip(axes[0], parts):
+        groups = _by_channel(rows, "Channel_Qvalue")
+        for (channel, decoy, q, _), style in zip(groups, _styles(groups)):
+            if decoy or q.size == 0:            # the decoy channel has no q-values
+                continue
+            n_at = int((q <= fdr_threshold).sum())
+            # a step at each q-value on the axis, carried on to its edge
+            shown = np.sort(q[q <= Q_RANGE])
+            ax.step(np.append(shown, Q_RANGE), np.append(np.arange(1, shown.size + 1), shown.size),
+                    where="post", label=f"{channel:g}: {n_at} at {fdr_threshold:g}", **style)
+        ax.axvline(fdr_threshold, color="grey", linestyle=":", linewidth=1)
+        ax.set_xlim(0, Q_RANGE)
+        ax.set_xlabel("Channel_Qvalue")
+        ax.set_ylabel("Precursors at or below it")
+        ax.grid(alpha=0.3)
+        if title:
+            ax.set_title(title, fontsize=10)
+        ax.legend(fontsize=8, loc="lower right")       # the curves start high: that corner is empty
+    fig.suptitle("IDs vs Channel_Qvalue")
+    fig.tight_layout()
+    _save(fig, os.path.join(folder, IDS_PLOT))
+
+
+def _has_channel_qvalues(features):
+    return "Channel_Qvalue" in features.columns and features["Channel_Qvalue"].drop_nulls().len() > 0
+
+
+def retained_counts(features, fdr_threshold):
+    """{real channel: (its rows at Channel_Qvalue <= *fdr_threshold*, all its
+    rows)}, in channel order.  The rows are the IDs the channel FDR scored."""
+    return {channel: (int((q <= fdr_threshold).sum()), q.size + n_null)
+            for channel, decoy, q, n_null in _by_channel(features, "Channel_Qvalue") if not decoy}
+
+
+def _lighter(colour, amount=0.55):
+    """*colour* mixed towards white by *amount*."""
+    return tuple(c + (1 - c) * amount for c in colour[:3])
+
+
+def _is_dark(colour):
+    """Whether white text reads on *colour* (by its luma); else black."""
+    r, g, b = colour[:3]
+    return 0.299 * r + 0.587 * g + 0.114 * b < 0.6
+
+
+def plot_ids_retained(features, folder, split="all", fdr_threshold=0.01):
+    """A stacked bar per real channel: of its IDs, those retained at
+    Channel_Qvalue <= *fdr_threshold* (the channel's colour, with the share
+    retained) and those removed (a lighter shade of it).  Into
+    *folder*/RETAINED_PLOT; nothing if there are no channel q-values."""
+    if not _has_channel_qvalues(features):
+        return
+    parts = panels(features, split)
+    fig, axes = plt.subplots(1, len(parts), figsize=(7 * len(parts), 4.5), squeeze=False, sharey=True)
+    for ax, (title, rows) in zip(axes[0], parts):
+        counts = retained_counts(rows, fdr_threshold)
+        # the real channels' colours, as in the other plots
+        colours = [s["color"] for s in _styles([(c, False, None, None) for c in counts])]
+        for i, ((kept, n), colour) in enumerate(zip(counts.values(), colours)):
+            ax.bar(i, kept, color=colour, label="retained" if i == 0 else None)
+            ax.bar(i, n - kept, bottom=kept, color=_lighter(colour), label="removed" if i == 0 else None)
+            if n:
+                ax.text(i, kept / 2, f"{kept / n:.0%}", ha="center", va="center", fontsize=8,
+                        color="white" if _is_dark(colour) else "black")
+        ax.set_xticks(range(len(counts)), [f"{channel:g}" for channel in counts])
+        ax.set_xlabel("Channel")
+        ax.set_ylabel("IDs")
+        if title:
+            ax.set_title(title, fontsize=10)
+        ax.set_ylim(0, ax.get_ylim()[1] * 1.12)       # room for the legend above the bars
+        ax.legend(fontsize=8, loc="upper right", ncol=2)
+    fig.suptitle(f"IDs retained at Channel_Qvalue <= {fdr_threshold:g}")
+    fig.tight_layout()
+    _save(fig, os.path.join(folder, RETAINED_PLOT))
+
+
+def plot_channel_fdr(features, folder, importance=None, split="all", fdr_threshold=0.01, histograms=True):
+    """The channel-FDR plots of a run into *folder*: the best channel by
+    PredVal, IDs vs Channel_Qvalue, the IDs it retains at *fdr_threshold*, the
+    feature importance if there is one, and
+    with *histograms* each feature's histogram and ECDF.  *split*: "all", or
+    "KR" for the K- and R-ending peptides as two panels (not the feature
+    importance, which is one model's)."""
+    split = _split(split)
+    if split is None:
+        return
+    if histograms:
+        plot_channel_features(features, folder, split=split)
+    plot_best_channel(features, folder, split=split)
+    plot_ids_vs_channel_qvalue(features, folder, split=split, fdr_threshold=fdr_threshold)
+    plot_ids_retained(features, folder, split=split, fdr_threshold=fdr_threshold)
+    if importance is not None:
+        plot_feature_importance(importance, folder)
+
+
 if __name__ == "__main__":
     if len(_ARGS) not in (1, 2):
         sys.exit("usage: python -m src.channel_fdr_plots <channel_features.parquet> [all|KR]")
     parquet = _ARGS[0]
-    plot_channel_features(pl.read_parquet(parquet), os.path.dirname(os.path.abspath(parquet)),
-                          split=_ARGS[1] if len(_ARGS) == 2 else "all")
+    folder = os.path.dirname(os.path.abspath(parquet))
+    # with the fit's feature importance, if it was written beside the table
+    plot_channel_fdr(pl.read_parquet(parquet), folder, importance=read_feature_importance(folder),
+                     split=_ARGS[1] if len(_ARGS) == 2 else "all")

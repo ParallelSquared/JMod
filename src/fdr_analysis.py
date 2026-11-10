@@ -1437,9 +1437,13 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # Channel-level evidence, before the list columns are merged back: it reads
     # the apex scan's fragments straight from polars, and needs ms1_quant's
     # outputs, so it sits between the two
-    from src.channel_fdr import write_channel_features
-    write_channel_features(fdx_quant, fdc_list_cols, dc, spectra, library, mass_tag, results_folder,
-                           config.fdr_threshold, plots=config.args.channel_fdr_plots)
+    from src.channel_fdr import channel_qvalues, run_channel_fdr
+    channel_features = run_channel_fdr(fdx_quant, fdc_list_cols, dc, spectra, library, mass_tag,
+                                       results_folder, config.fdr_threshold,
+                                       plots=config.args.channel_fdr_plots)
+    # Into every output; nothing is filtered by it.  Only with a decoy channel
+    if channel_features is not None:
+        fdx_quant["Channel_Qvalue"] = channel_qvalues(fdx_quant, channel_features)
 
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge
