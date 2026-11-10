@@ -12,9 +12,9 @@ from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, FEATURE_IMPORTANCE_FI
                              read_feature_importance, run_channel_fdr, tag_sites, write_feature_importance, _CARRIED_FEATURES,
                              _row_features)
 from src.channel_fdr import _AMINO_ACIDS
-from src.channel_fdr_plots import (BEST_CHANNEL_PLOT, ECDF_FOLDER, HIST_FOLDER, IDS_PLOT, IMPORTANCE_PLOT,
+from src.channel_fdr_plots import (BEST_CHANNEL_PLOT, ECDF_FOLDER, IDS_PLOT, IMPORTANCE_PLOT,
                                    RETAINED_PLOT, best_channel_counts, feature_columns, ks_distance, panels,
-                                   plot_channel_fdr, plot_channel_features, plot_feature_importance,
+                                   plot_channel_fdr, plot_feature_ecdfs, plot_feature_importance,
                                    retained_counts)
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
@@ -597,7 +597,7 @@ class TestWriteChannelFeatures:
                    "cosine_chan", "ChannelScore", "Channel_Qvalue"]
         assert model_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
 
-    def test_no_histograms_unless_asked(self, tmp_path):
+    def test_no_ecdfs_unless_asked(self, tmp_path):
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
         _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
@@ -633,17 +633,17 @@ class TestChannelQvalues:
 
 
 class TestPlots:
-    def test_a_histogram_and_an_ecdf_of_every_feature(self, tmp_path):
+    def test_an_ecdf_of_every_feature(self, tmp_path):
         features = pl.DataFrame({
             "seq": ["A", "A", "B", "B"], "channel": [0.0, 20.0, 0.0, 20.0],
             "is_decoy_channel": [False, True, False, True],
             "cosine_chan": [0.9, 0.2, 0.8, None],            # continuous, a null
             "n_chan_frags": [5, 1, 4, 0],                    # integer
             "im_error": [None, None, None, None]})           # nothing to plot
-        assert plot_channel_features(features, str(tmp_path)) == 2
-        for folder in (HIST_FOLDER, ECDF_FOLDER):
-            assert sorted(p.name for p in (tmp_path / folder).iterdir()) == ["cosine_chan.png",
-                                                                             "n_chan_frags.png"]
+        assert plot_feature_ecdfs(features, str(tmp_path)) == 2
+        assert sorted(p.name for p in tmp_path.iterdir()) == [ECDF_FOLDER]
+        assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == ["cosine_chan.png",
+                                                                          "n_chan_frags.png"]
 
     def test_split_by_the_c_terminal_residue(self, tmp_path):
         k, r, a = (_AMINO_ACIDS.index(aa) for aa in "KRA")
@@ -655,29 +655,29 @@ class TestPlots:
         assert (k_title, k_rows["seq"].to_list()) == ("C-terminal K", ["K", "K"])
         assert (r_title, r_rows["seq"].to_list()) == ("C-terminal R", ["R", "R"])     # not A
         assert panels(features, "all")[0][1].height == 5
-        assert plot_channel_features(features, str(tmp_path), split="kr") == 2       # any case
-        assert sorted(p.name for p in (tmp_path / HIST_FOLDER).iterdir()) == ["cosine_chan.png",
+        assert plot_feature_ecdfs(features, str(tmp_path), split="kr") == 2          # any case
+        assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == ["cosine_chan.png",
                                                                           "last_aa_code.png"]
 
     def test_an_unknown_split_plots_nothing(self, tmp_path):
         features = pl.DataFrame({"channel": [0.0], "is_decoy_channel": [False], "cosine_chan": [0.9]})
-        assert plot_channel_features(features, str(tmp_path), split="KQ") == 0
-        assert not (tmp_path / HIST_FOLDER).exists()
+        assert plot_feature_ecdfs(features, str(tmp_path), split="KQ") == 0
+        assert not (tmp_path / ECDF_FOLDER).exists()
 
     def test_written_beside_the_table_when_asked(self, tmp_path, monkeypatch):
         import src.channel_fdr_plots
         calls = []
         monkeypatch.setattr(src.channel_fdr_plots, "plot_channel_fdr",
-                            lambda features, folder, importance, split, fdr_threshold, histograms:
+                            lambda features, folder, importance, split, fdr_threshold, ecdfs:
                             calls.append((features.height, folder, importance, split, fdr_threshold,
-                                          histograms)))
+                                          ecdfs)))
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
         _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01, plots="KR")
         # too few decoys to fit: no importance
         assert calls == [(1, os.path.join(str(tmp_path), FEATURE_FOLDER), None, "KR", 0.01, True)]
         _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
-        assert calls[1][3:] == ("all", 0.01, False)                    # off: no histograms, one panel
+        assert calls[1][3:] == ("all", 0.01, False)                    # off: no ECDFs, one panel
 
     def test_the_flag_alone_is_all(self):
         import argparse
@@ -708,11 +708,11 @@ class TestPlots:
         plot_channel_fdr(self._scored(), str(tmp_path), importance=self._importance())
         for name in (BEST_CHANNEL_PLOT, IDS_PLOT, RETAINED_PLOT, IMPORTANCE_PLOT):
             assert (tmp_path / name).exists()
-        assert (tmp_path / HIST_FOLDER / "PredVal.png").exists()
+        assert (tmp_path / ECDF_FOLDER / "PredVal.png").exists()
 
-    def test_without_histograms(self, tmp_path):
-        plot_channel_fdr(self._scored(), str(tmp_path), histograms=False)
-        assert (tmp_path / BEST_CHANNEL_PLOT).exists() and not (tmp_path / HIST_FOLDER).exists()
+    def test_without_ecdfs(self, tmp_path):
+        plot_channel_fdr(self._scored(), str(tmp_path), ecdfs=False)
+        assert (tmp_path / BEST_CHANNEL_PLOT).exists() and not (tmp_path / ECDF_FOLDER).exists()
 
     def test_no_ids_plot_without_channel_qvalues(self, tmp_path):
         plot_channel_fdr(self._scored().drop("Channel_Qvalue"), str(tmp_path))

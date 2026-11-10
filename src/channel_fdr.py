@@ -597,7 +597,7 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
       - the best channel by PredVal, IDs vs Channel_Qvalue, the IDs retained
         at *fdr_threshold* and the feature importance
         (channel_fdr_plots.plot_channel_fdr)
-      - unless *plots* is "off", every column's histogram and ECDF too, and
+      - unless *plots* is "off", every column's ECDF too, and
         with "KR" every plot but the importance split by the C-terminal
         residue
 
@@ -633,9 +633,9 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
                 f"{os.path.abspath(path)}")
     if features.height:
         from src.channel_fdr_plots import plot_channel_fdr
-        histograms = str(plots).lower() != "off"
-        plot_channel_fdr(features, folder, importance=importance, split=plots if histograms else "all",
-                         fdr_threshold=fdr_threshold, histograms=histograms)
+        ecdfs = str(plots).lower() != "off"
+        plot_channel_fdr(features, folder, importance=importance, split=plots if ecdfs else "all",
+                         fdr_threshold=fdr_threshold, ecdfs=ecdfs)
     return features
 
 

@@ -338,10 +338,9 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
-    'channel_fdr_plots': {  ## a histogram and an ECDF of every channel feature, per channel, in
-                            ## channel_fdr/histograms and channel_fdr/ECDF: off, all (the flag
-                            ## alone), or KR (C-terminal K and R peptides side by side, in the
-                            ## channel FDR's other plots too, which are always made)
+    'channel_fdr_plots': {  ## an ECDF of every channel feature, per channel, in channel_fdr/ECDF:
+                            ## off, all (the flag alone), or KR (C-terminal K and R peptides side
+                            ## by side, in the channel FDR's other plots too, which are always made)
         'flags': ('--channel_fdr_plots',),
         'default': 'off',
         'const': 'all',

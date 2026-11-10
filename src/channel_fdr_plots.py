@@ -2,10 +2,10 @@
 
 Always: the best channel by PredVal in each plex set, IDs vs Channel_Qvalue,
 each channel's IDs retained at the FDR threshold, and the fitted model's
-feature importance.  With --channel_fdr_plots also a
-histogram and an ECDF of every channel feature (into histograms/ and ECDF/),
-one line per channel, the decoy channel set apart: a look at which features
-tell a channel that is there from one that is not.  "all" (the flag alone)
+feature importance.  With --channel_fdr_plots also an ECDF of every channel
+feature (into ECDF/), one line per channel, the decoy channel set apart: a
+look at which features tell a channel that is there from one that is not.
+"all" (the flag alone)
 plots every precursor together, "KR" the peptides ending in K and in R side by
 side, in every plot but the importance -- under a K-tagging tag every y ion of
 a K-ending peptide carries the tag, so the two behave differently.  Also runs
@@ -31,16 +31,12 @@ from src.channel_fdr import (IMPORTANCE_COLUMN, IMPORTANCE_SPREAD_COLUMN, _AMINO
                              read_feature_importance)
 from src.logger import logger
 
-HIST_FOLDER = "histograms"
 ECDF_FOLDER = "ECDF"
 SPLITS = ("all", "KR")
-# The axes show the central 99% of the values: a handful of extreme ones would
-# otherwise squash every channel into a bin or two.  The ECDF only zooms (its
-# fractions count every value); the histogram leaves the tails out
+# The x axis shows the central 99% of the values: a handful of extreme ones
+# would otherwise squash every channel into a corner.  Only a zoom: the
+# fractions count every value
 CLIP_PCT = 99.5
-N_BINS = 40
-# Integer-valued features over at most this many values get one bin per value
-MAX_INTEGER_BINS = 60
 DPI = 120
 
 
@@ -113,24 +109,6 @@ def _range(values):
     return (lo - 0.5, hi + 0.5) if lo == hi else (lo, hi)
 
 
-def _bins(values):
-    integer = np.all(values == np.round(values))
-    if integer and values.max() - values.min() <= MAX_INTEGER_BINS:
-        return np.arange(values.min() - 0.5, values.max() + 1.5)
-    return np.linspace(*_range(values), N_BINS + 1)
-
-
-def _draw_histogram(ax, groups, bins):
-    for (channel, decoy, values, n_null), style in zip(groups, _styles(groups)):
-        if values.size == 0:
-            continue
-        counts, _ = np.histogram(values, bins=bins)
-        density = counts / max(counts.sum(), 1) / np.diff(bins)
-        # one step outline per channel: filled bars from several channels hide each other
-        ax.stairs(density, bins, label=_label(channel, decoy, values, n_null), **style)
-    ax.set_ylabel("Density")
-
-
 def _draw_ecdf(ax, groups, x_range):
     """Monotone lines do not hide one another, and the largest vertical gap
     between two of them is their KS distance."""
@@ -146,13 +124,13 @@ def _draw_ecdf(ax, groups, x_range):
     ax.set_ylabel("Cumulative fraction")
 
 
-def _figure(column, panel_groups, draw, path):
-    """One panel per entry of *panel_groups* [(title, groups)], side by side on
-    the same x axis."""
+def _ecdf_figure(column, panel_groups, x_range, path):
+    """*column*'s ECDFs, one panel per entry of *panel_groups* [(title,
+    groups)], side by side on the same x axis."""
     fig, axes = plt.subplots(1, len(panel_groups), figsize=(8 * len(panel_groups), 5), squeeze=False,
                              sharex=True)
     for ax, (title, groups) in zip(axes[0], panel_groups):
-        draw(ax, groups)
+        _draw_ecdf(ax, groups, x_range)
         ax.set_xlabel(column)
         if title:
             ax.set_title(title, fontsize=10)
@@ -171,17 +149,15 @@ def _split(split):
     return known
 
 
-def plot_channel_features(features, folder, split="all"):
-    """A histogram and an ECDF of every feature of *features* (the table
-    run_channel_fdr writes), into *folder*/histograms and *folder*/ECDF.
-    *split*: "all", or "KR" for the K- and R-ending peptides as two panels.  A
-    feature with no value in any panel is skipped.  Returns the number of
-    features plotted."""
+def plot_feature_ecdfs(features, folder, split="all"):
+    """An ECDF of every feature of *features* (the table run_channel_fdr
+    writes), into *folder*/ECDF.  *split*: "all", or "KR" for the K- and
+    R-ending peptides as two panels.  A feature with no value in any panel is
+    skipped.  Returns the number of features plotted."""
     split = _split(split)
     if split is None:
         return 0
-    hist_folder, ecdf_folder = os.path.join(folder, HIST_FOLDER), os.path.join(folder, ECDF_FOLDER)
-    os.makedirs(hist_folder, exist_ok=True)
+    ecdf_folder = os.path.join(folder, ECDF_FOLDER)
     os.makedirs(ecdf_folder, exist_ok=True)
     parts = panels(features, split)
     if split == "KR":
@@ -196,17 +172,12 @@ def plot_channel_features(features, folder, split="all"):
         if not values:
             empty.append(column)
             continue
-        everything = np.concatenate(values)
-        bins, x_range = _bins(everything), _range(everything)
-        _figure(column, panel_groups, lambda ax, groups: _draw_histogram(ax, groups, bins),
-                os.path.join(hist_folder, f"{column}.png"))
-        _figure(column, panel_groups, lambda ax, groups: _draw_ecdf(ax, groups, x_range),
-                os.path.join(ecdf_folder, f"{column}.png"))
+        _ecdf_figure(column, panel_groups, _range(np.concatenate(values)),
+                     os.path.join(ecdf_folder, f"{column}.png"))
     if empty:
         logger.info(f"Channel feature plots: no values to plot for {', '.join(empty)}")
     n = len(feature_columns(features)) - len(empty)
-    logger.info(f"Channel feature histograms and ECDFs ({split}) for {n} features written to "
-                f"{os.path.abspath(hist_folder)} and {os.path.abspath(ecdf_folder)}")
+    logger.info(f"Channel feature ECDFs ({split}) for {n} features written to {os.path.abspath(ecdf_folder)}")
     return n
 
 
@@ -381,18 +352,17 @@ def plot_ids_retained(features, folder, split="all", fdr_threshold=0.01):
     _save(fig, os.path.join(folder, RETAINED_PLOT))
 
 
-def plot_channel_fdr(features, folder, importance=None, split="all", fdr_threshold=0.01, histograms=True):
+def plot_channel_fdr(features, folder, importance=None, split="all", fdr_threshold=0.01, ecdfs=True):
     """The channel-FDR plots of a run into *folder*: the best channel by
     PredVal, IDs vs Channel_Qvalue, the IDs it retains at *fdr_threshold*, the
-    feature importance if there is one, and
-    with *histograms* each feature's histogram and ECDF.  *split*: "all", or
-    "KR" for the K- and R-ending peptides as two panels (not the feature
-    importance, which is one model's)."""
+    feature importance if there is one, and with *ecdfs* each feature's ECDF.
+    *split*: "all", or "KR" for the K- and R-ending peptides as two panels (not
+    the feature importance, which is one model's)."""
     split = _split(split)
     if split is None:
         return
-    if histograms:
-        plot_channel_features(features, folder, split=split)
+    if ecdfs:
+        plot_feature_ecdfs(features, folder, split=split)
     plot_best_channel(features, folder, split=split)
     plot_ids_vs_channel_qvalue(features, folder, split=split, fdr_threshold=fdr_threshold)
     plot_ids_retained(features, folder, split=split, fdr_threshold=fdr_threshold)
