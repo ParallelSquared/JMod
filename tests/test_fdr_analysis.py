@@ -22,7 +22,7 @@ import pytest
 from src.utils.errors import JModError
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
                                compute_protein_FDR, id_counts, id_table_lines, report_id_counts, target_decoy_qvalues,
-                               untag_prec_qvalues,
+                               untag_prec_qvalues, fill_ms1_quant_gaps,
                                area, walk_to_local_max, gauss_r2_joint, ms1_quality)
 
 def test_score_model_minimal_fixed():
@@ -388,6 +388,23 @@ def test_no_ms2_coefficients_means_no_fit():
     peak = 1000 * np.exp(-0.5 * ((SCANS - 104) / 1.5) ** 2)
     r2 = gauss_r2_joint(_ids([peak], [104]), _ms2("OTHERK", peak))
     assert np.isnan(r2[0])
+
+
+def test_ms1_quant_fill_leaves_the_decoy_channels_qvalues_unscored():
+    """A set found only in the decoy channel has no best channel: as 0 it would
+    pass the run's FDR and be scored by the channel FDR and the protein FDR."""
+    dat = pd.DataFrame({"is_decoy_channel": [False, True, True],
+                        "Qvalue": [0.001, np.nan, np.nan],
+                        "BestChannel_Qvalue": [0.001, 0.001, np.nan],      # the last: decoy channel alone
+                        "untag_prec_Qvalue": [0.001, 0.001, np.nan],
+                        "plex_Area": [5.0, np.nan, np.nan], "ms1_cor": [0.9, np.nan, 0.2]})
+    out = fill_ms1_quant_gaps(dat)
+    assert out["Qvalue"].isna().tolist() == [False, True, True]
+    assert out["BestChannel_Qvalue"].isna().tolist() == [False, False, True]
+    assert out["untag_prec_Qvalue"].isna().tolist() == [False, False, True]
+    assert out["plex_Area"].tolist() == [5.0, 0.0, 0.0]                   # the rest as before
+    assert out["ms1_cor"].tolist() == [0.9, 0.0, 0.2]
+    assert not (out["BestChannel_Qvalue"] < 0.01).iloc[2]
 
 
 def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():

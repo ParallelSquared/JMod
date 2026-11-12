@@ -5,7 +5,7 @@ import polars as pl
 from src.channel_fdr import _AMINO_ACIDS
 from src.channel_fdr_plots import (BEST_CHANNEL_PLOT, ECDF_FOLDER, IDS_PLOT, IMPORTANCE_PLOT, RETAINED_PLOT,
                                    best_channel_counts, feature_columns, ks_distance, panels, plot_channel_fdr,
-                                   plot_feature_ecdfs, plot_feature_importance, retained_counts)
+                                   plot_feature_ecdfs, plot_feature_importance, retained_counts, tied_sets)
 
 
 class TestFeatureEcdfs:
@@ -83,6 +83,8 @@ class TestChannelFdrPlots:
 
     def test_best_channel_by_predval_shares_a_tie(self):
         assert best_channel_counts(self._scored()) == {0.0: 0.5, 4.0: 1.0, 20.0: 0.5}
+        assert tied_sets(self._scored()) == 1                     # B
+        assert tied_sets(self._scored().filter(pl.col("untag_prec") == "A")) == 0
 
     def test_retained_counts_leave_out_the_decoy_channel(self):
         assert retained_counts(self._scored(), 0.01) == {0.0: (1, 2), 4.0: (1, 2)}

@@ -383,6 +383,18 @@ def ms1_quality(ids):
 #     return fdc
 
 
+# Left NaN by ms1_quant's fill (fill_ms1_quant_gaps)
+_UNFILLED_QVALUES = ("Qvalue", "BestChannel_Qvalue", "untag_prec_Qvalue")
+
+
+def fill_ms1_quant_gaps(dat):
+    """*dat* with every NaN 0, as ms1_quant has always left it, except in the
+    q-values: a NaN there is "not scored" (the decoy channel's Qvalue, and the
+    best channel's of a set where only the decoy channel was found), and a 0
+    would pass every threshold."""
+    return dat.fillna({c: 0 for c in dat.columns if c not in _UNFILLED_QVALUES})
+
+
 def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=False,vote_sigma=1.0):
     # X = fdc.iloc[:,6:-5]
     fit_whole_MS1 = False
@@ -581,7 +593,8 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     existing_cols = [col for col in selected_cols if col in fdc.columns]
     
     # Perform the merge safely
-    dat = dat.merge(fdc[["untag_prec", "channel","silac_channel"] + existing_cols], how="left", on=["untag_prec", "channel","silac_channel"]).fillna(0)
+    dat = dat.merge(fdc[["untag_prec", "channel","silac_channel"] + existing_cols], how="left", on=["untag_prec", "channel","silac_channel"])
+    dat = fill_ms1_quant_gaps(dat)
 
 
     return dat

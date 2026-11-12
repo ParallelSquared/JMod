@@ -284,6 +284,13 @@ def best_channel_counts(features):
     return {channel: credit for channel, credit in sorted(totals.iter_rows())}
 
 
+def tied_sets(features):
+    """The number of plex sets in which more than one channel has the highest PredVal."""
+    keys = _set_keys(features)
+    at_best = pl.col("PredVal") == pl.col("PredVal").max().over(keys)
+    return int(features.filter(at_best).group_by(keys).len().filter(pl.col("len") > 1).height)
+
+
 def plot_best_channel(features, folder, split="all"):
     """Bars: in how many plex sets each channel has the highest PredVal, of the
     sets the channel FDR scored.  If one channel wins far more often than the
@@ -304,7 +311,9 @@ def plot_best_channel(features, folder, split="all"):
                       [f"{channel:g}{' (decoy)' if decoy else ''}" for channel, decoy, _, _ in groups])
         ax.set_xlabel("Channel")
         ax.set_ylabel("Plex sets where it has the highest PredVal")
-        ax.set_title(f"{title + ': ' if title else ''}{n_sets:.0f} sets", fontsize=10)
+        n_tied = tied_sets(rows)
+        ties = f", {n_tied} tied (split between the tied channels)" if n_tied else ""
+        ax.set_title(f"{title + ': ' if title else ''}{n_sets:.0f} sets{ties}", fontsize=10)
     fig.suptitle("Best channel by PredVal")
     fig.tight_layout()
     _save(fig, os.path.join(folder, BEST_CHANNEL_PLOT))
