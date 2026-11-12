@@ -1126,19 +1126,30 @@ _ID_COUNT_KEYS = ["file_name", "channel", "silac_channel"]
 
 def id_counts(df, plexDIA=False):
     """The run's IDs at ID_COUNT_FDR, one row per (file, channel, SILAC
-    channel): precursors and proteins, each at Qvalue and, with *plexDIA*, at
-    BestChannel_Qvalue.  Columns (kind, q-value), kind "Precursors" or
-    "Proteins".  The real channels only: the decoy channel's IDs are none."""
+    channel), columns (kind, level), kind "Precursors" or "Proteins".  The
+    real channels only: the decoy channel's IDs are none.
+
+    Each level is what a precursor or protein in that channel must pass:
+      - "own Q": its own Qvalue (a protein: Protein_Qvalue, and a precursor
+        there at Qvalue)
+      - "chan Q", when the run has a channel FDR: Channel_Qvalue (a
+        protein: Protein_Qvalue and Protein_Channel_Qvalue)
+      - "best chan Q", with *plexDIA*: BestChannel_Qvalue (a protein:
+        Protein_Qvalue, and a precursor there at BestChannel_Qvalue)
+    """
     real = ~df["is_decoy_channel"].astype(bool) if "is_decoy_channel" in df.columns else True
     targets = (df["is_decoy"] == False) & real
-    levels = [("Qvalue", "Qvalue")] + ([("BestChannel_Qvalue", "best channel")] if plexDIA else [])
+    passes = lambda column: df[column] < ID_COUNT_FDR          # NaN passes nothing
+    levels = [("own Q", passes("Qvalue"), passes("Qvalue"))]
+    if {"Channel_Qvalue", "Protein_Channel_Qvalue"} <= set(df.columns) and df["Channel_Qvalue"].notna().any():
+        levels.append(("chan Q", passes("Channel_Qvalue"), passes("Protein_Channel_Qvalue")))
+    if plexDIA:
+        levels.append(("best chan Q", passes("BestChannel_Qvalue"), passes("BestChannel_Qvalue")))
     counts = {}
     for kind, unit in (("Precursors", "untag_prec"), ("Proteins", "protein")):
-        for column, label in levels:
-            passing = targets & (df[column] < ID_COUNT_FDR)
-            if kind == "Proteins":
-                passing &= df["Protein_Qvalue"] < ID_COUNT_FDR
-            counts[(kind, label)] = (df[passing].drop_duplicates(subset=["run_chan", unit])
+        for label, precursor, protein in levels:
+            passing = targets & (precursor if kind == "Precursors" else protein & passes("Protein_Qvalue"))
+            counts[(kind, label)] = (df[passing].drop_duplicates(subset=_ID_COUNT_KEYS + [unit])
                                      .groupby(_ID_COUNT_KEYS, dropna=False).size())
     return pd.DataFrame(counts).fillna(0).astype(int)
 
@@ -1228,7 +1239,9 @@ def untag_prec_qvalues(fdx, target_decoy_ratio):
     return pd.Series(q[group], index=fdx.index)
 
 
-def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
+def compute_protein_FDR(df, target_decoy_ratio):
+    """Protein_Qvalue onto *df*: each protein in the run, by its best precursor
+    at Qvalue < 0.01 in any channel, against the library's decoy proteins."""
     logger.info("")
     logger.info("Computing Protein FDR")
 
@@ -1251,7 +1264,11 @@ def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
     
     df = df.drop(columns=["Protein_Qvalue"], errors="ignore")
     df = df.merge(df_seqchargeqvals_distinct, on="protein", how="left")
+    return df
 
+
+def report_id_counts(df, results_folder=None):
+    """The run's ID table (id_counts), into the log and <results_folder>/Summary.txt."""
     table = id_counts(df, plexDIA=config.args.plexDIA)
     lines = id_table_lines(table, timeplex=config.args.timeplex, silac=config.args.SILAC is not None)
     logger.info("")
@@ -1260,8 +1277,6 @@ def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
     if results_folder is not None:
         with open(results_folder + '/Summary.txt', 'a') as f:
             print(*lines, sep="\n", file=f)
-
-    return df
 
 def add_median_based_features(df, metric_columns, group_col="untag_prec", count_col="channels_matched"):
     """
@@ -1452,8 +1467,6 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     
     # have possible reannotate woth fasta here
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
-    fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder,
-                                    target_decoy_ratio=target_decoy_ratio)
 
     # Before the channel features, which use it.  It reads only ms1_quant's
     # traces, seq/z and dc, so it is the same here as after the list-column
@@ -1470,7 +1483,14 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # Into every output; nothing is filtered by it.  Only with a decoy channel
     if channel_features is not None:
         fdx_quant["Channel_Qvalue"] = channel_qvalues(fdx_quant, channel_features)
+
+    # The proteins: in the run, then (with the channel FDR) in each channel.
+    # compute_protein_FDR's merge keeps the rows and their order
+    fdx_quant = compute_protein_FDR(fdx_quant, target_decoy_ratio=target_decoy_ratio)
+    if channel_features is not None:
+        logger.info("Computing Protein Channel FDR")
         fdx_quant["Protein_Channel_Qvalue"] = protein_channel_qvalues(fdx_quant, channel_features)
+    report_id_counts(fdx_quant, results_folder)
 
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge

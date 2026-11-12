@@ -21,7 +21,7 @@ import pytest
 
 from src.utils.errors import JModError
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
-                               compute_protein_FDR, id_counts, id_table_lines, target_decoy_qvalues,
+                               compute_protein_FDR, id_counts, id_table_lines, report_id_counts, target_decoy_qvalues,
                                untag_prec_qvalues,
                                area, walk_to_local_max, gauss_r2_joint, ms1_quality)
 
@@ -264,14 +264,14 @@ def test_id_counts_and_summary_leave_out_the_decoy_channel(monkeypatch, tmp_path
         "is_decoy_channel": [False, False, True, True],
         "protein": ["P1", "P2", "P1", "P2"], "untag_prec": ["p1", "p2", "p1", "p2"],
     })
-    compute_protein_FDR(df, results_folder=str(tmp_path), target_decoy_ratio=1.0)
+    report_id_counts(compute_protein_FDR(df, target_decoy_ratio=1.0), str(tmp_path))
     # the precursors at Qvalue and at BestChannel_Qvalue; too few proteins for a protein FDR
     assert (tmp_path / "Summary.txt").read_text().splitlines() == [
         "IDs at 1% FDR, A",
-        "          Precursors              Proteins",
-        "channel   Qvalue   best channel   Qvalue   best channel",
-        "      0        2              2        0              0",
-        "  total        2              2        0              0"]               # no channel 8
+        "          Precursors            Proteins",
+        "channel   own Q   best chan Q   own Q   best chan Q",
+        "      0       2             2       0             0",
+        "  total       2             2       0             0"]               # no channel 8
 
         
 def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
@@ -288,7 +288,7 @@ def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
         "untag_prec": ["p1", "p2"],
     })
 
-    out = compute_protein_FDR(df, results_folder=None, target_decoy_ratio=1.0)
+    out = compute_protein_FDR(df, target_decoy_ratio=1.0)
 
     assert isinstance(out, pd.DataFrame)
     assert "Protein_Qvalue" in out.columns  # main thing it produces
@@ -302,7 +302,6 @@ def _counted(file_name, channels, silac_channels=None):
                        "is_decoy": False, "Qvalue": 0.001, "BestChannel_Qvalue": 0.001,
                        "Protein_Qvalue": 0.001, "untag_prec": [f"p{i}" for i in range(n)],
                        "protein": [f"P{i}" for i in range(n)]})
-    df["run_chan"] = df["file_name"] + df["channel"].astype(str) + df["silac_channel"].astype(str)
     return df
 
 
@@ -318,15 +317,32 @@ def test_id_table_sorts_the_channels_as_numbers_and_splits_timeplex():
     table = id_counts(_counted("f", ["1_4", "0_12", "0_4", "0_4"]), plexDIA=True)
     lines = id_table_lines(table, timeplex=True)
     rows = [line.split() for line in lines[3:]]
-    assert lines[2].split() == ["time", "channel", "Qvalue", "best", "channel", "Qvalue", "best", "channel"]
+    assert lines[2].split() == ["time", "channel", "own", "Q", "best", "chan", "Q", "own", "Q", "best", "chan", "Q"]
     assert rows == [["0", "4", "2", "2", "2", "2"], ["0", "12", "1", "1", "1", "1"],
                     ["1", "4", "1", "1", "1", "1"], ["total", "4", "4", "4", "4"]]
+
+
+def test_id_counts_channel_fdr_between_qvalue_and_best_channel():
+    # p0 passes everything; p1 only through its channel FDR and best channel;
+    # p2 only best channel.  P0 is in the run and the channel, P1 in the run
+    # but not the channel, P2 in the channel but not the run
+    df = pd.DataFrame({"file_name": "f", "channel": 0, "silac_channel": np.nan, "is_decoy": False,
+                       "untag_prec": ["p0", "p1", "p2"], "protein": ["P0", "P1", "P2"],
+                       "Qvalue": [0.001, 0.5, 0.5], "Channel_Qvalue": [0.001, 0.001, 0.5],
+                       "BestChannel_Qvalue": [0.001, 0.001, 0.001],
+                       "Protein_Qvalue": [0.001, 0.001, 0.5], "Protein_Channel_Qvalue": [0.001, 0.5, 0.001]})
+    table = id_counts(df, plexDIA=True)
+    assert [label for _, label in table.columns] == ["own Q", "chan Q", "best chan Q"] * 2
+    assert table.iloc[0].tolist() == [1, 2, 3, 1, 1, 2]
+    # without a fitted channel FDR, no such column
+    assert "chan Q" not in {label for _, label in id_counts(df.assign(Channel_Qvalue=np.nan)).columns}
 
 
 def test_id_table_one_per_file_and_silac():
     df = pd.concat([_counted("a", [0, 0, 0], [0.0, 1.0, np.nan]), _counted("b", [4], [0.0])])
     lines = id_table_lines(id_counts(df), silac=True)
-    assert [line for line in lines if line.startswith("IDs")] == ["IDs at 1% FDR, a", "IDs at 1% FDR, b"]
+    assert [line for line in lines if line.startswith("IDs")] == [
+        "IDs at 1% FDR, a", "IDs at 1% FDR, b"]
     assert lines[1].split() == ["channel", "SILAC", "Precursors", "Proteins"]
     assert [line.split()[:2] for line in lines[2:5]] == [["0", "0"], ["0", "1"], ["0", "-"]]   # no label: "-"
     assert id_table_lines(id_counts(df.iloc[:0])) == ["IDs at 1% FDR: none"]
