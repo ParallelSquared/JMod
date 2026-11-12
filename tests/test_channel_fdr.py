@@ -287,6 +287,14 @@ class TestBuildChannelFeatures:
         assert features["n_chan_frags"].to_list() == [2, 0]
         assert features["n_shared_frags"].to_list() == [1, 1]
 
+    def test_has_ms1_peak_is_a_feature_and_mz_error_only_the_error(self):
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001),
+                    ("(PSMtag_5plex-20)PEPTIDER", 20, False, True, 0.001)]).assign(mz_error=[2e-6, -1.0])
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])] * 2), _store(), self.tag, 0.01)
+        assert features["has_ms1_peak"].to_list() == [True, False]
+        assert features["mz_error"].to_list() == [pytest.approx(2e-6), None]
+        assert "has_ms1_peak" in model_columns(features)
+
     def test_a_precursor_missing_from_the_library_is_null_throughout(self):
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001),
                     ("(PSMtag_5plex-0)NOTINLIB", 0, False, False, 0.001)])
@@ -494,10 +502,15 @@ class TestPlaceholders:
         assert _carried(channels_matched=3, diff_gof_stats_from_median=0.0)["diff_gof_stats_from_median"] == 0.0
         assert _carried(frac_shared_intensity=0.0)["frac_shared_intensity"] == 0.0     # nothing shared
 
-    @pytest.mark.parametrize("column", ["mz_error", "im_error", "med_frag_error"])
+    @pytest.mark.parametrize("column", ["im_error", "med_frag_error"])
     def test_fillna_zeros(self, column):
-        # no MS1 peak in tolerance; no ion mobility; no fragment errors
+        # no ion mobility; no fragment errors
         assert _carried(**{column: 0.0})[column] is None
+
+    def test_no_ms1_peak_is_the_searchs_minus_one(self):
+        # the search's -1 for no MS1 peak in tolerance; any absolute error is real
+        assert _carried(mz_error=-1.0)["mz_error"] is None
+        assert _carried(mz_error=2e-6)["mz_error"] == pytest.approx(2e-6)
 
     def test_plex_fit_quality_needs_a_plex_fit(self):
         # no MS1 coefficient for the channel: argmax lands on the window's first

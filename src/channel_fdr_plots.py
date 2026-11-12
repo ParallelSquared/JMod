@@ -115,8 +115,11 @@ def _legend(ax, groups):
 
 
 def _range(values):
+    """The x axis: the values' central CLIP_PCT, and half a unit either side
+    when they are whole numbers (counts, a yes/no), so the steps at either end
+    are not drawn on the axes' edges."""
     lo, hi = np.percentile(values, [100 - CLIP_PCT, CLIP_PCT])
-    return (lo - 0.5, hi + 0.5) if lo == hi else (lo, hi)
+    return (lo - 0.5, hi + 0.5) if lo == hi or np.all(values == np.round(values)) else (lo, hi)
 
 
 def _draw_ecdf(ax, groups, x_range):

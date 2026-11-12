@@ -15,10 +15,12 @@ class TestFeatureEcdfs:
             "is_decoy_channel": [False, True, False, True],
             "cosine_chan": [0.9, 0.2, 0.8, None],            # continuous, a null
             "n_chan_frags": [5, 1, 4, 0],                    # integer
+            "has_ms1_peak": [True, False, True, False],      # boolean
             "im_error": [None, None, None, None]})           # nothing to plot
-        assert plot_feature_ecdfs(features, str(tmp_path)) == 2
+        assert plot_feature_ecdfs(features, str(tmp_path)) == 3
         assert sorted(p.name for p in tmp_path.iterdir()) == [ECDF_FOLDER]
         assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == ["cosine_chan.png",
+                                                                          "has_ms1_peak.png",
                                                                           "n_chan_frags.png"]
 
     def test_in_worker_processes(self, tmp_path):

@@ -152,9 +152,13 @@ _PLACEHOLDERS = {
     "frac_shared_intensity": pl.col("frac_shared_intensity") == -1,
     # A set with one channel has no median to measure against
     **{c: pl.col("channels_matched") == 1 for c in _SET_MEDIANS + _FROM_SET_MEDIANS},
-    # NaN before fillna: no MS1 peak within tolerance (without --require_ms1),
-    # no ion mobility (every row of a run without it), no fragment errors
-    **{c: pl.col(c) == 0 for c in ("mz_error", "im_error", "med_frag_error")},
+    # -1: no MS1 peak within tolerance (without --require_ms1).  The search
+    # writes it for the missing error (spectral_fitting), so it is not fillna's
+    # 0, and an absolute error is otherwise never negative
+    "mz_error": pl.col("mz_error") == -1,
+    # NaN before fillna: no ion mobility (every row of a run without it), no
+    # fragment errors
+    **{c: pl.col(c) == 0 for c in ("im_error", "med_frag_error")},
     # No MS1 plex fit for the channel: its largest coefficient is 0, so there is
     # no apex and argmax picks the window's first scan, whose quality says nothing
     # about this channel.  Its own 0 is fillna's (a real one is a Pearson r, never
@@ -565,9 +569,11 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
     if n_repeated:
         logger.warning(f"{n_repeated} scored precursors list a fragment identity more than once in the library: the first is used")
 
-    carried = null_placeholders(
-        pl.from_pandas(scored.drop(columns=["__fdc_idx", "last_aa"] + _MS1_COLUMNS).reset_index(drop=True))
-    ).drop(_RULE_COLUMNS).rename(_RENAMED)
+    carried = pl.from_pandas(scored.drop(columns=["__fdc_idx", "last_aa"] + _MS1_COLUMNS).reset_index(drop=True))
+    # mz_error's -1 as a feature of its own, before null_placeholders makes it
+    # null: whether there was an MS1 peak, apart from how far off it was
+    carried = carried.with_columns(has_ms1_peak=~_PLACEHOLDERS["mz_error"])
+    carried = null_placeholders(carried).drop(_RULE_COLUMNS).rename(_RENAMED)
     # hstack: one row each, so unequal heights are an error, not padding
     return (carried
             .hstack([pl.Series("longest_consecutive_scans", longest, dtype=pl.Int64)])
