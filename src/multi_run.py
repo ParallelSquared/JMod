@@ -197,15 +197,16 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
     # per-run counts and plots, nor the MBR library (which reads these IDs)
     if "is_decoy_channel" in available:
         df = df.filter(~pl.col("is_decoy_channel").fill_null(False))
-    time_channel, coeff, prec_im, untag_prec_q, channel_q, ms1_quality = (
+    time_channel, coeff, prec_im, untag_prec_q, channel_q, protein_channel_q, ms1_quality = (
         [c] if c in available else []
         for c in ("time_channel", "coeff", "prec_im", "untag_prec_Qvalue", "Channel_Qvalue",
-                  "MS1_quality"))
+                  "Protein_Channel_Qvalue", "MS1_quality"))
     df = (
         df
         .select(["run_idx", "file_name", "protein", "seq", "z", "channel", "silac_channel",
                  *time_channel,
                  "PredVal", "Qvalue", "BestChannel_Qvalue", *untag_prec_q, *channel_q, "Protein_Qvalue",
+                 *protein_channel_q,
                  "plex_Area", *coeff, *ms1_quality, "stripped_seq", "untag_seq", "untag_prec",
                  "mz", "rt", *prec_im, "is_decoy"])
         .with_columns(

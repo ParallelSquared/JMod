@@ -9,6 +9,7 @@ import pytest
 from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, FEATURE_IMPORTANCE_FILE, MIN_DECOYS,
                              build_channel_features, channel_qvalues, channel_specific_mask, fit_channel_fdr,
                              model_columns, model_matrix, per_channel_pep, per_channel_qvalues,
+                             protein_channel_qvalues,
                              first_of_each, frag_error_features, longest_consecutive_scans, ms1_features, ms2_cycles, null_placeholders,
                              read_feature_importance, run_channel_fdr, tag_sites, write_feature_importance, _CARRIED_FEATURES,
                              _row_features)
@@ -595,8 +596,8 @@ class TestWriteChannelFeatures:
         assert not (tmp_path / FEATURE_FOLDER / FEATURE_IMPORTANCE_FILE).exists()
 
     def test_the_model_is_fitted_on_the_features_only(self):
-        columns = ["seq", "z", "channel", "is_decoy_channel", "BestChannel_Qvalue", "untag_seq", "PredVal",
-                   "cosine_chan", "ChannelScore", "Channel_Qvalue"]
+        columns = ["seq", "z", "channel", "is_decoy_channel", "BestChannel_Qvalue", "untag_seq", "protein",
+                   "PredVal", "cosine_chan", "ChannelScore", "Channel_Qvalue"]
         assert model_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
 
     def test_no_ecdfs_unless_asked(self, tmp_path):
@@ -728,6 +729,39 @@ class TestFit:
     def test_too_few_decoys_is_no_fit(self):
         features = _fit_run(n_peptides=MIN_DECOYS - 1)
         assert fit_channel_fdr(features, ["signal", "noise"]) is None
+
+
+class TestProteinChannelQvalues:
+    """Whether a protein is in a channel: its best precursor in the channel,
+    each real channel ranked against the decoy channel."""
+
+    @staticmethod
+    def _features():
+        # P1 has two precursors in channel 0: its best, 0.9, counts
+        return pl.DataFrame({
+            "protein": ["P1", "P1", "P1", "P1", "P2", "P2", "P2"],
+            "channel": [0.0, 0.0, 4.0, 20.0, 0.0, 4.0, 20.0],
+            "is_decoy_channel": [False, False, False, True, False, False, True],
+            "ChannelScore": [0.2, 0.9, 0.1, 0.5, 0.8, 0.7, 0.3]})
+
+    def _ids(self):
+        return pd.DataFrame({"protein": ["P1", "P1", "P2", "P1", "P1", "P3"],
+                             "channel": [0, 4, 4, 20, 0, 0],
+                             "is_decoy": [False, False, False, False, True, False]},
+                            index=[10, 11, 12, 13, 14, 15])
+
+    def test_each_channel_against_the_decoy_channel(self):
+        q = protein_channel_qvalues(self._ids(), self._features())
+        assert list(q.index) == [10, 11, 12, 13, 14, 15]
+        # channel 0: P1 0.9 T, P2 0.8 T, then the decoy channel's 0.5, 0.3: 1/2 for both
+        # channel 4: P2 0.7 T, 0.5 D, 0.3 D, P1 0.1 T: 1/1, 2/1, 3/1, 3/2, the lowest from below
+        assert q.iloc[:3].tolist() == pytest.approx([0.5, 1.5, 1.0])
+        # the decoy channel, a library decoy (its target's protein name), a protein not scored
+        assert np.isnan(q.iloc[3]) and np.isnan(q.iloc[4]) and np.isnan(q.iloc[5])
+
+    def test_nothing_fitted(self):
+        assert protein_channel_qvalues(self._ids(), None).isna().all()
+        assert protein_channel_qvalues(self._ids(), self._features().drop("ChannelScore")).isna().all()
 
 
 class TestChannelQvalues:

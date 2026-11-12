@@ -60,7 +60,7 @@ SCORE_COLUMNS = ["ChannelScore", "Channel_Qvalue"]
 # the set-level score the rows were kept by.  The row's own score is PredVal, a
 # feature; Qvalue is not carried, being a coarser step function of it.  These are
 # the table's only columns that are not features
-_ID_COLUMNS = ["file_name", "seq", "untag_seq", "untag_prec", "channel", "time_channel",
+_ID_COLUMNS = ["file_name", "seq", "untag_seq", "untag_prec", "protein", "channel", "time_channel",
                "is_decoy_channel", "BestChannel_Qvalue"]
 
 # ms1_quant's outputs the MS1 features read: this channel's plex-fit coefficient
@@ -822,3 +822,42 @@ def channel_qvalues(ids, features):
     # a left merge keeps the left frame's rows, in their order
     merged = ids[keys].merge(q, on=keys, how="left")
     return pd.Series(merged["Channel_Qvalue"].to_numpy(dtype=float), index=ids.index)
+
+
+def protein_channel_qvalues(ids, features):
+    """Protein_Channel_Qvalue for every row of the run's IDs: whether the row's
+    protein is in the row's channel.
+
+    Each (protein, channel) of the channel feature table is scored by the best
+    ChannelScore of the protein's precursors in that channel -- the decoy
+    channel's too -- and each real channel's proteins are ranked against the
+    decoy channel's (per_channel_qvalues), as Channel_Qvalue ranks precursors.
+    A false call is the protein missing from the channel or from the run: the
+    decoy channel is the null for both.  So every protein in the table is
+    scored, not only those passing the run's Protein_Qvalue: one that is not in
+    the run at all is a null in every channel, the decoy channel's included,
+    and the two sides stay balanced.
+
+    Returns one value per *ids* row, in its order and with its index: the
+    q-value of its (protein, channel), for the target rows; null for the
+    library decoys (which share their target's protein name), the decoy
+    channel, a protein or channel not scored, or when nothing was fitted.
+    """
+    nothing = pd.Series(np.nan, index=ids.index)
+    if features is None or "ChannelScore" not in features.columns or "protein" not in features.columns:
+        return nothing
+    keys = ["protein", "channel"]
+    best = (features
+            .filter(pl.col("protein").is_not_null() & pl.col("ChannelScore").is_not_null())
+            .group_by(keys + ["is_decoy_channel"]).agg(pl.col("ChannelScore").max())
+            .sort(keys))               # group_by's order is arbitrary; the estimator's ties keep the row order
+    if best.height == 0:
+        return nothing
+    q = per_channel_qvalues(best["channel"].to_numpy(), best["ChannelScore"].to_numpy(),
+                            best["is_decoy_channel"].to_numpy().astype(bool))
+    table = best.select(keys).to_pandas().assign(Protein_Channel_Qvalue=q)
+    table["channel"] = table["channel"].astype(ids["channel"].dtype)
+    merged = ids[keys].merge(table, on=keys, how="left")    # left: the ids' rows, in their order
+    q = merged["Protein_Channel_Qvalue"].to_numpy(dtype=float, copy=True)
+    q[ids["is_decoy"].to_numpy(dtype=bool)] = np.nan
+    return pd.Series(q, index=ids.index)

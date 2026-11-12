@@ -1463,13 +1463,14 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # Channel-level evidence, before the list columns are merged back: it reads
     # the apex scan's fragments straight from polars, and needs ms1_quant's
     # outputs, so it sits between the two
-    from src.channel_fdr import channel_qvalues, run_channel_fdr
+    from src.channel_fdr import channel_qvalues, protein_channel_qvalues, run_channel_fdr
     channel_features = run_channel_fdr(fdx_quant, fdc_list_cols, dc, spectra, library, mass_tag,
                                        results_folder, config.fdr_threshold,
                                        plots=config.args.channel_fdr_plots, workers=config.args.threads)
     # Into every output; nothing is filtered by it.  Only with a decoy channel
     if channel_features is not None:
         fdx_quant["Channel_Qvalue"] = channel_qvalues(fdx_quant, channel_features)
+        fdx_quant["Protein_Channel_Qvalue"] = protein_channel_qvalues(fdx_quant, channel_features)
 
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge
@@ -1511,7 +1512,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","is_decoy_channel","Qvalue", "Protein_Qvalue","PredVal",
-                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'Channel_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'Channel_Qvalue', 'Protein_Channel_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")
