@@ -28,8 +28,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from src.channel_fdr import (IMPORTANCE_COLUMN, IMPORTANCE_SPREAD_COLUMN, _AMINO_ACIDS, _ID_COLUMNS,
-                             read_feature_importance)
+from src.channel_fdr import (IMPORTANCE_COLUMN, IMPORTANCE_SPREAD_COLUMN, SCORE_COLUMNS, _AMINO_ACIDS,
+                             _ID_COLUMNS, read_feature_importance)
 from src.logger import logger
 
 ECDF_FOLDER = "ECDF"
@@ -46,8 +46,10 @@ ECDF_MARGINS = (0.75, 0.25, 0.65, 0.75, 0.85)
 
 
 def feature_columns(features):
-    """Every column of the table that is a feature: all but the identity ones."""
-    return [c for c in features.columns if c not in _ID_COLUMNS]
+    """Every column of the table that is a feature: all but the identity ones
+    and the channel FDR's own outputs (ChannelScore, Channel_Qvalue), the
+    model's fit to the features rather than evidence of its own."""
+    return [c for c in features.columns if c not in _ID_COLUMNS + SCORE_COLUMNS]
 
 
 def panels(features, split):

@@ -50,9 +50,9 @@ class TestFeatureEcdfs:
         assert plot_feature_ecdfs(features, str(tmp_path), split="KQ") == 0
         assert not (tmp_path / ECDF_FOLDER).exists()
 
-    def test_only_the_identity_columns_are_not_features(self):
+    def test_neither_the_identity_columns_nor_the_scores_are_features(self):
         columns = ["seq", "z", "protein", "channel", "is_decoy_channel", "BestChannel_Qvalue", "PredVal",
-                   "cosine_chan"]
+                   "cosine_chan", "ChannelScore", "Channel_Qvalue"]
         assert feature_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
 
     def test_ks_distance(self):
