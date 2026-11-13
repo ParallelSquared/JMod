@@ -7,7 +7,7 @@ import polars as pl
 import pytest
 
 from src.channel_fdr import (FEATURE_FILE, FEATURE_FOLDER, FEATURE_IMPORTANCE_FILE, MIN_DECOYS,
-                             build_channel_features, channel_qvalues, channel_specific_mask, fit_channel_fdr,
+                             add_set_comparisons, build_channel_features, _FROM_BEST, _FROM_EXTREME, channel_qvalues, channel_specific_mask, fit_channel_fdr,
                              model_columns, model_matrix, per_channel_pep, per_channel_qvalues,
                              protein_channel_qvalues,
                              first_of_each, frag_error_features, longest_consecutive_scans, ms1_features, ms2_cycles, null_placeholders,
@@ -529,6 +529,77 @@ class TestPlaceholders:
         assert not {"channels_matched", "plexfitMS1"} & set(features.columns)
 
 
+class TestSetComparisons:
+    @staticmethod
+    def _set(**columns):
+        """One run's rows, every compared feature 0 unless given: set A three
+        channels (20 the decoy), set B one."""
+        rows = {"file_name": ["f"] * 4, "untag_prec": ["A", "A", "A", "B"],
+                "channel": [0.0, 4.0, 20.0, 0.0], "PredVal": [0.5, 0.9, 0.7, 0.8],
+                **{c: [0.0] * 4 for c in set(_FROM_EXTREME) | set(_FROM_BEST) if c != "PredVal"}}
+        rows.update(columns)
+        return add_set_comparisons(pl.DataFrame(rows))
+
+    def test_from_best_is_against_the_highest_predval(self):
+        out = self._set(cosine_chan=[0.6, 0.8, 0.3, 0.5], rt=[10.0, 11.0, 12.0, 9.0])
+        assert out["is_best_of_set"].to_list() == [False, True, False, None]
+        assert out["cosine_chan_from_best"].to_list()[:3] == pytest.approx([-0.2, 0.0, -0.5])
+        assert out["rt_from_best"].to_list()[:3] == pytest.approx([-1.0, 0.0, 1.0])
+
+    def test_the_decoy_channel_can_be_best(self):
+        out = self._set(PredVal=[0.5, 0.7, 0.9, 0.8], cosine_chan=[0.6, 0.8, 0.3, 0.5])
+        assert out["is_best_of_set"].to_list()[:3] == [False, False, True]
+        assert out["cosine_chan_from_best"].to_list()[:3] == pytest.approx([0.3, 0.5, 0.0])
+
+    def test_tied_best_channels_are_all_best_against_their_mean(self):
+        out = self._set(PredVal=[0.9, 0.9, 0.5, 0.8], cosine_chan=[0.6, 0.8, 0.3, 0.5],
+                        mz_error=[2e-6, None, 1e-6, 3e-6])
+        assert out["is_best_of_set"].to_list()[:3] == [True, True, False]
+        assert out["cosine_chan_from_best"].to_list()[:3] == pytest.approx([-0.1, 0.1, -0.4])
+        # the mean of the tied channels with a value
+        assert out["mz_error_from_best"].to_list()[:3] == [pytest.approx(0.0), None, pytest.approx(-1e-6)]
+
+    def test_no_channel_wins_a_tie_by_its_number(self):
+        """The same set with its channels renumbered: the comparisons follow
+        the values, not the channels."""
+        values = dict(PredVal=[0.9, 0.9, 0.5, 0.8], cosine_chan=[0.6, 0.8, 0.3, 0.5])
+        a = self._set(**values)
+        b = self._set(channel=[16.0, 4.0, 20.0, 0.0], **values)
+        for c in ("is_best_of_set", "cosine_chan_from_best"):
+            assert a[c].to_list() == b[c].to_list()
+
+    def test_from_max_and_min_are_each_features_own_best(self):
+        out = self._set(cosine_chan=[0.6, 0.8, 0.3, 0.5], mz_error=[2e-6, 1e-6, None, 3e-6])
+        assert out["cosine_chan_from_max"].to_list()[:3] == pytest.approx([-0.2, 0.0, -0.5])
+        assert out["mz_error_from_min"].to_list()[:3] == [pytest.approx(1e-6), 0.0, None]    # null stays null
+        assert out["PredVal_from_max"].to_list()[:3] == pytest.approx([-0.4, 0.0, -0.2])
+        assert "PredVal_from_best" not in out.columns
+
+    def test_a_set_of_one_channel_has_nothing_to_compare(self):
+        out = self._set(cosine_chan=[0.6, 0.8, 0.3, 0.5])
+        last = out.row(3, named=True)
+        assert last["cosine_chan_from_best"] is None and last["cosine_chan_from_max"] is None
+        assert last["is_best_of_set"] is None
+
+    def test_rows_keep_their_order(self):
+        out = self._set(untag_prec=["A", "B", "A", "A"], cosine_chan=[0.1, 0.2, 0.3, 0.4])
+        assert out["untag_prec"].to_list() == ["A", "B", "A", "A"]
+        assert out["cosine_chan"].to_list() == [0.1, 0.2, 0.3, 0.4]
+
+    def test_each_time_channel_is_its_own_set(self):
+        out = self._set(untag_prec=["A"] * 4, time_channel=[0, 0, 1, 1], cosine_chan=[0.6, 0.8, 0.3, 0.5])
+        assert out["is_best_of_set"].to_list() == [False, True, False, True]
+        assert out["cosine_chan_from_max"].to_list() == pytest.approx([-0.2, 0.0, -0.2, 0.0])
+
+    def test_built_into_the_feature_table(self):
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001),
+                    ("(PSMtag_5plex-20)PEPTIDER", 20, False, True, 0.001)]).assign(PredVal=[0.9, 0.4])
+        features = _features(ids, _list_cols([(["b2_1"], [1.0])] * 2), _store(),
+                             available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
+        assert features["is_best_of_set"].to_list() == [True, False]
+        assert {"cosine_chan_from_best", "cosine_chan_from_max", "mz_error_from_min"} <= set(model_columns(features))
+
+
 class TestRunScoreAndSequence:
     def test_predval_and_rt_are_carried_and_qvalue_is_not(self):
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
@@ -738,6 +809,22 @@ class TestFit:
         assert "constant" not in importance.index                 # left out, no information
         assert importance["share_of_gain"].sum() == pytest.approx(1.0)
         assert (importance["share_of_gain_sd"] >= 0).all()           # over the folds
+
+    def test_rows_out_of_the_training_mask_are_scored_but_never_trained_on(self, monkeypatch):
+        import xgboost
+        features = _fit_run()
+        trainable = (features["channel"] != 4.0).to_numpy()          # channel 4 kept out, as an empty channel
+        trained, real_train = [], xgboost.train
+
+        def spy(params, dtrain, **kwargs):
+            trained.append(dtrain.num_row())
+            return real_train(params, dtrain, **kwargs)
+        monkeypatch.setattr("src.fdr_analysis.xgb.train", spy)
+        score, q, _ = fit_channel_fdr(features, ["signal", "noise"], model_type="xg", train_mask=trainable)
+        # the first iteration's five folds train on each trainable row four times; the refits on fewer
+        assert sum(trained[:5]) == 4 * trainable.sum()
+        assert all(sum(trained[i:i + 5]) <= 4 * trainable.sum() for i in range(5, len(trained), 5))
+        assert np.isfinite(q[~trainable]).all() and np.isfinite(score[~trainable]).all()
 
     def test_too_few_decoys_is_no_fit(self):
         features = _fit_run(n_peptides=MIN_DECOYS - 1)

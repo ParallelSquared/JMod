@@ -471,6 +471,78 @@ def ms1_features(coeff_trace, ps_trace, spec_trace, ms1_apex_scan, ms1_spec_id,
     return out
 
 
+# Comparisons within the plex set: each channel against the rest of its set,
+# which is what a channel that is not there differs from (its set's real
+# channels), apart from how good the peptide's evidence is overall.
+#
+# {feature: which end is better} for <feature>_from_max / _from_min, the row's
+# value minus the best of that feature in the set: 0 for the set's best, and
+# how far behind it otherwise.  Only features with a better end; the best of
+# each is taken on its own, so the reference can be a different channel for
+# every feature.
+_FROM_EXTREME = {
+    **dict.fromkeys(["PredVal", "n_scans", "smoothness", "apex_pc1", "hyperscore",
+                     "n_corr_frags", "mean_frag_corr", "median_frag_corr", "max_frag_corr", "min_frag_corr",
+                     "mean_top3_frag_corr", "frac_corr_above_0p5", "mean_frag_mean_corr",
+                     *_RANKED_CORRELATIONS, "mean_prec_frag_corr", "max_prec_frag_corr",
+                     "scan_fit_cosine", "frac_lib_int", "frac_dia_int", "frac_int_uniq",
+                     "b_counts", "y_counts", "longest_y_ions",
+                     "ms1_cor", "iso_cor", "traceproduct", "gauss_r2_joint", "plexfitMS1_p",
+                     "longest_consecutive_scans", "n_chan_frags",
+                     "frac_chan_frags_matched", "frac_frags_matched", "chan_frag_fraction",
+                     "chan_intensity_fraction", "chan_mono_intensity_fraction",
+                     "chan_median_intensity_fraction", "cosine_chan", "cosine_all", "cosine_chan_minus_all",
+                     "plexfit_gauss_r2", "plexfit_ps_at_apex", "plexfit_ps_weighted"], "max"),
+    **dict.fromkeys(["mz_error", "med_frag_error", "gof_stats", "scribe_scores", "max_matched_residuals",
+                     "frac_shared_intensity", "max_matched_residuals_nearby_min", "gof_stats_nearby_min",
+                     "scribe_scores_nearby_min", "chan_frag_error", "chan_minus_shared_frag_error"], "min"),
+}
+# <feature>_from_best: the row's value minus the best channel's, the channel
+# of the set with the highest PredVal (the run's own score, which knows
+# nothing of which channel is the decoy -- the decoy channel can be best, and
+# must be able to be, or it would be measured against a different reference
+# than the false IDs of a real channel it stands in for).  Channels tied for
+# it (PredVal saturates near 1 in float32) are all best, and the reference is
+# their mean: breaking the tie by anything about the channel would put the
+# channel into the feature.  One reference for every feature, so these also
+# take the features with no better end (signed errors, where the peptide
+# eluted).  Not PredVal itself: its _from_best is its _from_max.  Never
+# abundance, as everywhere here: its difference from the best channel is the
+# ratio the experiment measures.  With is_best_of_set.
+_FROM_BEST = [f for f in _FROM_EXTREME if f != "PredVal"] + [
+    "rt", "rt_error", "im_error", "ms1_ms2_apex_delta", "std_frag_corr", "manhattan_distances",
+    "manhattan_distances_nearby_max", "fitted_spectral_contrasts", "frac_int_matched", "frac_int_pred",
+    "frac_int_uniq_pred", "frac_int_matched_pred", "frac_int_matched_pred_sigcoeff", "n_shared_frags",
+    "frac_shared_frags_matched", "shared_frag_error", "plexfit_sigma", "plexfit_trace_cv"]
+
+
+def set_keys(features):
+    """What a plex set is: one peptide and charge in one run (and time channel,
+    on timeplex: the time channels are separate injections)."""
+    return [c for c in ("file_name", "untag_prec", "time_channel") if c in features.columns]
+
+
+def add_set_comparisons(features):
+    """*features* with every _FROM_EXTREME and _FROM_BEST comparison and
+    is_best_of_set added.  Null throughout a set with one channel here, which
+    has nothing to compare against (it would be best of itself, every
+    difference 0).  A difference is null where either value is; the mean of
+    tied best channels is over those of them with a value."""
+    keys = set_keys(features)
+    best = pl.col("_best")
+    added = {
+        **{f"{f}_from_{better}": pl.col(f) - (pl.col(f).max() if better == "max" else pl.col(f).min()).over(keys)
+           for f, better in _FROM_EXTREME.items()},
+        **{f"{f}_from_best": pl.col(f) - pl.col(f).filter(best).mean().over(keys) for f in _FROM_BEST},
+        "is_best_of_set": best,
+    }
+    alone = pl.len().over(keys) == 1
+    return (features
+            .with_columns(_best=pl.col("PredVal") == pl.col("PredVal").max().over(keys))
+            .with_columns(pl.when(alone).then(None).otherwise(e).alias(name) for name, e in added.items())
+            .drop("_best"))
+
+
 def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, mass_tag, fdr_threshold):
     """The channel-evidence table for the rows of *ids* worth scoring.
 
@@ -575,13 +647,14 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
     carried = carried.with_columns(has_ms1_peak=~_PLACEHOLDERS["mz_error"])
     carried = null_placeholders(carried).drop(_RULE_COLUMNS).rename(_RENAMED)
     # hstack: one row each, so unequal heights are an error, not padding
-    return (carried
-            .hstack([pl.Series("longest_consecutive_scans", longest, dtype=pl.Int64)])
-            .hstack(pl.DataFrame(context))
-            .hstack([pl.Series("last_aa_code", last_aa_code, dtype=pl.Int64)])
-            .hstack(pl.DataFrame(rows, infer_schema_length=None))
-            .hstack(pl.DataFrame(errors, schema={name: pl.Float64 for name in _EMPTY_ERRORS}))
-            .hstack(pl.DataFrame(ms1, schema={name: pl.Float64 for name in _MS1_FEATURES})))
+    return add_set_comparisons(
+        carried
+        .hstack([pl.Series("longest_consecutive_scans", longest, dtype=pl.Int64)])
+        .hstack(pl.DataFrame(context))
+        .hstack([pl.Series("last_aa_code", last_aa_code, dtype=pl.Int64)])
+        .hstack(pl.DataFrame(rows, infer_schema_length=None))
+        .hstack(pl.DataFrame(errors, schema={name: pl.Float64 for name in _EMPTY_ERRORS}))
+        .hstack(pl.DataFrame(ms1, schema={name: pl.Float64 for name in _MS1_FEATURES})))
 
 
 def model_columns(features):
@@ -682,9 +755,12 @@ def feature_importance(model):
 
 
 def fit_channel_fdr(features, columns, n_iterations=N_ITERATIONS, train_q=TRAIN_Q, pep_cut=PEP_CUT,
-                    model_type=None):
+                    model_type=None, train_mask=None):
     """ChannelScore and Channel_Qvalue for every row of *features* (the channel
-    feature table), fitted on its *columns*.
+    feature table), fitted on its *columns*.  With *train_mask*, only its rows
+    are trained on, in every iteration; the rest are still scored, by the fold
+    that holds them out (a channel known to be empty, say, kept out of the
+    positives).
 
     Returns (score, q-values, feature importance), the first two aligned with
     the rows, the q-values NaN for the decoy channel's rows; or None, with a
@@ -718,13 +794,15 @@ def fit_channel_fdr(features, columns, n_iterations=N_ITERATIONS, train_q=TRAIN_
         logger.info(f"  scoring iteration {iteration + 1}/{n_iterations}")
         fitter = score_model(model_type)
         if iteration == 0:
-            score = fitter.run_model(X, y, groups=groups)
+            score = fitter.run_model(X, y, groups=groups, train_mask=train_mask)
         else:
             # Per channel, as the q-values (the reference script pooled it)
             mined = ~is_decoy & (per_channel_pep(channel, score, is_decoy) >= pep_cut)
             # q is per channel, so the positives are each channel's confident rows
             confident = ~is_decoy & ~mined & (q <= train_q)
             keep = is_decoy | confident | mined
+            if train_mask is not None:
+                keep &= np.asarray(train_mask, dtype=bool)
             y_refit = np.where(mined, 0, y)
             if np.unique(y_refit[keep]).size < 2:
                 logger.warning(f"Channel FDR: iteration {iteration + 1} would train on one class; "
