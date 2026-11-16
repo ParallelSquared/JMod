@@ -8,19 +8,11 @@ look at which features tell a channel that is there from one that is not.
 "all" (the flag alone)
 plots every precursor together, "KR" the peptides ending in K and in R side by
 side, in every plot but the importance -- under a K-tagging tag every y ion of
-a K-ending peptide carries the tag, so the two behave differently.  Also runs
-on its own, on any written feature table, making all of them:
-
-    python -m src.channel_fdr_plots <run>/channel_fdr/channel_features.parquet [KR]
+a K-ending peptide carries the tag, so the two behave differently.  For a
+written feature table on its own, all of them: scripts/channel_fdr_plots.py.
 """
 import multiprocessing
 import os
-import sys
-
-if __name__ == "__main__":
-    # JMod's config parses the command line when it is imported (through
-    # src.channel_fdr), and these arguments are not its options
-    _ARGS, sys.argv[1:] = sys.argv[1:], []
 
 import matplotlib
 matplotlib.use("Agg")
@@ -422,13 +414,3 @@ def plot_channel_fdr(features, folder, importance=None, split="all", fdr_thresho
     plot_ids_retained(features, folder, split=split, fdr_threshold=fdr_threshold)
     if importance is not None:
         plot_feature_importance(importance, folder)
-
-
-if __name__ == "__main__":
-    if len(_ARGS) not in (1, 2):
-        sys.exit("usage: python -m src.channel_fdr_plots <channel_features.parquet> [all|KR]")
-    parquet = _ARGS[0]
-    folder = os.path.dirname(os.path.abspath(parquet))
-    # with the fit's feature importance, if it was written beside the table
-    plot_channel_fdr(pl.read_parquet(parquet), folder, importance=read_feature_importance(folder),
-                     split=_ARGS[1] if len(_ARGS) == 2 else "all", workers=os.cpu_count() or 1)
