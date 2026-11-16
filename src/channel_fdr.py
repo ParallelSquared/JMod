@@ -883,8 +883,9 @@ def read_feature_importance(folder):
     return pd.read_csv(path, index_col="feature")
 
 
-def channel_qvalues(ids, features):
-    """Copies Channel_Qvalue from the channel feature table onto the run's IDs.
+def channel_qvalues(ids, features, column="Channel_Qvalue"):
+    """Copies Channel_Qvalue (or another *column*: ChannelScore) from the
+    channel feature table onto the run's IDs.
 
     *ids* is every row of the run (pandas: fdx_quant); *features* only the rows
     the channel FDR scored, so this is a lookup of each *ids* row in
@@ -896,16 +897,16 @@ def channel_qvalues(ids, features):
     nothing was fitted.  A precursor-channel listed twice in *features* is an
     error, as the lookup would be ambiguous.
     """
-    if features is None or "Channel_Qvalue" not in features.columns:
+    if features is None or column not in features.columns:
         return pd.Series(np.nan, index=ids.index)
     keys = ["seq", "z"] + (["time_channel"] if "time_channel" in features.columns else [])
-    q = features.select(keys + ["Channel_Qvalue"]).to_pandas()
+    q = features.select(keys + [column]).to_pandas()
     if q.duplicated(keys).any():
         raise ValueError(f"Channel FDR: the channel features repeat a precursor-channel ({', '.join(keys)})")
     q["z"] = q["z"].astype(ids["z"].dtype)
     # a left merge keeps the left frame's rows, in their order
     merged = ids[keys].merge(q, on=keys, how="left")
-    return pd.Series(merged["Channel_Qvalue"].to_numpy(dtype=float), index=ids.index)
+    return pd.Series(merged[column].to_numpy(dtype=float), index=ids.index)
 
 
 def protein_channel_qvalues(ids, features):

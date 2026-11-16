@@ -343,10 +343,12 @@ def _gaussian_fit_r2(traces, lens, center):
 
 def ms1_quality(ids):
     """MS1_quality of every row of ``ids``, one run's filtered IDs (pandas,
-    with PredVal, gauss_r2_joint and plex_Area)."""
+    with PredVal or, when the channel FDR was fitted, ChannelScore,
+    gauss_r2_joint and plex_Area)."""
     def pct(values):  # percentile within the run; NaN stays NaN
         return values.rank(method="average") / values.count()
-    score = np.sqrt(pct(ids["PredVal"]) * pct(ids["gauss_r2_joint"]).fillna(0.0)).to_numpy()
+    id_score = ids["ChannelScore"] if ids.get("ChannelScore", pd.Series()).notna().any() else ids["PredVal"]
+    score = np.sqrt(pct(id_score).fillna(0.0) * pct(ids["gauss_r2_joint"]).fillna(0.0)).to_numpy()
     return np.where(ids["plex_Area"].to_numpy() == 0, score * NO_MS1_QUANT_FACTOR, score)
 
 
@@ -1496,6 +1498,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # Into every output; nothing is filtered by it.  Only with a decoy channel
     if channel_features is not None:
         fdx_quant["Channel_Qvalue"] = channel_qvalues(fdx_quant, channel_features)
+        fdx_quant["ChannelScore"] = channel_qvalues(fdx_quant, channel_features, "ChannelScore")
 
     # The proteins: in the run, then (with the channel FDR) in each channel.
     # compute_protein_FDR's merge keeps the rows and their order
@@ -1544,7 +1547,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
 
     ### select minimum columns for parquet
-    parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","is_decoy_channel","Qvalue", "Protein_Qvalue","PredVal",
+    parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","is_decoy_channel","Qvalue", "Protein_Qvalue","PredVal","ChannelScore",
                        "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'Channel_Qvalue', 'Protein_Channel_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]

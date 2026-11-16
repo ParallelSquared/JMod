@@ -414,6 +414,10 @@ def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
     qq = ms1_quality(ids)
     # percentiles: PredVal 1/4, 2/4, 3.5/4, 3.5/4; gauss_r2_joint 1/3, 3/3, missing = 0, 2/3
     assert np.allclose(qq, [np.sqrt(1 / 4 * 1 / 3), np.sqrt(2 / 4), 0.0, 0.01 * np.sqrt(3.5 / 4 * 2 / 3)])
+    # ChannelScore, where the channel FDR was fitted, in place of PredVal: 4/4, 3/4, 2/4, 1/4
+    assert np.allclose(ms1_quality(ids.assign(ChannelScore=[4.0, 3.0, 2.0, 1.0])),
+                       [np.sqrt(1 / 3), np.sqrt(3 / 4), 0.0, 0.01 * np.sqrt(1 / 4 * 2 / 3)])
+    assert np.allclose(ms1_quality(ids.assign(ChannelScore=np.nan)), qq)   # not fitted
 
 
 def test_process_data_flags_and_filters_the_decoy_channel(tmp_path, monkeypatch):
