@@ -338,11 +338,12 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
-    'channel_fdr_plots': {  ## an ECDF of every channel feature, per channel, in channel_fdr/ECDF:
-                            ## off, all (the flag alone), or KR (C-terminal K and R peptides side
-                            ## by side, in the channel FDR's other plots too, which are always made)
+    'channel_fdr_plots': {  ## the channel FDR's plots (an ECDF of every channel feature in
+                            ## channel_fdr/ECDF among them): all (every precursor together), an amino
+                            ## acid such as K (the peptides ending in it and the rest side by side),
+                            ## or off (none)
         'flags': ('--channel_fdr_plots',),
-        'default': 'off',
+        'default': 'all',
         'const': 'all',
         'takes_value': True,
         'in_GUI': False,

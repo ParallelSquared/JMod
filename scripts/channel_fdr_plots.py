@@ -6,7 +6,7 @@ feature importance if the fit wrote it beside the table, and every feature's
 ECDF (into ECDF/).
 
     python scripts/channel_fdr_plots.py <run>/channel_fdr/channel_features.parquet
-    python scripts/channel_fdr_plots.py <run>/channel_fdr/channel_features.parquet --split KR
+    python scripts/channel_fdr_plots.py <run>/channel_fdr/channel_features.parquet --split K
 """
 import argparse
 import os
@@ -18,8 +18,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("features", help="the run's channel_features.parquet")
-    p.add_argument("--split", choices=["all", "KR"], default="all",
-                   help="every precursor together, or the K- and R-ending peptides side by side")
+    p.add_argument("--split", default="all",
+                   help="all (every precursor together), or an amino acid such as K: the peptides "
+                        "ending in it and the rest side by side")
     p.add_argument("--workers", type=int, default=os.cpu_count() or 1, help="processes drawing the ECDFs")
     return p.parse_args()
 

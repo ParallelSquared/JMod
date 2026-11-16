@@ -261,7 +261,7 @@ def _features(ids, list_cols, library, mass_tag, fdr_threshold):
     return build_channel_features(ids, list_cols, _dc(), _scan_cycles(), library, mass_tag, fdr_threshold)
 
 
-def _write(ids, list_cols, library, mass_tag, results_folder, fdr_threshold, plots="off"):
+def _write(ids, list_cols, library, mass_tag, results_folder, fdr_threshold, plots="all"):
     return run_channel_fdr(ids, list_cols, _dc(), _Spectra(), library, mass_tag, results_folder,
                                   fdr_threshold, plots=plots)
 
@@ -689,28 +689,27 @@ class TestWriteChannelFeatures:
                    "PredVal", "cosine_chan", "ChannelScore", "Channel_Qvalue"]
         assert model_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
 
-    def test_no_ecdfs_unless_asked(self, tmp_path):
+    def test_the_plots_and_ecdfs_always(self, tmp_path):
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
         _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
-        # the other plots always (here no fit, so no importance or IDs vs q-value)
-        assert sorted(p.name for p in (tmp_path / FEATURE_FOLDER).iterdir()) == [BEST_CHANNEL_PLOT,
-                                                                                  FEATURE_FILE]
+        # here no fit, so no importance or IDs vs q-value
+        assert sorted(p.name for p in (tmp_path / FEATURE_FOLDER).iterdir()) == sorted(
+            [BEST_CHANNEL_PLOT, "ECDF", FEATURE_FILE])
 
-    def test_written_beside_the_table_when_asked(self, tmp_path, monkeypatch):
+    def test_written_beside_the_table(self, tmp_path, monkeypatch):
         import src.channel_fdr_plots
         calls = []
         monkeypatch.setattr(src.channel_fdr_plots, "plot_channel_fdr",
-                            lambda features, folder, importance, split, fdr_threshold, ecdfs, workers:
-                            calls.append((features.height, folder, importance, split, fdr_threshold,
-                                          ecdfs)))
+                            lambda features, folder, importance, split, fdr_threshold, workers:
+                            calls.append((features.height, folder, importance, split, fdr_threshold)))
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
-        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01, plots="KR")
+        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01, plots="K")
         # too few decoys to fit: no importance
-        assert calls == [(1, os.path.join(str(tmp_path), FEATURE_FOLDER), None, "KR", 0.01, True)]
+        assert calls == [(1, os.path.join(str(tmp_path), FEATURE_FOLDER), None, "K", 0.01)]
         _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
-        assert calls[1][3:] == ("all", 0.01, False)                    # off: no ECDFs, one panel
+        assert calls[1][3:] == ("all", 0.01)                           # the default: one panel
 
     def test_feature_importance_round_trips_through_its_file(self, tmp_path):
         write_feature_importance(_IMPORTANCE, str(tmp_path))

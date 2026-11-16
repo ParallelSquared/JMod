@@ -824,7 +824,7 @@ def fit_channel_fdr(features, columns, n_iterations=N_ITERATIONS, train_q=TRAIN_
 
 
 def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, results_folder, fdr_threshold,
-                    plots="off", workers=1):
+                    plots="all", workers=1):
     """The channel-level FDR for one run, into <results_folder>/channel_fdr/.
 
     Builds the channel feature table (build_channel_features), fits the model
@@ -832,13 +832,11 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
     Channel_Qvalue to the table, and writes:
       - FEATURE_FILE: the table
       - FEATURE_IMPORTANCE_FILE: each feature's share of the model's gain
-      - the best channel by PredVal, IDs vs Channel_Qvalue, the IDs retained
-        at *fdr_threshold* and the feature importance
-        (channel_fdr_plots.plot_channel_fdr)
-      - unless *plots* is "off", every column's ECDF too (in *workers*
-        processes), and
-        with "KR" every plot but the importance split by the C-terminal
-        residue
+      - every column's ECDF (in *workers* processes), the best channel by
+        PredVal, IDs vs Channel_Qvalue, the IDs retained at *fdr_threshold*
+        and the feature importance (channel_fdr_plots.plot_channel_fdr); with
+        *plots* an amino acid ("K"), every plot but the importance split into
+        the peptides ending in it and the rest; none with "off"
 
     Returns the table, for channel_qvalues to put Channel_Qvalue onto the run's
     IDs.  Without a decoy channel there is nothing to measure the channels
@@ -870,9 +868,8 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
     features.write_parquet(os.path.join(folder, FEATURE_FILE))
     if features.height:
         from src.channel_fdr_plots import plot_channel_fdr
-        ecdfs = str(plots).lower() != "off"
-        plot_channel_fdr(features, folder, importance=importance, split=plots if ecdfs else "all",
-                         fdr_threshold=fdr_threshold, ecdfs=ecdfs, workers=workers)
+        plot_channel_fdr(features, folder, importance=importance, split=plots,
+                         fdr_threshold=fdr_threshold, workers=workers)
     return features
 
 

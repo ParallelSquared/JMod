@@ -4,7 +4,7 @@ import polars as pl
 
 from src.channel_fdr import _AMINO_ACIDS
 from src.channel_fdr_plots import (BEST_CHANNEL_PLOT, ECDF_FOLDER, IDS_PLOT, IMPORTANCE_PLOT, RETAINED_PLOT,
-                                   best_channel_counts, feature_columns, ks_distance, panels, plot_channel_fdr,
+                                   ECDF_MAX_POINTS, best_channel_counts, ecdf_steps, feature_columns, ks_distance, panels, plot_channel_fdr,
                                    plot_feature_ecdfs, plot_feature_importance, retained_counts, tied_sets)
 
 
@@ -29,7 +29,7 @@ class TestFeatureEcdfs:
             "channel": [0.0, 20.0, 0.0, 20.0], "is_decoy_channel": [False, True, False, True],
             "last_aa_code": [k, k, r, r], "cosine_chan": [0.9, 0.2, 0.8, 0.1],
             "shared_frag_error": [None, None, 1e-6, 2e-6]})          # nothing in the K panel
-        assert plot_feature_ecdfs(features, str(tmp_path), split="KR", workers=2) == 3
+        assert plot_feature_ecdfs(features, str(tmp_path), split="K", workers=2) == 3
         assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == [
             "cosine_chan.png", "last_aa_code.png", "shared_frag_error.png"]
 
@@ -39,11 +39,14 @@ class TestFeatureEcdfs:
             "seq": list("KKRRA"), "channel": [0.0, 20.0, 0.0, 20.0, 0.0],
             "is_decoy_channel": [False, True, False, True, False],
             "last_aa_code": [k, k, r, r, a], "cosine_chan": [0.9, 0.2, 0.8, 0.1, 0.5]})
-        (k_title, k_rows), (r_title, r_rows) = panels(features, "KR")
+        (k_title, k_rows), (o_title, o_rows) = panels(features, "K")
         assert (k_title, k_rows["seq"].to_list()) == ("C-terminal K", ["K", "K"])
-        assert (r_title, r_rows["seq"].to_list()) == ("C-terminal R", ["R", "R"])     # not A
+        assert (o_title, o_rows["seq"].to_list()) == ("other C-terminus", ["R", "R", "A"])
         assert panels(features, "all")[0][1].height == 5
-        assert plot_feature_ecdfs(features, str(tmp_path), split="kr") == 2          # any case
+        assert plot_feature_ecdfs(features, str(tmp_path), split="k") == 2           # any case
+        (a_title, a_rows), (_, rest) = panels(features, "A")                         # any amino acid
+        assert (a_title, a_rows["seq"].to_list(), rest.height) == ("C-terminal A", ["A"], 4)
+        assert plot_feature_ecdfs(features, str(tmp_path), split="KR") == 0          # one amino acid
         assert sorted(p.name for p in (tmp_path / ECDF_FOLDER).iterdir()) == ["cosine_chan.png",
                                                                           "last_aa_code.png"]
 
@@ -57,18 +60,29 @@ class TestFeatureEcdfs:
                    "cosine_chan", "ChannelScore", "Channel_Qvalue"]
         assert feature_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
 
+    def test_ecdf_steps_thinned_to_at_most_the_cap(self):
+        x, y = ecdf_steps(np.array([3.0, 1.0, 2.0]))
+        assert x.tolist() == [1.0, 2.0, 3.0] and np.allclose(y, [1 / 3, 2 / 3, 1])
+        values = np.random.default_rng(0).normal(size=10 * ECDF_MAX_POINTS + 7)
+        x, y = ecdf_steps(values)
+        assert x.size <= ECDF_MAX_POINTS and x[0] == values.min() and x[-1] == values.max() and y[-1] == 1
+        full = np.searchsorted(np.sort(values), x, side="right") / values.size
+        assert np.all(np.diff(x) >= 0) and np.allclose(y, full)     # points on the full ECDF
+
     def test_ks_distance(self):
         assert ks_distance(np.array([1.0, 2.0]), np.array([1.0, 2.0])) == 0.0
         assert ks_distance(np.array([1.0, 2.0]), np.array([3.0, 4.0])) == 1.0
         assert np.isnan(ks_distance(np.array([1.0]), np.zeros(0)))
-    def test_the_flag_alone_is_all(self):
+
+    def test_all_by_default(self):
         import argparse
         from src.config import _add_arguments
         parser = argparse.ArgumentParser()
         _add_arguments(parser)
-        assert parser.parse_args([]).channel_fdr_plots == "off"
+        assert parser.parse_args([]).channel_fdr_plots == "all"
         assert parser.parse_args(["--channel_fdr_plots"]).channel_fdr_plots == "all"
-        assert parser.parse_args(["--channel_fdr_plots", "KR"]).channel_fdr_plots == "KR"
+        assert parser.parse_args(["--channel_fdr_plots", "K"]).channel_fdr_plots == "K"
+        assert parser.parse_args(["--channel_fdr_plots", "off"]).channel_fdr_plots == "off"
 
 
 class TestChannelFdrPlots:
@@ -96,10 +110,6 @@ class TestChannelFdrPlots:
             assert (tmp_path / name).exists()
         assert (tmp_path / ECDF_FOLDER / "PredVal.png").exists()
 
-    def test_without_ecdfs(self, tmp_path):
-        plot_channel_fdr(self._scored(), str(tmp_path), ecdfs=False)
-        assert (tmp_path / BEST_CHANNEL_PLOT).exists() and not (tmp_path / ECDF_FOLDER).exists()
-
     def test_no_ids_plot_without_channel_qvalues(self, tmp_path):
         plot_channel_fdr(self._scored().drop("Channel_Qvalue"), str(tmp_path))
         assert (tmp_path / BEST_CHANNEL_PLOT).exists() and not (tmp_path / IDS_PLOT).exists()
@@ -107,6 +117,10 @@ class TestChannelFdrPlots:
 
     def test_an_unknown_split_makes_no_plots(self, tmp_path):
         plot_channel_fdr(self._scored(), str(tmp_path), split="KQ")
+        assert not list(tmp_path.iterdir())
+
+    def test_off_makes_no_plots(self, tmp_path):
+        plot_channel_fdr(self._scored(), str(tmp_path), importance=self._importance(), split="off")
         assert not list(tmp_path.iterdir())
 
     @staticmethod
