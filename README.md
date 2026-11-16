@@ -235,6 +235,10 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --channels
   Comma-separated channels of --tag to search (e.g. --tag dimethyl --channels 0,4). 
   default = None (all channels)
+--decoy_channel
+  Decoy channel used as the null for the channel-level FDR. 
+  default = auto (one channel past the last, if more than 1 channel, else none)
+  other options: none (do not perform channel level FDR), int (the channel to be used as the decoy)
 --SILAC
   Adds stable isotope label
   default = False
@@ -359,6 +363,11 @@ JMod produces multiple output files. Each search writes them to a folder determi
 
 With `--mbr`, the first search of each file is in `first_pass/` and the match between runs library is in `mbr_library/`.
 
+#### Channel-level FDR
+
+With a tag searching two or more channels, JMod also searches a decoy channel (`--decoy_channel`). Its IDs are false by construction, so they are the null for a model that scores each channel of a plex set (`ChannelScore`) and gives it a q-value of its own against the decoy channel (`Channel_Qvalue`). Proteins get one per channel the same way (`Protein_Channel_Qvalue`).
+
+
 A comprehensive list of all output columns and descriptions for each one can be found below:
 
 <details>
@@ -440,6 +449,15 @@ A comprehensive list of all output columns and descriptions for each one can be 
 | `PredVal` | Raw score from the target-decoy classifier (1 is target) |
 | `Qvalue` | Q-value of the precursor |
 | `BestChannel_Qvalue` | Best q-value of the precursor plex set |
+| `untag_prec_Qvalue` | Q-value of the untagged precursor (the plex set), scored by its best PredVal over its channels |
+| `is_decoy_channel` | Is this precursor in the decoy channel (`--decoy_channel`) |
+| `ChannelScore` | Channel FDR model score for this channel of the plex set |
+| `Channel_Qvalue` | Channel-level q-value: this channel against the decoy channel (none for the decoy channel itself) |
+| `Protein_Channel_Qvalue` | Channel-level protein q-value: the protein in this channel against the decoy channel |
+| `gauss_r2_joint` | Fit of one Gaussian elution peak to the MS1 and MS2 traces together (mean R^2 of the two) |
+| `MS1_quality` | How far to trust the MS1 quant (plex_Area): percentile of ChannelScore (or PredVal without channel FDR) and gauss_r2_joint; x 0.01 without an MS1 quant |
+| `untag_prec_Global_Qvalue` | (combined_filtered_IDs) Q-value of the untagged precursor over every run |
+| `Protein_Global_Qvalue` | (combined_filtered_IDs) Q-value of the protein over every run |
 | `plexfitMS1` | Fitted MS1 coefficient at max |
 | `plexfitMS1_p` | Correlation of theoretical MS1 isotope distribution with observed peaks |
 | `plexfittrace` | Fitted MS1 coefficients of elution trace |
@@ -488,6 +506,12 @@ experiment_folder (-o, or 'Output Folder' entry in GUI)
     ├── Summary.txt
     ├── first_search/
     │   └── firstSearch.tsv
+    ├── channel_fdr/          (with a decoy channel)
+    │   ├── channel_features.parquet
+    │   ├── feature_importance.csv
+    │   ├── [channel_fdr_plots].png
+    │   └── ECDF/
+    │       └── [feature].png
     ├── outputs/
     │   ├── all_IDs_filtered.parquet
     │   ├── all_IDs.csv
