@@ -406,8 +406,8 @@ def _trace(value):
     return np.array(value.split(";"), dtype=float)
 
 
-_MS1_FEATURES = ["ms1_trace_nonzero", "plexfit_gauss_r2", "plexfit_sigma", "plexfit_trace_cv",
-                 "plexfit_ps_at_apex", "plexfit_ps_weighted", "ms1_ms2_apex_delta"]
+_MS1_FEATURES = ["ms1_trace_nonzero", "ms1_trace_frac_nonzero", "plexfit_gauss_r2", "plexfit_sigma",
+                 "plexfit_trace_cv_nonzero", "plexfit_ps_at_apex", "plexfit_ps_weighted", "ms1_ms2_apex_delta"]
 
 
 def ms1_features(coeff_trace, ps_trace, spec_trace, ms1_apex_scan, ms1_spec_id,
@@ -420,9 +420,13 @@ def ms1_features(coeff_trace, ps_trace, spec_trace, ms1_apex_scan, ms1_spec_id,
     ";"-joined strings, or its 0 where it fitted no window.
 
     - ms1_trace_nonzero: whether the channel has any positive coefficient
+    - ms1_trace_frac_nonzero: the share of the window's points that are positive
     - plexfit_gauss_r2, plexfit_sigma: a Gaussian put on the trace by its
       coefficient-weighted moments (sigma in MS1 cycles), and how well it fits
-    - plexfit_trace_cv: the trace's coefficient of variation
+    - plexfit_trace_cv_nonzero: the coefficient of variation of the trace's
+      positive points (2 or more).  Not of the whole trace: with its zeros in,
+      k equal points in a window of n have a CV of sqrt(n / k - 1), so it
+      mostly counted the zeros, which ms1_trace_frac_nonzero now does
     - plexfit_ps_at_apex, plexfit_ps_weighted: the joint fit's quality at this
       channel's own apex, and weighted by this channel's coefficients -- the
       quality itself is per set, so only these selections of it can tell the
@@ -447,6 +451,7 @@ def ms1_features(coeff_trace, ps_trace, spec_trace, ms1_apex_scan, ms1_spec_id,
 
     w = np.clip(c, 0, None)
     out["ms1_trace_nonzero"] = float(w.sum() > 0)
+    out["ms1_trace_frac_nonzero"] = float((w > 0).mean())
     if c.size < min_points or w.sum() <= 0:
         return out
 
@@ -459,7 +464,8 @@ def ms1_features(coeff_trace, ps_trace, spec_trace, ms1_apex_scan, ms1_spec_id,
     out["plexfit_gauss_r2"] = (float(np.clip(1.0 - ((c - amplitude * g) ** 2).sum() / ss_tot, 0.0, 1.0))
                                if ss_tot > 0 else np.nan)
     out["plexfit_sigma"] = sigma
-    out["plexfit_trace_cv"] = float(w.std() / w.mean()) if w.mean() > 0 else np.nan
+    positive = w[w > 0]
+    out["plexfit_trace_cv_nonzero"] = float(positive.std() / positive.mean()) if positive.size >= 2 else np.nan
 
     finite = np.isfinite(p)
     if finite.any():
@@ -492,7 +498,8 @@ _FROM_EXTREME = {
                      "frac_chan_frags_matched", "frac_frags_matched", "chan_frag_fraction",
                      "chan_intensity_fraction", "chan_mono_intensity_fraction",
                      "chan_median_intensity_fraction", "cosine_chan", "cosine_all", "cosine_chan_minus_all",
-                     "plexfit_gauss_r2", "plexfit_ps_at_apex", "plexfit_ps_weighted"], "max"),
+                     "plexfit_gauss_r2", "plexfit_ps_at_apex", "plexfit_ps_weighted",
+                     "ms1_trace_frac_nonzero"], "max"),
     **dict.fromkeys(["mz_error", "med_frag_error", "gof_stats", "scribe_scores", "max_matched_residuals",
                      "frac_shared_intensity", "max_matched_residuals_nearby_min", "gof_stats_nearby_min",
                      "scribe_scores_nearby_min", "chan_frag_error", "chan_minus_shared_frag_error"], "min"),
@@ -513,7 +520,7 @@ _FROM_BEST = [f for f in _FROM_EXTREME if f != "PredVal"] + [
     "rt", "rt_error", "im_error", "ms1_ms2_apex_delta", "std_frag_corr", "manhattan_distances",
     "manhattan_distances_nearby_max", "fitted_spectral_contrasts", "frac_int_matched", "frac_int_pred",
     "frac_int_uniq_pred", "frac_int_matched_pred", "frac_int_matched_pred_sigcoeff", "n_shared_frags",
-    "frac_shared_frags_matched", "shared_frag_error", "plexfit_sigma", "plexfit_trace_cv"]
+    "frac_shared_frags_matched", "shared_frag_error", "plexfit_sigma", "plexfit_trace_cv_nonzero"]
 
 
 def set_keys(features):

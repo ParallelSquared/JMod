@@ -368,7 +368,9 @@ class TestMS1Features:
         f = ms1_features(self.peak, "0.9;0.9;0.9;0.9;0.9", self.specs, 52, 31)
         assert f["ms1_trace_nonzero"] == 1.0
         assert f["plexfit_sigma"] == pytest.approx(np.sqrt(1 / 3))
-        assert f["plexfit_trace_cv"] == pytest.approx(np.sqrt(2.16) / 1.2)   # population std / mean
+        assert f["ms1_trace_frac_nonzero"] == pytest.approx(3 / 5)
+        # of the positive points 1, 4, 1: population std sqrt(2) / mean 2
+        assert f["plexfit_trace_cv_nonzero"] == pytest.approx(np.sqrt(2) / 2)
         assert f["ms1_ms2_apex_delta"] == 52 - 31
 
     def test_a_peak_fits_a_gaussian_better_than_noise(self):
@@ -395,6 +397,9 @@ class TestMS1Features:
         flat = ms1_features("0;0;0;0;0", "1;1;1;1;1", self.specs, 52, 52)
         assert short["ms1_trace_nonzero"] == 1.0 and np.isnan(short["plexfit_sigma"])
         assert flat["ms1_trace_nonzero"] == 0.0 and np.isnan(flat["plexfit_gauss_r2"])
+        assert short["ms1_trace_frac_nonzero"] == pytest.approx(1 / 3) and flat["ms1_trace_frac_nonzero"] == 0.0
+        # one positive point has no spread to measure
+        assert np.isnan(ms1_features("0;0;4;0;0", "1;1;1;1;1", self.specs, 52, 52)["plexfit_trace_cv_nonzero"])
         assert short["ms1_ms2_apex_delta"] == 0 and flat["ms1_ms2_apex_delta"] == 0
 
     def test_fit_quality_must_cover_the_trace(self):
