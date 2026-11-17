@@ -330,10 +330,36 @@ class SpectrumFile:
         self.ms1_by_id = {}
         self.ms2_by_id = {}
 
+        # FileFactory does not throw on a missing/locked/corrupt file; it
+        # returns a reader with IsError set. A truncated file can also open
+        # cleanly and list an MS device, then fail in SelectInstrument with an
+        # opaque "Instrument index not available" error. Turn all of these
+        # into one readable IOError.
         reader = RawFileReaderAdapter.FileFactory(raw_file)
-        reader.SelectInstrument(Device.MS, 1)
+        problem = None
         if reader.IsError or not reader.IsOpen:
-            raise IOError(f"Could not open Thermo .raw file: {raw_file}")
+            if not os.path.isfile(raw_file):
+                problem = "file not found"
+            elif os.path.getsize(raw_file) == 0:
+                problem = "file is empty"
+            else:
+                thermo_msg = reader.FileError.ErrorMessage.strip().splitlines() if reader.IsError else []
+                problem = "file could not be opened; it may be corrupt or truncated"
+                if thermo_msg:
+                    problem += f". Thermo: {thermo_msg[0]}"
+        elif reader.GetInstrumentCountOfType(Device.MS) < 1:
+            problem = "file contains no MS data; it may be corrupt or truncated"
+        else:
+            try:
+                reader.SelectInstrument(Device.MS, 1)
+            except Exception as e:  # .NET exceptions surface as Python exceptions
+                problem = ("MS data could not be read; the file may be corrupt or truncated. "
+                           f"Thermo: {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}")
+        if problem:
+            if reader.IsOpen and not reader.IsError and reader.InAcquisition:
+                problem += " (the file is still being acquired)"
+            reader.Dispose()
+            raise IOError(f"Could not read Thermo .raw file {raw_file}: {problem}")
 
         try:
             first_scan = reader.RunHeaderEx.FirstSpectrum
