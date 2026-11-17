@@ -39,6 +39,26 @@ class TestLoadConfigFromJson:
         config.load_config_from_json(str(path))
         assert config.args.config_json == str(path)
 
+    def test_sdk_paths_in_the_json_are_not_loaded(self, tmp_path, monkeypatch):
+        # Where the computer that wrote the JSON had its SDKs; this one uses its settings
+        monkeypatch.setattr(config.args, "rawfilereader_path", None)
+        monkeypatch.setattr(config.args, "bruker_sdk_path", None)
+        monkeypatch.setattr(config, "cli_args", {})
+        path = tmp_path / "JMod_config.json"
+        path.write_text(json.dumps({"rawfilereader_path": "C:/Users/equip/netstandard2.0",
+                                    "bruker_sdk_path": "C:/Users/equip/timsdata"}))
+        config.load_config_from_json(str(path))
+        assert config.args.rawfilereader_path is None
+        assert config.args.bruker_sdk_path is None
+
+    def test_sdk_paths_typed_on_the_command_line_still_win(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config.args, "rawfilereader_path", None)
+        monkeypatch.setattr(config, "cli_args", {"rawfilereader_path": "D:/my/netstandard2.0"})
+        path = tmp_path / "JMod_config.json"
+        path.write_text(json.dumps({"rawfilereader_path": "C:/Users/equip/netstandard2.0"}))
+        config.load_config_from_json(str(path))
+        assert config.args.rawfilereader_path == "D:/my/netstandard2.0"
+
     # Until c395306, no_ms1_req was true unless --no_ms1_req was passed, and true required MS1
     @pytest.mark.parametrize("old", [True, False])
     def test_old_no_ms1_req_is_read_as_require_ms1(self, tmp_path, monkeypatch, old):

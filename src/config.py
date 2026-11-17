@@ -326,6 +326,11 @@ def translate_old_keys(config_data, json_path):
     return warnings
 
 
+# Keys of a config JSON that are not loaded: its own source, and the vendor SDK
+# paths (this computer's are in data/settings.json, or typed on the command line)
+NOT_LOADED_FROM_JSON = ("config_json", "rawfilereader_path", "bruker_sdk_path")
+
+
 def load_config_from_json(json_path):
     """Load configuration parameters from a JSON file.
 
@@ -351,9 +356,10 @@ def load_config_from_json(json_path):
     # Update args with values from JSON. Downstream code reads
     # ``config.args.X`` directly, so there is no module-level alias to
     # re-sync — mutating the Namespace is enough.
-    # config_json in a JSON JMod wrote is where *that* run was loaded from, not a setting
+    # config_json in a JSON JMod wrote is where *that* run was loaded from, and
+    # the SDK paths are where *that* computer had them: not settings for this one
     for key, value in config_data.items():
-        if hasattr(args, key) and key != "config_json":
+        if hasattr(args, key) and key not in NOT_LOADED_FROM_JSON:
             setattr(args, key, value)
 
     # Set additional config variables if present
