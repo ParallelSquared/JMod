@@ -309,7 +309,8 @@ def quantify_group(rows, spectra, tag, ppm, im_tol, iso_cache):
     results = {}
     for j in range(K):
         s = ms2[pos[j]]
-        wkey = (win_mz[j], round(float(s.im_lo), 5))
+        # no IM band (data without ion mobility, e.g. mzML): 0.0, as ms2_window_scans keys it
+        wkey = (win_mz[j], round(float(s.im_lo or 0.0), 5))
         if wkey in results:
             continue
         active = np.array([win_mz[i] == wkey[0] for i in range(K)])
@@ -336,7 +337,7 @@ def quantify_group(rows, spectra, tag, ppm, im_tol, iso_cache):
             results[wkey] = (sum(c * gi for c, gi in zip(fits, g)), ref_obs)
     for j in range(K):
         s = ms2[pos[j]]
-        res = results.get((round(float(s.prec_mz), 3), round(float(s.im_lo), 5)))
+        res = results.get((round(float(s.prec_mz), 3), round(float(s.im_lo or 0.0), 5)))
         if res is None:
             continue
         c, (y, bg, _rt) = res
