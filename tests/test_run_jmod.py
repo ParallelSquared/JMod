@@ -465,7 +465,7 @@ class TestLoadLibrary:
     def test_an_unknown_modification_without_a_tag_raises(self, monkeypatch):
         monkeypatch.setattr(run_jmod.spec_lib, "loadSpecLib",
                             lambda lib_file, mod_edits: (None, True, 150.0, "Foo"))
-        with pytest.raises(JModError, match=r"no mass for \(Foo\).*--add_fixed_mod Foo,MASS,SITES"):
+        with pytest.raises(JModError, match=r"no mass for \(Foo\).*--define_mod Foo,MASS"):
             run_jmod.load_library("lib.tsv", None, None)
 
 

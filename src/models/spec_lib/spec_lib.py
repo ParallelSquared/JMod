@@ -332,7 +332,7 @@ def has_mass_tag(modified_peptides, prec_mzs, prec_zs, known_mods=None):
         raise JModError(f"The spectral library contains {len(unknown)} modifications JMod has no "
                         f"mass for: {', '.join(unknown)}. JMod takes one unknown modification "
                         f"to be the library's tag; more than one is not supported. Give their "
-                        f"masses with --add_fixed_mod or --strip_mod")
+                        f"masses with --define_mod NAME,MASS (or remove them with --strip_mod)")
 
     # The tag's mass from the precursors carrying it: the median over up to
     # 10 of them, so one badly written precursor cannot decide it
@@ -438,6 +438,8 @@ def _misplaced_nterm_tags(seqs, tag_pattern, rules):
 # NAME,MASS) strips it from every site.  --add_fixed_mod skips a
 # site that already carries another modification (with a warning), unless
 # the spec ends in ",stack": --add_fixed_mod UniMod:121,K,stack.
+# --define_mod NAME,MASS only gives JMod the mass of a modification the
+# library already has, and leaves the library as it is.
 # ---------------------------------------------------------------------------
 
 # The residues the library parser accepts (library_store._STANDARD_RESIDUES),
@@ -480,23 +482,33 @@ class ModSpec:
 class ModEdits:
     """The modifications to strip from the library, then the fixed ones to
     add, then the variable ones: each precursor also gets a copy for every
-    combination of 1 to *max_variable* of their sites."""
+    combination of 1 to *max_variable* of their sites.  *defined*: those
+    (--define_mod) whose mass is only made known, with no sites; they change
+    nothing in the library, so they alone leave a ModEdits false."""
     strip: tuple = ()
     add: tuple = ()
     variable: tuple = ()
     max_variable: int = 1
+    defined: tuple = ()
 
     def __bool__(self):
         return bool(self.strip or self.add or self.variable)
 
+    @property
+    def named(self):
+        """Every modification named, edits and definitions: each has a mass."""
+        return self.strip + self.add + self.variable + self.defined
 
-def resolve_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variable_mods=1):
+
+def resolve_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variable_mods=1, define_mod=None):
     """parse_mod_edits, with the modifications' masses added to
     config.diann_mods, so that every modification in the edited library has a
     mass, and logged."""
-    edits = parse_mod_edits(add_fixed_mod, strip_mod, add_variable_mod, max_variable_mods)
-    for spec in edits.strip + edits.add + edits.variable:
+    edits = parse_mod_edits(add_fixed_mod, strip_mod, add_variable_mod, max_variable_mods, define_mod)
+    for spec in edits.named:
         config.diann_mods[spec.name] = spec.mass
+    for spec in edits.defined:
+        logger.info(f"Modification mass defined: {spec.name} ({spec.mass:+.6f} Da)")
     for spec in edits.strip:
         logger.info(f"Stripping from the library: {spec}")
     for spec in edits.add:
@@ -506,9 +518,9 @@ def resolve_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_varia
     return edits
 
 
-def parse_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variable_mods=1):
-    """The --add_fixed_mod, --strip_mod and --add_variable_mod modifications
-    (each a string, a list of strings, or None), checked, with
+def parse_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variable_mods=1, define_mod=None):
+    """The --add_fixed_mod, --strip_mod, --add_variable_mod and --define_mod
+    modifications (each a string, a list of strings, or None), checked, with
     --max_variable_mods, as a ModEdits.  Changes nothing: resolve_mod_edits
     also registers their masses."""
     try:
@@ -520,12 +532,14 @@ def parse_mod_edits(add_fixed_mod, strip_mod, add_variable_mod=None, max_variabl
     given = {flag: [(text, parse_mod_spec(text, flag)) for text in _as_list(texts)]
              for flag, texts in (("--strip_mod", strip_mod), ("--add_fixed_mod", add_fixed_mod),
                                  ("--add_variable_mod", add_variable_mod))}
+    given["--define_mod"] = [(text, parse_mod_definition(text)) for text in _as_list(define_mod)]
     _check_one_mass_per_name(given)
     return ModEdits(
         strip=tuple(spec for _, spec in given["--strip_mod"]),
         add=tuple(spec for _, spec in given["--add_fixed_mod"]),
         variable=tuple(spec for _, spec in given["--add_variable_mod"]),
         max_variable=max_variable_mods,
+        defined=tuple(spec for _, spec in given["--define_mod"]),
     )
 
 
@@ -572,7 +586,7 @@ def match_library_spelling(edits, library_names, register=True):
             config.diann_mods[name] = spec.mass
         return replace(spec, name=name)
     return replace(edits, strip=tuple(map(respell, edits.strip)), add=tuple(map(respell, edits.add)),
-                   variable=tuple(map(respell, edits.variable)))
+                   variable=tuple(map(respell, edits.variable)), defined=tuple(map(respell, edits.defined)))
 
 
 def _as_list(value):
@@ -635,6 +649,27 @@ def parse_mod_spec(text, flag):
         raise JModError(f"{flag} {text}: sites must be n (the N-terminus) and/or residues "
                         f"({_RESIDUES}), e.g. nK; got '{sites}'")
     return ModSpec(name=name, mass=mass, sites="".join(dict.fromkeys(sites)), stack=stack)
+
+
+def parse_mod_definition(text):
+    """A ModSpec, with no sites, from --define_mod NAME,MASS.  Raises
+    JModError.  As for the other flags, a modification JMod knows
+    (known_mod_mass) keeps the known mass, whatever MASS says."""
+    flag = "--define_mod"
+    parts = [part.strip() for part in str(text).split(",")]
+    if len(parts) != 2 or not _is_number(parts[1]):
+        raise JModError(f"{flag} {text}: expected NAME,MASS, e.g. MyTag,42.0106")
+    name = re.sub(r"^unimod:", "UniMod:", parts[0], flags=re.IGNORECASE)
+    name = _canonical_name(name, config.diann_mods)
+    if not name or re.search(r"[()\[\]\s]", name):
+        raise JModError(f"{flag} {text}: '{name}' is not a modification name (no spaces or brackets)")
+    mass = float(parts[1])
+    known = known_mod_mass(name)
+    if known is not None:
+        if abs(known - mass) > 1e-4:
+            logger.warning(f"{flag} {text}: {name} is {known:.6f} Da; the {parts[1]} given is ignored")
+        mass = known
+    return ModSpec(name=name, mass=mass, sites="")
 
 
 def _is_number(text):
@@ -717,9 +752,9 @@ def inspect_library(lib_file, mass_tag=None, edits=None, sample_size=20_000, sam
     # The masses JMod would know: its table, plus the edits' modifications,
     # named as the library spells them
     masses = dict(config.diann_mods)
-    if edits:
+    if edits is not None and edits.named:
         edits = match_library_spelling(edits, library_mod_names(precursors["mod_seq"]), register=False)
-        masses.update({spec.name: spec.mass for spec in edits.strip + edits.add + edits.variable})
+        masses.update({spec.name: spec.mass for spec in edits.named})
 
     seqs, mzs, zs = precursors["mod_seq"], precursors["prec_mz"], precursors["prec_z"]
     mods = _mod_rows(seqs, masses)
@@ -842,7 +877,7 @@ def _loading_problems(rows, seqs, mzs, zs, masses, mass_tag):
             status = f"tag? ({tag_mass:.4f} Da)"
             problems.append(f"{tag_name} has no mass in JMod, and no tag is selected. If it is the "
                             f"library's tag, choose that tag; otherwise give its mass with "
-                            f"--add_fixed_mod {tag_name},MASS,SITES, or remove it with "
+                            f"--define_mod {tag_name},MASS, or remove it with "
                             f"--strip_mod {tag_name},MASS")
         else:
             try:
@@ -1052,9 +1087,11 @@ def loadSpecLib(lib_file, mod_edits=None):
             raise ValueError(f"Unsupported spectral library format: .{lib_ext}")
         spec_lib.save(store_file)
 
-    if mod_edits:
+    if mod_edits is not None and mod_edits.named:
+        # Also registers the masses under the library's spelling (--define_mod too)
         mod_edits = match_library_spelling(mod_edits, library_mod_names(spec_lib.mod_seq))
-        spec_lib = spec_lib.edit_mods(mod_edits)
+        if mod_edits:
+            spec_lib = spec_lib.edit_mods(mod_edits)
 
     source_channel_mass, library_tag_bool, library_tag_name = has_mass_tag(spec_lib.mod_seq, spec_lib.prec_mz, spec_lib.prec_z)
     if library_tag_bool:

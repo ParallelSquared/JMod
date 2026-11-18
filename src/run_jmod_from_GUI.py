@@ -892,7 +892,8 @@ class JModGUI(ThemedTk):
                 # The mod edits in the additional commands, as a run would apply them
                 args, _ = parser.parse_known_args(shlex.split(additional_commands))
                 edits = spec_lib.parse_mod_edits(args.add_fixed_mod, args.strip_mod,
-                                                 args.add_variable_mod, args.max_variable_mods)
+                                                 args.add_variable_mod, args.max_variable_mods,
+                                                 args.define_mod)
                 result["lines"] = spec_lib.format_library_report(spec_lib.inspect_library(path, mass_tag, edits))
             # SystemExit: argparse exits on a malformed command
             except (Exception, SystemExit) as e:
