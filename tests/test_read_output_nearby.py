@@ -31,7 +31,8 @@ def test_smoothness_runs_before_the_nearby_features():
     """get_large_prec computes smoothness before n_scans exists."""
     from src.utils.io.read_output import calculate_peak_smoothness
     df = pl.DataFrame({"seq": ["P"] * 3 + ["Q"], "z": [2.0] * 4, "rt": [0.0, 1, 2, 0],
-                       "spec_id": [0, 1, 2, 3], "coeff": [1.0, 4.0, 1.0, 2.0]}).lazy()
+                       "spec_id": [0, 1, 2, 3], "coeff": [1.0, 4.0, 1.0, 2.0],
+                       "__parquet_row": [0, 1, 2, 3]}).lazy()
     out = calculate_peak_smoothness(df).collect()
     assert "smoothness" in out.columns
     assert out.filter(pl.col("seq") == "Q")["smoothness"].to_list() == [0.0]
@@ -65,7 +66,8 @@ def test_apex_score_prefers_the_scan_near_the_prediction(tmp_path):
             rows.append(r)
     pl.DataFrame(rows, schema=schema).write_parquet(tmp_path / "decoylibsearch_coeffs.parquet")
     f = str(tmp_path / "decoylibsearch_coeffs.parquet")
-    pick = lambda **kw: get_large_prec(f, condense_output=False, **kw)[1].set_index("seq").loc["PEPTIDEK", "rt_error"]
+    # rt_tol: the main search's RT gate, wider than any precursor's rows here
+    pick = lambda **kw: get_large_prec([f], rt_tol=10.0, **kw)[1].set_index("seq").loc["PEPTIDEK", "rt_error"]
     assert pick() == -60.0                        # spectral PC1 alone: the interferer
     assert abs(pick(rt_sigma=20.0)) <= 1.0        # with the RT prior: the real peak
 
@@ -94,7 +96,7 @@ def test_override_features_record_the_spectral_apex(tmp_path):
                      hyperscore=5 + 10 * w, rt_error=0.0, gof_stats=-w, max_matched_residuals=-w)
             rows.append(r)
     pl.DataFrame(rows, schema=schema).write_parquet(tmp_path / "decoylibsearch_coeffs.parquet")
-    out = get_large_prec(str(tmp_path / "decoylibsearch_coeffs.parquet"), condense_output=False,
+    out = get_large_prec([str(tmp_path / "decoylibsearch_coeffs.parquet")], rt_tol=10.0,
                          rt_sigma=20.0)[1].set_index("seq").loc["PEPTIDEK"]
     assert abs(out["rt_error"]) <= 1.0                 # chosen apex: the real peak
     assert out["spec_apex_rt_error"] == 60.0           # spectral apex: the interferer

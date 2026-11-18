@@ -645,8 +645,8 @@ def _create_results_folder(mzml_file, results_parent):
     # folder is often a network share (SMB), which is slow and does not behave
     # like local disk: the library memory maps (<experiment>/library_mmap)
     # crashed a run there with SIGBUS, and the main search's per-batch parquets
-    # (decoylibsearch_coeffs_batch*.parquet, merged then deleted) are written and
-    # re-read over the network.  Also check what else is written mid-run, e.g.
+    # (outputs/decoylibsearch_coeffs_batch*.parquet) are written and re-read over
+    # the network.  Also check what else is written mid-run, e.g.
     # the Bruker calibration tables cached inside the .d (bruker_calibration/).
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
     os.makedirs(results_parent, exist_ok=True)
@@ -1077,9 +1077,9 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_cal
 def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_path, runState):
     """Fit every MS2 spectrum against the calibrated library.
 
-    Builds the fragment index, writes the search parameters, fits the spectra
-    in batches, and merges the batch parquets into
-    ``outputs/decoylibsearch_coeffs.parquet``.  Returns that path.
+    Builds the fragment index, writes the search parameters, fits the spectra in
+    batches (``outputs/decoylibsearch_coeffs_batch<i>.parquet``; not merged).
+    Returns the batch paths, in the order they are read as one table.
     """
     logger.info("")
     logger.info("Starting Main Search")
@@ -1140,6 +1140,9 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     # write_to_csv(ms2scans_info,ms2_info_path)
     
     ## process in batches
+    # TODO: when the batch count becomes variable, return the batch paths below in
+    # batch-index order instead of sorted(glob): the text sort puts batch10 before
+    # batch2, and downstream row order (__parquet_row) must follow spectrum/RT order.
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
 
@@ -1215,32 +1218,16 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
 
         logger.info(f"Fitting batch {batch_idx+1} of {num_batches}")
 
-        batch_parquet_path = results_folder_path + f"/decoylibsearch_coeffs_batch{batch_idx}.parquet"
+        batch_parquet_path = results_folder_path + f"/outputs/decoylibsearch_coeffs_batch{batch_idx}.parquet"
         n_results = 0
 
-        # ``with`` guarantees ``writer.close()`` even when a worker crashes or
-        # a network write fails — otherwise the OS handle (and the server-side
-        # SMB/NFS oplock on network mounts like Synology) leaks and the file
-        # stays "Resource busy" until the next mount cycle.
         with pq.ParquetWriter(batch_parquet_path, _pa_schema) as writer:
             buffer = []           # SpectrumHits, one per spectrum with results
             n_buffered = 0
-            # Submit in chunks and drain each before submitting the next.
-            # Holding every future for the whole batch (the previous dict, keyed
-            # by an index nothing read) kept each completed future -- and so its
-            # result rows -- alive until the batch ended, so flushing ``buffer``
-            # freed nothing and peak memory grew with the task count.  ~190k
-            # tasks was enough to exhaust the machine.
             with ThreadPoolExecutor(max_workers=n_threads) as pool, \
                     tqdm.tqdm(total=len(batch_spectra)) as bar:
                 # Sliding window: keep up to _IN_FLIGHT fits submitted and drain the
-                # oldest, so the pool always has queued work.  Submitting a chunk and
-                # draining it completely before the next left every thread idle
-                # while the chunk's slowest fit (and the main thread's writing)
-                # finished -- about 3.5-5 of 10 threads busy.  Still drained in
-                # submission order, not completion order, so rows are written in
-                # spectrum order every run: scoring depends on row order (apex_pc1
-                # ties, CV folds).  The window also bounds how many results are held.
+                # oldest by submission order, so the pool always has queued work.
                 inflight = deque()
                 _next = 0
                 while _next < len(batch_spectra) or inflight:
@@ -1271,27 +1258,11 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     del _fit_kwargs, frag_index, _ms1_rt, _im_bin_ms1, spectra_to_fit, all_keys
     gc.collect()
 
-    # Merge batch parquets into single file (streaming, one batch at a time)
+    # The batches in sorted path order, the order the former merge concatenated
+    # them, so row numbers are unchanged; read as one table, by RT chunk
+    # (read_output.get_large_prec), never all at once.
     import glob as _glob
-    batch_files = sorted(_glob.glob(results_folder_path + "/decoylibsearch_coeffs_batch*.parquet"))
-    decoylib_search_path = results_folder_path + "/outputs/decoylibsearch_coeffs.parquet"
-    merge_writer = None
-    try:
-        for bf in batch_files:
-            table = pq.read_table(bf)
-            if merge_writer is None:
-                merge_writer = pq.ParquetWriter(decoylib_search_path, table.schema)
-            merge_writer.write_table(table)
-            del table
-    finally:
-        # Guarantee close even on read/write failure mid-merge — same Synology
-        # oplock leak story as the batch writer above.
-        if merge_writer is not None:
-            merge_writer.close()
-    for bf in batch_files:
-        os.remove(bf)
-
-    return decoylib_search_path
+    return sorted(_glob.glob(results_folder_path + "/outputs/decoylibsearch_coeffs_batch*.parquet"))
 
 
 def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,

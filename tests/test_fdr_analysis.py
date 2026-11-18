@@ -20,6 +20,7 @@ import types
 import pytest
 
 from src.utils.errors import JModError
+from src.utils.io.read_output import MainSearchFiles, MainSearchRows
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
                                compute_protein_FDR, log_df, untag_prec_qvalues,
                                area, walk_to_local_max, gauss_r2_joint, ms1_quality, ms1_quality_pass)
@@ -101,28 +102,40 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
     spectra = None
     library = None
 
+    # get_large_prec's four outputs: the kept rows (one per precursor), their list
+    # columns, and the main-search rows MS1 quant reads, over a real batch parquet
+    fdc = pd.DataFrame({
+        "seq": ["AAAA", "BBBB"],
+        "z": [2.0, 2.0],
+        "rt": [10.0, 20.0],
+        "mz": [500.0, 600.0],
+        "rt_error": [0.1, -0.2],
+        "mz_error": [5, -10],
+        "gof_stats": [0.1, 0.2],
+        "scribe_scores": [1, 2],
+        "max_matched_residuals": [0.5, 0.8],
+        "manhattan_distances": [5, 6],
+        "frac_lib_int": [1, 1],
+        "file_name": ["f", "f"],
+        "time_channel": [0, 0],
+        "silac_channel": [np.nan, np.nan],
+        "is_decoy": [False, False],
+        "stripped_seq": ["AAAA", "BBBB"],
+        "__fdc_idx": [0, 1],
+    })
+    fdc_list_cols = pl.DataFrame({
+        "__fdc_idx": [0, 1],
+        "frag_errors": [[1.0, 2.0], [2.0, 3.0]],
+        "frag_mz": [[100.0, 200.0], [150.0]],
+        "frag_int": [[1.0, 2.0], [3.0]],
+    })
+    batch = tmp_path / "decoylibsearch_coeffs_batch0.parquet"
+    dc_cols = ["seq", "z", "coeff", "rt", "Ms1_spec_id", "spec_id"]
+    pl.DataFrame({"seq": ["AAAA", "BBBB"], "z": [2.0, 2.0], "coeff": [1.0, 2.0], "rt": [10.0, 20.0],
+                  "Ms1_spec_id": [1, 2], "spec_id": [1, 2]}).write_parquet(batch)
+    dc = MainSearchRows(MainSearchFiles([str(batch)]), dc_cols, ["seq", "z"])
     monkeypatch.setattr("src.fdr_analysis.get_large_prec",
-                        lambda *args, **kwargs: (None,
-                                                 pd.DataFrame({
-                                                     "seq": ["AAAA", "BBBB"],
-                                                     "z": [2, 2],
-                                                     "rt": [10.0, 20.0],
-                                                     "mz": [500.0, 600.0],
-                                                     "rt_error": [0.1, -0.2],
-                                                     "mz_error": [5, -10],
-                                                     "gof_stats": [0.1, 0.2],
-                                                     "scribe_scores": [1, 2],
-                                                     "max_matched_residuals": [0.5, 0.8],
-                                                     "manhattan_distances": [5, 6],
-                                                     "frag_errors": [[1.0, 2.0], [2.0, 3.0]],
-                                                     "frac_lib_int": [1, 1],
-                                                     "file_name": ["f", "f"],
-                                                     "time_channel": [0, 0],
-                                                     "silac_channel": [np.nan, np.nan],
-                                                     "is_decoy": [False, False],
-                                                     "stripped_seq": ["AAAA", "BBBB"],
-                                                 }),
-                                                 None))
+                        lambda *args, **kwargs: (None, fdc, dc, fdc_list_cols))
 
     monkeypatch.setattr("src.fdr_analysis.score_precursors",
                         lambda fdc, *args, **kwargs: fdc.assign(
@@ -132,7 +145,10 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
 
     monkeypatch.setattr("src.fdr_analysis.ms1_quant",
                         lambda *args, **kwargs: args[0].assign(plex_Area=[100.0, 0.0], plex_bg=[5.0, 5.0],
-                                                               plex_snr=[20.0, 0.0], plexfitMS1_p=[0.9, 0.1]))
+                                                               plex_snr=[20.0, 0.0], plexfitMS1_p=[0.9, 0.1],
+                                                               # no MS1 fit window (ms1_quant's fillna)
+                                                               plexfittrace_spec_all=[0, 0],
+                                                               plexfittrace_all=[0, 0], ms1_apex_scan=[0, 0]))
 
     monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
                         lambda df, results_folder=None, **kwargs: df.assign(
@@ -145,7 +161,7 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
         lambda x: x if isinstance(x, list) else [1.0, 2.0]
     )
 
-    process_data(str(dummy_file), spectra, library,
+    process_data([str(dummy_file)], spectra, library,
                  ms1_tol=20e-6, rt_tol=1.0, im_tol=0.01, target_decoy_ratio=1.0)
 
     expected_files = [

@@ -15,7 +15,7 @@
 #  limitations under the License.
 
 from src.utils.errors import JModError
-from src.utils.io.read_output import get_large_prec
+from src.utils.io.read_output import get_large_prec, log_mem
 
 from sklearn.model_selection import KFold,GroupKFold
 from sklearn.ensemble import RandomForestClassifier
@@ -78,45 +78,6 @@ def _compute_shared_frac_jit(target_mz, target_int, other_mz_flat, mz_tol):
     if total_int == 0.0:
         return 0.0
     return shared_int / total_int
-
-
-def _compute_frac_shared_intensity(fdc, mz_tol):
-    """Compute fraction of library intensity from fragments shared across channels.
-
-    For each untag_prec group with 2+ channels, compares fragment m/z lists
-    across channels using relative PPM tolerance. Single-channel groups get -1.
-    """
-    result = np.full(len(fdc), -1.0)
-    groups = fdc.groupby("untag_prec").indices
-
-    for untag_prec, indices in groups.items():
-        if len(indices) < 2:
-            continue
-
-        # Collect frag_mz and frag_int arrays for all rows in this group
-        mz_arrays = []
-        int_arrays = []
-        for idx in indices:
-            mz_arr = np.array(fdc["frag_mz"].iloc[idx], dtype=np.float64)
-            int_arr = np.array(fdc["frag_int"].iloc[idx], dtype=np.float64)
-            mz_arrays.append(mz_arr)
-            int_arrays.append(int_arr)
-
-        for k, idx in enumerate(indices):
-            # Build other_mz_flat from all channels except this one
-            other_parts = [mz_arrays[j] for j in range(len(indices)) if j != k]
-            if len(other_parts) == 0 or all(len(p) == 0 for p in other_parts):
-                result[idx] = 0.0
-                continue
-            other_mz_flat = np.concatenate(other_parts)
-            target_mz = mz_arrays[k]
-            target_int = int_arrays[k]
-            if len(target_mz) == 0:
-                result[idx] = 0.0
-                continue
-            result[idx] = _compute_shared_frac_jit(target_mz, target_int, other_mz_flat, mz_tol)
-
-    return result
 
 
 def _compute_frac_shared_intensity_from_polars(fdc, fdc_list_cols, mz_tol):
@@ -275,8 +236,6 @@ def gauss_r2_joint(ids, dc, timeplex=False):
     one in each. ``dc`` is the run's MS2 coefficients (polars: seq, z,
     Ms1_spec_id, coeff, and time_channel when ``timeplex``)."""
     out = np.full(len(ids), np.nan)
-    if dc is None:
-        return out
     # IDs without an MS1 quant have 0 here (ms1_quant's fillna)
     has_window = ids["plexfittrace_spec_all"].map(lambda s: isinstance(s, str) and s != "").to_numpy()
     if not has_window.any():
@@ -1352,8 +1311,8 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # ms1_tol, rt_tol, im_tol: the run's fitted tolerances (RunState.opt_*);
     # target_decoy_ratio: targets over decoys among the run's searchable entries
 
-    # results_folder = os.path.dirname(file)
-    results_folder = os.path.dirname(os.path.dirname(file))
+    # file: the main search's batch parquets, read as one table
+    results_folder = os.path.dirname(os.path.dirname(file[0]))
     mz_ppm = ms1_tol
 
     # After loading data and adding basic features
@@ -1364,15 +1323,8 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     if rt_tol and elution_fwhm:
         _rt_sigma = max((float(rt_tol) - 8.0 * float(elution_fwhm) / 2.3548200450309493) / 4.0, 1e-6)
     _im_scale = float(im_accuracy) / np.log(100.0) if im_accuracy else None
-    _glp = get_large_prec(file, condense_output=False, timeplex=timeplex,
-                          rt_sigma=_rt_sigma, im_scale=_im_scale)
-    # Tests monkey-patch ``get_large_prec`` to return a legacy 3-tuple; the
-    # production path returns a 4-tuple with a separate polars list-cols frame.
-    if len(_glp) == 4:
-        lp, fdc, dc, fdc_list_cols = _glp
-    else:
-        lp, fdc, dc = _glp
-        fdc_list_cols = None
+    lp, fdc, dc, fdc_list_cols = get_large_prec(file, rt_tol, timeplex=timeplex,
+                                                rt_sigma=_rt_sigma, im_scale=_im_scale)
 
     # Add standard features
     fdc["stripped_seq"] = np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in fdc["seq"]])
@@ -1396,14 +1348,9 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     fdc = add_median_based_features(fdc, metrics_to_process)
 
     # Compute frac_shared_intensity: fraction of library intensity from fragments shared across channels
-    if fdc_list_cols is not None:
-        fdc["frac_shared_intensity"] = _compute_frac_shared_intensity_from_polars(
-            fdc, fdc_list_cols, mz_tol=(config.args.ppm * 1e-6)
-        )
-    else:
-        fdc["frac_shared_intensity"] = _compute_frac_shared_intensity(
-            fdc, mz_tol=(config.args.ppm * 1e-6)
-        )
+    fdc["frac_shared_intensity"] = _compute_frac_shared_intensity_from_polars(
+        fdc, fdc_list_cols, mz_tol=(config.args.ppm * 1e-6)
+    )
 
     if timeplex:
         if mass_tag:
@@ -1429,16 +1376,11 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
         fdc["silac_channel"] = np.nan 
         
     #this was previously in ms1_quant function.. we need it for the target/decoy classification
-    # frag_errors stored as list columns in parquet — convert to numpy arrays
-    if fdc_list_cols is not None:
-        _med_pd = _compute_med_frag_error_from_polars(fdc_list_cols)
-        fdc = fdc.merge(_med_pd, on="__fdc_idx", how="left")
-        del _med_pd
-    else:
-        frag_errors = [np.array(x, dtype=float) if x is not None and len(x) > 0 else np.array([]) for x in fdc.frag_errors]
-        non_empty = [i for i in frag_errors if len(i) > 0]
-        median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
-        fdc["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
+    _med_pd = _compute_med_frag_error_from_polars(fdc_list_cols)
+    fdc = fdc.merge(_med_pd, on="__fdc_idx", how="left")
+    del _med_pd
+
+    log_mem("Precursor features done")
 
     # Fragment-ion correlation features (pairwise Pearson across MS2 scans)
     from src.fragment_correlation import compute_fragment_correlations
@@ -1456,6 +1398,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # frame (the PerformanceWarning pandas raises further down).
     corr_features.index = fdc.index
     fdc = pd.concat([fdc, corr_features], axis=1)
+    log_mem("Fragment-ion correlation features done")
 
     fdx = score_precursors(fdc.reset_index(drop=True), target_decoy_ratio, config.score_model, config.fdr_threshold,
                           folder=results_folder)
@@ -1477,9 +1420,20 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
         fdx["untag_prec_Qvalue"] = fdx["Qvalue"]  # one row per untagged precursor, so the same
 
-    
+    log_mem("Scoring done")
+
+    # The main-search scans MS1 quant reads, for the rows it quantifies only (the
+    # same selection ms1_quant makes), not every PSM of the run.  gauss_r2_joint
+    # below reads a subset of these.
+    _quant_rows = fdx[~fdx["is_decoy"]]
+    if config.args.unfiltered_quant:
+        _quant_rows = _quant_rows[_quant_rows["BestChannel_Qvalue"] < 0.01]
+    dc = dc.frame_for(_quant_rows)
+    del _quant_rows
+
     fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, im_tol, timeplex,
                           vote_sigma=vote_sigma)
+    log_mem("MS1 quant done")
 
     fdx_quant["last_aa"] = [i[-1] for i in fdx_quant["stripped_seq"]]
     fdx_quant["seq_len"] = [len(i) for i in fdx_quant["stripped_seq"]]
@@ -1492,14 +1446,11 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge
     # only happens once and the pipeline ran on a slim frame until now.
-    if fdc_list_cols is not None and "__fdc_idx" in fdx_quant.columns:
-        _list_cols_pd = fdc_list_cols.to_pandas()
-        fdx_quant = fdx_quant.merge(_list_cols_pd, on="__fdc_idx", how="left")
-        del _list_cols_pd
-        import gc as _gc_attach
-        _gc_attach.collect()
-    if "__fdc_idx" in fdx_quant.columns:
-        fdx_quant = fdx_quant.drop(columns=["__fdc_idx"])
+    _list_cols_pd = fdc_list_cols.to_pandas()
+    fdx_quant = fdx_quant.merge(_list_cols_pd, on="__fdc_idx", how="left").drop(columns=["__fdc_idx"])
+    del _list_cols_pd
+    import gc as _gc_attach
+    _gc_attach.collect()
 
     # MS2 quant of each plex group at its voted apex, every channel read from
     # its own isolation window, background-aware (src/ms2_plex_quant.py)
@@ -1508,6 +1459,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
         from src.ms2_plex_quant import add_plex_coeff
         fdx_quant = add_plex_coeff(fdx_quant, spectra, mass_tag, mz_ppm, im_tol,
                                    q_gate=config.fdr_threshold, n_threads=config.args.threads)
+        log_mem("MS2 plex quant done")
 
     fdx_quant["gauss_r2_joint"] = gauss_r2_joint(fdx_quant, dc, timeplex)
 
