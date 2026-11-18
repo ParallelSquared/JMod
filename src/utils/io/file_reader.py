@@ -26,6 +26,7 @@ from src.utils.io.load_files import (
     Spectrum, SpectrumFile, PEAK_MZ_DTYPE, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
 )
 from src.utils.io.tdf_bin import TdfBinReader, frame_peak_counts
+from src.utils.io.band_store import BandSpectrum, band_keys
 from src.logger import logger
 
 # Centroiding noise thresholds. TODO: expose via settings/CLI alongside
@@ -50,7 +51,7 @@ _BRUKER_SDK_MAX_DEPTH = 2
 def compute_im_bins(im_lo, im_hi, width=0.05, stride=0.025):
     """Return (N, 2) array of [bin_lo, bin_hi] for overlapping IM bins.
 
-    ``width = 2 * stride`` (50% overlap) is required by ``_assign_peaks_to_im_bins``,
+    ``width = 2 * stride`` (50% overlap) is required by ``band_store.band_keys``,
     which only tests two candidate bins per peak.
     """
     starts = np.arange(im_lo, im_hi - width + stride * 0.5, stride)
@@ -662,92 +663,69 @@ def _load_dia_windows(tdf_path: str, frame_ids: np.ndarray, ms_level: np.ndarray
     return dia_lookup
 
 
-def _assign_peaks_to_im_bins(mob_arr, im_bins):
-    """Assign each peak to its overlapping IM bins.
-
-    Returns arrays (peak_indices, bin_indices) where each peak may appear
-    in up to 2 bins due to 50% overlap.  Vectorized, O(N_peaks).
-    """
-    mob_arr = np.asarray(mob_arr, dtype=np.float64)
-    bin_lo0 = im_bins[0, 0]
-    stride = im_bins[1, 0] - im_bins[0, 0]  # 0.0125
-    n_bins = len(im_bins)
-
-    # Primary bin index for each peak; the two overlapping candidates are
-    # raw_idx and raw_idx-1 (50% overlap => a peak lands in at most 2 bins).
-    raw_idx = ((mob_arr - bin_lo0) / stride).astype(np.int64)
-    all_peaks = np.arange(mob_arr.shape[0], dtype=np.int64)
-
-    peak_chunks = []
-    bin_chunks = []
-    for cand in (raw_idx, raw_idx - 1):
-        valid = (cand >= 0) & (cand < n_bins)
-        cv = cand[valid]
-        pv = all_peaks[valid]
-        mv = mob_arr[valid]
-        inb = (im_bins[cv, 0] <= mv) & (mv < im_bins[cv, 1])
-        peak_chunks.append(pv[inb])
-        bin_chunks.append(cv[inb])
-
-    return (np.concatenate(peak_chunks) if peak_chunks else np.empty(0, np.int64),
-            np.concatenate(bin_chunks) if bin_chunks else np.empty(0, np.int64))
+def _drain_sorted(groups):
+    """``groups``' items in sorted key order, each removed from the dict as it is
+    yielded, so a window's un-banded arrays are released once banded."""
+    for key in sorted(groups):
+        yield key, groups.pop(key)
 
 
-def _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter):
+def _band_ms2_groups(sf, items, im_bins, scan_counter):
     """Segment each (frame, window) group into IM bands, one Spectrum per band.
 
-    ``ms2_groups`` maps ``(rt, prec_mz, iso_width, ce)`` to concatenated
-    ``(mz, intens, mob)`` arrays of that window's un-banded peaks.  Appends a
+    ``items`` yields ``((rt, prec_mz, iso_width, ce), (mz, intens, mob))``, the
+    concatenated un-banded peaks of each window, in sorted key order (scan numbers
+    follow it): ``_drain_sorted`` of a dict, or ``_iter_raw_ms2_groups``, which
+    streams them so only one RT's un-banded peaks exist at a time.  Appends a
     Spectrum per band to ``sf.ms2scans`` and updates ``sf.ms2_by_id`` /
-    ``sf.scan_pos``; returns the next free scan number.
+    ``sf.scan_pos``; returns the next free scan number and the number of windows.
 
-    Consumes ``ms2_groups``: each window's un-banded arrays are released as soon
-    as its bands are built.  The bands are ~2x the size of the un-banded peaks
-    they come from (the 50% overlap duplicates every boundary peak), so holding
-    both in full at once costs an extra ~9 GB on a large timsTOF .d.  Callers
-    that need the un-banded peaks afterwards pass a shallow copy of the dict.
-
-    Each peak lands in up to 2 overlapping fixed IM bins (denormalized).
+    A peak lies in up to 2 overlapping fixed IM bins but is stored once: the
+    bands are ``BandSpectrum`` views of their window's buffer
+    (src/utils/io/band_store.py).
     """
-    for key in sorted(ms2_groups.keys()):
+    # TODO: consider compact peak types (TOF index uint32 + scan uint16 +
+    # intensity uint16/uint32 with SDK-table lookups, 8-10 B per peak vs 12 B).
+    n_windows = 0
+    for key, (mz_concat, intens_concat, mob_concat) in items:
+        n_windows += 1
         rt_val, prec_mz_val, iso_width, ce = key
-        mz_concat, intens_concat, mob_concat = ms2_groups.pop(key)
         if len(mz_concat) == 0:
             continue
 
-        _pidxs, _bidxs = _assign_peaks_to_im_bins(mob_concat, im_bins)
-        bands = []
-        if _bidxs.shape[0] > 0:
-            # sort by bin, then split into contiguous per-bin chunks (no repeated scans)
-            _order = np.argsort(_bidxs, kind="stable")
-            _sb = _bidxs[_order]
-            _sp = _pidxs[_order]
-            _cuts = np.flatnonzero(np.diff(_sb)) + 1
-            _starts = np.concatenate(([0], _cuts))
-            for _s, _chunk in zip(_starts, np.split(_sp, _cuts)):
-                b = int(_sb[_s])
-                bands.append((float(im_bins[b, 0]), float(im_bins[b, 1]), _chunk))
+        # Each peak once, in its group's buffer ordered by band membership then
+        # (m/z, mobility, intensity); band b is the buffer's keys 2b-1..2b+1
+        # (src/utils/io/band_store.py).
+        keys = band_keys(mob_concat, im_bins)
+        keep = keys >= 0
+        if not keep.any():
+            continue
+        keys = keys[keep]
+        g_mz = mz_concat[keep]
+        g_int = intens_concat[keep]
+        g_mob = mob_concat[keep]
+        order = np.lexsort((g_int, g_mob, g_mz, keys))
+        keys = keys[order]
+        group = (g_mz[order], g_int[order], g_mob[order])
+        del g_mz, g_int, g_mob, order, keep
 
         half_width = iso_width / 2.0
-        for im_lo, im_hi, peak_idx in bands:
-            band_mz = mz_concat[peak_idx]
-            band_intens = intens_concat[peak_idx]
-            band_mob = mob_concat[peak_idx]
+        b_lo = int(keys[0]) // 2
+        b_hi = int(keys[-1]) // 2 + int(keys[-1]) % 2
+        # band edges in the buffer, for every candidate band at once
+        cand = np.arange(b_lo, b_hi + 1)
+        e = np.searchsorted(keys, np.stack([2 * cand - 1, 2 * cand, 2 * cand + 1, 2 * cand + 2]))
+        for j, b in enumerate(cand):
+            s0, s1, s2, s3 = (int(x) for x in e[:, j])
+            if s3 <= s0:
+                continue                     # no peak in this band
+            spec = BandSpectrum(group, (s0, s1, s2, s3))
+            mz_sorted, intens_sorted, _ = spec._arrays()
 
-            # Sort by m/z (mobility kept parallel so spec.mobility[i] matches mz[i])
-            order = np.argsort(band_mz)
-            mz_sorted = band_mz[order]
-            intens_sorted = band_intens[order]
-            mob_sorted = band_mob[order]
-
-            spec = Spectrum()
             spec.id = f"scan={scan_counter}"
             spec.scan_num = scan_counter
             spec.level = 2
             spec.RT = rt_val
-            spec.mz = mz_sorted
-            spec.intens = intens_sorted
-            spec.mobility = mob_sorted
             spec.TIC = float(intens_sorted.sum(dtype=np.float64))
             spec.injection_time = 1.0
             spec.collision_energy = ce
@@ -758,16 +736,17 @@ def _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter):
                 "isolation window upper offset": half_width,
             }
             spec.ms1window = prec_mz_val + np.array([-1, 1]) * half_width
-            spec.im_lo = im_lo
-            spec.im_hi = im_hi
+            spec.im_lo = float(im_bins[b, 0])
+            spec.im_hi = float(im_bins[b, 1])
             spec.scanwindow = [float(mz_sorted[0]), float(mz_sorted[-1])]
+            del mz_sorted, intens_sorted
 
             idx = len(sf.ms2scans)
             sf.ms2scans.append(spec)
             sf.ms2_by_id[scan_counter] = idx
             sf.scan_pos[scan_counter] = [2, idx]
             scan_counter += 1
-    return scan_counter
+    return scan_counter, n_windows
 
 
 def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
@@ -788,21 +767,8 @@ def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
     """
     import pyarrow.parquet as pq
 
-    # Build numpy lookup arrays indexed by frame ID for fast vectorized access
-    max_frame = int(cal["frame_ids"].max())
-    rt_by_frame = np.zeros(max_frame + 1, dtype=np.float64)
-    ms_level_by_frame = np.zeros(max_frame + 1, dtype=np.uint8)
-    for i, fid in enumerate(cal["frame_ids"]):
-        rt_by_frame[int(fid)] = cal["rt_values"][i]
-        ms_level_by_frame[int(fid)] = cal["ms_level"][i]
-
-    # Build DIA lookup as a dict: frame -> list of (scan_begin, scan_end, prec_mz, iso_width, ce)
-    dia_dict = {}
-    for row in dia_lookup.iter_rows():
-        frame, scan_begin, scan_end, prec_mz, iso_width, ce = row
-        dia_dict.setdefault(int(frame), []).append(
-            (int(scan_begin), int(scan_end), float(prec_mz), float(iso_width), float(ce))
-        )
+    rt_by_frame, ms_level_by_frame = _frame_tables(cal)
+    dia_dict = _windows_by_frame(dia_lookup)
 
     # Accumulators: group peaks by rt for MS1 and (rt, prec_mz, iso_width, ce) for MS2
     ms1_groups = {}  # rt -> (mz_list, intens_list, mob_list); one frame per rt
@@ -887,29 +853,10 @@ def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
                 windows = dia_dict.get(int(frame_id))
                 if windows is None:
                     continue
-                f_scans = ms2_scans[sel]
-                f_mz = ms2_mz[sel]
-                f_intens = ms2_intens[sel]
-                f_mob = ms2_mob[sel]
-                f_rt = float(ms2_rt[sel[0]])
-
-                for scan_begin, scan_end, prec_mz, iso_width, ce in windows:
-                    win_mask = (f_scans >= scan_begin) & (f_scans < scan_end)
-                    if not win_mask.any():
-                        continue
-                    w_mz = f_mz[win_mask]
-                    w_intens = f_intens[win_mask]
-                    w_mob = f_mob[win_mask]
-
-                    # Accumulate raw peaks per (frame, window) across row groups;
-                    # IM-band segmentation runs in a post-pass (it needs the whole
-                    # window at once).
-                    key = (f_rt, prec_mz, iso_width, ce)
-                    if key not in ms2_groups:
-                        ms2_groups[key] = ([], [], [])
-                    ms2_groups[key][0].append(w_mz)
-                    ms2_groups[key][1].append(w_intens)
-                    ms2_groups[key][2].append(w_mob)
+                # Accumulated per (frame, window) across row groups; IM-band
+                # segmentation runs in a post-pass (it needs the whole window).
+                _add_window_peaks(ms2_groups, float(ms2_rt[sel[0]]), windows, ms2_scans[sel],
+                                  ms2_mz[sel], ms2_intens[sel], ms2_mob[sel])
 
     # Concatenate MS2 in place, dropping the per-row-group fragments as we go so
     # the list-of-chunks form never coexists in full with the concatenated form.
@@ -921,15 +868,42 @@ def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
     return ms1_groups, ms2_groups
 
 
-def _read_raw_peak_groups(d_path: str, cal: dict, dia_lookup: pl.DataFrame,
-                          include_ms1: bool = True, min_intensity: int = 0):
-    """Group raw ``analysis.tdf_bin`` peaks by acquisition, without IM banding.
+def _frame_tables(cal: dict):
+    """RT and MS level indexed by frame ID (level 0: frame not in the calibration table)."""
+    max_frame = int(cal["frame_ids"].max())
+    rt_by_frame = np.zeros(max_frame + 1, dtype=np.float64)
+    ms_level_by_frame = np.zeros(max_frame + 1, dtype=np.uint8)
+    for i, fid in enumerate(cal["frame_ids"]):
+        rt_by_frame[int(fid)] = cal["rt_values"][i]
+        ms_level_by_frame[int(fid)] = cal["ms_level"][i]
+    return rt_by_frame, ms_level_by_frame
 
-    Same contract as :func:`_read_peak_groups` -- returns
-    ``(ms1_groups, ms2_groups)`` in the shapes ``_build_spectrum_file`` and
-    ``_band_ms2_groups`` expect -- but reads every stored ion from the binary
-    instead of the centroider's peak list.  Downstream code cannot tell the two
-    apart.
+
+def _windows_by_frame(dia_lookup: pl.DataFrame) -> dict:
+    """frame -> [(scan_begin, scan_end, prec_mz, iso_width, ce)], its DIA windows."""
+    windows = {}
+    for frame, scan_begin, scan_end, prec_mz, iso_width, ce in dia_lookup.iter_rows():
+        windows.setdefault(int(frame), []).append(
+            (int(scan_begin), int(scan_end), float(prec_mz), float(iso_width), float(ce)))
+    return windows
+
+
+def _add_window_peaks(groups, rt, windows, scans, mz, intens, mob):
+    """Append one frame's peaks to its DIA windows' groups in ``groups``, keyed
+    ``(rt, prec_mz, iso_width, ce)``, each a ``([mz], [intens], [mob])`` of chunks."""
+    for scan_begin, scan_end, prec_mz, iso_width, ce in windows:
+        win = (scans >= scan_begin) & (scans < scan_end)
+        if not win.any():
+            continue
+        g = groups.setdefault((rt, prec_mz, iso_width, ce), ([], [], []))
+        g[0].append(mz[win])
+        g[1].append(intens[win])
+        g[2].append(mob[win])
+
+
+def _read_raw_frame(reader, fid: int, cal: dict, min_intensity: int):
+    """One frame's ions from ``analysis.tdf_bin``, calibrated:
+    ``(scans, mz, intens, mob)``, or None if none are above ``min_intensity``.
 
     Calibration is whatever ``cal["mz_values"]`` / ``cal["mobility_values"]``
     hold.  By default that is estimation mode, the lookups ``_load_calibration``
@@ -938,114 +912,110 @@ def _read_raw_peak_groups(d_path: str, cal: dict, dia_lookup: pl.DataFrame,
     ``_load_d`` replaces them with tables Bruker's timsdata computed
     (``_load_sdk_tables``), so m/z and 1/K0 match the SDK.
 
-    ``min_intensity`` drops peaks at or below a raw detector count before
-    grouping.  It defaults to 0 (keep everything), since recovering the signal
-    the centroider discards is the point of this path; raise it if the
-    accumulators do not fit in memory.
+    ``min_intensity`` drops peaks at or below a raw detector count.  It defaults
+    to 0 (keep everything), since recovering the signal the centroider discards
+    is the point of reading raw.
     """
+    scans, tof_indices, intensities = reader.read_frame(fid)
+    if min_intensity > 0:
+        keep = intensities > min_intensity
+        scans = scans[keep]
+        tof_indices = tof_indices[keep]
+        intensities = intensities[keep]
+    if scans.shape[0] == 0:
+        return None
+    # Indices come from the instrument and should always be in range; clipping
+    # keeps a corrupt frame from taking the whole run down.
     mz_values = cal["mz_values"]
     mobility_values = cal["mobility_values"]
+    mz = mz_values[np.clip(tof_indices, 0, len(mz_values) - 1)].astype(PEAK_MZ_DTYPE)
+    mob = mobility_values[np.clip(scans, 0, len(mobility_values) - 1)].astype(PEAK_MOB_DTYPE)
+    return scans, mz, intensities.astype(PEAK_INT_DTYPE), mob
 
-    max_frame = int(cal["frame_ids"].max())
-    rt_by_frame = np.zeros(max_frame + 1, dtype=np.float64)
-    ms_level_by_frame = np.zeros(max_frame + 1, dtype=np.uint8)
-    for i, fid in enumerate(cal["frame_ids"]):
-        rt_by_frame[int(fid)] = cal["rt_values"][i]
-        ms_level_by_frame[int(fid)] = cal["ms_level"][i]
 
-    dia_dict = {}
-    for row in dia_lookup.iter_rows():
-        frame, scan_begin, scan_end, prec_mz, iso_width, ce = row
-        dia_dict.setdefault(int(frame), []).append(
-            (int(scan_begin), int(scan_end), float(prec_mz), float(iso_width), float(ce))
-        )
+def _read_raw_ms1_groups(d_path: str, cal: dict, min_intensity: int = 0) -> dict:
+    """The raw MS1 frames of ``analysis.tdf_bin``, in the shape ``_read_peak_groups``
+    returns MS1: ``rt -> ([mz], [intens], [mob])``, one frame per RT.
 
+    Reads every stored ion instead of the centroider's peak list; downstream code
+    cannot tell the two apart.  MS2 is streamed separately
+    (``_iter_raw_ms2_groups``).
+    """
+    rt_by_frame, ms_level_by_frame = _frame_tables(cal)
+    logger.info(f"Reading raw MS1 frames from {d_path}/analysis.tdf_bin "
+                f"({frame_peak_counts(d_path)} stored peaks)")
     ms1_groups = {}
-    ms2_groups = {}
-
-    total_peaks = frame_peak_counts(d_path)
-    logger.info(f"Reading raw frames from {d_path}/analysis.tdf_bin "
-                f"({total_peaks} stored peaks)")
-
     kept = 0
     with TdfBinReader(d_path) as reader:
         for frame_id in reader.frame_ids:
             fid = int(frame_id)
-            level = ms_level_by_frame[fid]
-            if level == 0:
-                continue  # frame absent from the calibration table
-            if level == 1 and not include_ms1:
+            if ms_level_by_frame[fid] != 1:
                 continue
-            if level == 2 and fid not in dia_dict:
+            peaks = _read_raw_frame(reader, fid, cal, min_intensity)
+            if peaks is None:
                 continue
-
-            scans, tof_indices, intensities = reader.read_frame(fid)
-            if scans.shape[0] == 0:
-                continue
-
-            if min_intensity > 0:
-                keep = intensities > min_intensity
-                if not keep.any():
-                    continue
-                scans = scans[keep]
-                tof_indices = tof_indices[keep]
-                intensities = intensities[keep]
-
-            # Calibration by table lookup (see the docstring). Indices come from the
-            # instrument and should always be in range; clipping keeps a corrupt
-            # frame from taking the whole run down.
-            mz = mz_values[np.clip(tof_indices, 0, len(mz_values) - 1)].astype(PEAK_MZ_DTYPE)
-            mob = mobility_values[
-                np.clip(scans, 0, len(mobility_values) - 1)
-            ].astype(PEAK_MOB_DTYPE)
-            intens = intensities.astype(PEAK_INT_DTYPE)
-            rt = float(rt_by_frame[fid])
-            kept += scans.shape[0]
-
-            if level == 1:
-                # One frame per RT, so this key is written exactly once.
-                ms1_groups.setdefault(rt, ([], [], []))
-                ms1_groups[rt][0].append(mz)
-                ms1_groups[rt][1].append(intens)
-                ms1_groups[rt][2].append(mob)
-                continue
-
-            for scan_begin, scan_end, prec_mz, iso_width, ce in dia_dict[fid]:
-                win_mask = (scans >= scan_begin) & (scans < scan_end)
-                if not win_mask.any():
-                    continue
-                key = (rt, prec_mz, iso_width, ce)
-                if key not in ms2_groups:
-                    ms2_groups[key] = ([], [], [])
-                ms2_groups[key][0].append(mz[win_mask])
-                ms2_groups[key][1].append(intens[win_mask])
-                ms2_groups[key][2].append(mob[win_mask])
-
-    # Match _read_peak_groups: MS2 arrives concatenated, MS1 as chunk lists.
-    for key in list(ms2_groups):
-        v = ms2_groups.pop(key)
-        ms2_groups[key] = (np.concatenate(v[0]), np.concatenate(v[1]),
-                           np.concatenate(v[2]))
-
-    logger.info(f"Read {kept} raw peaks into {len(ms1_groups)} MS1 frames "
-                f"and {len(ms2_groups)} MS2 windows")
-    return ms1_groups, ms2_groups
+            _scans, mz, intens, mob = peaks
+            kept += mz.shape[0]
+            g = ms1_groups.setdefault(float(rt_by_frame[fid]), ([], [], []))
+            g[0].append(mz)
+            g[1].append(intens)
+            g[2].append(mob)
+    logger.info(f"Read {kept} raw MS1 peaks in {len(ms1_groups)} MS1 frames")
+    return ms1_groups
 
 
-def _reread_peak_groups(sf: SpectrumFile, include_ms1: bool = False):
-    """Re-read un-banded peaks from whichever source built ``sf``.
+def _iter_raw_ms2_groups(d_path: str, cal: dict, dia_lookup: pl.DataFrame,
+                         min_intensity: int = 0):
+    """Stream the raw MS2 (frame, window) groups of ``analysis.tdf_bin``, one RT at a time.
 
-    ``reband_ms2`` deliberately does not keep the un-banded peaks in memory, so
-    it needs to go back to the data. Both ingest paths leave the .d on disk;
-    this picks the right reader.
+    Yields ``(key, (mz, intens, mob))`` with ``key = (rt, prec_mz, iso_width, ce)``
+    in sorted key order, the form ``_band_ms2_groups`` consumes.  A (frame,
+    window) group comes from a single frame, so every group of an RT is complete
+    once that RT's frames are read: frames are visited in RT order (stable, so
+    equal-RT frames keep reader order) and each RT's groups are yielded sorted.
+    Only one RT's un-banded peaks are held at a time, instead of the whole run's
+    (~35 GB on a 20 ng timsTOF .d).
     """
-    raw_path = getattr(sf, "_raw_d_path", None)
-    if raw_path is not None:
-        return _read_raw_peak_groups(raw_path, sf._cal, sf._dia_lookup,
-                                     include_ms1=include_ms1,
-                                     min_intensity=getattr(sf, "_min_intensity", 0))
-    return _read_peak_groups(sf._peaks_path, sf._cal, sf._dia_lookup,
-                             include_ms1=include_ms1)
+    rt_by_frame, ms_level_by_frame = _frame_tables(cal)
+    windows = _windows_by_frame(dia_lookup)
+    logger.info(f"Reading raw MS2 frames from {d_path}/analysis.tdf_bin, banding as they are read")
+    kept = 0
+    n_groups = 0
+    with TdfBinReader(d_path) as reader:
+        frames = sorted((int(f) for f in reader.frame_ids
+                         if ms_level_by_frame[int(f)] == 2 and int(f) in windows),
+                        key=lambda f: rt_by_frame[f])
+        i = 0
+        while i < len(frames):
+            rt = float(rt_by_frame[frames[i]])
+            groups = {}
+            while i < len(frames) and float(rt_by_frame[frames[i]]) == rt:
+                fid = frames[i]
+                i += 1
+                peaks = _read_raw_frame(reader, fid, cal, min_intensity)
+                if peaks is None:
+                    continue
+                scans, mz, intens, mob = peaks
+                kept += scans.shape[0]
+                _add_window_peaks(groups, rt, windows[fid], scans, mz, intens, mob)
+            for key, (mz, intens, mob) in _drain_sorted(groups):
+                n_groups += 1
+                yield key, (np.concatenate(mz), np.concatenate(intens), np.concatenate(mob))
+    logger.info(f"Read {kept} raw MS2 peaks in {n_groups} MS2 windows")
+
+
+def _reread_ms2_groups(sf: SpectrumFile):
+    """The un-banded MS2 groups again, in sorted key order, from whichever source
+    built ``sf``.
+
+    ``reband_ms2`` deliberately does not keep the un-banded peaks in memory, so it
+    goes back to the data: raw .d input is streamed again, one RT at a time; a
+    peaks.parquet is re-read whole and drained window by window.
+    """
+    if sf._peaks_path is not None:
+        _, groups = _read_peak_groups(sf._peaks_path, sf._cal, sf._dia_lookup, include_ms1=False)
+        return _drain_sorted(groups)
+    return _iter_raw_ms2_groups(sf._raw_d_path, sf._cal, sf._dia_lookup, sf._min_intensity)
 
 
 def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
@@ -1060,7 +1030,7 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
       row-group batches to avoid loading 6+ GB at once.  Expects columns
       ``frame, scan, mz, im, apex_intensity``.
     - ``raw_d_path`` -- a stock .d, decoded frame by frame from analysis.tdf_bin
-      and calibrated here in estimation mode (see ``_read_raw_peak_groups``).
+      and calibrated here (see ``_read_raw_frame``).
 
     Exactly one of the two must be given.  Each non-empty IM bin produces a
     separate Spectrum object.
@@ -1069,11 +1039,13 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
         raise ValueError("Pass exactly one of peaks_path or raw_d_path")
 
     if raw_d_path is not None:
-        ms1_groups, ms2_groups = _read_raw_peak_groups(
-            raw_d_path, cal, dia_lookup, min_intensity=min_intensity
-        )
+        # MS1 now; MS2 is streamed into banding below, one RT at a time, so the
+        # whole run's un-banded MS2 peaks are never held at once.
+        ms1_groups = _read_raw_ms1_groups(raw_d_path, cal, min_intensity)
+        ms2_groups = _iter_raw_ms2_groups(raw_d_path, cal, dia_lookup, min_intensity)
     else:
-        ms1_groups, ms2_groups = _read_peak_groups(peaks_path, cal, dia_lookup)
+        ms1_groups, ms2_dict = _read_peak_groups(peaks_path, cal, dia_lookup)
+        ms2_groups = _drain_sorted(ms2_dict)
 
     # Build SpectrumFile from accumulated groups
     sf = SpectrumFile()
@@ -1147,11 +1119,9 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
     sf._cal = cal
     sf._dia_lookup = dia_lookup
     sf._im_range = (float(im_bins[:, 0].min()), float(im_bins[:, 1].max()))
-    n_windows = len(ms2_groups)
 
     logger.info("Building MS2 spectra with overlapping fixed IM bins")
-    scan_counter = _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter)
-    del ms2_groups
+    scan_counter, n_windows = _band_ms2_groups(sf, ms2_groups, im_bins, scan_counter)
     logger.info(
         f"MS2 scans after IM binning: {len(sf.ms2scans)} "
         f"(original windows: {n_windows})"
@@ -1170,7 +1140,7 @@ def reband_ms2(sf: SpectrumFile, width: float) -> bool:
     it.  Call between the preliminary search and the main search.
 
     ``width`` is the full band width; bins overlap by 50%, so the stride is
-    ``width / 2``.  That relationship is required by ``_assign_peaks_to_im_bins``,
+    ``width / 2``.  That relationship is required by ``band_store.band_keys``,
     which only ever tests two candidate bins per peak.
 
     The un-banded peaks are not kept in memory for this -- they are re-read from
@@ -1215,13 +1185,7 @@ def reband_ms2(sf: SpectrumFile, width: float) -> bool:
     scan_counter = (max(sf.ms1_by_id) + 1) if sf.ms1_by_id else 1
 
     logger.info("Re-banding MS2: re-reading un-banded peaks")
-    _, groups = _reread_peak_groups(sf, include_ms1=False)
-
-    # _band_ms2_groups drains the dict as it goes, so the un-banded peaks are
-    # released window by window instead of sitting in memory alongside the ~2x
-    # larger banded set being allocated.
-    _band_ms2_groups(sf, groups, new_bins, scan_counter)
-    del groups
+    _band_ms2_groups(sf, _reread_ms2_groups(sf), new_bins, scan_counter)
     sf.build_ms2_to_ms1_map()
 
     logger.info(
