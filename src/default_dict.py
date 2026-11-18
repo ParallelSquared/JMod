@@ -221,6 +221,8 @@ default_dict = {
     },
     # Worker processes for isotope generation (--iso).  Each is a separate
     # process with its own memory; capped at the number of CPUs.
+    ##TODO fold into -t/--threads like the rest of JMod's parallelism; a separate
+    # worker count for one stage (and processes, not threads) is out of step with them
     'iso_workers': {
         'flags': ('--iso_workers',),
         'default': 3,
@@ -244,6 +246,9 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    ##TODO -p reads as "processes"; give the MS2 tolerance an unambiguous flag (e.g.
+    # --ms2_ppm, no one-letter form).  On .d input it only sets the first-search
+    # tolerance: run_jmod.py replaces it with the fitted MS1 tolerance afterwards
     'ppm': {
         'flags': ('-p', '--ppm'),
         'default': 10,

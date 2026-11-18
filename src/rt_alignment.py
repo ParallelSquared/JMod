@@ -2137,6 +2137,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     # plt.hist(((mz_func(id_mzs,rts)-orig_mzs)/id_mzs)[rt_filter_bool],100)
     
     corrected_mz_diffs = (diffs-(f_rt_mz(new_lib_rt)+mz_spl(output_df.mz)))[cor_filter]
+    # TODO: the MS1 tolerance collapses when the first search keeps few IDs
+    # (15-min 200pg runs: ~1,100 at percentile 98 gave 7.7 and 3.2 ppm, against
+    # 12-14 ppm on the long-gradient runs).  local_frac=.01 leaves ~11 points
+    # per window, so the modal LOWESS fits each point's own error and piles the
+    # corrected errors up at 0; the narrower GMM component is that spike, and
+    # 4 sigma of it is the tolerance.  Give the smoother a minimum number of
+    # points per window, and set the tolerance from residuals not fitted to
+    # themselves (cross-fitted), not from the narrow component alone.
     mz_weights, mz_sigmas = fit_zero_mean_gmm_1d(corrected_mz_diffs, n_components=2)
     mz_order = np.argsort(mz_sigmas)
     mz_sigmas = mz_sigmas[mz_order]
