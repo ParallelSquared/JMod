@@ -86,13 +86,12 @@ def stub_loader(monkeypatch):
                         lambda d, sdk=None: calls.setdefault("tables", d) and "TABLES")
     monkeypatch.setattr(bd, "_load_sdk_tables",
                         lambda t, cal: calls.setdefault("loaded", t))
-    monkeypatch.setattr(bd, "_centroid_d", lambda *a: pytest.fail("must not centroid"))
 
     class SF:
         ms1scans = ms2scans = []
 
-    def _build(filepath, peaks_path, cal, dia, bins, raw_d_path=None):
-        calls["build"] = (peaks_path, raw_d_path)
+    def _build(filepath, raw_d_path, cal, dia, bins):
+        calls["build"] = raw_d_path
         return SF()
 
     monkeypatch.setattr(bd, "_build_spectrum_file", _build)
@@ -104,7 +103,7 @@ def test_without_peaks_parquet_reads_raw_with_sdk_tables(tmp_path, stub_loader):
     bd._load_d(str(d) + "/")
     assert stub_loader["tables"] == str(d)
     assert stub_loader["loaded"] == "TABLES"
-    assert stub_loader["build"] == (None, str(d))
+    assert stub_loader["build"] == str(d)
     assert not (d / "peaks.parquet").exists()
 
 
@@ -115,4 +114,4 @@ def test_a_peaks_parquet_is_ignored_and_the_raw_ions_are_read(tmp_path, stub_loa
     bd._load_d(str(d))
     assert stub_loader["tables"] == str(d)
     assert stub_loader["loaded"] == "TABLES"
-    assert stub_loader["build"] == (None, str(d))
+    assert stub_loader["build"] == str(d)

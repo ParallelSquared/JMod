@@ -12,8 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-"""Bruker timsTOF .d input: calibration, DIA windows, the raw and peaks.parquet
-readers, MS2 IM banding, and the Bruker SDK location.  ``file_reader.FileReader``
+"""Bruker timsTOF .d input: calibration, DIA windows, the raw-ion readers, MS2 IM
+banding, and the Bruker SDK location.  ``file_reader.FileReader``
 dispatches .d input here (``_load_d``)."""
 
 import os
@@ -192,7 +192,7 @@ class BandSpectrum(Spectrum):
     bands), so reading all three costs one merge.  Assigning one of them
     replaces it for this spectrum (the others still read the band); once all
     three are assigned the spectrum no longer refers to the group buffer, so the
-    buffer is freed when no band uses it (``use_centroided_ms2``)."""
+    buffer is freed when no band uses it."""
 
     def __init__(self, group, runs):
         # Spectrum's attributes, without its mz/intens/mobility = None (properties here)
@@ -268,16 +268,6 @@ class BandSpectrum(Spectrum):
     def mobility(self, value):
         self._assign(2, value)
 
-
-# ---------------------------------------------------------------------------
-# Reading .d input
-# ---------------------------------------------------------------------------
-
-# Centroiding noise thresholds. TODO: expose via settings/CLI alongside
-# --bruker_sdk_path; constant for now.
-MIN_ION_COUNT_MS1 = 0.5
-MIN_ION_COUNT_MS2 = 2.0
-
 # Bruker's timsdata SDK (5.0.4) unpacks to a folder holding exactly two platform
 # directories -- win64/ and linux64/ -- alongside include/, examples/ and
 # thirdparty/. Bruker publishes no macOS build, so there is deliberately no
@@ -302,382 +292,40 @@ def compute_im_bins(im_lo, im_hi, width=0.05, stride=0.025):
     return np.column_stack([starts, starts + width])
 
 
-@nb.njit
-def collapse_tof(mz_vals, intensities, mobilities, ppm_tol=10.0):
-    """Merge peaks within ppm tolerance by intensity-weighted m/z averaging.
-
-    Processes peaks in descending intensity order. For each unmerged peak,
-    gathers all unmerged neighbors within ppm_tol (computed per-pair) and
-    merges them into a single peak with summed intensity, weighted m/z,
-    and the ion mobility of the seed (most intense) peak.
-
-    mz_vals: 1D array of calibrated m/z values (unsorted, from multiple IM scans)
-    intensities: 1D array of corresponding intensities
-    mobilities: 1D array of ion mobility values (1/K0)
-    ppm_tol: merging tolerance in ppm
-    Returns: (centroided_mz, summed_intensity, seed_mobility) sorted by m/z
-    """
-    n = len(mz_vals)
-    if n == 0:
-        return np.empty(0, dtype=np.float64), np.empty(0, dtype=np.float64), np.empty(0, dtype=np.float64)
-
-    # Sort by m/z for neighbor searching
-    mz_order = np.argsort(mz_vals)
-    mz_sorted = mz_vals[mz_order]
-    int_sorted = intensities[mz_order]
-    mob_sorted = mobilities[mz_order]
-
-    # Process order: most intense first
-    int_order = np.argsort(-int_sorted)
-
-    merged = np.zeros(n, dtype=nb.boolean)
-    out_mz = np.empty(n, dtype=np.float64)
-    out_int = np.empty(n, dtype=np.float64)
-    out_mob = np.empty(n, dtype=np.float64)
-    n_out = 0
-
-    for k in range(n):
-        idx = int_order[k]
-        if merged[idx]:
-            continue
-
-        anchor_mz = mz_sorted[idx]
-        wsum_mz = anchor_mz * int_sorted[idx]
-        wsum_int = int_sorted[idx]
-        seed_mob = mob_sorted[idx]
-        merged[idx] = True
-
-        # Search left
-        j = idx - 1
-        while j >= 0 and not merged[j]:
-            tol_da = mz_sorted[j + 1] * ppm_tol * 1e-6
-            if (mz_sorted[j + 1] - mz_sorted[j]) > tol_da:
-                break
-            wsum_mz += mz_sorted[j] * int_sorted[j]
-            wsum_int += int_sorted[j]
-            merged[j] = True
-            j -= 1
-
-        # Search right
-        j = idx + 1
-        while j < n and not merged[j]:
-            tol_da = mz_sorted[j - 1] * ppm_tol * 1e-6
-            if (mz_sorted[j] - mz_sorted[j - 1]) > tol_da:
-                break
-            wsum_mz += mz_sorted[j] * int_sorted[j]
-            wsum_int += int_sorted[j]
-            merged[j] = True
-            j += 1
-
-        out_mz[n_out] = wsum_mz / wsum_int
-        out_int[n_out] = wsum_int
-        out_mob[n_out] = seed_mob
-        n_out += 1
-
-    # Sort output by m/z
-    result_mz = out_mz[:n_out]
-    result_int = out_int[:n_out]
-    result_mob = out_mob[:n_out]
-    final_order = np.argsort(result_mz)
-    return result_mz[final_order], result_int[final_order], result_mob[final_order]
-
-
-def _centroid_d(d_path: str, peaks_path: str, sdk_path: str = None) -> None:
-    """Centroid a .d in place, writing peaks.parquet, via peppy_sage.
-
-    Replaces the manual step of running the timscentroid binary beforehand;
-    the result is the same file, with the same columns, read the same way.
-
-    ``sdk_path`` points at Bruker's timsdata library, or the directory holding
-    it, and comes from ``--bruker_sdk_path`` or the stored setting.  Without it
-    m/z and 1/K0 are approximated from analysis.tdf and will not match an
-    SDK-centroided run.
-    """
-    try:
-        from peppy_sage import _peppy_sage
-    except ImportError as e:
-        raise FileNotFoundError(
-            f"Peaks file not found: {peaks_path}, and peppy_sage is not "
-            f"importable to create it ({e}). Either place a peaks.parquet "
-            f"inside {d_path} or install peppy_sage."
-        ) from e
-
-    if not hasattr(_peppy_sage, "centroid_d"):
-        raise FileNotFoundError(
-            f"Peaks file not found: {peaks_path}, and the installed peppy_sage "
-            f"has no centroid_d. Rebuild peppy_sage, or place a peaks.parquet "
-            f"inside {d_path}."
-        )
-
-    sdk_path = sdk_path or None
-    # run_jmod resolves this to a concrete library file before we ever get here.
-    # Re-check, because the GUI writes bruker_sdk_path into settings directly and
-    # a stale value would otherwise reach peppy_sage and hit its directory
-    # fallback instead of failing with something the user can act on.
-    if sdk_path and not os.path.isfile(sdk_path):
-        _fail_bruker(f"Bruker timsdata library not found: {sdk_path}")
-
-    # TODO: plumb these through the settings/CLI like bruker_sdk_path once we
-    # know which values we actually want. Lowering them keeps signal the
-    # defaults discard, which is worth revisiting.
-    min_ms1 = MIN_ION_COUNT_MS1
-    min_ms2 = MIN_ION_COUNT_MS2
-
-    if sdk_path:
-        logger.info(f"Centroiding with Bruker SDK at {sdk_path}")
-    else:
-        logger.warning(
-            "Centroiding WITHOUT the Bruker SDK: m/z and 1/K0 are approximated "
-            "from analysis.tdf and will not match an SDK-centroided run. Pass "
-            "--bruker_sdk_path to use the real calibration."
-        )
-    logger.info(f"  min_ion_count_ms1={min_ms1}, min_ion_count_ms2={min_ms2}")
-
-    # Write beside the target and rename, so an interrupted run cannot leave a
-    # partial peaks.parquet that the next run would treat as complete.
-    tmp_path = peaks_path + ".partial"
-    t0 = perf_counter()
-
-    # centroid_d reports (done, total) every 64 frames from its worker threads.
-    # tqdm.total is not known until the first callback, so the bar is created
-    # lazily and only closed if it was ever opened.
-    from tqdm.auto import tqdm
-    bar = {"obj": None}
-
-    def _on_progress(done, total):
-        if bar["obj"] is None:
-            bar["obj"] = tqdm(total=total, desc="Centroiding", unit="frame")
-        bar["obj"].update(done - bar["obj"].n)
-
-    try:
-        n = _peppy_sage.centroid_d(d_path, tmp_path, min_ms1, min_ms2, sdk_path,
-                                   _on_progress)
-    except BaseException:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-    finally:
-        if bar["obj"] is not None:
-            bar["obj"].close()
-    os.replace(tmp_path, peaks_path)
-    logger.info(f"Centroided {n:,} peaks -> {peaks_path} "
-                f"({perf_counter() - t0:.0f}s)")
-
-
-def _recalibrate_peaks_parquet(peaks_path: str, cal: dict) -> None:
-    """Set a peaks.parquet's m/z and 1/K0 from the SDK tables in *cal* (by each
-    peak's apex TOF index and scan), in place, if they differ."""
-    import pyarrow as pa, pyarrow.parquet as pq
-    src = pq.ParquetFile(peaks_path); schema = src.schema_arrow
-    head = src.read_row_group(0, columns=["tof", "scan", "mz", "im"])
-    mz_t, im_t = np.asarray(cal["mz_values"]), np.asarray(cal["mobility_values"])
-    if (np.allclose(head.column("mz").to_numpy(), mz_t[head.column("tof").to_numpy()], rtol=0, atol=1e-9)
-            and np.allclose(head.column("im").to_numpy(), im_t[head.column("scan").to_numpy()], rtol=0, atol=1e-9)):
-        return
-    tmp = peaks_path + ".sdk.partial"
-    with pq.ParquetWriter(tmp, schema) as w:
-        for k in range(src.metadata.num_row_groups):
-            t = src.read_row_group(k); cols = {n: t.column(n) for n in schema.names}
-            cols["mz"] = pa.array(mz_t[np.clip(t.column("tof").to_numpy(), 0, len(mz_t) - 1)])
-            cols["im"] = pa.array(im_t[np.clip(t.column("scan").to_numpy(), 0, len(im_t) - 1)])
-            w.write_table(pa.Table.from_arrays([cols[n] for n in schema.names], schema=schema))
-    os.replace(tmp, peaks_path)
-    logger.info(f"Set {peaks_path} m/z and 1/K0 from the Bruker SDK tables")
-
-
-def use_centroided_ms1(sf: SpectrumFile) -> SpectrumFile:
-    """Replace the MS1 peaks of a raw-read .d with its centroids, in place.
-
-    Not called at present (raw ions quantified better on the 200pg 5plex).
-    Identification runs on the raw ions, and once
-    the IDs are scored the MS1 spectra are swapped for centroided peaks for the
-    quantification.  Scan numbers, retention times, the MS2 spectra and the
-    MS2 -> MS1 map are untouched, so the IDs' Ms1_spec_id still point at the
-    same frames.
-
-    The centroids are the .d's peaks.parquet, made by the centroider when
-    missing.  It works in TOF-index and scan space and only labels each peak
-    with m/z and 1/K0 at its apex, so those are taken here from the Bruker SDK
-    tables the raw read already uses (bruker_calibration/): the same values an
-    SDK-centroided peaks.parquet holds, on every platform.
-    """
-    d_path = getattr(sf, "_raw_d_path", None)
-    if d_path is None:
-        raise JModError("centroided MS1 needs .d input read raw")
-    peaks_path = os.path.join(d_path, "peaks.parquet")
-    if not os.path.exists(peaks_path):
-        _centroid_d(d_path, peaks_path, None)
-    tables = os.path.join(d_path, _SDK_TABLES_DIR)
-    mz_table = np.load(os.path.join(tables, "mz.npy"))
-    ook0_table = np.load(os.path.join(tables, "ook0.npy"))
-
-    cal = sf._cal
-    is_ms1 = np.asarray(cal["ms_level"]) == 1
-    frame_rt = dict(zip(np.asarray(cal["frame_ids"])[is_ms1].tolist(),
-                        np.asarray(cal["rt_values"])[is_ms1].tolist()))
-    by_rt = {spec.RT: spec for spec in sf.ms1scans}
-
-    import pyarrow.dataset as pads
-    t = pads.dataset(peaks_path).to_table(
-        filter=pads.field("frame").isin(list(frame_rt)),
-        columns=["frame", "scan", "tof", "apex_intensity"])
-    frame = t.column("frame").to_numpy()
-    order = np.argsort(frame, kind="stable")
-    frame = frame[order]
-    scan = t.column("scan").to_numpy()[order]
-    tof = t.column("tof").to_numpy()[order]
-    intens = t.column("apex_intensity").to_numpy()[order]
-    starts = np.flatnonzero(np.r_[True, frame[1:] != frame[:-1]]) if frame.size else np.array([], int)
-    ends = np.r_[starts[1:], frame.size]
-
-    empty = (np.empty(0, PEAK_MZ_DTYPE), np.empty(0, PEAK_INT_DTYPE), np.empty(0, PEAK_MOB_DTYPE))
-    replaced = set()
-    for a, b in zip(starts, ends):
-        spec = by_rt.get(frame_rt[int(frame[a])])
-        if spec is None:
-            continue
-        mz = mz_table[np.clip(tof[a:b], 0, len(mz_table) - 1)].astype(PEAK_MZ_DTYPE)
-        o = np.argsort(mz, kind="stable")
-        spec.mz = mz[o]
-        spec.intens = intens[a:b][o].astype(PEAK_INT_DTYPE)
-        spec.mobility = ook0_table[np.clip(scan[a:b], 0, len(ook0_table) - 1)][o].astype(PEAK_MOB_DTYPE)
-        spec.TIC = float(spec.intens.sum(dtype=np.float64))
-        replaced.add(id(spec))
-    for spec in sf.ms1scans:          # frames without a centroid
-        if id(spec) not in replaced:
-            spec.mz, spec.intens, spec.mobility = empty
-            spec.TIC = 0.0
-    logger.info(f"MS1 quantified from centroids: {len(replaced)} of {len(sf.ms1scans)} "
-                f"MS1 spectra, {frame.size} peaks ({peaks_path})")
-    return sf
-
-
-def use_centroided_ms2(sf: SpectrumFile) -> SpectrumFile:
-    """Replace the MS2 peaks of a raw-read .d with its centroids, in place.
-
-    Not called at present.  After identification and MS1 quant: each MS2
-    spectrum (one isolation window of one frame, cut to one IM band) gets the
-    frame's centroids whose apex scan lies in that window's scan range and
-    whose 1/K0 lies in the band, by the same rules the raw ions were assigned
-    with (scan_begin <= scan < scan_end; im_lo <= 1/K0 < im_hi).  Scan numbers
-    and everything else are untouched.  m/z and 1/K0 come from the Bruker SDK
-    tables, as in use_centroided_ms1.
-    """
-    d_path = getattr(sf, "_raw_d_path", None)
-    if d_path is None:
-        raise JModError("centroided MS2 needs .d input read raw")
-    peaks_path = os.path.join(d_path, "peaks.parquet")
-    if not os.path.exists(peaks_path):
-        _centroid_d(d_path, peaks_path, None)
-    tables = os.path.join(d_path, _SDK_TABLES_DIR)
-    mz_table = np.load(os.path.join(tables, "mz.npy"))
-    ook0_table = np.load(os.path.join(tables, "ook0.npy"))
-
-    cal = sf._cal
-    frame_ids = np.asarray(cal["frame_ids"])
-    is_ms2 = np.asarray(cal["ms_level"]) == 2
-    rt_frame = dict(zip(np.asarray(cal["rt_values"])[is_ms2].tolist(), frame_ids[is_ms2].tolist()))
-    windows = {}                                   # (frame, prec_mz) -> (scan_begin, scan_end)
-    for frame, scan_begin, scan_end, prec_mz, _w, _ce in sf._dia_lookup.iter_rows():
-        windows[(int(frame), float(prec_mz))] = (int(scan_begin), int(scan_end))
-
-    import pyarrow.dataset as pads
-    t = pads.dataset(peaks_path).to_table(
-        filter=pads.field("frame").isin(list(rt_frame.values())),
-        columns=["frame", "scan", "tof", "apex_intensity"])
-    frame = t.column("frame").to_numpy()
-    order = np.argsort(frame, kind="stable")
-    frame = frame[order]
-    scan = t.column("scan").to_numpy()[order].astype(np.int64)
-    tof = t.column("tof").to_numpy()[order]
-    intens = t.column("apex_intensity").to_numpy()[order]
-    del t
-    mob = ook0_table[np.clip(scan, 0, len(ook0_table) - 1)].astype(PEAK_MOB_DTYPE)
-    mz_all = mz_table[np.clip(tof, 0, len(mz_table) - 1)].astype(PEAK_MZ_DTYPE)
-    starts = np.flatnonzero(np.r_[True, frame[1:] != frame[:-1]]) if frame.size else np.array([], int)
-    span = {int(frame[a]): (a, b) for a, b in zip(starts, np.r_[starts[1:], frame.size])}
-
-    n_peaks = 0
-    for spec in sf.ms2scans:
-        f = rt_frame.get(spec.RT)
-        w = windows.get((f, float(spec.prec_mz))) if f is not None else None
-        a, b = span.get(f, (0, 0)) if w is not None else (0, 0)
-        m64 = mob[a:b].astype(np.float64)
-        keep = ((scan[a:b] >= w[0]) & (scan[a:b] < w[1]) & (spec.im_lo <= m64) & (m64 < spec.im_hi)
-                if b > a else np.zeros(0, bool))
-        mz = mz_all[a:b][keep]
-        o = np.argsort(mz, kind="stable")
-        spec.mz = mz[o]
-        spec.intens = intens[a:b][keep][o].astype(PEAK_INT_DTYPE)
-        spec.mobility = mob[a:b][keep][o]
-        spec.TIC = float(spec.intens.sum(dtype=np.float64))
-        n_peaks += spec.mz.size
-    logger.info(f"MS2 quantified from centroids: {len(sf.ms2scans)} MS2 spectra, "
-                f"{n_peaks} peaks ({peaks_path})")
-    return sf
-
-
 def _load_d(filepath: str, bruker_sdk_path: str = None) -> SpectrumFile:
-    """Load timsTOF .d data.
-
-    With a peaks.parquet in the .d, peaks come from it (already centroided and
-    calibrated).  Without one, the raw ions in analysis.tdf_bin are read
-    uncentroided and calibrated with tables computed by Bruker's timsdata
-    (see ``_sdk_calibration_tables``).
-    """
+    """Load timsTOF .d data: the raw ions in analysis.tdf_bin, read uncentroided
+    and calibrated with tables computed by Bruker's timsdata (see
+    ``_sdk_calibration_tables``).  A peaks.parquet in the .d is ignored."""
     logger.info("Loading Spectra... from .d file")
     d_path = filepath.rstrip("/")
 
-    peaks_path = os.path.join(d_path, "peaks.parquet")
     tdf_path = os.path.join(d_path, "analysis.tdf")
     bin_path = os.path.join(d_path, "analysis.tdf_bin")
 
     if not os.path.exists(tdf_path):
         raise FileNotFoundError(f"analysis.tdf not found in {d_path}")
 
-    # Always read the raw, uncentroided ions with Bruker's calibration; a
-    # peaks.parquet in the .d is ignored and the centroider is not used.
-    # raw = not os.path.exists(peaks_path)
-    # TODO: the centroided path below (the centroider's peaks.parquet, m/z and
-    # 1/K0 set from the SDK tables by _recalibrate_peaks_parquet) is kept but
-    # not reachable; on the 200pg 5plex raw ions quantified better.
-    raw = True
-    if not raw and not os.path.exists(peaks_path):
-        _centroid_d(d_path, peaks_path, None)
-    if raw and not os.path.exists(bin_path):
-        raise FileNotFoundError(
-            f"Neither {peaks_path} nor {bin_path} exists; there are no peaks "
-            f"to read."
-        )
+    if not os.path.exists(bin_path):
+        raise FileNotFoundError(f"{bin_path} not found; there are no peaks to read.")
 
     logger.info(f"Loading calibration from {d_path}")
     cal = _load_calibration(tdf_path)
-    if raw:
-        logger.info(f"No peaks.parquet in {d_path}; reading the raw, "
-                    f"uncentroided ions with Bruker's calibration")
-        _load_sdk_tables(_sdk_calibration_tables(d_path, bruker_sdk_path), cal)
+    logger.info(f"Reading the raw, uncentroided ions of {d_path} with Bruker's calibration")
+    _load_sdk_tables(_sdk_calibration_tables(d_path, bruker_sdk_path), cal)
     dia_lookup = _load_dia_windows(tdf_path, cal["frame_ids"], cal["ms_level"])
 
     im_bins = compute_im_bins(cal["im_range_lower"], cal["im_range_upper"])
     logger.info(f"Computed {len(im_bins)} overlapping IM bins "
                 f"[{cal['im_range_lower']:.4f}, {cal['im_range_upper']:.4f}]")
 
-    if raw:
-        sf = _build_spectrum_file(filepath, None, cal, dia_lookup, im_bins,
-                                  raw_d_path=d_path)
-    else:
-        _load_sdk_tables(_sdk_calibration_tables(d_path, bruker_sdk_path), cal)
-        _recalibrate_peaks_parquet(peaks_path, cal)
-        logger.info(f"Reading peaks from {peaks_path}")
-        sf = _build_spectrum_file(filepath, peaks_path, cal, dia_lookup, im_bins)
-        sf._raw_d_path = d_path
+    sf = _build_spectrum_file(filepath, d_path, cal, dia_lookup, im_bins)
 
     logger.info(f"Loaded {len(sf.ms1scans)} MS1 spectra, {len(sf.ms2scans)} MS2 spectra")
     return sf
 
 
-# Bruker's m/z and 1/K0 tables for a .d, cached inside it beside where
-# peaks.parquet would go, as written by scripts/bruker_calibration_tables.py.
+# Bruker's m/z and 1/K0 tables for a .d, cached inside it, as written by
+# scripts/bruker_calibration_tables.py.
 _SDK_TABLES_DIR = "bruker_calibration"
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _SDK_TABLES_SCRIPT = os.path.join(_REPO_ROOT, "scripts", "bruker_calibration_tables.py")
@@ -716,8 +364,7 @@ def _sdk_calibration_tables(d_path: str, bruker_sdk_path: str = None) -> str:
     # partial tables that the next run would treat as complete.
     tmp_dir = tables_dir + ".partial"
     if not bruker_sdk_path:
-        _fail_bruker(f"No peaks.parquet in {d_path}, and reading it raw needs "
-                     f"Bruker's calibration")
+        _fail_bruker(f"Reading {d_path} raw needs Bruker's calibration")
     if sys.platform == "darwin":
         for p in (_WINE, _WINE_PYTHON):
             if not os.path.exists(p):
@@ -879,8 +526,8 @@ def _band_ms2_groups(sf, items, im_bins, scan_counter):
 
     ``items`` yields ``((rt, prec_mz, iso_width, ce), (mz, intens, mob))``, the
     concatenated un-banded peaks of each window, in sorted key order (scan numbers
-    follow it): ``_drain_sorted`` of a dict, or ``_iter_raw_ms2_groups``, which
-    streams them so only one RT's un-banded peaks exist at a time.  Appends a
+    follow it): ``_iter_raw_ms2_groups``, which streams them so only one RT's
+    un-banded peaks exist at a time.  Appends a
     Spectrum per band to ``sf.ms2scans`` and updates ``sf.ms2_by_id`` /
     ``sf.scan_pos``; returns the next free scan number and the number of windows.
 
@@ -953,125 +600,6 @@ def _band_ms2_groups(sf, items, im_bins, scan_counter):
     return scan_counter, n_windows
 
 
-def _read_peak_groups(peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
-                      include_ms1: bool = True):
-    """Read peaks.parquet and group peaks by acquisition, without IM banding.
-
-    Returns ``(ms1_groups, ms2_groups)``:
-
-    - ``ms1_groups``: ``rt -> (mz_list, intens_list, mob_list)``, one frame per RT,
-      left as per-row-group lists for the caller to concatenate.  Empty when
-      ``include_ms1`` is False.
-    - ``ms2_groups``: ``(rt, prec_mz, iso_width, ce) -> (mz, intens, mob)``, already
-      concatenated -- the form ``_band_ms2_groups`` consumes.
-
-    Processes the parquet in row-group batches to avoid loading 6+ GB at once.
-    ``include_ms1=False`` skips MS1 entirely, for callers that only need to redraw
-    the MS2 bands (see ``reband_ms2``).
-    """
-    import pyarrow.parquet as pq
-
-    rt_by_frame, ms_level_by_frame = _frame_tables(cal)
-    dia_dict = _windows_by_frame(dia_lookup)
-
-    # Accumulators: group peaks by rt for MS1 and (rt, prec_mz, iso_width, ce) for MS2
-    ms1_groups = {}  # rt -> (mz_list, intens_list, mob_list); one frame per rt
-    # (rt, prec_mz, iso_width, ce) -> (mz_list, intens_list, mob_list); raw peaks
-    # accumulated across row groups, then IM-band segmented in a post-pass.
-    ms2_groups = {}
-
-    # Batched read with column pruning and prefetch. peaks.parquet files from
-    # older centroid_d builds carry tens of thousands of tiny row groups (one
-    # per frame); reading them one group at a time costs one network round
-    # trip each (~10 min over SMB for a 7 GB file). iter_batches with
-    # pre_buffer coalesces the small column chunks into large sequential
-    # reads, and the 4 unused columns (tof/rt/isolation_window_*: RT is
-    # rebuilt from analysis.tdf) are ~44% of the bytes.
-    columns = ["frame", "scan", "mz", "im", "apex_intensity"]
-    pf = pq.ParquetFile(peaks_path, pre_buffer=True)
-    n_rows = pf.metadata.num_rows
-    batch_size = 2_000_000  # ~70 MB working set over the 5 columns
-    logger.info(f"Processing {n_rows:,} peaks from {peaks_path}")
-
-    import pyarrow as pa
-    for batch in pf.iter_batches(batch_size=batch_size, columns=columns,
-                                 use_threads=True):
-        # zero-copy wrap: Table.column(...).to_numpy() handles nullable
-        # columns, RecordBatch.column(...).to_numpy() does not
-        table = pa.Table.from_batches([batch])
-        frames = table.column("frame").to_numpy()
-        scans = table.column("scan").to_numpy()
-        mz_arr = table.column("mz").to_numpy().astype(PEAK_MZ_DTYPE, copy=False)
-        # Intensity and mobility are stored as float32 on Spectrum (see PEAK_INT_DTYPE
-        # / PEAK_MOB_DTYPE): 1/K0 spans ~0.7-1.3, where float32 resolution (~1e-7) is
-        # orders of magnitude below any IM tolerance, and intensities only need
-        # relative precision. Cast at ingest so the per-row-group accumulators in
-        # ms1_groups / ms2_groups are narrow too, not just the final spectra.
-        mob_arr = table.column("im").to_numpy().astype(PEAK_MOB_DTYPE)
-        intensities = table.column("apex_intensity").to_numpy().astype(PEAK_INT_DTYPE)
-
-        # RT and MS level still come from analysis.tdf (indexed by frame)
-        rt_arr = rt_by_frame[frames]
-        level_arr = ms_level_by_frame[frames]
-
-        # MS1 peaks — accumulate raw peaks per frame (one spectrum per RT),
-        # keeping per-peak mobility (1/K0). No IM binning.
-        # One stable argsort + boundary split per batch instead of an
-        # equality mask per unique RT: a batch holds ~200 frames, so repeated
-        # full-batch masks are O(rows x frames) and dominated the local-disk
-        # runtime. Stable sort keeps within-frame row order, so output is
-        # unchanged.
-        ms1_mask = level_arr == 1 if include_ms1 else None
-        if include_ms1 and ms1_mask.any():
-            ms1_mz = mz_arr[ms1_mask]
-            ms1_intens = intensities[ms1_mask]
-            ms1_mob = mob_arr[ms1_mask]
-            ms1_rt = rt_arr[ms1_mask]
-
-            order = np.argsort(ms1_rt, kind="stable")
-            sorted_rt = ms1_rt[order]
-            bounds = np.flatnonzero(np.diff(sorted_rt)) + 1
-            for sel in np.split(order, bounds):
-                key = float(ms1_rt[sel[0]])
-                if key not in ms1_groups:
-                    ms1_groups[key] = ([], [], [])
-                ms1_groups[key][0].append(ms1_mz[sel])
-                ms1_groups[key][1].append(ms1_intens[sel])
-                ms1_groups[key][2].append(ms1_mob[sel])
-
-        # MS2 peaks: assign to DIA windows (same sort-and-split pattern)
-        ms2_mask = level_arr == 2
-        if ms2_mask.any():
-            ms2_frames = frames[ms2_mask]
-            ms2_scans = scans[ms2_mask]
-            ms2_mz = mz_arr[ms2_mask]
-            ms2_intens = intensities[ms2_mask]
-            ms2_mob = mob_arr[ms2_mask]
-            ms2_rt = rt_arr[ms2_mask]
-
-            order = np.argsort(ms2_frames, kind="stable")
-            sorted_frames = ms2_frames[order]
-            bounds = np.flatnonzero(np.diff(sorted_frames)) + 1
-            for sel in np.split(order, bounds):
-                frame_id = ms2_frames[sel[0]]
-                windows = dia_dict.get(int(frame_id))
-                if windows is None:
-                    continue
-                # Accumulated per (frame, window) across row groups; IM-band
-                # segmentation runs in a post-pass (it needs the whole window).
-                _add_window_peaks(ms2_groups, float(ms2_rt[sel[0]]), windows, ms2_scans[sel],
-                                  ms2_mz[sel], ms2_intens[sel], ms2_mob[sel])
-
-    # Concatenate MS2 in place, dropping the per-row-group fragments as we go so
-    # the list-of-chunks form never coexists in full with the concatenated form.
-    for key in list(ms2_groups):
-        v = ms2_groups.pop(key)
-        ms2_groups[key] = (np.concatenate(v[0]), np.concatenate(v[1]),
-                           np.concatenate(v[2]))
-
-    return ms1_groups, ms2_groups
-
-
 def _frame_tables(cal: dict):
     """RT and MS level indexed by frame ID (level 0: frame not in the calibration table)."""
     max_frame = int(cal["frame_ids"].max())
@@ -1112,7 +640,7 @@ def _read_raw_frame(reader, fid: int, cal: dict, min_intensity: int):
     Calibration is whatever ``cal["mz_values"]`` / ``cal["mobility_values"]``
     hold.  By default that is estimation mode, the lookups ``_load_calibration``
     builds from ``GlobalMetadata``, which approximate the instrument response
-    and so do *not* match a peaks.parquet produced with the Bruker SDK.
+    and so do *not* match the Bruker SDK.
     ``_load_d`` replaces them with tables Bruker's timsdata computed
     (``_load_sdk_tables``), so m/z and 1/K0 match the SDK.
 
@@ -1138,12 +666,9 @@ def _read_raw_frame(reader, fid: int, cal: dict, min_intensity: int):
 
 
 def _read_raw_ms1_groups(d_path: str, cal: dict, min_intensity: int = 0) -> dict:
-    """The raw MS1 frames of ``analysis.tdf_bin``, in the shape ``_read_peak_groups``
-    returns MS1: ``rt -> ([mz], [intens], [mob])``, one frame per RT.
-
-    Reads every stored ion instead of the centroider's peak list; downstream code
-    cannot tell the two apart.  MS2 is streamed separately
-    (``_iter_raw_ms2_groups``).
+    """The raw MS1 frames of ``analysis.tdf_bin``: ``rt -> ([mz], [intens], [mob])``,
+    one frame per RT, every stored ion (no centroiding).  MS2 is streamed
+    separately (``_iter_raw_ms2_groups``).
     """
     rt_by_frame, ms_level_by_frame = _frame_tables(cal)
     logger.info(f"Reading raw MS1 frames from {d_path}/analysis.tdf_bin "
@@ -1208,48 +733,18 @@ def _iter_raw_ms2_groups(d_path: str, cal: dict, dia_lookup: pl.DataFrame,
     logger.info(f"Read {kept} raw MS2 peaks in {n_groups} MS2 windows")
 
 
-def _reread_ms2_groups(sf: SpectrumFile):
-    """The un-banded MS2 groups again, in sorted key order, from whichever source
-    built ``sf``.
+def _build_spectrum_file(filepath: str, raw_d_path: str, cal: dict, dia_lookup: pl.DataFrame,
+                         im_bins: np.ndarray, min_intensity: int = 0) -> SpectrumFile:
+    """Assign the .d's raw ions to DIA windows and IM bins, and build a SpectrumFile.
 
-    ``reband_ms2`` deliberately does not keep the un-banded peaks in memory, so it
-    goes back to the data: raw .d input is streamed again, one RT at a time; a
-    peaks.parquet is re-read whole and drained window by window.
+    The ions are decoded frame by frame from analysis.tdf_bin and calibrated here
+    (see ``_read_raw_frame``).  Each non-empty IM bin produces a separate Spectrum
+    object.
     """
-    if sf._peaks_path is not None:
-        _, groups = _read_peak_groups(sf._peaks_path, sf._cal, sf._dia_lookup, include_ms1=False)
-        return _drain_sorted(groups)
-    return _iter_raw_ms2_groups(sf._raw_d_path, sf._cal, sf._dia_lookup, sf._min_intensity)
-
-
-def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: pl.DataFrame,
-                         im_bins: np.ndarray, raw_d_path: str = None,
-                         min_intensity: int = 0) -> SpectrumFile:
-    """Assign peaks to DIA windows and IM bins, and build a SpectrumFile.
-
-    Peaks come from one of two sources, and everything after the read is
-    identical for both:
-
-    - ``peaks_path`` -- a centroider peaks.parquet, already calibrated, read in
-      row-group batches to avoid loading 6+ GB at once.  Expects columns
-      ``frame, scan, mz, im, apex_intensity``.
-    - ``raw_d_path`` -- a stock .d, decoded frame by frame from analysis.tdf_bin
-      and calibrated here (see ``_read_raw_frame``).
-
-    Exactly one of the two must be given.  Each non-empty IM bin produces a
-    separate Spectrum object.
-    """
-    if (peaks_path is None) == (raw_d_path is None):
-        raise ValueError("Pass exactly one of peaks_path or raw_d_path")
-
-    if raw_d_path is not None:
-        # MS1 now; MS2 is streamed into banding below, one RT at a time, so the
-        # whole run's un-banded MS2 peaks are never held at once.
-        ms1_groups = _read_raw_ms1_groups(raw_d_path, cal, min_intensity)
-        ms2_groups = _iter_raw_ms2_groups(raw_d_path, cal, dia_lookup, min_intensity)
-    else:
-        ms1_groups, ms2_dict = _read_peak_groups(peaks_path, cal, dia_lookup)
-        ms2_groups = _drain_sorted(ms2_dict)
+    # MS1 now; MS2 is streamed into banding below, one RT at a time, so the
+    # whole run's un-banded MS2 peaks are never held at once.
+    ms1_groups = _read_raw_ms1_groups(raw_d_path, cal, min_intensity)
+    ms2_groups = _iter_raw_ms2_groups(raw_d_path, cal, dia_lookup, min_intensity)
 
     # Build SpectrumFile from accumulated groups
     sf = SpectrumFile()
@@ -1314,10 +809,8 @@ def _build_spectrum_file(filepath: str, peaks_path: str, cal: dict, dia_lookup: 
     # data-driven watershed.
     # These bands are provisional: reband_ms2 redraws them once the preliminary
     # search has fitted the IM precision.  Rather than keeping the un-banded peaks
-    # in memory for that (~9 GB on a large .d, untouched across the whole initial
-    # search), record what it takes to re-read them from the parquet, which is
-    # still on disk.  Re-reading costs ~25 s; holding them costs 9 GB for minutes.
-    sf._peaks_path = peaks_path
+    # in memory for that (tens of GB on a large .d, untouched across the whole
+    # initial search), record what it takes to re-read them from the .d.
     sf._raw_d_path = raw_d_path
     sf._min_intensity = min_intensity
     sf._cal = cal
@@ -1347,19 +840,14 @@ def reband_ms2(sf: SpectrumFile, width: float) -> bool:
     ``width / 2``.  That relationship is required by ``band_keys``,
     which only ever tests two candidate bins per peak.
 
-    The un-banded peaks are not kept in memory for this -- they are re-read from
-    whichever source built ``sf`` (peaks parquet or raw .d), which is still on
-    disk.  A parquet re-read costs ~25 s; retaining the peaks would cost ~9 GB
-    on a large .d, held untouched across the whole initial search.  Re-reading
-    raw costs whatever the initial raw read cost.
+    The un-banded peaks are not kept in memory for this -- they are streamed again
+    from the .d, one RT at a time, at the cost of the initial MS2 read.
 
     Returns True if the bands were rebuilt, False if there was nothing to do
     (non-IM data, i.e. anything but the .d path).
     """
     im_range = getattr(sf, "_im_range", None)
-    has_source = (getattr(sf, "_peaks_path", None) is not None
-                  or getattr(sf, "_raw_d_path", None) is not None)
-    if not has_source or im_range is None:
+    if getattr(sf, "_raw_d_path", None) is None or im_range is None:
         logger.info("Re-banding MS2: not a .d acquisition; skipping")
         return False
     if not np.isfinite(width) or width <= 0:
@@ -1389,7 +877,9 @@ def reband_ms2(sf: SpectrumFile, width: float) -> bool:
     scan_counter = (max(sf.ms1_by_id) + 1) if sf.ms1_by_id else 1
 
     logger.info("Re-banding MS2: re-reading un-banded peaks")
-    _band_ms2_groups(sf, _reread_ms2_groups(sf), new_bins, scan_counter)
+    _band_ms2_groups(sf, _iter_raw_ms2_groups(sf._raw_d_path, sf._cal, sf._dia_lookup,
+                                              sf._min_intensity),
+                     new_bins, scan_counter)
     sf.build_ms2_to_ms1_map()
 
     logger.info(
@@ -1403,9 +893,7 @@ def reband_ms2(sf: SpectrumFile, width: float) -> bool:
 _BRUKER_REMEDIATION = (
     "Point --bruker_sdk_path at the unzipped Bruker timsdata SDK folder (the one "
     "containing win64/ and linux64/), at the platform subfolder itself, or directly "
-    "at the library file. You can also set \"bruker_sdk_path\" in JMod/data/settings.json. "
-    "Omit --bruker_sdk_path entirely to centroid without the SDK, with m/z and 1/K0 "
-    "approximated from analysis.tdf (results will not match an SDK-centroided run)."
+    "at the library file. You can also set \"bruker_sdk_path\" in JMod/data/settings.json."
 )
 
 
@@ -1454,8 +942,8 @@ def _search_bruker_lib(root, lib_name, max_depth):
 def resolve_bruker_sdk_path(sdk_path, *, platform=None, strict=True):
     """Resolve ``--bruker_sdk_path`` to a concrete timsdata library file.
 
-    Returns None if and only if nothing was specified (None or blank), in which
-    case the caller may fall back to centroiding without the SDK. Otherwise
+    Returns None if and only if nothing was specified (None or blank); .d input
+    then fails, since it is always read raw with the SDK's calibration. Otherwise
     returns an absolute path to an existing library file -- never a directory.
     Raises JModError when a path was given but no library could be found: a
     specified-but-unresolvable SDK is an error, not a reason to silently

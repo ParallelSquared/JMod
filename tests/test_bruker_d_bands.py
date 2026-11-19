@@ -28,8 +28,8 @@ def test_partial_assignment_keeps_band_for_the_rest():
 
 
 def test_full_assignment_releases_group_buffer():
-    # use_centroided_ms2 assigns all three arrays: the raw group buffer must not
-    # stay alive behind the centroids.
+    # Replacing all three arrays: the group buffer must not stay alive behind
+    # the new ones.
     buf = np.zeros(1000, dtype=np.float32)
     ref = weakref.ref(buf)
     s = BandSpectrum((buf, buf, buf), (0, 0, 0, 1000))
