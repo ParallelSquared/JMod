@@ -15,7 +15,7 @@
 #  limitations under the License.
 
 from src.utils.errors import JModError
-from src.utils.io.read_output import get_large_prec, log_mem
+from src.utils.io.read_output import get_large_prec
 
 from sklearn.model_selection import KFold,GroupKFold
 from sklearn.ensemble import RandomForestClassifier
@@ -1380,7 +1380,6 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     fdc = fdc.merge(_med_pd, on="__fdc_idx", how="left")
     del _med_pd
 
-    log_mem("Precursor features done")
 
     # Fragment-ion correlation features (pairwise Pearson across MS2 scans)
     from src.fragment_correlation import compute_fragment_correlations
@@ -1398,7 +1397,6 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # frame (the PerformanceWarning pandas raises further down).
     corr_features.index = fdc.index
     fdc = pd.concat([fdc, corr_features], axis=1)
-    log_mem("Fragment-ion correlation features done")
 
     fdx = score_precursors(fdc.reset_index(drop=True), target_decoy_ratio, config.score_model, config.fdr_threshold,
                           folder=results_folder)
@@ -1420,7 +1418,6 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
         fdx["untag_prec_Qvalue"] = fdx["Qvalue"]  # one row per untagged precursor, so the same
 
-    log_mem("Scoring done")
 
     # The main-search scans MS1 quant reads, for the rows it quantifies only (the
     # same selection ms1_quant makes), not every PSM of the run.  gauss_r2_joint
@@ -1433,7 +1430,6 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, im_tol, timeplex,
                           vote_sigma=vote_sigma)
-    log_mem("MS1 quant done")
 
     fdx_quant["last_aa"] = [i[-1] for i in fdx_quant["stripped_seq"]]
     fdx_quant["seq_len"] = [len(i) for i in fdx_quant["stripped_seq"]]
@@ -1459,7 +1455,6 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
         from src.ms2_plex_quant import add_plex_coeff
         fdx_quant = add_plex_coeff(fdx_quant, spectra, mass_tag, mz_ppm, im_tol,
                                    q_gate=config.fdr_threshold, n_threads=config.args.threads)
-        log_mem("MS2 plex quant done")
 
     fdx_quant["gauss_r2_joint"] = gauss_r2_joint(fdx_quant, dc, timeplex)
 

@@ -418,20 +418,6 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
 APEX_PART_ROWS = 3_000_000
 
 
-def log_mem(stage):
-    """Log a pipeline stage with the process's current and peak memory."""
-    import psutil
-    mi = psutil.Process().memory_info()
-    peak = getattr(mi, "peak_wset", None)                      # Windows
-    if peak is None:
-        import resource
-        import sys
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform != "darwin":
-            peak *= 1024                                       # Linux reports KiB
-    logger.info(f"{stage} [memory {mi.rss / 1e9:.1f} GB, peak {peak / 1e9:.1f} GB]")
-
-
 # The main search's per-fragment list columns: most of its bytes, and not needed
 # until the kept rows (one per precursor) are known.
 LIST_COLS = ["frag_names", "frag_errors", "frag_mz", "frag_int",
@@ -487,7 +473,6 @@ class MainSearchRows:
         out = [self.ms.scan(i).select(self.cols + ["__parquet_row"]).join(want, on=self.keys, how="semi").collect()
                for i in range(len(self.ms.files))]
         frame = pl.concat(out).sort(self.keys + ["__parquet_row"]).drop("__parquet_row")
-        log_mem(f"MS2 rows for MS1 quant: {frame.height:,} scans of {rows[self.keys].drop_duplicates().shape[0]:,} precursors")
         return frame
 
 
@@ -540,7 +525,6 @@ def get_large_prec(files,
     span_max = 2.0 * float(rt_tol) + 1e-3
     margin = span_max + 1e-3
 
-    log_mem(f"Apex selection: {ms.n_rows:,} rows in {len(edges) - 1} RT chunk(s); fitting apex PC1")
     loadings = quality_pca.fit_main_apex_pc1(
         ms.scan_all().drop(LIST_COLS), apex_group_cols, seed=config.RANDOM_SEED)
 
@@ -635,8 +619,6 @@ def get_large_prec(files,
             raise JModError(f"A precursor's main-search rows span {kept['__rt_span'].max():.3f} in RT, "
                             f"more than 2 x rt_tol ({rt_tol}): apex selection by RT chunk would miss rows")
         kept_parts[-1] = kept.drop("__rt_span")
-        if (i + 1) % 10 == 0 or i + 2 == len(edges):
-            log_mem(f"Apex selection: RT chunk {i + 1} of {len(edges) - 1}")
 
     # The kept rows in the order a single global pass leaves them: by apex_score,
     # ties in row order, the frame's order after the smoothness sort.
@@ -668,7 +650,6 @@ def get_large_prec(files,
 
     filtered_decoy_coeffs = _fdc_polars.drop("__parquet_row").to_pandas()
     del _fdc_polars
-    log_mem(f"Apex selection done: {len(filtered_decoy_coeffs):,} precursors")
 
     # The scans of each precursor for MS1 quant (ms1_cor_channels), which reads a
     # handful of numeric columns and groups by (seq, z[, time_channel]).  Not read
