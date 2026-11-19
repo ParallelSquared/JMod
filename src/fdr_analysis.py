@@ -1004,10 +1004,7 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
 
         plt.subplots()
         y_log=False
-        # Bin edges in float64: in the predictions' float32, scores clustered more
-        # tightly than float32 can split 50 ways have no 50 distinct edges, and
-        # numpy raises ("Too many bins for data range").
-        vals,bins,_ = plt.hist(np.asarray(output, dtype=np.float64),50,log=y_log,label="All")
+        vals,bins,_ = plt.hist(output,50,log=y_log,label="All")
         plt.hist(output[y.astype(bool)],bins,alpha=.5,log=y_log,label="Targets")
         plt.hist(output[~y.astype(bool)],bins,alpha=.5,log=y_log,label="Decoys")
         plt.legend()

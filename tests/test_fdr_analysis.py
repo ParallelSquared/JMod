@@ -45,18 +45,23 @@ def test_score_model_minimal_fixed():
         sm.run_model(X, y)
 
 def test_score_precursors_minimal_fixed(tmp_path):
-    # Need enough samples for 5-fold CV with iterative negative mining
-    np.random.seed(42)
-    n = 30
-    is_decoy = [False, True] * (n // 2)
+    # Need enough samples for 5-fold CV with iterative negative mining.  Targets
+    # are separated from decoys as in a real run (higher coeff and features,
+    # smaller errors), with overlap, so the model has something to learn and its
+    # scores spread out; identical target and decoy distributions give every row
+    # the same score, which no real run does.
+    rng = np.random.default_rng(42)
+    n = 60
+    is_decoy = np.array([False, True] * (n // 2))
+    shift = np.where(is_decoy, 0.0, 1.0)
     fdc = pd.DataFrame({
-        "coeff": np.random.uniform(0.5, 3.0, n),
+        "coeff": rng.uniform(0.5, 3.0, n) + 1.5 * shift,
         "is_decoy": is_decoy,
         "stripped_seq": [f"SEQ{i}" for i in range(n)],
-        "rt_error": np.random.uniform(0.0, 1.0, n),
-        "mz_error": np.random.uniform(0.0, 0.1, n),
-        "feature1": np.random.uniform(1.0, 5.0, n),
-        "feature2": np.random.uniform(1.0, 5.0, n),
+        "rt_error": rng.uniform(0.0, 1.0, n) * (1.0 - 0.5 * shift),
+        "mz_error": rng.uniform(0.0, 0.1, n) * (1.0 - 0.5 * shift),
+        "feature1": rng.uniform(1.0, 5.0, n) + shift,
+        "feature2": rng.uniform(1.0, 5.0, n) + shift,
     })
 
     out = score_precursors(
