@@ -331,13 +331,15 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 _SDK_TABLES_SCRIPT = os.path.join(_REPO_ROOT, "scripts", "bruker_calibration_tables.py")
 
 # macOS: Bruker ships no macOS library, so the Windows timsdata.dll from
-# --bruker_sdk_path runs under Wine with a Windows Python (never bundled; Wine is
-# LGPL).  Hardcoded to this machine's setup; see MONO_D_CALIBRATION_PLAN.md for
-# how these were installed.  The helper script needs only the standard library.
-_WINE = os.path.expanduser(
-    "~/Applications/Wine Devel.app/Contents/Resources/wine/bin/wine")
-_WINE_PREFIX = os.path.expanduser("~/.wine-jmod")
-_WINE_PYTHON = os.path.expanduser("~/.wine-jmod-py/python.exe")
+# --bruker_sdk_path runs under Wine with a Windows Python, both set up by the user
+# (neither is bundled; Wine is LGPL): ``wine`` on PATH, the prefix Wine itself
+# picks (WINEPREFIX, default ~/.wine), and ``python`` on that prefix's Windows
+# PATH.  The helper script needs only the standard library.
+_MAC_WINE_REQUIREMENTS = (
+    "Reading .d data on macOS runs Bruker's Windows timsdata library under Wine, "
+    "which needs: wine on PATH; and a Windows Python installed in your Wine prefix "
+    "(WINEPREFIX, default ~/.wine) and on its PATH, so that 'wine python --version' "
+    "works.")
 
 
 def _wine_path(path: str) -> str:
@@ -353,6 +355,7 @@ def _sdk_calibration_tables(d_path: str, bruker_sdk_path: str = None) -> str:
     through scripts/bruker_calibration_tables.py: natively with
     ``bruker_sdk_path`` on Windows or Linux, under Wine on a Mac.
     """
+    import shutil
     import subprocess
     import sys
 
@@ -366,13 +369,13 @@ def _sdk_calibration_tables(d_path: str, bruker_sdk_path: str = None) -> str:
     if not bruker_sdk_path:
         _fail_bruker(f"Reading {d_path} raw needs Bruker's calibration")
     if sys.platform == "darwin":
-        for p in (_WINE, _WINE_PYTHON):
-            if not os.path.exists(p):
-                raise FileNotFoundError(
-                    f"Cannot compute Bruker calibration for {d_path}: {p} is missing")
-        cmd = [_WINE, _WINE_PYTHON, _wine_path(_SDK_TABLES_SCRIPT),
+        wine = shutil.which("wine")
+        if wine is None:
+            raise JModError(f"Cannot compute Bruker calibration for {d_path}: wine is not "
+                            f"on PATH.\n\n{_MAC_WINE_REQUIREMENTS}")
+        cmd = [wine, "python", _wine_path(_SDK_TABLES_SCRIPT),
                _wine_path(bruker_sdk_path), _wine_path(d_path), _wine_path(tmp_dir)]
-        env = dict(os.environ, WINEPREFIX=_WINE_PREFIX, WINEDEBUG="-all")
+        env = dict(os.environ, WINEDEBUG="-all")
     else:
         cmd = [sys.executable, _SDK_TABLES_SCRIPT, bruker_sdk_path, d_path, tmp_dir]
         env = None
@@ -382,9 +385,10 @@ def _sdk_calibration_tables(d_path: str, bruker_sdk_path: str = None) -> str:
     result = subprocess.run(cmd, env=env, capture_output=True, text=True)
     if result.returncode != 0 or not os.path.isfile(
             os.path.join(tmp_dir, "calibration.json")):
+        hint = f"\n\n{_MAC_WINE_REQUIREMENTS}" if sys.platform == "darwin" else ""
         raise RuntimeError(
             f"Computing Bruker calibration for {d_path} failed "
-            f"(exit {result.returncode}):\n{result.stdout}\n{result.stderr}")
+            f"(exit {result.returncode}):\n{result.stdout}\n{result.stderr}{hint}")
     os.replace(tmp_dir, tables_dir)
     logger.info(f"Bruker calibration: {result.stdout.strip()} "
                 f"({perf_counter() - t0:.0f}s)")

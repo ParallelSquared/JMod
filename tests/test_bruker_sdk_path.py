@@ -294,28 +294,30 @@ def test_linux_and_windows_run_the_sdk_natively(tmp_path, monkeypatch, capture_r
     assert os.path.isfile(os.path.join(tables, "calibration.json"))
 
 
-def test_macos_runs_the_windows_sdk_under_wine(tmp_path, monkeypatch, capture_run):
+def test_macos_runs_the_windows_sdk_under_the_users_wine(tmp_path, monkeypatch, capture_run):
+    # wine from PATH, the Windows python on the Wine prefix's PATH, and the
+    # user's own WINEPREFIX passed through untouched
+    import shutil
     from src.utils.io import bruker_d as bd
-    wine = tmp_path / "wine"; wine.write_text("")
-    py = tmp_path / "python.exe"; py.write_text("")
-    monkeypatch.setattr(bd, "_WINE", str(wine))
-    monkeypatch.setattr(bd, "_WINE_PYTHON", str(py))
-    monkeypatch.setattr(bd, "_WINE_PREFIX", str(tmp_path / "prefix"))
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/wine" if name == "wine" else None)
+    monkeypatch.setenv("WINEPREFIX", str(tmp_path / "prefix"))
     monkeypatch.setattr(sys, "platform", "darwin")
     d = tmp_path / "run.d"; d.mkdir()
     bd._sdk_calibration_tables(str(d), str(tmp_path / "sdk" / "timsdata.dll"))
     cmd = capture_run["cmd"]
-    assert cmd[:2] == [str(wine), str(py)]
+    assert cmd[:2] == ["/usr/local/bin/wine", "python"]
+    assert cmd[2] == bd._wine_path(bd._SDK_TABLES_SCRIPT)
     assert cmd[3] == bd._wine_path(str(tmp_path / "sdk" / "timsdata.dll"))
     assert capture_run["env"]["WINEPREFIX"] == str(tmp_path / "prefix")
 
 
-def test_macos_without_wine_fails(tmp_path, monkeypatch, capture_run):
+def test_macos_without_wine_fails_with_the_requirements(tmp_path, monkeypatch, capture_run):
+    import shutil
     from src.utils.io import bruker_d as bd
-    monkeypatch.setattr(bd, "_WINE", str(tmp_path / "no-wine"))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     monkeypatch.setattr(sys, "platform", "darwin")
     d = tmp_path / "run.d"; d.mkdir()
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(JModError, match="wine python --version"):
         bd._sdk_calibration_tables(str(d), "/sdk/timsdata.dll")
     assert "cmd" not in capture_run
 
