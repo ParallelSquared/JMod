@@ -195,16 +195,19 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
     # per-run counts and plots, nor the MBR library (which reads these IDs)
     if "is_decoy_channel" in available:
         df = df.filter(~pl.col("is_decoy_channel").fill_null(False))
-    time_channel, coeff, prec_im, untag_prec_q, channel_q, protein_channel_q, ms1_quality, channel_score = (
+    (time_channel, coeff, prec_im, untag_prec_q, channel_q, protein_channel_q, ms1_quality, channel_score,
+     plex_set_score, plex_set_q, protein_plex_set_q) = (
         [c] if c in available else []
         for c in ("time_channel", "coeff", "prec_im", "untag_prec_Qvalue", "Channel_Qvalue",
-                  "Protein_Channel_Qvalue", "MS1_quality", "ChannelScore"))
+                  "Protein_Channel_Qvalue", "MS1_quality", "ChannelScore", "PlexSetScore", "PlexSet_Qvalue",
+                  "Protein_PlexSet_Qvalue"))
     df = (
         df
         .select(["run_idx", "file_name", "protein", "seq", "z", "channel", "silac_channel",
                  *time_channel,
-                 "PredVal", *channel_score, "Qvalue", "BestChannel_Qvalue", *untag_prec_q, *channel_q, "Protein_Qvalue",
-                 *protein_channel_q,
+                 "PredVal", *channel_score, "Qvalue", "BestChannel_Qvalue", *untag_prec_q, *plex_set_score, *plex_set_q, *channel_q,
+                 "Protein_Qvalue",
+                 *protein_channel_q, *protein_plex_set_q,
                  "plex_Area", *coeff, *ms1_quality, "stripped_seq", "untag_seq", "untag_prec",
                  "mz", "rt", *prec_im, "is_decoy"])
         .with_columns(

@@ -386,14 +386,14 @@ def ms1_quality(ids):
 
 
 # Left NaN by ms1_quant's fill (fill_ms1_quant_gaps)
-_UNFILLED_QVALUES = ("Qvalue", "BestChannel_Qvalue", "untag_prec_Qvalue")
+_UNFILLED_QVALUES = ("Qvalue", "BestChannel_Qvalue", "untag_prec_Qvalue", "PlexSetScore", "PlexSet_Qvalue")
 
 
 def fill_ms1_quant_gaps(dat):
     """*dat* with every NaN 0, as ms1_quant has always left it, except in the
-    q-values: a NaN there is "not scored" (the decoy channel's Qvalue, and the
-    best channel's of a set where only the decoy channel was found), and a 0
-    would pass every threshold."""
+    q-values and the plex-set score: a NaN there is "not scored" (the decoy
+    channel's Qvalue, and the best channel's of a set where only the decoy
+    channel was found), and a 0 would pass every threshold."""
     return dat.fillna({c: 0 for c in dat.columns if c not in _UNFILLED_QVALUES})
 
 
@@ -929,6 +929,25 @@ def target_decoy_qvalues(scores, is_decoy, target_decoy_ratio=1.0, rows=None):
     return q
 
 
+# The columns of the run's IDs that the precursor scoring (score_precursors)
+# never trains on: identity, list columns, MS1 quant's outputs and labels.  Also
+# read by the plex-set scoring (plex_scoring), so both models see the same
+# per-channel evidence
+NOT_FEATURES = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz', 'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq',
+              'untag_seq', 'is_decoy', 'all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals',
+              'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
+              "plexfittrace_ps_all",
+              "unique_frag_mz", "untag_prec",
+              "channels_matched",
+              "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor","plexfitMS1","plexfitMS1_p","plex_Area", "untag_prec","channel","time_channel",
+              "silac_channel",
+              "unique_frag_mz",
+              "unique_obs_int",
+              "file_name",
+              "protein",
+              "is_decoy_channel"]
+
+
 def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder=None):
     """
     Parameters
@@ -966,21 +985,7 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
     real = (~fdc["is_decoy_channel"].to_numpy(bool) if "is_decoy_channel" in fdc.columns
             else np.ones(len(fdc), bool))
 
-    # exclude necessary columns
-    drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz', 'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq',
-                  'untag_seq', 'is_decoy', 'all_ms1_specs', 'all_ms1_iso0vals', 'all_ms1_iso1vals', 'all_ms1_iso2vals','all_ms1_iso3vals', 'all_ms1_iso4vals',
-                  'all_ms1_iso5vals','all_ms1_iso6vals','all_ms1_iso7vals',"plexfittrace","plexfit_ps","untag_prec","plexfittrace_spec_all","plexfittrace_all",
-                  "plexfittrace_ps_all",
-                  "unique_frag_mz", "untag_prec",
-                  "channels_matched",
-                  "unique_obs_int", 'MS1_Int',"MS1_Area", "iso_cor", "cosine", "traceproduct","iso1_cor","iso2_cor","ms1_cor","plexfitMS1","plexfitMS1_p","plex_Area", "untag_prec","channel","time_channel",
-                  "silac_channel",
-                  "unique_frag_mz",
-                  "unique_obs_int",
-                  "file_name",
-                  "protein",
-                  "is_decoy_channel"]
-    X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
+    X = fdc.drop([c for c in NOT_FEATURES if c in fdc.columns], axis=1)
     # Internal bookkeeping columns are never features. __fdc_idx in particular is
     # a row index whose ordering encodes the label -- each spectrum writes its
     # targets before its decoys -- so leaving it in lets the model read the answer
@@ -1478,6 +1483,20 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     if config.args.plexDIA or config.args.timeplex:
         fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "is_decoy"])["Qvalue"].transform("min") #within a run
         fdx["untag_prec_Qvalue"] = untag_prec_qvalues(fdx, target_decoy_ratio)
+        # A separate model, one row per plex set (plex_scoring): built from the
+        # per-channel measurements alone, none of score_precursors' outputs, to
+        # compare against untag_prec_Qvalue.  Into every output; nothing is
+        # filtered by it
+        from src.channel_fdr import ms2_cycles
+        from src.plex_scoring import run_plex_scoring
+        scan_cycles = ms2_cycles([spectrum.scan_num for spectrum in spectra.ms2scans],
+                                 [spectrum.ms1window for spectrum in spectra.ms2scans])
+        # the label whose sites make a fragment channel-specific
+        label = mass_tag if mass_tag is not None else SILAC
+        fdx["PlexSetScore"], fdx["PlexSet_Qvalue"] = run_plex_scoring(
+            fdx, target_decoy_ratio, results_folder, config.fdr_threshold,
+            scan_coeffs=dc, scan_cycles=scan_cycles, list_cols=fdc_list_cols,
+            label_name=label.name if label is not None else None)
     else:
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
         fdx["untag_prec_Qvalue"] = fdx["Qvalue"]  # one row per untagged precursor, so the same
@@ -1512,10 +1531,18 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # The proteins: in the run, then (with the channel FDR) in each channel.
     # compute_protein_FDR's merge keeps the rows and their order
     fdx_quant = compute_protein_FDR(fdx_quant, target_decoy_ratio=target_decoy_ratio)
+    if "PlexSetScore" in fdx_quant.columns:
+        # the proteins by the plex-set model, beside Protein_Qvalue
+        from src.plex_scoring import protein_qvalues
+        fdx_quant["Protein_PlexSet_Qvalue"] = protein_qvalues(fdx_quant, target_decoy_ratio)
     if channel_features is not None:
         logger.info("Computing Protein Channel FDR")
         fdx_quant["Protein_Channel_Qvalue"] = protein_channel_qvalues(fdx_quant, channel_features)
     report_id_counts(fdx_quant, results_folder)
+    # TEMPORARY: proteins by the plex-set model against the best channel's, in the log only
+    if "Protein_PlexSet_Qvalue" in fdx_quant.columns:
+        from src.plex_scoring import log_protein_counts
+        log_protein_counts(fdx_quant)
 
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge
@@ -1557,7 +1584,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","is_decoy_channel","Qvalue", "Protein_Qvalue","PredVal","ChannelScore",
-                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'Channel_Qvalue', 'Protein_Channel_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'PlexSetScore', 'PlexSet_Qvalue', 'Protein_PlexSet_Qvalue', 'Channel_Qvalue', 'Protein_Channel_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")
