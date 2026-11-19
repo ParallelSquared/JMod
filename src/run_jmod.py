@@ -1078,7 +1078,8 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     """Fit every MS2 spectrum against the calibrated library.
 
     Builds the fragment index, writes the search parameters, fits the spectra in
-    batches (``outputs/decoylibsearch_coeffs_batch<i>.parquet``; not merged).
+    batches (``outputs/decoylibsearch_coeffs_batch<i>.parquet``; merged after
+    scoring by ``merge_main_search``).
     Returns the batch paths, in the order they are read as one table.
     """
     logger.info("")
@@ -1221,6 +1222,9 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
         batch_parquet_path = results_folder_path + f"/outputs/decoylibsearch_coeffs_batch{batch_idx}.parquet"
         n_results = 0
 
+        # TODO: test snappy (pyarrow's default, used here) against zstd for these
+        # batches and the merged file: on one 15 min 200 pg 5plex batch, zstd was
+        # ~37% smaller.  Check write/read time too, locally and over SMB.
         with pq.ParquetWriter(batch_parquet_path, _pa_schema) as writer:
             buffer = []           # SpectrumHits, one per spectrum with results
             n_buffered = 0
@@ -1283,3 +1287,29 @@ def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
                  im_tol=runState.opt_im_precision,
                  target_decoy_ratio=runState.target_decoy_ratio,
                  im_accuracy=getattr(runState, "opt_im_accuracy", None))
+    merge_main_search(decoylib_search_path,
+                      os.path.join(runState.results_folder, "outputs", "decoylibsearch_coeffs.parquet"))
+
+
+# TODO: this rewrites the whole main search output once more at the end of every
+# run (3.5 GB on a 15 min 200 pg 5plex, slow on the SMB share), only to give one
+# file.  Find a layout that is one file without the rewrite, or settle for the
+# batches read as one table (pl.scan_parquet over them).
+def merge_main_search(batch_files, merged_path):
+    """Stream the main search's batch parquets, in order, into one file at
+    ``merged_path``, one row group at a time, then delete them.
+
+    Runs after scoring, which reads the batches; memory is one row group.
+    Written beside the target and renamed, so an interrupted merge leaves the
+    batches and no partial file under the final name.
+    """
+    logger.info("Merging main search output")
+    tmp_path = merged_path + ".partial"
+    with pq.ParquetWriter(tmp_path, pq.ParquetFile(batch_files[0]).schema_arrow) as writer:
+        for f in batch_files:
+            pf = pq.ParquetFile(f)
+            for i in range(pf.metadata.num_row_groups):
+                writer.write_table(pf.read_row_group(i))
+    os.replace(tmp_path, merged_path)
+    for f in batch_files:
+        os.remove(f)

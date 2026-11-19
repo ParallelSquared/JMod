@@ -2694,6 +2694,11 @@ def hits_to_arrow(hits, pa_schema):
                 per_spectrum("rt", np.float64).astype(np.float32),
                 stacked("prec_im", np.float32)]
     columns += [np.ascontiguousarray(features[:, j]) for j in range(features.shape[1])]
+    # TODO: the float list columns are written as float64, ~64% of the main search
+    # output.  frag_mz, frag_int, obs_int, unique_frag_mz and unique_obs_int come
+    # from float32 library/spectrum values, so float32 is lossless for them (checked
+    # on the 15 min 200 pg 5plex); frag_errors is computed in float64, and as
+    # float32 it would move med_frag_error (a scoring feature) in the last digits.
     columns += [list_column("frag_codes", "frag_offsets"),
                 list_column("frag_errors", "frag_offsets"),
                 list_column("frag_mz", "frag_offsets"),

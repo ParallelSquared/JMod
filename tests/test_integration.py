@@ -155,7 +155,7 @@ class TestJModIntegration:
 
         expected_files = [
             # 'ms2scans.csv',
-            'outputs/decoylibsearch_coeffs_batch0.parquet',  # main search output (batches)
+            'outputs/decoylibsearch_coeffs.parquet',  # main search output, merged after scoring
             'outputs/all_precursors.parquet',
             'filtered_precursors.parquet',
             'outputs/params.txt'
@@ -288,7 +288,7 @@ class TestSILACIntegration:
 
         expected_files = [
            # 'ms2scans.csv',
-            'outputs/decoylibsearch_coeffs_batch0.parquet',  # main search output (batches)
+            'outputs/decoylibsearch_coeffs.parquet',  # main search output, merged after scoring
             'outputs/all_precursors.parquet',
             'filtered_precursors.parquet',
             'outputs/params.txt'

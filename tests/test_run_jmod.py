@@ -527,3 +527,24 @@ class TestHitsToArrow:
         expected = pl.DataFrame({c: [row[i] for row in rows] for i, c in enumerate(schema)},
                                 schema=schema).to_arrow()
         assert parquet_bytes(hits_to_arrow(hits, pa_schema)) == parquet_bytes(expected)
+
+
+def test_merge_main_search_concatenates_batches_in_order_and_deletes_them(tmp_path):
+    import polars as pl
+    import pyarrow.parquet as pq
+    batches = []
+    for b in range(3):
+        f = tmp_path / f"decoylibsearch_coeffs_batch{b}.parquet"
+        # an empty batch (no hits), and batches of several row groups
+        df = pl.DataFrame({"spec_id": list(range(10 * b, 10 * b + 4 * b)),
+                           "frag_mz": [[1.0, 2.0]] * (4 * b)},
+                          schema={"spec_id": pl.Int64, "frag_mz": pl.List(pl.Float64)})
+        df.write_parquet(f, row_group_size=3)
+        batches.append(str(f))
+    merged = tmp_path / "decoylibsearch_coeffs.parquet"
+    run_jmod.merge_main_search(batches, str(merged))
+    out = pl.read_parquet(merged)
+    assert out["spec_id"].to_list() == [10, 11, 12, 13, 20, 21, 22, 23, 24, 25, 26, 27]
+    assert out["frag_mz"].to_list()[0] == [1.0, 2.0]
+    assert not any(os.path.exists(f) for f in batches)
+    assert not os.path.exists(str(merged) + ".partial")
