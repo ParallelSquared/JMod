@@ -44,7 +44,7 @@ import tqdm
 
 from src.logger import logger
 from src.utils.frag_encoding import is_isotope
-from src.utils.io.band_store import gather_range, nearest_peak
+from src.utils.io.bruker_d import gather_range, nearest_peak
 from src.utils.io.load_files import (
     PEAK_MZ_DTYPE, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
 )
@@ -183,7 +183,7 @@ def _build_peak_lists(ms2scans, need_mob):
     Returns ``(gmz, gint, gmob, tab)``: typed lists of peak buffers, and per scan
     ``tab[i] = (buffer, s0, s1, s2, s3)``.  An IM band (``BandSpectrum``) points
     into its (frame, window) group's buffer, where its peaks are three sorted runs
-    (``src/utils/io/band_store.py``), so each peak is passed once; the kernels read
+    (``src/utils/io/bruker_d.py``), so each peak is passed once; the kernels read
     the runs with ``gather_range`` / ``nearest_peak``, which give exactly the
     merged band's slices.  Any other spectrum is its own buffer of one run
     (s0 = s1 = 0, s2 = s3 = n), read as is.

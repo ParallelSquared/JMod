@@ -30,7 +30,7 @@ import sysconfig
 import platform
 
 from src import _version
-from src.utils.io import file_reader
+from src.utils.io import file_reader, bruker_d
 from src.utils.set_seeds import set_seeds
 from src.utils.numba_threads import prime_type_cache
 from src.models.spec_lib import spec_lib
@@ -401,11 +401,11 @@ def _prepare_readers(run_files):
         file_reader.load_rawfilereader(reader_path)
 
     if any(f.rstrip("/").lower().endswith(".d") for f in run_files):
-        sdk_path = file_reader.resolve_bruker_setting(config.args.bruker_sdk_path)
+        sdk_path = bruker_d.resolve_bruker_setting(config.args.bruker_sdk_path)
         # .d data is always read raw with Bruker's calibration, so the SDK is
         # required (on macOS its Windows library runs under Wine).
         if sdk_path is None:
-            file_reader._fail_bruker("Reading .d data needs the Bruker timsdata SDK")
+            bruker_d._fail_bruker("Reading .d data needs the Bruker timsdata SDK")
         return sdk_path
     return None
 
@@ -959,7 +959,7 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC, results_folder_pa
     ## band spectrum alive while the new, larger set is allocated -- on a large .d
     ## that is an extra ~18 GB held for no reason.
     if DIAspectra.has_ion_mobility:
-        file_reader.reband_ms2(DIAspectra, 4.0 * runState.opt_im_precision)
+        bruker_d.reband_ms2(DIAspectra, 4.0 * runState.opt_im_precision)
 
     return funcs, target_iRT, rt_models_data, im_cal, elution_fwhm, vote_sigma
 

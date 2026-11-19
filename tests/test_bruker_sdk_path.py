@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.utils.errors import JModError
-from src.utils.io.file_reader import resolve_bruker_sdk_path
+from src.utils.io.bruker_d import resolve_bruker_sdk_path
 
 
 @pytest.fixture
@@ -179,11 +179,11 @@ class TestResolveBrukerSetting:
     def _linux(self, monkeypatch):
         # Pin the platform so these run identically on a macOS dev box and in
         # the linux/amd64 container.
-        import src.utils.io.file_reader as file_reader
+        import src.utils.io.bruker_d as bruker_d
 
-        real = file_reader.resolve_bruker_sdk_path
+        real = bruker_d.resolve_bruker_sdk_path
         monkeypatch.setattr(
-            file_reader,
+            bruker_d,
             "resolve_bruker_sdk_path",
             lambda p, **kw: real(p, platform="linux"),
         )
@@ -194,7 +194,7 @@ class TestResolveBrukerSetting:
         return json.loads(settings_file.read_text())
 
     def test_cli_path_is_resolved_and_persisted(self, fake_sdk, settings_file):
-        from src.utils.io.file_reader import resolve_bruker_setting
+        from src.utils.io.bruker_d import resolve_bruker_setting
 
         got = resolve_bruker_setting(str(fake_sdk))
 
@@ -204,7 +204,7 @@ class TestResolveBrukerSetting:
         assert self._read(settings_file)["bruker_sdk_path"] == expected
 
     def test_bad_cli_path_does_not_touch_settings(self, tmp_path, settings_file):
-        from src.utils.io.file_reader import resolve_bruker_setting
+        from src.utils.io.bruker_d import resolve_bruker_setting
 
         with pytest.raises(JModError):
             resolve_bruker_setting(str(tmp_path / "nope"))
@@ -216,7 +216,7 @@ class TestResolveBrukerSetting:
     def test_stored_setting_used_when_no_cli_arg(self, fake_sdk, settings_file):
         import json
 
-        from src.utils.io.file_reader import resolve_bruker_setting
+        from src.utils.io.bruker_d import resolve_bruker_setting
 
         lib = str(fake_sdk / "linux64" / "libtimsdata.so")
         settings_file.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +227,7 @@ class TestResolveBrukerSetting:
     def test_stored_setting_is_validated_too(self, tmp_path, settings_file):
         import json
 
-        from src.utils.io.file_reader import resolve_bruker_setting
+        from src.utils.io.bruker_d import resolve_bruker_setting
 
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         settings_file.write_text(json.dumps({"bruker_sdk_path": str(tmp_path / "gone")}))
@@ -238,14 +238,14 @@ class TestResolveBrukerSetting:
             resolve_bruker_setting(None)
 
     def test_nothing_specified_returns_none(self, settings_file):
-        from src.utils.io.file_reader import resolve_bruker_setting
+        from src.utils.io.bruker_d import resolve_bruker_setting
 
         assert resolve_bruker_setting(None) is None
 
     def test_empty_cli_arg_clears_stored_setting(self, fake_sdk, settings_file):
         import json
 
-        from src.utils.io.file_reader import resolve_bruker_setting
+        from src.utils.io.bruker_d import resolve_bruker_setting
 
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         settings_file.write_text(
@@ -284,55 +284,55 @@ def capture_run(monkeypatch):
 
 @pytest.mark.parametrize("plat", ["linux", "win32"])
 def test_linux_and_windows_run_the_sdk_natively(tmp_path, monkeypatch, capture_run, plat):
-    from src.utils.io import file_reader as fr
+    from src.utils.io import bruker_d as bd
     monkeypatch.setattr(sys, "platform", plat)
     d = tmp_path / "run.d"; d.mkdir()
-    tables = fr._sdk_calibration_tables(str(d), "/sdk/libtimsdata.so")
+    tables = bd._sdk_calibration_tables(str(d), "/sdk/libtimsdata.so")
     cmd = capture_run["cmd"]
-    assert cmd[0] == sys.executable and cmd[1] == fr._SDK_TABLES_SCRIPT
+    assert cmd[0] == sys.executable and cmd[1] == bd._SDK_TABLES_SCRIPT
     assert cmd[2] == "/sdk/libtimsdata.so" and capture_run["env"] is None
     assert os.path.isfile(os.path.join(tables, "calibration.json"))
 
 
 def test_macos_runs_the_windows_sdk_under_wine(tmp_path, monkeypatch, capture_run):
-    from src.utils.io import file_reader as fr
+    from src.utils.io import bruker_d as bd
     wine = tmp_path / "wine"; wine.write_text("")
     py = tmp_path / "python.exe"; py.write_text("")
-    monkeypatch.setattr(fr, "_WINE", str(wine))
-    monkeypatch.setattr(fr, "_WINE_PYTHON", str(py))
-    monkeypatch.setattr(fr, "_WINE_PREFIX", str(tmp_path / "prefix"))
+    monkeypatch.setattr(bd, "_WINE", str(wine))
+    monkeypatch.setattr(bd, "_WINE_PYTHON", str(py))
+    monkeypatch.setattr(bd, "_WINE_PREFIX", str(tmp_path / "prefix"))
     monkeypatch.setattr(sys, "platform", "darwin")
     d = tmp_path / "run.d"; d.mkdir()
-    fr._sdk_calibration_tables(str(d), str(tmp_path / "sdk" / "timsdata.dll"))
+    bd._sdk_calibration_tables(str(d), str(tmp_path / "sdk" / "timsdata.dll"))
     cmd = capture_run["cmd"]
     assert cmd[:2] == [str(wine), str(py)]
-    assert cmd[3] == fr._wine_path(str(tmp_path / "sdk" / "timsdata.dll"))
+    assert cmd[3] == bd._wine_path(str(tmp_path / "sdk" / "timsdata.dll"))
     assert capture_run["env"]["WINEPREFIX"] == str(tmp_path / "prefix")
 
 
 def test_macos_without_wine_fails(tmp_path, monkeypatch, capture_run):
-    from src.utils.io import file_reader as fr
-    monkeypatch.setattr(fr, "_WINE", str(tmp_path / "no-wine"))
+    from src.utils.io import bruker_d as bd
+    monkeypatch.setattr(bd, "_WINE", str(tmp_path / "no-wine"))
     monkeypatch.setattr(sys, "platform", "darwin")
     d = tmp_path / "run.d"; d.mkdir()
     with pytest.raises(FileNotFoundError):
-        fr._sdk_calibration_tables(str(d), "/sdk/timsdata.dll")
+        bd._sdk_calibration_tables(str(d), "/sdk/timsdata.dll")
     assert "cmd" not in capture_run
 
 
 @pytest.mark.parametrize("plat", ["linux", "win32", "darwin"])
 def test_the_sdk_is_required(tmp_path, monkeypatch, capture_run, plat):
-    from src.utils.io import file_reader as fr
+    from src.utils.io import bruker_d as bd
     monkeypatch.setattr(sys, "platform", plat)
     d = tmp_path / "run.d"; d.mkdir()
     with pytest.raises(JModError):
-        fr._sdk_calibration_tables(str(d), None)
+        bd._sdk_calibration_tables(str(d), None)
     assert "cmd" not in capture_run
 
 
 def test_cached_tables_are_reused(tmp_path, capture_run):
-    from src.utils.io import file_reader as fr
-    d = tmp_path / "run.d"; (d / fr._SDK_TABLES_DIR).mkdir(parents=True)
-    (d / fr._SDK_TABLES_DIR / "calibration.json").write_text("{}")
-    fr._sdk_calibration_tables(str(d), "/sdk/libtimsdata.so")
+    from src.utils.io import bruker_d as bd
+    d = tmp_path / "run.d"; (d / bd._SDK_TABLES_DIR).mkdir(parents=True)
+    (d / bd._SDK_TABLES_DIR / "calibration.json").write_text("{}")
+    bd._sdk_calibration_tables(str(d), "/sdk/libtimsdata.so")
     assert "cmd" not in capture_run

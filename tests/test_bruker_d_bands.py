@@ -3,7 +3,7 @@ import weakref
 
 import numpy as np
 
-from src.utils.io.band_store import BandSpectrum
+from src.utils.io.bruker_d import BandSpectrum
 
 
 def _band():
@@ -60,7 +60,7 @@ def _random_group(rng):
 
 
 def test_gather_range_and_nearest_peak_match_merged_band():
-    from src.utils.io.band_store import gather_range, merge_runs, nearest_peak
+    from src.utils.io.bruker_d import gather_range, merge_runs, nearest_peak
     rng = np.random.default_rng(0)
     for _ in range(300):
         (mz, it, mob), runs = _random_group(rng)

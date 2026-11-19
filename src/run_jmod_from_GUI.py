@@ -615,8 +615,8 @@ class JModGUI(ThemedTk):
         """
         if not path:
             return None
-        from src.utils.io import file_reader
-        return file_reader.resolve_bruker_sdk_path(path, strict=False)
+        from src.utils.io import bruker_d
+        return bruker_d.resolve_bruker_sdk_path(path, strict=False)
 
 
     # Info button

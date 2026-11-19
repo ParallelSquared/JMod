@@ -19,7 +19,7 @@ import os
 import numpy as np
 import pytest
 
-from src.utils.io import file_reader as fr
+from src.utils.io import bruker_d as bd
 
 
 def _cal(n_tof=5, n_scan=3):
@@ -40,7 +40,7 @@ def test_tables_replace_the_estimates(tmp_path):
     mz = np.linspace(100.1, 200.1, 5)
     ook0 = np.linspace(1.41, 0.61, 3)
     _write_tables(tmp_path, mz, ook0)
-    fr._load_sdk_tables(str(tmp_path), cal)
+    bd._load_sdk_tables(str(tmp_path), cal)
     assert np.array_equal(cal["mz_values"], mz)
     assert np.array_equal(cal["mobility_values"], ook0)
 
@@ -53,18 +53,18 @@ def test_tables_replace_the_estimates(tmp_path):
 def test_tables_must_match_the_estimates_shape(tmp_path, mz, ook0):
     _write_tables(tmp_path, mz, ook0)
     with pytest.raises(ValueError, match="expected float64"):
-        fr._load_sdk_tables(str(tmp_path), _cal())
+        bd._load_sdk_tables(str(tmp_path), _cal())
 
 
 def test_cached_tables_are_reused(tmp_path, monkeypatch):
-    tables = tmp_path / fr._SDK_TABLES_DIR
+    tables = tmp_path / bd._SDK_TABLES_DIR
     _write_tables(tables, np.zeros(5), np.zeros(3))
     monkeypatch.setattr("subprocess.run", lambda *a, **k: pytest.fail("recomputed"))
-    assert fr._sdk_calibration_tables(str(tmp_path)) == str(tables)
+    assert bd._sdk_calibration_tables(str(tmp_path)) == str(tables)
 
 
 def test_wine_path():
-    assert fr._wine_path("/Users/me/run 1.d") == r"Z:\Users\me\run 1.d"
+    assert bd._wine_path("/Users/me/run 1.d") == r"Z:\Users\me\run 1.d"
 
 
 def _fake_d(tmp_path, parquet):
@@ -79,14 +79,14 @@ def _fake_d(tmp_path, parquet):
 def stub_loader(monkeypatch):
     """Stub everything _load_d calls; record which peak source it chose."""
     calls = {}
-    monkeypatch.setattr(fr, "_load_calibration", lambda p: dict(
+    monkeypatch.setattr(bd, "_load_calibration", lambda p: dict(
         _cal(), frame_ids=None, ms_level=None, im_range_lower=0.6, im_range_upper=1.4))
-    monkeypatch.setattr(fr, "_load_dia_windows", lambda *a: None)
-    monkeypatch.setattr(fr, "_sdk_calibration_tables",
+    monkeypatch.setattr(bd, "_load_dia_windows", lambda *a: None)
+    monkeypatch.setattr(bd, "_sdk_calibration_tables",
                         lambda d, sdk=None: calls.setdefault("tables", d) and "TABLES")
-    monkeypatch.setattr(fr, "_load_sdk_tables",
+    monkeypatch.setattr(bd, "_load_sdk_tables",
                         lambda t, cal: calls.setdefault("loaded", t))
-    monkeypatch.setattr(fr, "_centroid_d", lambda *a: pytest.fail("must not centroid"))
+    monkeypatch.setattr(bd, "_centroid_d", lambda *a: pytest.fail("must not centroid"))
 
     class SF:
         ms1scans = ms2scans = []
@@ -95,13 +95,13 @@ def stub_loader(monkeypatch):
         calls["build"] = (peaks_path, raw_d_path)
         return SF()
 
-    monkeypatch.setattr(fr, "_build_spectrum_file", _build)
+    monkeypatch.setattr(bd, "_build_spectrum_file", _build)
     return calls
 
 
 def test_without_peaks_parquet_reads_raw_with_sdk_tables(tmp_path, stub_loader):
     d = _fake_d(tmp_path, parquet=False)
-    fr._load_d(str(d) + "/")
+    bd._load_d(str(d) + "/")
     assert stub_loader["tables"] == str(d)
     assert stub_loader["loaded"] == "TABLES"
     assert stub_loader["build"] == (None, str(d))
@@ -112,7 +112,7 @@ def test_a_peaks_parquet_is_ignored_and_the_raw_ions_are_read(tmp_path, stub_loa
     # .d data is always read raw with Bruker's calibration; a centroided
     # peaks.parquet in the folder is not used.
     d = _fake_d(tmp_path, parquet=True)
-    fr._load_d(str(d))
+    bd._load_d(str(d))
     assert stub_loader["tables"] == str(d)
     assert stub_loader["loaded"] == "TABLES"
     assert stub_loader["build"] == (None, str(d))
