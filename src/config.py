@@ -89,7 +89,9 @@ ran_from_GUI = False
 ms1_ppm = 20
 ms1_tol = ms1_ppm*10**(-6)
 
-# TODO: unit-bound default; check whether anything still reads it.  See RT_ALIGNMENT_NOTES.md
+# TODO: unit-bound default; check whether anything still reads it.  It reaches
+# fit_to_lib in rt_alignment.fit_with_features with rt_filter=False, and run_jmod's
+# test-mode rt_tolerance only in a commented-out line.
 rt_tol = 9
 # Ion mobility, two distinct quantities (both half-widths; gates are |d| <= tol):
 #   im_precision -- spread of a precursor's fragments about their own median.

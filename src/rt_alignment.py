@@ -402,8 +402,9 @@ def fit_errors(errors,limit=10,percentile=.999):
     """
     ### try to fit half gaussian or exponential to absolute rt errors
     
-    # TODO: filters signed errors (errors < limit), so every negative error passes;
-    # check whether callers pass |errors|.  See RT_ALIGNMENT_NOTES.md
+    # TODO: filters signed errors (errors < limit, not abs(errors) < limit), so every
+    # negative error passes the cutoff, then fits half-normal and exponential CDFs as
+    # if the errors were absolute.  Check whether the callers pass |errors|.
     errors_filtered = np.array(errors)[np.array(errors)<limit]
     errors_filtered = np.sort(np.append(errors_filtered,limit))
     
@@ -1191,7 +1192,7 @@ def aligned_library_im(library, im_cal):
 
     n_filled = int((~np.isfinite(first) & np.isfinite(second)).sum())
     n_missing = int((~np.isfinite(aligned)).sum())
-    # TODO: keep this log line?  RT has no counterpart.  See RT_ALIGNMENT_NOTES.md
+    # TODO: keep this log line?  RT has no counterpart.
     logger.info(f"Library IM from {im_cal.winner} for {n} entries"
                 + (f" ({n_filled} filled from the other model)" if n_filled else "")
                 + f", range {np.nanmin(aligned):.4f}-{np.nanmax(aligned):.4f}")
@@ -1996,7 +1997,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         emp_seq_rt = (pd.Series(emp_train_spl(np.array(output_df.lib_rt))[cor_filter],
                                 index=row_seqs[cor_filter])
                       .groupby(level=0).median())
-        # TODO: untested end to end (no test runs MZRTfit).  See RT_ALIGNMENT_NOTES.md
+        # TODO: untested end to end (no test runs MZRTfit); needs a real run on a .d
+        # and an mzML file.  Expect the model choice to change on .d data.
         holdout_emp_diffs = holdout['RT'].to_numpy() - holdout['mod_seq'].map(emp_seq_rt).to_numpy()
         holdout_pred_diffs = holdout['RT'].to_numpy() - validation_rts
         scored = np.logical_and(np.isfinite(holdout_emp_diffs), np.isfinite(holdout_pred_diffs))
@@ -2046,8 +2048,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         else:
             logger.info("Empirical retention times chosen")
             # Fit 2-component zero-mean GMM to residuals
-            # TODO: the empirical boundary is still fitted on in-sample residuals
-            # (all_emp_diffs), the fine-tuned one on held-out residuals.  See RT_ALIGNMENT_NOTES.md
+            # TODO: when empirical wins, the RT tolerance (boundary) comes from a GMM on
+            # in-sample residuals (all_emp_diffs, the rows the spline was fitted on);
+            # when fine-tuned wins it comes from held-out residuals.  Should the
+            # empirical boundary use the held-out peptides too?  That would change the
+            # RT tolerance, not just the model choice.
             weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
@@ -2996,7 +3001,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     # rt_offsets2 = np.array([i[0] for i in t_vals[2]])-[i[0] for i in t_vals[1]] ## for column 2 vs 3
     all_rt_offsets = [np.array([i[0] for i in t_vals[idx+1]])-[i[0] for i in t_vals[idx]] 
                       for idx in range(n_timeplex-1)]
-    # TODO: assumes RT in minutes; replace with a scale from the data.  See RT_ALIGNMENT_NOTES.md
+    # TODO: timeplex still assumes RT in minutes (on .d data RT is in seconds):
+    # offset_tolerance here and limit below.  Timeplex doesn't call empirical_fit,
+    # so it needs its own scale derived from the data.
     offset_tolerance = 1 ## 1 minute
     # expected_offset = stats.mode(np.round(all_rt_offsets[0][all_rt_offsets[0]>.5],1)).mode
     exp_offsets = [stats.mode(np.round(rt_off[rt_off>.5],1)).mode for rt_off in all_rt_offsets] ## ensure it's around zero
@@ -3053,8 +3060,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     
     
     percentile = config.rt_percentile
-    # TODO: assumes RT in minutes, and here it also sets the RT tolerance via
-    # fit_errors.  MZRTfit no longer has a limit.  See RT_ALIGNMENT_NOTES.md
+    # TODO: assumes RT in minutes (3 s on .d data), and drives both the fine-tuned vs
+    # empirical comparison and fit_errors, which sets the RT tolerance.  MZRTfit no
+    # longer has a limit.  See the offset_tolerance TODO above.
     limit = 3 ## exlcude RT diffs larger than this (outliers)
     
     
