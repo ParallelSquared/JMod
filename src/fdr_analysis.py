@@ -644,11 +644,18 @@ class model_instance():
         
         
 class score_model():
-    
-    def __init__(self,model_type,n_splits=5,folder=None):
+    """*xgb_params* override the XGBoost parameters below; *xgb_rounds* is
+    run_model's boosting rounds and *xgb_refit_rounds* run_model_filtered's
+    (default: *xgb_rounds*).  The channel FDR sets all three
+    (channel_fdr.XGB_PARAMS); the precursor scoring keeps these."""
+
+    def __init__(self,model_type,n_splits=5,folder=None,xgb_params=None,xgb_rounds=500,xgb_refit_rounds=None):
         self.model_type=model_type
         self.n_splits = n_splits
         self.folder = folder
+        self.xgb_params = dict(xgb_params or {})
+        self.xgb_rounds = xgb_rounds
+        self.xgb_refit_rounds = xgb_rounds if xgb_refit_rounds is None else xgb_refit_rounds
                 
     def run_model(self,X,y,sample_weight=None,groups=None,train_mask=None):
         """Out-of-fold predictions for every row of *X*.  With *train_mask*,
@@ -720,13 +727,14 @@ class score_model():
                          'tree_method': 'hist',         
                          'nthread': -1,                   
                          'seed': config.RANDOM_SEED,
-                         'min_child_weight': .5
+                         'min_child_weight': .5,
+                         **self.xgb_params
                         }
 
                     # param['nthread'] = 4
                     # param['eval_metric'] = 'pre'
                     
-                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=500)
+                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=self.xgb_rounds)
                     def xg_predict(X):
                         X_convert = xgb.DMatrix(X,feature_names=list(X.columns))
                         return m.model.predict(X_convert)
@@ -844,9 +852,10 @@ class score_model():
                          'tree_method': 'hist',
                          'nthread': -1,
                          'seed': config.RANDOM_SEED,
-                         'min_child_weight': .5
+                         'min_child_weight': .5,
+                         **self.xgb_params
                         }
-                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=500)
+                    m.model = xgb.train(param, dtrain=dTrain,num_boost_round=self.xgb_refit_rounds)
                     def xg_predict(X):
                         X_convert = xgb.DMatrix(X,feature_names=list(X.columns))
                         return m.model.predict(X_convert)

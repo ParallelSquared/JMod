@@ -830,6 +830,23 @@ class TestFit:
         assert all(sum(trained[i:i + 5]) <= 4 * trainable.sum() for i in range(5, len(trained), 5))
         assert np.isfinite(q[~trainable]).all() and np.isfinite(score[~trainable]).all()
 
+    def test_its_own_xgboost_shallower_and_shorter_than_the_precursor_scoring(self, monkeypatch):
+        import xgboost
+        from src.channel_fdr import XGB_PARAMS, XGB_ROUNDS, XGB_REFIT_ROUNDS, N_ITERATIONS
+        assert (XGB_PARAMS, XGB_ROUNDS, XGB_REFIT_ROUNDS, N_ITERATIONS) == ({"max_depth": 6, "eta": 0.1}, 100, 50, 3)
+        fits, real_train = [], xgboost.train
+
+        def spy(params, dtrain, num_boost_round=10, **kwargs):
+            fits.append((params["max_depth"], params["eta"], params["subsample"], num_boost_round))
+            return real_train(params, dtrain, num_boost_round=num_boost_round, **kwargs)
+        monkeypatch.setattr("src.fdr_analysis.xgb.train", spy)
+        # enough peptides for rows at q <= TRAIN_Q (the smallest q is 1 / the rows ahead of the first decoy),
+        # so the refits run
+        fit_channel_fdr(_fit_run(n_peptides=400), ["signal", "noise"], model_type="xg")
+        assert len(fits) == 5 * N_ITERATIONS                                    # five folds per iteration
+        assert fits[:5] == [(6, 0.1, 0.8, 100)] * 5                             # the rest of the parameters as before
+        assert fits[5:] == [(6, 0.1, 0.8, 50)] * 10
+
     def test_too_few_decoys_is_no_fit(self):
         features = _fit_run(n_peptides=MIN_DECOYS - 1)
         assert fit_channel_fdr(features, ["signal", "noise"]) is None
