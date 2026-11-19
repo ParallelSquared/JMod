@@ -207,8 +207,8 @@ def walk_to_local_max(fitted, start_pos, apex_jitter=None, area_radius=1):
 # MS1 trace is plexfittrace_all over the MS1 fit window, the MS2 trace the run's
 # MS2 coefficients of the same precursor on those MS1 scans (matched on
 # Ms1_spec_id, 0 where there is none).
-# MS1_quality = geometric mean of pct(PredVal), pct(plexfitMS1_p) and
-# pct(plex_snr) -- the ID's confidence, the plex fit's Pearson at the voted
+# MS1_quality = geometric mean of pct(PredVal, or ChannelScore when the channel
+# FDR was fitted), pct(plexfitMS1_p) and pct(plex_snr) -- the ID's confidence, the plex fit's Pearson at the voted
 # apex and the quant's signal over the fitted on-grid background -- percentiles within the
 # run's filtered IDs, a missing value counting as 0; x 0.01 when plex_Area == 0,
 # which puts IDs without an MS1 quant at the bottom.  gauss_r2_joint is not in
@@ -315,11 +315,12 @@ def _gaussian_fit_r2(traces, lens, center):
 
 def ms1_quality(ids):
     """MS1_quality of every row of ``ids``, one run's filtered IDs (pandas, with
-    PredVal, plexfitMS1_p, plex_snr and plex_Area); see the
-    comment above NO_MS1_QUANT_FACTOR."""
+    PredVal or, when the channel FDR was fitted, ChannelScore, plexfitMS1_p,
+    plex_snr and plex_Area); see the comment above NO_MS1_QUANT_FACTOR."""
     def pct(values):  # percentile within the run; NaN stays NaN
         return values.rank(method="average") / values.count()
-    parts = [pct(ids["PredVal"]), pct(ids["plexfitMS1_p"].clip(lower=0)).fillna(0.0),
+    id_score = ids["ChannelScore"] if ids.get("ChannelScore", pd.Series()).notna().any() else ids["PredVal"]
+    parts = [pct(id_score).fillna(0.0), pct(ids["plexfitMS1_p"].clip(lower=0)).fillna(0.0),
              pct(ids["plex_snr"]).fillna(0.0)]
     score = np.power(np.prod(parts, axis=0), 1.0 / len(parts))
     return np.where(ids["plex_Area"].to_numpy() == 0, score * NO_MS1_QUANT_FACTOR, score)
@@ -362,6 +363,18 @@ def ms1_quality_pass(ids):
     
     
 #     return fdc
+
+
+# Left NaN by ms1_quant's fill (fill_ms1_quant_gaps)
+_UNFILLED_QVALUES = ("Qvalue", "BestChannel_Qvalue", "untag_prec_Qvalue")
+
+
+def fill_ms1_quant_gaps(dat):
+    """*dat* with every NaN 0, as ms1_quant has always left it, except in the
+    q-values: a NaN there is "not scored" (the decoy channel's Qvalue, and the
+    best channel's of a set where only the decoy channel was found), and a 0
+    would pass every threshold."""
+    return dat.fillna({c: 0 for c in dat.columns if c not in _UNFILLED_QVALUES})
 
 
 def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=False,vote_sigma=1.0):
@@ -574,7 +587,8 @@ def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group
     existing_cols = [col for col in selected_cols if col in fdc.columns]
     
     # Perform the merge safely
-    dat = dat.merge(fdc[["untag_prec", "channel","silac_channel"] + existing_cols], how="left", on=["untag_prec", "channel","silac_channel"]).fillna(0)
+    dat = dat.merge(fdc[["untag_prec", "channel","silac_channel"] + existing_cols], how="left", on=["untag_prec", "channel","silac_channel"])
+    dat = fill_ms1_quant_gaps(dat)
 
 
     return dat
@@ -628,7 +642,10 @@ class score_model():
         self.n_splits = n_splits
         self.folder = folder
                 
-    def run_model(self,X,y,sample_weight=None,groups=None):
+    def run_model(self,X,y,sample_weight=None,groups=None,train_mask=None):
+        """Out-of-fold predictions for every row of *X*.  With *train_mask*,
+        only its rows are trained on; the others are still predicted, by the
+        fold that holds them out."""
         # logger.info(f"{config.tree_max_depth}")
         if self.model_type=="rf":
             
@@ -746,8 +763,11 @@ class score_model():
         else:
             raise JModError("Unsupported model type")
         
-        logger.info(f"Total samples: {len(y)}, Positive: {sum(y)}, Negative: {len(y) - sum(y)}")
-        
+        trained = np.ones(len(y), bool) if train_mask is None else np.asarray(train_mask, bool)
+        n_positive = int(np.asarray(y)[trained].sum())
+        logger.info(f"Total samples: {int(trained.sum())}, Positive: {n_positive}, "
+                    f"Negative: {int(trained.sum()) - n_positive}")
+
         kf = KFold(n_splits=self.n_splits,shuffle=True, random_state = config.RANDOM_SEED)
         k_orders = [i for i in kf.split(X,y)]
         rev_order = np.argsort(np.concatenate([i[1] for i in k_orders], ), kind='stable') # collapse test sets and get order
@@ -774,6 +794,7 @@ class score_model():
         self.models = []
         self.predictions=[]
         for model_idx, (train_idx, test_idx) in enumerate(tqdm.tqdm(k_orders)):
+            train_idx = train_idx[trained[train_idx]]
             X_train = X.iloc[train_idx]
             y_train = y[train_idx]
             weights = sample_weight[train_idx] if sample_weight is not None else None
@@ -876,6 +897,26 @@ class score_model():
         return np.concatenate(self.predictions)[rev_order]
 
 
+def target_decoy_qvalues(scores, is_decoy, target_decoy_ratio=1.0, rows=None):
+    """JMod's target-decoy q-values, ranked by *scores* (highest first):
+    (1 + decoys at or above) / (targets at or above) x *target_decoy_ratio*,
+    monotonized, so each is the lowest at or below it.  Ties keep the order of
+    the rows (a stable sort).  Every q-value JMod reports is this: Qvalue,
+    untag_prec_Qvalue, Protein_Qvalue, Channel_Qvalue and the experiment's
+    global q-values (multi_run.global_qvalues).
+
+    With *rows* (a mask), of those rows alone, NaN for every other.
+    """
+    q = np.full(len(scores), np.nan)
+    idx = np.arange(len(scores)) if rows is None else np.flatnonzero(rows)
+    order = idx[np.argsort(-np.asarray(scores)[idx], kind="stable")]
+    decoy = np.asarray(is_decoy, bool)[order]
+    with np.errstate(divide="ignore"):   # no target yet at the very top: inf, monotonized away
+        q_ordered = (1 + np.cumsum(decoy)) / np.cumsum(~decoy) * target_decoy_ratio
+    q[order] = np.minimum.accumulate(q_ordered[::-1])[::-1]
+    return q
+
+
 def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder=None):
     """
     Parameters
@@ -894,6 +935,12 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
     -------
     fdc : pandas.DataFrame
         Updated dataframe with prediction values and Q-values.
+
+    The decoy channel's rows (is_decoy_channel: the tag channel left empty in
+    the sample, its targets and its library decoys) are scored -- the channel
+    FDR needs their PredVal -- but never trained on nor counted: a channel with
+    nothing in it is no target, and its library decoys have no targets to
+    stand for.  Their Qvalue is NaN.
     """
 
     assert model_type in ["lda", "rf", "xg"], 'model_type must be one of ["lda", "rf", "xg"]'
@@ -903,6 +950,9 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
 
     ## Only decoys are negatives - all targets are positives
     y = np.array(~fdc["is_decoy"], dtype=int)
+    is_decoy = fdc["is_decoy"].to_numpy(bool)
+    real = (~fdc["is_decoy_channel"].to_numpy(bool) if "is_decoy_channel" in fdc.columns
+            else np.ones(len(fdc), bool))
 
     # exclude necessary columns
     drop_colums = ['spec_id', 'Ms1_spec_id', 'seq', 'window_mz', 'frag_names', 'frag_errors', 'frag_mz', 'frag_int', 'obs_int', 'stripped_seq',
@@ -916,7 +966,8 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
                   "unique_frag_mz",
                   "unique_obs_int",
                   "file_name",
-                  "protein"]
+                  "protein",
+                  "is_decoy_channel"]
     X = fdc.drop([c for c in drop_colums if c in fdc.columns], axis=1)
     # Internal bookkeeping columns are never features. __fdc_idx in particular is
     # a row index whose ordering encodes the label -- each spectrum writes its
@@ -955,15 +1006,16 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
 
         if itr == 0:
             sc_model = score_model(model_type, folder=folder)
-            pred = sc_model.run_model(X, y, groups=fdc.stripped_seq)
+            pred = sc_model.run_model(X, y, groups=fdc.stripped_seq, train_mask=real)
         else:
-            pep_values = estimate_pep(pred, fdc["is_decoy"].values)
+            pep_values = np.full(len(pred), np.nan)
+            pep_values[real] = estimate_pep(pred[real], is_decoy[real])
 
             y_filtered = y.copy()
             neg_mine_mask = (y_filtered == 1) & (pep_values >= 0.90)
             y_filtered[neg_mine_mask] = 0
 
-            keep_mask = fdc["is_decoy"].values | (fdc_qvalues <= 0.01) | neg_mine_mask
+            keep_mask = real & (is_decoy | (fdc_qvalues <= 0.01) | neg_mine_mask)
 
             n_kept = keep_mask.sum()
             n_relabeled = neg_mine_mask[keep_mask].sum()
@@ -973,12 +1025,7 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
             pred = sc_model.run_model_filtered(X, y, keep_mask, y_filtered, groups=fdc.stripped_seq)
 
         # Compute q-values for this iteration
-        score_order = np.argsort(-pred, kind='stable')
-        decoy_order = fdc["is_decoy"].values[score_order]
-        fdc_qvalues_ordered = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order) * target_decoy_ratio
-        fdc_qvalues_ordered = np.minimum.accumulate(fdc_qvalues_ordered[::-1])[::-1]
-        fdc_qvalues = np.empty_like(fdc_qvalues_ordered)
-        fdc_qvalues[score_order] = fdc_qvalues_ordered
+        fdc_qvalues = target_decoy_qvalues(pred, is_decoy, target_decoy_ratio, real)
 
     model_name = model_type
 
@@ -988,25 +1035,22 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
         output = pred
 
     ## Use the scores to estimate the #IDs as 1% FDR
-    fpr, tpr, _ = roc_curve(y, output)
-
-    score_order = np.argsort(-output, kind='stable')
-    orig_order = np.argsort(score_order, kind='stable')
-    decoy_order = fdc["is_decoy"][score_order]
-    frac_decoy = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order) * target_decoy_ratio
-    frac_decoy = np.minimum.accumulate(frac_decoy[::-1])[::-1]  # Monotonize: q-value = min of downstream q-values
-    T = output[score_order[min(len(score_order)-1,np.searchsorted(frac_decoy,0.01))]]
-    above_t = output>T
+    qvalues = target_decoy_qvalues(output, is_decoy, target_decoy_ratio, real)
+    # the score at 1% FDR, for the plots
+    real_order = np.flatnonzero(real)[np.argsort(-output[real], kind='stable')]
+    T = output[real_order[min(len(real_order)-1, np.searchsorted(qvalues[real_order], 0.01))]]
+    above_t = real & (output > T)
     fdc["PredVal"] = output
-    fdc["Qvalue"] = frac_decoy[orig_order]
+    fdc["Qvalue"] = qvalues
 
     if folder:
 
         plt.subplots()
         y_log=False
         vals,bins,_ = plt.hist(output,50,log=y_log,label="All")
-        plt.hist(output[y.astype(bool)],bins,alpha=.5,log=y_log,label="Targets")
-        plt.hist(output[~y.astype(bool)],bins,alpha=.5,log=y_log,label="Decoys")
+        # the decoy channel is neither (score_precursors' docstring)
+        plt.hist(output[y.astype(bool) & real],bins,alpha=.5,log=y_log,label="Targets")
+        plt.hist(output[~y.astype(bool) & real],bins,alpha=.5,log=y_log,label="Decoys")
         plt.legend()
         plt.title(model_name+ f" - Type {config.args.unmatched}")
         plt.vlines(T,0,max(vals))
@@ -1021,8 +1065,8 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
         vals,bins,_ = plt.hist(func([i for i in fdc[feat]]),40,label="All")
         # plt.hist([],[])
         vals,bins,_ = plt.hist(func([i for i in fdc[feat][above_t]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][np.logical_and(~above_t,~fdc.is_decoy)]]),bins,alpha=.5,label="Low scoring")
-        vals,bins,_ = plt.hist(func([i for i in fdc[feat][fdc.is_decoy]]),bins,alpha=.5,label="Decoy")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][~above_t & ~is_decoy & real]]),bins,alpha=.5,label="Low scoring")
+        vals,bins,_ = plt.hist(func([i for i in fdc[feat][is_decoy & real]]),bins,alpha=.5,label="Decoy")
         plt.xlabel(feat)
         plt.ylabel("Frequency")
         # plt.title(model_name+ f" - Type {config.args.unmatched}")
@@ -1052,8 +1096,9 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
         vals,bins,_ = plt.hist(func([i for i in plot_vals]),40,label="All")
         # plt.hist([],[])
         vals,bins,_ = plt.hist(func([i for i in plot_vals[above_t[valid]]]),bins,alpha=.5,label="1%FDR")
-        vals,bins,_ = plt.hist(func([i for i in plot_vals[np.logical_and(~above_t[valid],~fdc.is_decoy[valid])]]),bins,alpha=.5,label="Low scoring")
-        vals,bins,_ = plt.hist(func([i for i in plot_vals[fdc.is_decoy[valid]]]),bins,alpha=.5,label="Decoy")
+        valid_rows = valid.to_numpy()
+        vals,bins,_ = plt.hist(func([i for i in plot_vals[(~above_t & ~is_decoy & real)[valid_rows]]]),bins,alpha=.5,label="Low scoring")
+        vals,bins,_ = plt.hist(func([i for i in plot_vals[(is_decoy & real)[valid_rows]]]),bins,alpha=.5,label="Decoy")
 
         # putting a xlim so that you can see entire distribution of the mz errors better
         # xmin, xmax = plt.xlim()
@@ -1086,16 +1131,103 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
     return fdc
 
 
-def log_df(df):
-    filenames = df.iloc[:, 0].unique()
-    filenames = [fn.rstrip("0123456789") for fn in filenames]
-    filenames = list(set(filenames))
-    for fn in filenames:
-        logger.info(f"File: {fn}")
+# The ID counts' FDR, in the log and Summary.txt
+ID_COUNT_FDR = 0.01
+_ID_COUNT_KEYS = ["file_name", "channel", "silac_channel"]
 
-    df_no_first = df.iloc[:, 1:]
-    for line in df_no_first.to_string(index=False).splitlines():
-        logger.info(line)
+
+def id_counts(df, plexDIA=False):
+    """The run's IDs at ID_COUNT_FDR, one row per (file, channel, SILAC
+    channel), columns (kind, level), kind "Precursors" or "Proteins".  The
+    real channels only: the decoy channel's IDs are none.
+
+    Each level is what a precursor or protein in that channel must pass:
+      - "own Q": its own Qvalue (a protein: Protein_Qvalue, and a precursor
+        there at Qvalue)
+      - "chan Q", when the run has a channel FDR: Channel_Qvalue (a
+        protein: Protein_Qvalue and Protein_Channel_Qvalue)
+      - "best chan Q", with *plexDIA*: BestChannel_Qvalue (a protein:
+        Protein_Qvalue, and a precursor there at BestChannel_Qvalue)
+    """
+    real = ~df["is_decoy_channel"].astype(bool) if "is_decoy_channel" in df.columns else True
+    targets = (df["is_decoy"] == False) & real
+    passes = lambda column: df[column] < ID_COUNT_FDR          # NaN passes nothing
+    levels = [("own Q", passes("Qvalue"), passes("Qvalue"))]
+    if {"Channel_Qvalue", "Protein_Channel_Qvalue"} <= set(df.columns) and df["Channel_Qvalue"].notna().any():
+        levels.append(("chan Q", passes("Channel_Qvalue"), passes("Protein_Channel_Qvalue")))
+    if plexDIA:
+        levels.append(("best chan Q", passes("BestChannel_Qvalue"), passes("BestChannel_Qvalue")))
+    counts = {}
+    for kind, unit in (("Precursors", "untag_prec"), ("Proteins", "protein")):
+        for label, precursor, protein in levels:
+            passing = targets & (precursor if kind == "Precursors" else protein & passes("Protein_Qvalue"))
+            counts[(kind, label)] = (df[passing].drop_duplicates(subset=_ID_COUNT_KEYS + [unit])
+                                     .groupby(_ID_COUNT_KEYS, dropna=False).size())
+    return pd.DataFrame(counts).fillna(0).astype(int)
+
+
+def _key_text(value):
+    """A channel as it reads: 4, not 4.0; "-" for none (a row with no SILAC label)."""
+    if isinstance(value, float):
+        if np.isnan(value):
+            return "-"
+        if value.is_integer():
+            return str(int(value))
+    return str(value)
+
+
+def _channel_columns(channel, silac_channel, timeplex, silac):
+    """The key columns of one ID-count row: ([names], [texts]).  A tagged
+    timeplex channel is "<time channel>_<tag channel>": two columns."""
+    channel = _key_text(channel)
+    if timeplex and "_" in channel:
+        names, values = ["time", "channel"], channel.split("_", 1)
+    else:
+        names, values = (["time"] if timeplex else ["channel"]), [channel]
+    if silac:
+        names, values = names + ["SILAC"], values + [_key_text(silac_channel)]
+    return names, values
+
+
+def _sort_key(texts):
+    return tuple((0, float(t), "") if t.replace(".", "", 1).lstrip("-").isdigit() else (1, 0.0, t)
+                 for t in texts)
+
+
+def id_table_lines(table, timeplex=False, silac=False, gap=3):
+    """*table* (id_counts) as the lines of a text table, one per file: its
+    channels sorted as numbers, the totals last, and over each kind's columns
+    the kind ("Precursors", "Proteins") when it has more than one."""
+    if table.empty:
+        return [f"IDs at {ID_COUNT_FDR:.0%} FDR: none"]
+    columns = list(table.columns)
+    two_levels = any(sum(k == kind for k, _ in columns) > 1 for kind, _ in columns)
+    lines = []
+    for file_name, rows in table.groupby(level="file_name", sort=False):
+        keys = [_channel_columns(channel, silac_channel, timeplex, silac)
+                for _, channel, silac_channel in rows.index]
+        key_names = keys[0][0]
+        body = sorted(([*values, *map(str, counts)] for (_, values), counts in zip(keys, rows.to_numpy())),
+                      key=lambda row: _sort_key(row[:len(key_names)]))
+        total = ["total"] + [""] * (len(key_names) - 1) + [str(int(n)) for n in rows.sum()]
+        header = key_names + [label if two_levels else kind for kind, label in columns]
+        widths = [max(len(row[i]) for row in [header, total, *body]) for i in range(len(header))]
+
+        def line(cells):
+            return (" " * gap).join(cell.rjust(width) for cell, width in zip(cells, widths)).rstrip()
+
+        lines.append(f"IDs at {ID_COUNT_FDR:.0%} FDR, {os.path.basename(str(file_name))}")
+        if two_levels:
+            # each kind's name over its columns, from the first of them
+            spans, at = [], len(key_names)
+            for kind in dict.fromkeys(kind for kind, _ in columns):
+                n = sum(k == kind for k, _ in columns)
+                spans.append((kind, sum(widths[at:at + n]) + gap * (n - 1)))
+                at += n
+            lead = sum(widths[:len(key_names)]) + gap * len(key_names)
+            lines.append((" " * lead + (" " * gap).join(kind.ljust(width) for kind, width in spans)).rstrip())
+        lines += [line(header), *map(line, body), line(total), ""]
+    return lines[:-1]
 
 def untag_prec_qvalues(fdx, target_decoy_ratio):
     """Each row's untag_prec_Qvalue: the run's q-value of its untagged
@@ -1104,25 +1236,24 @@ def untag_prec_qvalues(fdx, target_decoy_ratio):
     Each untagged precursor, targets and decoys apart, is scored by its best
     PredVal over its channels; those are ranked and counted as score_precursors
     counts the rows for Qvalue, with the same *target_decoy_ratio*.  Grouped
-    like BestChannel_Qvalue (run, untag_prec, is_decoy).  Returns a Series
-    aligned with *fdx*.
+    like BestChannel_Qvalue (run, untag_prec, is_decoy).  The decoy channel's
+    PredVal is not counted, as it is not for Qvalue: its rows get their set's
+    q-value from the real channels, NaN for a set seen only in it.  Returns a
+    Series aligned with *fdx*.
     """
     group = fdx.groupby(["file_name", "untag_prec", "is_decoy"], sort=False).ngroup().to_numpy()
-    by_group = fdx.groupby(group)
-    best = by_group["PredVal"].max().to_numpy()
-    is_decoy = by_group["is_decoy"].first().to_numpy().astype(bool)
-
-    score_order = np.argsort(-best, kind="stable")
-    decoy_order = is_decoy[score_order]
-    with np.errstate(divide="ignore"):  # as for Qvalue: no target yet at the top gives inf
-        q_ordered = (1 + np.cumsum(decoy_order)) / np.cumsum(~decoy_order) * target_decoy_ratio
-    q_ordered = np.minimum.accumulate(q_ordered[::-1])[::-1]  # Monotonize, as for Qvalue
-    q = np.empty_like(q_ordered)
-    q[score_order] = q_ordered
+    predval = fdx["PredVal"]
+    if "is_decoy_channel" in fdx.columns:
+        predval = predval.where(~fdx["is_decoy_channel"].astype(bool))
+    best = predval.groupby(group).max().to_numpy()                        # NaN: only the decoy channel
+    is_decoy = fdx["is_decoy"].groupby(group).first().to_numpy().astype(bool)
+    q = target_decoy_qvalues(best, is_decoy, target_decoy_ratio, ~np.isnan(best))
     return pd.Series(q[group], index=fdx.index)
 
 
-def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
+def compute_protein_FDR(df, target_decoy_ratio):
+    """Protein_Qvalue onto *df*: each protein in the run, by its best precursor
+    at Qvalue < 0.01 in any channel, against the library's decoy proteins."""
     logger.info("")
     logger.info("Computing Protein FDR")
 
@@ -1132,12 +1263,9 @@ def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
     df_seqchargeqvals["maxPredval"] = df_seqchargeqvals.groupby(["protein", "is_decoy"])["PredVal"].transform("max")
     df_seqchargeqvals = df_seqchargeqvals.drop_duplicates(subset=["protein", "is_decoy"]).reset_index(drop=True)
 
-    # Rank by descending maxPredval and compute accum_decoys & Protein_Qvalue
-    df_seqchargeqvals = df_seqchargeqvals.sort_values(by="maxPredval", ascending=False, kind="stable").reset_index(drop=True)
-    df_seqchargeqvals["prot_rank"] = df_seqchargeqvals.index + 1  # Equivalent to row_number()
-    df_seqchargeqvals["accum_decoys"] = df_seqchargeqvals["is_decoy"].cumsum()
-    df_seqchargeqvals["Protein_Qvalue"] = (1 + df_seqchargeqvals["accum_decoys"]) / (~df_seqchargeqvals["is_decoy"]).cumsum() * target_decoy_ratio
-    df_seqchargeqvals["Protein_Qvalue"] = df_seqchargeqvals["Protein_Qvalue"].iloc[::-1].cummin().iloc[::-1]  # Monotonize: q-value = min of downstream q-values
+    # Each protein, target and decoy apart, ranked by its best precursor
+    df_seqchargeqvals["Protein_Qvalue"] = target_decoy_qvalues(
+        df_seqchargeqvals["maxPredval"].to_numpy(), df_seqchargeqvals["is_decoy"].to_numpy(), target_decoy_ratio)
     
     # Filter for non-decoy proteins and select distinct protein values
     df_seqchargeqvals_distinct = (
@@ -1148,98 +1276,19 @@ def compute_protein_FDR(df, target_decoy_ratio, results_folder=None):
     
     df = df.drop(columns=["Protein_Qvalue"], errors="ignore")
     df = df.merge(df_seqchargeqvals_distinct, on="protein", how="left")
-        
-    df_counts_prec = (
-        df[(df["is_decoy"] == False) & (df["Qvalue"] < 0.01)]
-        .drop_duplicates(subset=["run_chan", "untag_prec"])
-        .groupby(["file_name", "channel", "silac_channel"])
-        .size()
-        .reset_index(name="Precursor_IDs")
-        .sort_values("channel")
-    )    
-    logger.info("")
-    logger.info("Number of precursors at 1% FDR:")
-    logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
-    log_df(df_counts_prec)
-    
-
-    df_counts_prots = (
-        df[(df["Protein_Qvalue"] < 0.01) & (df["is_decoy"] == False) & (df["Qvalue"] < 0.01)]
-        .drop_duplicates(subset=["run_chan", "protein"])
-        .groupby(["file_name", "channel", "silac_channel"])
-        .size()
-        .reset_index(name="Protein_IDs")
-        .sort_values("channel")
-        )
-    logger.info("")
-    logger.info("Number of proteins at 1% FDR:")
-    logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
-    log_df(df_counts_prots)
-
-    if results_folder is not None:
-        with open(results_folder+'/Summary.txt', 'a') as f:
-            print("Number of precursors at 1% FDR:", file=f)
-            print("All Channels:",np.sum(df_counts_prec.Precursor_IDs), file=f)
-            print(df_counts_prec.to_string(index=False), file=f)
-            
-            print("\nNumber of proteins at 1% FDR:", file=f)
-            print("All Channels:",np.sum(df_counts_prots.Protein_IDs), file=f)
-            print(df_counts_prots.to_string(index=False), file=f)
-    
-    # if config.args.plexDIA:
-    #     if config.args.timeplex:
-    #         df["BestChannel_Protein_Qvalue"] = df.groupby(["time_channel", "protein", "decoy"])["Protein_Qvalue"].transform("min")
-    #     else:
-    #         df["BestChannel_Protein_Qvalue"] = df.groupby(["file_name", "protein", "decoy"])["Protein_Qvalue"].transform("min")
-
-    if config.args.plexDIA:
-        logger.info("")
-        logger.info("After plexDIA identification propagation based on best channel Q-value:")
-        
-        # Compute number of precursor IDs at 1% FDR
-        df_counts_prec = (
-            df[(df["is_decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
-            .drop_duplicates(subset=["run_chan", "untag_prec"])
-            .groupby(["file_name", "channel", "silac_channel"])
-            .size()
-            .reset_index(name="Precursor_IDs")
-            .sort_values("channel")
-        )
-        
-        # Print precursor ID counts
-        logger.info("")
-        logger.info("Number of precursors at 1% FDR (best channel):")
-        logger.info(f"All Channels:{np.sum(df_counts_prec.Precursor_IDs)}")
-        log_df(df_counts_prec)
-        
-        # Compute number of protein IDs at 1% FDR
-        df_counts_prots = (
-            df[(df["Protein_Qvalue"] < 0.01) & (df["is_decoy"] == False) & (df["BestChannel_Qvalue"] < 0.01)]
-            .drop_duplicates(subset=["run_chan", "protein"])
-            .groupby(["file_name", "channel", "silac_channel"])
-            .size()
-            .reset_index(name="Protein_IDs")
-            .sort_values("channel")
-        )
-        
-        # Print protein ID counts
-        logger.info("")
-        logger.info("Number of proteins at 1% FDR (best channel):")
-        logger.info(f"All Channels:{np.sum(df_counts_prots.Protein_IDs)}")
-        log_df(df_counts_prots)
-        
-        if results_folder is not None:
-            with open(results_folder+'/Summary.txt', 'a') as f:
-                print("Number of precursors at 1% FDR (best channel):", file=f)
-                print("All Channels:",np.sum(df_counts_prec.Precursor_IDs), file=f)
-                print(df_counts_prec.to_string(index=False), file=f)
-                
-                print("\nNumber of proteins at 1% FDR (best channel):", file=f)
-                print("All Channels:",np.sum(df_counts_prots.Protein_IDs), file=f)
-                print(df_counts_prots.to_string(index=False), file=f)
-
-
     return df
+
+
+def report_id_counts(df, results_folder=None):
+    """The run's ID table (id_counts), into the log and <results_folder>/Summary.txt."""
+    table = id_counts(df, plexDIA=config.args.plexDIA)
+    lines = id_table_lines(table, timeplex=config.args.timeplex, silac=config.args.SILAC is not None)
+    logger.info("")
+    for line in lines:
+        logger.info(line)
+    if results_folder is not None:
+        with open(results_folder + '/Summary.txt', 'a') as f:
+            print(*lines, sep="\n", file=f)
 
 def add_median_based_features(df, metric_columns, group_col="untag_prec", count_col="channels_matched"):
     """
@@ -1368,7 +1417,21 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     else: 
         fdc["channel"] = 0 #if LF
-        
+
+    # The tag channel left empty in the sample (massTag.decoy_channel): searched
+    # and fitted like any other channel, but never a real identification, so it
+    # is kept out of the precursor scoring's training and q-values
+    # (score_precursors), the ID counts, the filtered outputs, the combined
+    # results and the MBR library
+    decoy_channel = mass_tag.decoy_channel if mass_tag is not None else None
+    if decoy_channel is None:
+        fdc["is_decoy_channel"] = False
+    elif timeplex:
+        # a timeplex channel is "<time channel>_<tag channel>"
+        fdc["is_decoy_channel"] = [str(c).rsplit("_", 1)[-1] == decoy_channel for c in fdc["channel"]]
+    else:
+        fdc["is_decoy_channel"] = fdc["channel"] == int(decoy_channel)
+
     if SILAC is not None:
         silac_channel = [re.findall(f"{SILAC.name}-(\d+)",i) for i in fdc.seq]
         fdc["silac_channel"] = [int(i[0]) if len(i)>0 else np.nan for i in silac_channel] ### Note: This needs to change for multichannel SILAC
@@ -1402,7 +1465,11 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
                           folder=results_folder)
 
     fdx['PredVal'] = fdx['PredVal'].fillna(0)
-    fdx['Qvalue'] = fdx['Qvalue'].fillna(1)
+    # The decoy channel has no Qvalue (score_precursors): it stays NaN, so the
+    # best channel's below takes the real channels' alone (min skips NaN), and
+    # gives it to the decoy channel's rows of a set they pass
+    real_rows = ~fdx["is_decoy_channel"]
+    fdx.loc[real_rows, 'Qvalue'] = fdx.loc[real_rows, 'Qvalue'].fillna(1)
 
 
     # if config.args.plexDIA:
@@ -1436,8 +1503,31 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     
     # have possible reannotate woth fasta here
     # fdx["org"] = np.array([";".join(orgs[[i in all_fasta_seqs[j] for j in range(3)]]) for i in fdx["stripped_seq"]])
-    fdx_quant = compute_protein_FDR(fdx_quant,results_folder=results_folder,
-                                    target_decoy_ratio=target_decoy_ratio)
+
+    # Before the channel features, which use it.  It reads only ms1_quant's
+    # traces, seq/z and dc, so it is the same here as after the list-column
+    # merge below (a left join on a unique key: same rows, same order)
+    fdx_quant["gauss_r2_joint"] = gauss_r2_joint(fdx_quant, dc, timeplex)
+
+    # Channel-level evidence, before the list columns are merged back: it reads
+    # the apex scan's fragments straight from polars, and needs ms1_quant's
+    # outputs, so it sits between the two
+    from src.channel_fdr import channel_qvalues, protein_channel_qvalues, run_channel_fdr
+    channel_features = run_channel_fdr(fdx_quant, fdc_list_cols, dc, spectra, library, mass_tag,
+                                       results_folder, config.fdr_threshold,
+                                       plots=config.args.channel_fdr_plots, workers=config.args.threads)
+    # Into every output; nothing is filtered by it.  Only with a decoy channel
+    if channel_features is not None:
+        fdx_quant["Channel_Qvalue"] = channel_qvalues(fdx_quant, channel_features)
+        fdx_quant["ChannelScore"] = channel_qvalues(fdx_quant, channel_features, "ChannelScore")
+
+    # The proteins: in the run, then (with the channel FDR) in each channel.
+    # compute_protein_FDR's merge keeps the rows and their order
+    fdx_quant = compute_protein_FDR(fdx_quant, target_decoy_ratio=target_decoy_ratio)
+    if channel_features is not None:
+        logger.info("Computing Protein Channel FDR")
+        fdx_quant["Protein_Channel_Qvalue"] = protein_channel_qvalues(fdx_quant, channel_features)
+    report_id_counts(fdx_quant, results_folder)
 
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge
@@ -1456,15 +1546,16 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
         fdx_quant = add_plex_coeff(fdx_quant, spectra, mass_tag, mz_ppm, im_tol,
                                    q_gate=config.fdr_threshold, n_threads=config.args.threads)
 
-    fdx_quant["gauss_r2_joint"] = gauss_r2_joint(fdx_quant, dc, timeplex)
-
     logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
-    # Every scored precursor, targets and decoys.  Parquet rather than CSV: it
-    # writes faster and far smaller, and the fragment list columns stay lists.
+    # Every scored precursor, targets and decoys (and the decoy channel, flagged
+    # by is_decoy_channel).  Parquet rather than CSV: it writes faster and far
+    # smaller, and the fragment list columns stay lists.
     _write_full_parquet(fdx_quant, results_folder+"/outputs/all_precursors.parquet")
-    filtered = fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold)].copy()
+    filtered = fdx_quant[np.logical_and.reduce([~fdx_quant["is_decoy"],
+                                                ~fdx_quant["is_decoy_channel"],
+                                                fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold])].copy()
     filtered["MS1_quality"] = ms1_quality(filtered)
     filtered["MS1_quality_pass"] = ms1_quality_pass(filtered)
     if mass_tag is not None:
@@ -1493,8 +1584,8 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
 
     ### select minimum columns for parquet
-    parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","Qvalue", "Protein_Qvalue","PredVal",
-                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'plex_Area', 'plex_bg', 'plex_snr', 'MS1_quality', 'MS1_quality_pass', 'coeff_plex', 'ms2_bg', 'ms2_snr', 'ms2_nfrag', 'MS2_quant_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+    parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","is_decoy_channel","Qvalue", "Protein_Qvalue","PredVal","ChannelScore",
+                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'Channel_Qvalue', 'Protein_Channel_Qvalue', 'plex_Area', 'plex_bg', 'plex_snr', 'MS1_quality', 'MS1_quality_pass', 'coeff_plex', 'ms2_bg', 'ms2_snr', 'ms2_nfrag', 'MS2_quant_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")

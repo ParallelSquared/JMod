@@ -25,7 +25,7 @@ def experiment(monkeypatch, tmp_path, combined):
     monkeypatch.setattr(run_jmod, "_log_jmod_version", lambda experiment_dir: None)
     monkeypatch.setattr(run_jmod, "resolve_tags", lambda: (None, None))
     monkeypatch.setattr(run_jmod, "build_library",
-                        lambda *args: SimpleNamespace(target_decoy_ratio=1.0))
+                        lambda *args: (SimpleNamespace(target_decoy_ratio=1.0), None))
     return run_jmod
 
 
@@ -310,7 +310,7 @@ class TestMatchBetweenRuns:
 
         def build_mbr_library(combined_ids, *rest):
             mbr_inputs.append(combined_ids)
-            return SimpleNamespace(target_decoy_ratio=1.0)
+            return SimpleNamespace(target_decoy_ratio=1.0), None
 
         monkeypatch.setattr(experiment, "process_run", process_run)
         monkeypatch.setattr(experiment, "build_mbr_library", build_mbr_library)
@@ -326,6 +326,30 @@ class TestMatchBetweenRuns:
         assert [args[1] for args in combined] == [first_pass, experiment_dir]
         assert mbr_experiment.mbr_inputs == ["combined IDs"]  # built from the first pass
         assert (tmp_path / "experiment" / "mbr_library").is_dir()
+
+    def test_the_mbr_library_is_built_with_a_tag_that_has_no_decoy_channel(self, experiment, monkeypatch):
+        """The MBR pass reads the input library again, so its tag is taken fresh
+        from the settings: the first pass's tag carries the channel JMod invented,
+        which no library is tagged with.  The decoy channel is made again after."""
+        monkeypatch.setattr(config.args, "tag", "PSMtag_5plex")
+        monkeypatch.setattr(config.args, "channels", "0,4,8,12")
+        monkeypatch.setattr(config.args, "decoy_channel", "auto")
+        first_pass_tag = experiment.resolve_decoy_channel(
+            experiment.set_config_tag(experiment.available_tags, "PSMtag_5plex", "0,4,8,12"), "auto")
+        assert first_pass_tag.decoy_channel == "16"
+
+        seen = []
+        monkeypatch.setattr(experiment, "write_mbr_library",
+                            lambda combined_ids, mbr_dir, mass_tag, *rest: (seen.append(mass_tag)
+                                                                            or (None, False, None)))
+        monkeypatch.setattr(experiment, "prepare_library", lambda *args: SimpleNamespace())
+        _, mbr_tag = experiment.build_mbr_library("ids", "dir", None, None)
+
+        assert seen[0].decoy_channel is None                    # fresh for the library read
+        assert seen[0].channel_names == ["0", "4", "8", "12"]
+        assert "PSMtag_5plex-16" in seen[0].mass_dict           # the tag's own 16, not the decoy
+        assert mbr_tag.decoy_channel == "16"                    # remade for the tagging
+        assert mbr_tag.mass_dict["PSMtag_5plex-16"] == pytest.approx(first_pass_tag.mass_dict["PSMtag_5plex-16"])
 
     def test_single_file_skips_mbr(self, experiment, mbr_experiment, monkeypatch, app_log, tmp_path):
         monkeypatch.setattr(config.args, "mzml", ["a.mzML"])

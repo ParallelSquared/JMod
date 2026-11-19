@@ -366,6 +366,34 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    'decoy_channel': {  ## the tag channel left empty in the sample, searched as a null draw for the
+                        ## channel-level FDR: auto (one step past the last channel searched), none,
+                        ## or the name of a channel already being searched
+        'flags': ('--decoy_channel',),
+        'default': 'auto',
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
+    'channel_fdr_plots': {  ## the channel FDR's plots (an ECDF of every channel feature in
+                            ## channel_fdr/ECDF among them): all (every precursor together), an amino
+                            ## acid such as K (the peptides ending in it and the rest side by side),
+                            ## or off (none)
+        'flags': ('--channel_fdr_plots',),
+        'default': 'all',
+        'const': 'all',
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'num_iso': {
         'flags': ('--num_iso',),
         'default': 2,

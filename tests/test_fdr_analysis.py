@@ -22,7 +22,8 @@ import pytest
 from src.utils.errors import JModError
 from src.utils.io.read_output import MainSearchFiles, MainSearchRows
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
-                               compute_protein_FDR, log_df, untag_prec_qvalues,
+                               compute_protein_FDR, id_counts, id_table_lines, report_id_counts, target_decoy_qvalues,
+                               untag_prec_qvalues, fill_ms1_quant_gaps,
                                area, walk_to_local_max, gauss_r2_joint, ms1_quality, ms1_quality_pass)
 
 def test_score_model_minimal_fixed():
@@ -74,6 +75,66 @@ def test_score_precursors_minimal_fixed(tmp_path):
 
     assert isinstance(out, pd.DataFrame)
     assert len(out) == len(fdc)
+
+
+def test_score_precursors_scores_the_decoy_channel_but_never_trains_on_or_counts_it(monkeypatch):
+    import xgboost
+    np.random.seed(0)
+    n = 60
+    fdc = pd.DataFrame({
+        "is_decoy": [False, True] * (n // 2),
+        "is_decoy_channel": [False] * 40 + [True] * 20,
+        "stripped_seq": [f"SEQ{i % 30}" for i in range(n)],
+        "rt_error": np.random.uniform(0.0, 1.0, n),
+        "mz_error": np.random.uniform(0.0, 0.1, n),
+        "feature1": np.random.uniform(1.0, 5.0, n),
+    })
+    trained = []
+    real_train = xgboost.train
+    def spy(params, dtrain, **kwargs):
+        trained.append(dtrain.num_row())
+        assert "is_decoy_channel" not in dtrain.feature_names
+        return real_train(params, dtrain, **kwargs)
+    monkeypatch.setattr("src.fdr_analysis.xgb.train", spy)
+
+    out = score_precursors(fdc, model_type="xg", target_decoy_ratio=1.0)
+
+    real = ~fdc["is_decoy_channel"].to_numpy()
+    # the first iteration's five folds train on each real row four times, never on the decoy channel
+    assert sum(trained[:5]) == 4 * real.sum()
+    assert all(sum(trained[i:i + 5]) <= 4 * real.sum() for i in (5, 10))
+    assert out["PredVal"].notna().all()                                      # scored
+    assert out.loc[~real, "Qvalue"].isna().all()                            # not counted
+    # the real rows' Qvalue counts them alone
+    sub = out.loc[real]
+    order = np.argsort(-sub["PredVal"].to_numpy(), kind="stable")
+    decoy = sub["is_decoy"].to_numpy()[order]
+    with np.errstate(divide="ignore"):
+        q_ordered = np.minimum.accumulate(((1 + np.cumsum(decoy)) / np.cumsum(~decoy))[::-1])[::-1]
+    expected = np.empty(order.size)
+    expected[order] = q_ordered
+    assert np.allclose(sub["Qvalue"].to_numpy(), expected)
+
+
+def test_target_decoy_qvalues_is_jmods_estimator():
+    # ranked: T T D T D T -> (1 + decoys) / targets, then the minimum from below
+    score = np.array([6.0, 5.0, 4.0, 3.0, 2.0, 1.0])
+    is_decoy = np.array([False, False, True, False, True, False])
+    raw = np.array([1 / 1, 1 / 2, 2 / 2, 2 / 3, 3 / 3, 3 / 4])
+    assert target_decoy_qvalues(score, is_decoy) == pytest.approx(np.minimum.accumulate(raw[::-1])[::-1])
+    # by score: T(3) D(2) T(1)
+    assert target_decoy_qvalues(np.array([1.0, 3.0, 2.0]), np.array([False, False, True]),
+                                target_decoy_ratio=2.0) == pytest.approx([2.0, 2.0, 2.0])
+
+
+def test_target_decoy_qvalues_of_a_subset():
+    score = np.array([6.0, 5.0, 4.0, 3.0])
+    is_decoy = np.array([False, True, False, False])
+    rows = np.array([True, False, True, True])            # the decoy left out
+    q = target_decoy_qvalues(score, is_decoy, rows=rows)
+    # as the rows ranked alone: no decoy, so 1/1, 1/2, 1/3, the lowest from below
+    assert np.isnan(q[1]) and q[rows] == pytest.approx([1 / 3] * 3)
+    assert q[rows] == pytest.approx(target_decoy_qvalues(score[rows], is_decoy[rows]))
 
 
 def test_add_median_based_features_basic():
@@ -198,7 +259,42 @@ def test_untag_prec_qvalues_rank_each_plex_set_by_its_best_channel():
     })
     q = untag_prec_qvalues(fdx, target_decoy_ratio=1.0)
     assert q.tolist() == pytest.approx([0.5, 0.5, 0.5, 0.5, 2 / 3, 2 / 3, 2 / 3, 2 / 3])
-        
+
+
+def test_untag_prec_qvalues_leave_out_the_decoy_channel():
+    # P1's best is its decoy channel (0.95), so it ranks by its real 0.4; P2 is
+    # seen only in the decoy channel.  Ranked: P3 0.9, D1 0.6, P1 0.4 -> 1/1, 2/1, 2/2
+    fdx = pd.DataFrame({
+        "file_name": ["f"] * 6,
+        "untag_prec": ["P1_2", "P1_2", "P2_2", "P3_2", "D1_2", "D1_2"],
+        "is_decoy": [False, False, False, False, True, True],
+        "is_decoy_channel": [False, True, True, False, False, True],
+        "PredVal": [0.4, 0.95, 0.99, 0.9, 0.6, 0.97],
+    })
+    q = untag_prec_qvalues(fdx, target_decoy_ratio=1.0)
+    assert q.iloc[[0, 1, 3, 4, 5]].tolist() == pytest.approx([1.0, 1.0, 1.0, 1.0, 1.0])
+    assert np.isnan(q.iloc[2])
+
+
+def test_id_counts_and_summary_leave_out_the_decoy_channel(monkeypatch, tmp_path):
+    from src import config
+    monkeypatch.setattr(config.args, "plexDIA", True)
+    df = pd.DataFrame({
+        "file_name": ["A"] * 4, "channel": [0, 0, 8, 8], "silac_channel": [0] * 4,
+        "Qvalue": [0.001, 0.002, np.nan, np.nan], "BestChannel_Qvalue": [0.001, 0.002, 0.001, 0.002],
+        "PredVal": [0.9, 0.8, 0.95, 0.85], "is_decoy": [False] * 4,
+        "is_decoy_channel": [False, False, True, True],
+        "protein": ["P1", "P2", "P1", "P2"], "untag_prec": ["p1", "p2", "p1", "p2"],
+    })
+    report_id_counts(compute_protein_FDR(df, target_decoy_ratio=1.0), str(tmp_path))
+    # the precursors at Qvalue and at BestChannel_Qvalue; too few proteins for a protein FDR
+    assert (tmp_path / "Summary.txt").read_text().splitlines() == [
+        "IDs at 1% FDR, A",
+        "          Precursors            Proteins",
+        "channel   own Q   best chan Q   own Q   best chan Q",
+        "      0       2             2       0             0",
+        "  total       2             2       0             0"]               # no channel 8
+
         
 def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
     fake_args = types.SimpleNamespace(plexDIA=False)
@@ -214,35 +310,64 @@ def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
         "untag_prec": ["p1", "p2"],
     })
 
-    out = compute_protein_FDR(df, results_folder=None, target_decoy_ratio=1.0)
+    out = compute_protein_FDR(df, target_decoy_ratio=1.0)
 
     assert isinstance(out, pd.DataFrame)
     assert "Protein_Qvalue" in out.columns  # main thing it produces
     assert out.shape[0] == 2  # still same number of rows
 
 
-def test_log_df_smoke():
-    """Smoke test for log_df function - just verify it runs without error."""
-    df = pd.DataFrame({
-        "file_name": ["sample1_001", "sample1_002", "sample2_001"],
-        "metric1": [1.0, 2.0, 3.0],
-        "metric2": [4.0, 5.0, 6.0],
-    })
-
-    # log_df should run without raising exceptions
-    # It just logs to the logger, so we verify it doesn't crash
-    log_df(df)
+def _counted(file_name, channels, silac_channels=None):
+    n = len(channels)
+    df = pd.DataFrame({"file_name": file_name, "channel": channels,
+                       "silac_channel": silac_channels if silac_channels is not None else [np.nan] * n,
+                       "is_decoy": False, "Qvalue": 0.001, "BestChannel_Qvalue": 0.001,
+                       "Protein_Qvalue": 0.001, "untag_prec": [f"p{i}" for i in range(n)],
+                       "protein": [f"P{i}" for i in range(n)]})
+    return df
 
 
-def test_log_df_multiple_files():
-    """Test log_df with multiple different file prefixes."""
-    df = pd.DataFrame({
-        "file_name": ["fileA_01", "fileA_02", "fileB_01", "fileC_01"],
-        "value": [10, 20, 30, 40],
-    })
+def test_id_table_label_free_is_one_level():
+    lines = id_table_lines(id_counts(_counted("C:/data/run.mzML", [0, 0, 0])))
+    assert lines == ["IDs at 1% FDR, run.mzML",
+                     "channel   Precursors   Proteins",
+                     "      0            3          3",
+                     "  total            3          3"]
 
-    # Should handle multiple unique file prefixes
-    log_df(df)
+
+def test_id_table_sorts_the_channels_as_numbers_and_splits_timeplex():
+    table = id_counts(_counted("f", ["1_4", "0_12", "0_4", "0_4"]), plexDIA=True)
+    lines = id_table_lines(table, timeplex=True)
+    rows = [line.split() for line in lines[3:]]
+    assert lines[2].split() == ["time", "channel", "own", "Q", "best", "chan", "Q", "own", "Q", "best", "chan", "Q"]
+    assert rows == [["0", "4", "2", "2", "2", "2"], ["0", "12", "1", "1", "1", "1"],
+                    ["1", "4", "1", "1", "1", "1"], ["total", "4", "4", "4", "4"]]
+
+
+def test_id_counts_channel_fdr_between_qvalue_and_best_channel():
+    # p0 passes everything; p1 only through its channel FDR and best channel;
+    # p2 only best channel.  P0 is in the run and the channel, P1 in the run
+    # but not the channel, P2 in the channel but not the run
+    df = pd.DataFrame({"file_name": "f", "channel": 0, "silac_channel": np.nan, "is_decoy": False,
+                       "untag_prec": ["p0", "p1", "p2"], "protein": ["P0", "P1", "P2"],
+                       "Qvalue": [0.001, 0.5, 0.5], "Channel_Qvalue": [0.001, 0.001, 0.5],
+                       "BestChannel_Qvalue": [0.001, 0.001, 0.001],
+                       "Protein_Qvalue": [0.001, 0.001, 0.5], "Protein_Channel_Qvalue": [0.001, 0.5, 0.001]})
+    table = id_counts(df, plexDIA=True)
+    assert [label for _, label in table.columns] == ["own Q", "chan Q", "best chan Q"] * 2
+    assert table.iloc[0].tolist() == [1, 2, 3, 1, 1, 2]
+    # without a fitted channel FDR, no such column
+    assert "chan Q" not in {label for _, label in id_counts(df.assign(Channel_Qvalue=np.nan)).columns}
+
+
+def test_id_table_one_per_file_and_silac():
+    df = pd.concat([_counted("a", [0, 0, 0], [0.0, 1.0, np.nan]), _counted("b", [4], [0.0])])
+    lines = id_table_lines(id_counts(df), silac=True)
+    assert [line for line in lines if line.startswith("IDs")] == [
+        "IDs at 1% FDR, a", "IDs at 1% FDR, b"]
+    assert lines[1].split() == ["channel", "SILAC", "Precursors", "Proteins"]
+    assert [line.split()[:2] for line in lines[2:5]] == [["0", "0"], ["0", "1"], ["0", "-"]]   # no label: "-"
+    assert id_table_lines(id_counts(df.iloc[:0])) == ["IDs at 1% FDR: none"]
 
 
 def test_plex_area_sums_the_scan_radius_on_either_side_of_the_apex():
@@ -287,6 +412,23 @@ def test_no_ms2_coefficients_means_no_fit():
     assert np.isnan(r2[0])
 
 
+def test_ms1_quant_fill_leaves_the_decoy_channels_qvalues_unscored():
+    """A set found only in the decoy channel has no best channel: as 0 it would
+    pass the run's FDR and be scored by the channel FDR and the protein FDR."""
+    dat = pd.DataFrame({"is_decoy_channel": [False, True, True],
+                        "Qvalue": [0.001, np.nan, np.nan],
+                        "BestChannel_Qvalue": [0.001, 0.001, np.nan],      # the last: decoy channel alone
+                        "untag_prec_Qvalue": [0.001, 0.001, np.nan],
+                        "plex_Area": [5.0, np.nan, np.nan], "ms1_cor": [0.9, np.nan, 0.2]})
+    out = fill_ms1_quant_gaps(dat)
+    assert out["Qvalue"].isna().tolist() == [False, True, True]
+    assert out["BestChannel_Qvalue"].isna().tolist() == [False, False, True]
+    assert out["untag_prec_Qvalue"].isna().tolist() == [False, False, True]
+    assert out["plex_Area"].tolist() == [5.0, 0.0, 0.0]                   # the rest as before
+    assert out["ms1_cor"].tolist() == [0.9, 0.0, 0.2]
+    assert not (out["BestChannel_Qvalue"] < 0.01).iloc[2]
+
+
 def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
     ids = pd.DataFrame({"PredVal": [0.9, 0.95, 0.99, 0.99],
                         "gauss_r2_joint": [0.5, 0.9, np.nan, 0.7],
@@ -300,7 +442,11 @@ def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
     g = lambda *p: np.prod(p) ** (1 / 3)
     assert np.allclose(qq, [g(1 / 4, 2.5 / 4, 1 / 4), g(2 / 4, 2.5 / 4, 2 / 4), g(3.5 / 4, 2.5 / 4, 3 / 4),
                             0.01 * g(3.5 / 4, 2.5 / 4, 1.0)])
-
+    # ChannelScore, where the channel FDR was fitted, in place of PredVal: 4/4, 3/4, 2/4, 1/4
+    assert np.allclose(ms1_quality(ids.assign(ChannelScore=[4.0, 3.0, 2.0, 1.0])),
+                       [g(1.0, 2.5 / 4, 1 / 4), g(3 / 4, 2.5 / 4, 2 / 4), g(2 / 4, 2.5 / 4, 3 / 4),
+                        0.01 * g(1 / 4, 2.5 / 4, 1.0)])
+    assert np.allclose(ms1_quality(ids.assign(ChannelScore=np.nan)), qq)   # not fitted
 
 
 def test_ms1_quality_pass_is_a_fixed_pearson_cut_on_quantified_ids():
@@ -334,3 +480,77 @@ def test_full_parquet_keeps_types_and_stringifies_mixed_columns(tmp_path):
     assert t.schema.field("plexfittrace").type == pa.string()
     assert t.column("plexfittrace").to_pylist() == ["0", "235502.4;189496.8", None]
     assert t.column("frag_errors").to_pylist() == [[1.0, 2.0], None, [3.0]]
+
+
+def test_process_data_flags_and_filters_the_decoy_channel(tmp_path, monkeypatch):
+    """The tag's empty channel is scored like any other, so it is in
+    all_precursors with is_decoy_channel set, but it is never an identification:
+    out of the filtered IDs, which is what the combined results and the MBR
+    library are built from."""
+    from src.mass_tags import available_tags
+
+    mass_tag = available_tags["PSMtag_5plex"].select_channels(["0", "4"]).with_decoy_channel()
+    assert mass_tag.decoy_channel == "8"
+    seqs = [f"(PSMtag_5plex-{c})AAAA" for c in (0, 8)] + [f"(PSMtag_5plex-{c})BBBB" for c in (0, 8)]
+
+    dummy_file = tmp_path / "input.mzML"
+    dummy_file.write_text("dummy")
+    (tmp_path.parent / "outputs").mkdir(exist_ok=True)
+
+    # get_large_prec's four outputs, the main-search rows over a real batch parquet
+    fdc = pd.DataFrame({
+        "seq": seqs,
+        "z": [2.0] * 4,
+        "rt": [10.0] * 4,
+        "mz": [500.0] * 4,
+        "rt_error": [0.1] * 4,
+        "mz_error": [5] * 4,
+        "gof_stats": [0.1] * 4,
+        "scribe_scores": [1] * 4,
+        "max_matched_residuals": [0.5] * 4,
+        "manhattan_distances": [5] * 4,
+        "frac_lib_int": [1] * 4,
+        "file_name": ["f"] * 4,
+        "time_channel": [0] * 4,
+        "silac_channel": [np.nan] * 4,
+        "is_decoy": [False] * 4,
+        "stripped_seq": ["AAAA", "AAAA", "BBBB", "BBBB"],
+        "__fdc_idx": [0, 1, 2, 3],
+    })
+    fdc_list_cols = pl.DataFrame({
+        "__fdc_idx": [0, 1, 2, 3],
+        "frag_errors": [[1.0, 2.0]] * 4,
+        "frag_mz": [[200.0, 300.0]] * 4,
+        "frag_int": [[1.0, 2.0]] * 4,
+    })
+    batch = tmp_path / "decoylibsearch_coeffs_batch0.parquet"
+    dc_cols = ["seq", "z", "coeff", "rt", "Ms1_spec_id", "spec_id"]
+    pl.DataFrame({"seq": seqs, "z": [2.0] * 4, "coeff": [1.0] * 4, "rt": [10.0] * 4,
+                  "Ms1_spec_id": [1] * 4, "spec_id": [1] * 4}).write_parquet(batch)
+    dc = MainSearchRows(MainSearchFiles([str(batch)]), dc_cols, ["seq", "z"])
+    monkeypatch.setattr("src.fdr_analysis.get_large_prec",
+                        lambda *args, **kwargs: (None, fdc, dc, fdc_list_cols))
+    monkeypatch.setattr("src.fdr_analysis.score_precursors",
+                        lambda fdc, *args, **kwargs: fdc.assign(PredVal=0.9, Qvalue=0.001))
+    monkeypatch.setattr("src.fdr_analysis.ms1_quant",
+                        lambda *args, **kwargs: args[0].assign(plex_Area=100.0, plex_bg=5.0, plex_snr=20.0,
+                                                               plexfitMS1_p=0.9, plexfittrace_spec_all=0,
+                                                               plexfittrace_all=0, ms1_apex_scan=0))
+    # The channel FDR and the MS2 plex quant need spectra; not what this tests
+    monkeypatch.setattr("src.channel_fdr.run_channel_fdr", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.ms2_plex_quant.add_plex_coeff", lambda df, *args, **kwargs: df)
+    monkeypatch.setattr("src.ms2_plex_quant.ms2_quant_quality", lambda ids: np.zeros(len(ids)))
+    monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
+                        lambda df, results_folder=None, **kwargs: df.assign(Protein_Qvalue=1.0,
+                                                                            protein="P12345"))
+    monkeypatch.setattr("src.fdr_analysis.unstring_floats",
+                        lambda x: x if isinstance(x, list) else [1.0, 2.0])
+
+    process_data([str(dummy_file)], None, None, ms1_tol=20e-6, rt_tol=1.0, im_tol=0.01,
+                 target_decoy_ratio=1.0, mass_tag=mass_tag)
+
+    all_ids = pd.read_parquet(tmp_path.parent / "outputs/all_precursors.parquet")
+    assert dict(zip(all_ids["channel"], all_ids["is_decoy_channel"])) == {0: False, 8: True}
+    filtered = pd.read_parquet(tmp_path.parent / "filtered_IDs.parquet")
+    assert filtered["channel"].tolist() == [0, 0]
+    assert "is_decoy_channel" in pd.read_parquet(tmp_path.parent / "outputs/all_IDs_filtered.parquet").columns

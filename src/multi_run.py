@@ -27,6 +27,7 @@ import polars as pl
 
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
+from src.fdr_analysis import target_decoy_qvalues
 from src.logger import logger
 from src.utils.parse_peptides import untag_sequences
 from src.utils.errors import JModError
@@ -93,10 +94,8 @@ class _IdLevel(NamedTuple):
 
 # From the strictest.  The run-level IDs pass the best channel's q-value;
 # the global q-value is per ID over the experiment, so it can sit anywhere
-# below them.  ##TODO Channel Qvalue, the strictest, once JMod has
-# channel-level FDR: add _IdLevel("channel_qvalue_pass", "Channel Qvalue",
-# "darker") first, a "darker" shade, and its column in precursors_per_run and
-# proteins_per_run
+# below them.  qvalue_pass is on the channel FDR's q-value when there is one
+# (_channel_q), the channel's own Qvalue when not
 _ID_LEVELS = [
     _IdLevel("qvalue_pass", "Qvalue", "dark"),
     _IdLevel("retained", "Global Qvalue", "full"),
@@ -189,16 +188,23 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
 
     # Kept when the runs' results carry them: timeplex runs have each ID's time
     # channel, and coeff, prec_im and untag_prec_Qvalue are there when the
-    # results were written with them, as is MS1_quality
+    # results were written with them
     available = df.collect_schema().names()
-    time_channel, coeff, prec_im, untag_prec_q, ms1_quality = (
+    # The decoy channel is a null draw, not an identification: it is left out of
+    # the combined IDs entirely, so it reaches neither the global q-values, the
+    # per-run counts and plots, nor the MBR library (which reads these IDs)
+    if "is_decoy_channel" in available:
+        df = df.filter(~pl.col("is_decoy_channel").fill_null(False))
+    time_channel, coeff, prec_im, untag_prec_q, channel_q, protein_channel_q, ms1_quality, channel_score = (
         [c] if c in available else []
-        for c in ("time_channel", "coeff", "prec_im", "untag_prec_Qvalue", "MS1_quality"))
+        for c in ("time_channel", "coeff", "prec_im", "untag_prec_Qvalue", "Channel_Qvalue",
+                  "Protein_Channel_Qvalue", "MS1_quality", "ChannelScore"))
     df = (
         df
         .select(["run_idx", "file_name", "protein", "seq", "z", "channel", "silac_channel",
                  *time_channel,
-                 "PredVal", "Qvalue", "BestChannel_Qvalue", *untag_prec_q, "Protein_Qvalue",
+                 "PredVal", *channel_score, "Qvalue", "BestChannel_Qvalue", *untag_prec_q, *channel_q, "Protein_Qvalue",
+                 *protein_channel_q,
                  "plex_Area", *coeff, *ms1_quality, "stripped_seq", "untag_seq", "untag_prec",
                  "mz", "rt", *prec_im, "is_decoy"])
         .with_columns(
@@ -244,7 +250,9 @@ def global_qvalues(df, key, target_decoy_ratio, qvalue_name):
     is_decoy with its best score, the run it came from (BestRun) and that run's
     channel (Best_channel and so on, one per channel column), the number of runs
     and of (run, channel) units it was scored in, and the q-value, named
-    *qvalue_name*.
+    *qvalue_name*: JMod's estimator (fdr_analysis.target_decoy_qvalues), with
+    tied scores ranked targets first, then by *key*, so the order never depends
+    on the runs' row order.
     """
     channel_columns = [c for c in _CHANNEL_COLUMNS if c in df.collect_schema().names()]
     # Ties go to the earliest run, then the lowest channel
@@ -263,36 +271,17 @@ def global_qvalues(df, key, target_decoy_ratio, qvalue_name):
         )
     )
 
-    global_qs = (
-        scores
-        .sort("MaxPredVal", descending=True)
-        .with_columns(
-            (~pl.col("is_decoy")).cast(pl.Int64).cum_sum().alias("n_target"),
-            pl.col("is_decoy").cast(pl.Int64).cum_sum().alias("n_decoy"),
-        )
-        # Tied scores are a single threshold step: give every key in a tie the
-        # counts from its end, so the q-value doesn't depend on row order
-        .with_columns(
-            pl.col("n_target").max().over("MaxPredVal"),
-            pl.col("n_decoy").max().over("MaxPredVal"),
-        )
-    )
+    # group_by's order is arbitrary: fixed first, as the estimator's ties keep the row order
+    scores = scores.sort("is_decoy", key).collect()
+    qvalues = target_decoy_qvalues(scores["MaxPredVal"].to_numpy(), scores["is_decoy"].to_numpy(),
+                                   target_decoy_ratio)
+    return scores.with_columns(pl.Series(qvalue_name, qvalues))
 
-    return (
-        global_qs
-        .with_columns(
-            # As the per-run q-value (fdr_analysis.score_precursors)
-            ((1 + pl.col("n_decoy")) / pl.col("n_target") * target_decoy_ratio).alias("FDR")
-        )
-        .with_columns(
-            pl.col("FDR")
-            .reverse()
-            .cum_min()
-            .reverse()
-            .alias(qvalue_name)
-        )
-        .collect()
-    )
+
+def _channel_q(df, column="Channel_Qvalue"):
+    """*column* (Channel_Qvalue, Protein_Channel_Qvalue) where the channel FDR
+    gave it, the run's Qvalue where not."""
+    return column if column in df.columns and df[column].is_not_null().any() else "Qvalue"
 
 
 def precursors_per_run(df, units, fdr_threshold):
@@ -309,7 +298,7 @@ def precursors_per_run(df, units, fdr_threshold):
         .agg(
             pl.col("plex_Area").fill_nan(None).sum().alias("area"),
             (pl.col("untag_prec_Global_Qvalue").first() < fdr_threshold).alias("retained"),
-            (pl.col("Qvalue") < fdr_threshold).any().alias("qvalue_pass"),
+            (pl.col(_channel_q(df)) < fdr_threshold).any().alias("qvalue_pass"),
         )
         .with_columns(
             pl.when(pl.col("area") > 0).then(pl.col("area").log(2)).alias("log2_area")
@@ -330,7 +319,7 @@ def proteins_per_run(df, units, fdr_threshold):
         df.filter(pl.col("Protein_Qvalue") < fdr_threshold)
         .group_by("run_idx", *units.columns, "protein")
         .agg((pl.col("Protein_Global_Qvalue").first() < fdr_threshold).alias("retained"),
-             (pl.col("Qvalue") < fdr_threshold).any().alias("qvalue_pass"))
+             (pl.col(_channel_q(df, "Protein_Channel_Qvalue")) < fdr_threshold).any().alias("qvalue_pass"))
     )
 
 
@@ -341,7 +330,7 @@ def precursors_per_protein(df, fdr_threshold):
     return (
         df.filter(pl.col("Protein_Qvalue") < fdr_threshold)
         .group_by("protein")
-        .agg(pl.col("untag_prec").filter(pl.col("Qvalue") < fdr_threshold).n_unique().alias("n_precursors"))
+        .agg(pl.col("untag_prec").filter(pl.col(_channel_q(df)) < fdr_threshold).n_unique().alias("n_precursors"))
     )
 
 
@@ -370,6 +359,7 @@ class _Units:
         self.plural = f"(run, {self.channel_name}) pairs" if self.columns else "runs"
         self.axis_name = ", ".join(["Run", *(_CHANNEL_COLUMNS[c].capitalize() for c in self.columns)])
         self.labels = [self._label(row) for row in self.frame.select("run_idx", *self.columns).rows()]
+        self.qvalue_label = "Channel Qvalue" if _channel_q(df) != "Qvalue" else "Qvalue"
 
         # The colour of each channel of a run, by its innermost channel
         innermost = sorted({ch[-1] for ch in self.channels}) if self.columns else [None]
@@ -395,7 +385,8 @@ class _Units:
         """The q-value levels to plot.  Without channels an ID's Qvalue is its
         best channel's, so the two are one level, named Qvalue."""
         if self.columns:
-            return _ID_LEVELS
+            return [level._replace(label=self.qvalue_label) if level.column == "qvalue_pass" else level
+                    for level in _ID_LEVELS]
         return [level if level.column else level._replace(label="Qvalue")
                 for level in _ID_LEVELS if level.column != "qvalue_pass"]
 
@@ -662,7 +653,7 @@ def plot_lost_to_global_q(per_run, level, units, fdr_threshold, results_dir, n_p
     if not counts.any():
         ax.set_ylim(0, 1)
         ax.text(0.5, 0.5, "None", transform=ax.transAxes, ha="center", va="center", color=_MUTED_COLOR)
-    ax.set_xlabel(f"Number of {units.plural.title()} with Qvalue < {fdr_threshold:g}", color=_MUTED_COLOR)
+    ax.set_xlabel(f"Number of {units.plural.title()} with {units.qvalue_label} < {fdr_threshold:g}", color=_MUTED_COLOR)
     ax.set_ylabel(f"{level.noun.capitalize()}s", color=_MUTED_COLOR)
     ax.set_title(f"{level.noun.capitalize()}s failing the {level.global_q} ({fdr_threshold:g}): "
                  f"{lost.height:,} of {per_key.height:,}",

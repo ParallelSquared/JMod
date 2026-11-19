@@ -43,6 +43,7 @@ min_int = 1e-3
 import csv
 import pickle
 from src.logger import logger
+from src.channel_fdr import MIN_MS1_POINTS
 
 ## To enable fitting whole MS1 spectrum: in FDR analysis, set fit_whole_MS1 to true
     # Uncomment the two blocks of code that follow if fit_whole_MS1:
@@ -194,9 +195,12 @@ def ms1_cor_channels(all_spectra,
         # apex toward a local maximum. The slide is capped plex_area_scan_radius
         # positions in from the edge, so a channel can drift at most
         # config.args.apex_jitter cycles from the voted apex. apex_jitter == 0
-        # yields just the plex_Area window — no walk.
+        # yields just the plex_Area window — no walk. Never fewer than
+        # MIN_MS1_POINTS scans, which the channel FDR's MS1 trace features need
+        # (the extra scans are fitted, not quantified)
         area_radius = int(config.args.plex_area_scan_radius)
-        fit_radius = max(int(config.args.apex_jitter) + area_radius, additional_scans + area_radius)
+        fit_radius = max(int(config.args.apex_jitter) + area_radius, additional_scans + area_radius,
+                         MIN_MS1_POINTS // 2)
         apex_idx = int(np.searchsorted(all_scans, voted_apex))
         lo = max(0, apex_idx - fit_radius)
         hi = min(len(all_scans), apex_idx + fit_radius + 1)
