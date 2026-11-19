@@ -29,6 +29,8 @@ Kevin McDonnell, Daniel J. Geiszler, Nathan Wamsley, Jason Derks, Sarah Sipe, Za
 
 ### Windows Setup
 
+<!-- TODO: Windows-specific section on launching the GUI directly from the .bat; the file is launch_JMod.bat, not launch.bat (step 2) -->
+
 <details>
 <summary><strong> Setup Steps </strong>
 </summary>
@@ -48,6 +50,8 @@ If you would like to set up the UV environment with the command line, please fol
 
 ### Linux/MacOS Setup
 
+<!-- TODO: a Linux/macOS launcher like launch_JMod.bat (install/update UV, uv sync, open the GUI). The executable bit gets lost on download, so document it as 'bash launch_JMod.sh' (needs only read permission), with chmod +x as the optional step for double-clicking -->
+
 <details>
 <summary><strong> Setup Steps </strong>
 </summary>
@@ -65,6 +69,7 @@ If you would like to set up the UV environment with the command line, please fol
 
     or, if UV was installed with pip, ```pip install -U uv```.
 
+<!-- TODO: add a separate step for navigating to the JMod directory (cd path/to/JMod), and run uv self update right before uv sync -->
 3. Open a new terminal and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: 
 
     ```uv sync```
@@ -74,6 +79,8 @@ If you would like to set up the UV environment with the command line, please fol
 </details>
 
 <!-- TODO: review this -->
+
+<!-- TODO: a macOS section on reading .d data: it runs Bruker's Windows timsdata library under Wine, so users need wine on PATH and a Windows Python installed in their Wine prefix (WINEPREFIX, default ~/.wine) and on its PATH, so that 'wine python --version' works (see _MAC_WINE_REQUIREMENTS in src/utils/io/bruker_d.py) -->
 
 ### Thermo Raw File Support
 

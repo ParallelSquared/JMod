@@ -60,6 +60,7 @@ uv self update >nul 2>&1
 if %ERRORLEVEL% neq 0 pip install -U uv
 
 @rem Sync UV environment
+@rem TODO: if uv sync fails, the GUI still launches and the window closes; stop and pause so the error stays readable
 uv sync --python 3.14t
 
 @rem Launch GUI application
