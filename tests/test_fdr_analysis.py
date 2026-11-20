@@ -45,6 +45,31 @@ def test_score_model_minimal_fixed():
         sm = score_model("unsupported", n_splits=3)
         sm.run_model(X, y)
 
+def test_score_model_xgboost_defaults_and_overrides(monkeypatch):
+    import xgboost
+    X = pd.DataFrame({"feat1": np.arange(12.0), "feat2": np.arange(12.0, 24.0)})
+    y = np.array([0, 1] * 6)
+    fits, real_train = [], xgboost.train
+
+    def spy(params, dtrain, num_boost_round=10, **kwargs):
+        fits.append((params["max_depth"], params["eta"], num_boost_round))
+        return real_train(params, dtrain, num_boost_round=2, **kwargs)
+    monkeypatch.setattr("src.fdr_analysis.xgb.train", spy)
+    keep = np.ones(len(y), bool)
+    # the precursor scoring's: depth 10, 500 rounds, in both fits
+    sm = score_model("xg", n_splits=3)
+    sm.run_model(X, y)
+    sm.run_model_filtered(X, y, keep, y)
+    assert set(fits) == {(10, 0.1, 500)}
+    # overridden, the refits with their own rounds
+    fits.clear()
+    sm = score_model("xg", n_splits=3, xgb_params={"max_depth": 6}, xgb_rounds=100, xgb_refit_rounds=50)
+    sm.run_model(X, y)
+    assert set(fits) == {(6, 0.1, 100)}
+    fits.clear()
+    sm.run_model_filtered(X, y, keep, y)
+    assert set(fits) == {(6, 0.1, 50)}
+
 def test_score_precursors_minimal_fixed(tmp_path):
     # Need enough samples for 5-fold CV with iterative negative mining.  Targets
     # are separated from decoys as in a real run (higher coeff and features,

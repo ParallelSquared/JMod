@@ -89,6 +89,20 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # The mass of a modification the library has but JMod does not know:
+    # NAME,MASS.  Only the mass: the library is left as it is
+    'define_mod': {
+        'flags': ('--define_mod',),
+        'default': None,
+        'takes_value': True,
+        'multiple': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
+    },
     'max_variable_mods': {
         'flags': ('--max_variable_mods',),
         'default': 1,

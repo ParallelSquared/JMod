@@ -275,28 +275,33 @@ Some commonly used search parameters are listed below. A more extensive list of 
 <details>
 <summary><strong> Library Modifications </strong></summary>
 
-Modifications can be added to, or removed from, precursors in the library when it is loaded. The library file itself is not changed.
+Modifications can be added to, or removed from, precursors in the library when it is loaded. The library file itself is not changed. When --tag is given, the library may have one modification JMod does not know, and it is read as the tag. Any other library modification must be in UniMod, built into JMod, or given its mass with --define_mod. To check a library before searching, run --inspect_library with the same --tag and modification options, or use the ‘i’ button next to the library loader in the GUI.
 
 ```
 --add_fixed_mod NAME,SITES  or  NAME,MASS,SITES
-  Add a modification to every one of SITES: n for the peptide N-terminus, plus any residues, e.g. nK.
-  If the mod is not in UniMod, MASS is required.
-  A mod is never added to a site twice, so this can also give an existing fixed mod its mass.
-  A site that already carries another modification is skipped, with a warning.
-  End with ,stack to add it alongside the other modification instead.
+  Add a modification at every one of SITES: n for the peptide N-terminus, plus any residues, e.g. nK.
+  MASS is required if the mod is not in UniMod.
+  Sites that already carry this mod are left as they are.
+  Sites that carry a different mod are skipped, with a warning.
+  End with ,stack to add it on top of the other mod (e.g. a SILAC label on a dimethylated K).
 --add_variable_mod NAME,SITES  or  NAME,MASS,SITES
-  Also make a copy of each precursor for every combination of these sites (every position).
-  Copies keep their parent's retention time, ion mobility and fragment intensities. Can end with ,stack.
+  Add copies of each precursor with the mod at every combination of SITES.
+  Copies keep their parent's retention time, ion mobility and fragment intensities.
+  ,stack works as for --add_fixed_mod.
 --max_variable_mods
-  Most variable modifications on one precursor, counted across all of them.
+  Most variable mods added to one precursor.
   default = 1
 --strip_mod NAME  or  NAME,MASS  or  NAME,SITES  or  NAME,MASS,SITES
-  Remove a modification: from every site, or only from SITES.
-  If the mod is not in UniMod, MASS is required.
+  Remove a modification from every site, or only from SITES.
+  MASS is required if the mod is not in UniMod.
+--define_mod NAME,MASS
+  Give the mass of a modification the library already has but JMod does not know, e.g. MyTag,42.0106.
+  The library is not changed.
 ```
 
 - Use UniMod names (e.g. `UniMod:4`) whenever the modification is in UniMod. JMod then looks up its mass and its isotopic composition. Give MASS for a modification UniMod does not have.
 - Each option can be repeated. Strips are applied first, then fixed modifications, then variable copies.
+- A name has one mass: giving the same name two different masses, in one option or across them, is an error.
 - Check what the options will do before searching with `--inspect_library` or the 'i' button in the GUI next to the library loader.
 - In the GUI, add these options in the Additional Commands box.
 
@@ -340,8 +345,8 @@ These commands run on their own, without a search.
 
 ```
 --inspect_library path/to/library
-  Report the library's modifications, what any --strip_mod, --add_fixed_mod and --add_variable_mod
-  given would do to them, and whether JMod can load it (with the --tag given, if any).
+  Report the library's modifications, what any --strip_mod, --add_fixed_mod, --add_variable_mod
+  and --define_mod given would do to them, and whether JMod can load it (with the --tag given, if any).
   The "i" button next to the spectral library in the GUI shows the same report.
 --make_library path/to/experiment_folder
   Build the match between runs library from a finished search's experiment folder.

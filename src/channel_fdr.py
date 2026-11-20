@@ -692,6 +692,16 @@ def model_columns(features):
 # ---------------------------------------------------------------------------
 
 N_ITERATIONS = 3
+# The channel FDR's own XGBoost, shallower and shorter than the precursor
+# scoring's (depth 10, 500 rounds in every fit).  On the species-dropout runs
+# (20 ng 5plex; 9plex with a d14 or a d2 decoy) the first fit's held-out logloss
+# is best near round 100 at depth 10 and worse by 500, and the refits' from
+# their first few rounds; at these settings the measured FDP at Channel_Qvalue
+# <= 1% fell from 8.7% to 1.9% (9plex, d14 decoy), 4.7% to 1.8% (d2 decoy) and
+# 3.1% to 2.2% (5plex), and the fit takes minutes instead of an hour or more
+XGB_PARAMS = {"max_depth": 6, "eta": 0.1}
+XGB_ROUNDS = 100        # the first fit's boosting rounds
+XGB_REFIT_ROUNDS = 50   # each refit's (iterations 2 and on)
 TRAIN_Q = 0.01          # a real row this confident is a positive for the refit
 PEP_CUT = 0.90          # a real row this decoy-like is relabelled a decoy for it
 # Below this many decoy-channel rows the q-values are too coarse to mean much
@@ -799,7 +809,8 @@ def fit_channel_fdr(features, columns, n_iterations=N_ITERATIONS, train_q=TRAIN_
     score = q = model = None
     for iteration in range(n_iterations):
         logger.info(f"  scoring iteration {iteration + 1}/{n_iterations}")
-        fitter = score_model(model_type)
+        fitter = score_model(model_type, xgb_params=XGB_PARAMS, xgb_rounds=XGB_ROUNDS,
+                             xgb_refit_rounds=XGB_REFIT_ROUNDS)
         if iteration == 0:
             score = fitter.run_model(X, y, groups=groups, train_mask=train_mask)
         else:

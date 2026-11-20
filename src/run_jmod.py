@@ -87,7 +87,8 @@ def run_experiment(GUI_config_json=None):
     set_seeds(config.RANDOM_SEED)
     mass_tag, SILAC = resolve_tags()
     mod_edits = spec_lib.resolve_mod_edits(config.args.add_fixed_mod, config.args.strip_mod,
-                                           config.args.add_variable_mod, config.args.max_variable_mods)
+                                           config.args.add_variable_mod, config.args.max_variable_mods,
+                                           config.args.define_mod)
     mbr = _use_mbr(run_files)
     # With MBR the first pass is not the final result, so it goes in first_pass/
     first_pass_dir = os.path.join(experiment_dir, "first_pass") if mbr else None
@@ -234,7 +235,8 @@ def run_make_library(experiment_dir):
 
     mass_tag, SILAC = resolve_tags()
     mod_edits = spec_lib.resolve_mod_edits(config.args.add_fixed_mod, config.args.strip_mod,
-                                           config.args.add_variable_mod, config.args.max_variable_mods)
+                                           config.args.add_variable_mod, config.args.max_variable_mods,
+                                           config.args.define_mod)
     combined_ids = _experiment_ids(experiment_dir, run_folders)
     write_mbr_library(combined_ids, mbr_dir, mass_tag, SILAC, mod_edits)
     logger.info("")
@@ -248,7 +250,8 @@ def run_inspect_library(lib_file):
     library only; no folder or log file is made."""
     mass_tag, _ = resolve_tags()
     edits = spec_lib.parse_mod_edits(config.args.add_fixed_mod, config.args.strip_mod,
-                                     config.args.add_variable_mod, config.args.max_variable_mods)
+                                     config.args.add_variable_mod, config.args.max_variable_mods,
+                                     config.args.define_mod)
     for line in spec_lib.format_library_report(spec_lib.inspect_library(lib_file, mass_tag, edits)):
         logger.info(line)
 
@@ -814,8 +817,8 @@ def load_library(lib_file, mass_tag, mod_edits):
     if library_tag_bool and not mass_tag:
         raise JModError(f"The spectral library contains a modification JMod has no mass for "
                         f"({library_tag_name}). If it is the library's mass tag, choose that tag (--tag). "
-                        f"Otherwise give its mass with --add_fixed_mod {library_tag_name},MASS,SITES, "
-                        f"or remove it with --strip_mod {library_tag_name},MASS,SITES")
+                        f"Otherwise give its mass with --define_mod {library_tag_name},MASS, "
+                        f"or remove it with --strip_mod {library_tag_name},MASS")
 
     if config.args.test_mode:
         # Pre-filter the library to speed up processing

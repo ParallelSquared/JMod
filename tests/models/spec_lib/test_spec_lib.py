@@ -9,6 +9,7 @@ import types
 
 from src.models.spec_lib.spec_lib import create_python_lib, LibrarySpectrum, load_tsv_speclib, has_mass_tag, in_windows, check_nterm_tags
 from src.models.spec_lib.spec_lib import ModSpec, parse_mod_spec, resolve_mod_edits, parse_mod_edits, match_library_spelling, loadSpecLib
+from src.models.spec_lib.spec_lib import parse_mod_definition
 from src.models.spec_lib.spec_lib import inspect_library, format_library_report, _mod_site_counts
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 from tests.models.spec_lib.test_library_snapshots import FIXTURE_DIR
@@ -397,6 +398,58 @@ class TestResolveModEdits:
 
     def test_none_is_no_edits(self, restore_mods):
         assert not resolve_mod_edits(None, None)
+
+
+class TestDefineMod:
+    """--define_mod NAME,MASS: only the mass of a modification the library has."""
+    @staticmethod
+    def _library(tmp_path, peptides):
+        path = str(tmp_path / "lib.parquet")
+        n = len(peptides)
+        pl.DataFrame({"ModifiedPeptide": peptides, "StrippedPeptide": ["PEPTIDEK"] * n,
+                      "PrecursorCharge": [2] * n, "PrecursorMz": [500.0 + i for i in range(n)],
+                      "Tr_recalibrated": [10.0] * n, "FragmentType": ["y"] * n, "FragmentNumber": [2] * n,
+                      "FragmentCharge": [1] * n, "FragmentLossType": ["noloss"] * n,
+                      "FragmentMz": [250.0] * n, "RelativeIntensity": [1.0] * n}).write_parquet(path)
+        return path
+
+    def test_name_and_mass(self):
+        assert parse_mod_definition("MyTag,42.0106") == ModSpec("MyTag", 42.0106, "")
+
+    def test_a_known_modification_keeps_its_known_mass(self):
+        assert parse_mod_definition("unimod:4,57.0215") == ModSpec("UniMod:4", 57.021464, "")
+
+    @pytest.mark.parametrize("text", ["MyTag", "MyTag,42.0,K", "MyTag,heavy", "My Tag,42.0", "MyTag,", "42.0106"])
+    def test_malformed_definitions_raise(self, text):
+        with pytest.raises(JModError, match="--define_mod"):
+            parse_mod_definition(text)
+
+    def test_the_mass_is_registered_and_the_library_left_as_it_is(self, restore_mods):
+        edits = resolve_mod_edits(None, None, define_mod=["MyTag,42.0106", "Other,1.5"])
+        assert [spec.name for spec in edits.defined] == ["MyTag", "Other"]
+        assert not edits   # nothing to strip, add or vary
+        assert config.diann_mods["MyTag"] == 42.0106 and config.diann_mods["Other"] == 1.5
+
+    def test_one_name_with_two_masses_across_flags_raises(self, restore_mods):
+        with pytest.raises(JModError, match="MyTag is given two masses"):
+            resolve_mod_edits(["MyTag,42.0,K"], None, define_mod="MyTag,43.0")
+
+    def test_inspecting_a_library_knows_the_defined_masses(self, tmp_path, restore_mods):
+        path = self._library(tmp_path, ["(foo)PEPTIDEK", "PEPTIDEK(bar)"])
+        assert any("bar, foo" in p for p in inspect_library(path).problems)
+        report = inspect_library(path, None, parse_mod_edits(None, None, define_mod=["FOO,42.0", "bar,1.5"]))
+        assert not report.problems
+        assert {(r.name, r.mass) for r in report.mods} == {("foo", 42.0), ("bar", 1.5)}
+        assert not report.edit_lines   # nothing edited
+        assert "foo" not in config.diann_mods   # inspecting changes nothing
+
+    def test_loading_registers_the_library_spelling_and_edits_nothing(self, tmp_path, restore_mods):
+        path = self._library(tmp_path, ["(foo)PEPTIDEK", "PEPTIDEK(bar)"])
+        edits = resolve_mod_edits(None, None, define_mod=["FOO,42.0", "bar,1.5"])
+        store, library_tag_bool, _, _ = loadSpecLib(path, edits)
+        assert config.diann_mods["foo"] == 42.0   # as the library spells it
+        assert not library_tag_bool   # a defined mass is not the library's tag
+        assert sorted(store.mod_seq) == ["(foo)PEPTIDEK", "PEPTIDEK(bar)"]
 
 
 class TestInspectLibrary:
