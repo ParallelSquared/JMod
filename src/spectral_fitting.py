@@ -53,6 +53,16 @@ from typing import NamedTuple, Optional
 import pyarrow as pa
 
 
+def plex_size():
+    """Copies of each precursor in the searched library: the mass tag's channels
+    (its decoy channel included) times the SILAC label's, 1 for label-free."""
+    n = 1
+    for label in (getattr(config, "tag", None), getattr(config, "SILAC", None)):
+        if label is not None:
+            n *= max(1, int(label.n_channels))
+    return n
+
+
 # ── Thread-local RandomState cache for enet_path ──
 # Constructing np.random.RandomState(42) is expensive (~2K GIL samples in profiling).
 # Each thread keeps one, reseeded to 42 per spectrum for determinism + thread safety.
@@ -2883,7 +2893,11 @@ def fit_to_lib2(dia_spec,
     # Targets and decoys are ranked together, by matched top-N ions then the
     # matched fraction of library intensity, with the library index breaking ties
     # so the choice is deterministic.  Same rule for both, so it is symmetric.
+    # The cap is per channel: every precursor has a copy in each channel the
+    # library was tagged with, decoy channel included, so it scales with plex size.
     _cap = getattr(config.args, "max_candidates", None)
+    if _cap is not None:
+        _cap = int(_cap) * plex_size()
     _n_dec = len(decoy_passing) if decoy else 0
     if _cap is not None and len(ref_passing) + _n_dec > _cap:
         _topn = np.concatenate([ref_topn, dec_topn]) if decoy else ref_topn

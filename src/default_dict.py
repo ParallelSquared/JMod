@@ -167,7 +167,12 @@ default_dict = {
     },
     # Per-spectrum cap on candidates entering the fit: targets and decoys ranked
     # together by matched top-N ions, then matched fraction of library intensity.
-    # None = no cap.  100 from a sweep on the uncentroided timsTOF 200 pg test
+    # Per channel: the search multiplies it by the plex size (tag channels, decoy
+    # channel included, times SILAC channels; spectral_fitting.plex_size), since
+    # each precursor has a copy in every channel.  A flat 100 on the 9plex cost
+    # 9.5% of IDs (230,838 vs 252,868 uncapped) and let the decoy channel take
+    # slots from the real ones.  None = no cap.  100 from a sweep on the
+    # uncentroided timsTOF 200 pg test
     # (precursors at 1% FDR / also in DIA-NN): 1000 -> 12,781 / 10,488,
     # 250 -> 13,750 / 10,871, 100 -> 13,908 / 11,053.  Fewer weak candidates per
     # spectrum give cleaner coefficients and goodness-of-fit for the real ones.

@@ -24,7 +24,7 @@ from scipy import sparse
 from src.spectral_fitting import (
     get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, gof_stat, huber_nnls_irls,
     _dia_prep_2d_jit, _match_mz_only, _match_mz_im, _create_entries_direct_jit,
-    _keep_passing, _resp_ent_angle_jit,
+    _keep_passing, _resp_ent_angle_jit, plex_size,
 )
 from src.utils.frag_encoding import encode_frag_name
 
@@ -667,3 +667,30 @@ class TestResponsibilityEntropyAngle:
     def test_zero_coefficient_is_nan(self):
         out = self._run([1.0, 3.0], [1.0, 1.0], [1.0, 0.0], [900.0, 500.0, 0.0, 0.0], b_bins=(2, 3))
         assert np.isfinite(out[0]) and np.isnan(out[1])
+
+
+class TestPlexSize:
+    """--max_candidates is per channel: the cap is multiplied by plex_size()."""
+
+    def test_label_free_is_one(self, monkeypatch):
+        import src.config as config
+        monkeypatch.setattr(config, "tag", None, raising=False)
+        monkeypatch.setattr(config, "SILAC", None, raising=False)
+        assert plex_size() == 1
+
+    def test_counts_the_decoy_channel(self, monkeypatch):
+        import src.config as config
+        from src.mass_tags import available_tags, set_config_tag, resolve_decoy_channel
+        tag = set_config_tag(available_tags, "PSMtag_9plex", None)
+        monkeypatch.setattr(config, "SILAC", None, raising=False)
+        monkeypatch.setattr(config, "tag", tag, raising=False)
+        assert plex_size() == 9
+        monkeypatch.setattr(config, "tag", resolve_decoy_channel(tag, "auto"), raising=False)
+        assert plex_size() == 10
+
+    def test_tag_and_silac_multiply(self, monkeypatch):
+        import src.config as config
+        from types import SimpleNamespace
+        monkeypatch.setattr(config, "tag", SimpleNamespace(n_channels=3), raising=False)
+        monkeypatch.setattr(config, "SILAC", SimpleNamespace(n_channels=2), raising=False)
+        assert plex_size() == 6
