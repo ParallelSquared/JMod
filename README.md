@@ -476,20 +476,20 @@ A comprehensive list of all output columns and descriptions for each one can be 
 | `Protein_Global_Qvalue` | (combined_filtered_IDs) Q-value of the protein over every run |
 | `plexfitMS1` | Fitted MS1 coefficient at max |
 | `plexfitMS1_p` | Correlation of theoretical MS1 isotope distribution with observed peaks |
-| `plexfittrace` | Fitted MS1 coefficients of elution trace |
-| `plexfit_ps` | Correlation of theoretical MS1 isotope distribution with observed peaks for each fit in elution trace |
-| `plexfittrace_spec_all` | All MS1 spectra used for MS1 fitting |
-| `plexfittrace_all` | All fitted MS1 coefficients |
-| `plexfittrace_ps_all` | Correlation of theoretical MS1 isotope distribution with observed peaks for each fit |
+| `plexfittrace` | Fitted MS1 coefficients of elution trace (list, one per MS1 scan of the fit window) |
+| `plexfit_ps` | Correlation of theoretical MS1 isotope distribution with observed peaks for each fit in elution trace (list; 0 where nothing was fitted) |
+| `plexfittrace_spec_all` | All MS1 spectra used for MS1 fitting (list of scan numbers) |
+| `plexfittrace_all` | All fitted MS1 coefficients (list) |
+| `plexfittrace_ps_all` | Correlation of theoretical MS1 isotope distribution with observed peaks for each fit (list; NaN where nothing was fitted) |
 | `plex_Area` | Area under fitted MS1 coefficients |
 | `ms1_apex_scan` | MS1 apex scan selected for MS quantitation |
 | `ms1_cor` | Correlation between MS2 coefficients and monoisotopic trace |
 | `traceproduct` | Product of MS1xMS1 correlations |
 | `iso_cor` | Correlation between theoretical and observed MS1 isotopes |
 | `MS1_Int` | Observed intensity of MS1 monoisotopic peak at max |
-| `all_ms1_specs` | MS1 spectra searched for monoisotopic peak |
+| `all_ms1_specs` | MS1 spectra searched for monoisotopic peak (list of scan numbers) |
 | `MS1_Area` | Area under elution trace of MS1 monoisotopic trace |
-| `all_ms1_iso[n]vals` | Observed MS1 intensities for the [n]th isotopic peak (0 being the monoisotopic peak) |
+| `all_ms1_iso[n]vals` | Observed MS1 intensities for the [n]th isotopic peak (0 being the monoisotopic peak): its fit row's summed intensity at each scan (list) |
 | `last_aa` | Last amino acid in the peptide sequence |
 | `seq_len` | Length of the amino acid sequence |
 | `run_chan` | Sample run and channel concatenated |

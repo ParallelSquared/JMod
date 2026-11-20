@@ -237,9 +237,9 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
     monkeypatch.setattr("src.fdr_analysis.ms1_quant",
                         lambda *args, **kwargs: args[0].assign(plex_Area=[100.0, 0.0], plex_bg=[5.0, 5.0],
                                                                plex_snr=[20.0, 0.0], plexfitMS1_p=[0.9, 0.1],
-                                                               # no MS1 fit window (ms1_quant's fillna)
-                                                               plexfittrace_spec_all=[0, 0],
-                                                               plexfittrace_all=[0, 0], ms1_apex_scan=[0, 0]))
+                                                               # no MS1 fit window
+                                                               plexfittrace_spec_all=[None, None],
+                                                               plexfittrace_all=[None, None], ms1_apex_scan=[0, 0]))
 
     monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
                         lambda df, results_folder=None, **kwargs: df.assign(
@@ -410,8 +410,8 @@ def _ids(ms1_traces, apexes):
     return pd.DataFrame({
         "seq": [f"PEP{i}K" for i in range(len(ms1_traces))],
         "z": 2.0,
-        "plexfittrace_spec_all": [";".join(map(str, SCANS)) if t is not None else 0 for t in ms1_traces],
-        "plexfittrace_all": [";".join(map(str, t)) if t is not None else 0 for t in ms1_traces],
+        "plexfittrace_spec_all": [SCANS if t is not None else None for t in ms1_traces],
+        "plexfittrace_all": [np.asarray(t, dtype=float) if t is not None else None for t in ms1_traces],
         "ms1_apex_scan": apexes,
     })
 
@@ -444,7 +444,8 @@ def test_ms1_quant_fill_leaves_the_decoy_channels_qvalues_unscored():
                         "Qvalue": [0.001, np.nan, np.nan],
                         "BestChannel_Qvalue": [0.001, 0.001, np.nan],      # the last: decoy channel alone
                         "untag_prec_Qvalue": [0.001, 0.001, np.nan],
-                        "plex_Area": [5.0, np.nan, np.nan], "ms1_cor": [0.9, np.nan, 0.2]})
+                        "plex_Area": [5.0, np.nan, np.nan], "ms1_cor": [0.9, np.nan, 0.2],
+                        "plexfittrace_all": [np.array([1.0, 2.0]), np.nan, None]})
     out = fill_ms1_quant_gaps(dat)
     assert out["Qvalue"].isna().tolist() == [False, True, True]
     assert out["BestChannel_Qvalue"].isna().tolist() == [False, False, True]
@@ -452,6 +453,9 @@ def test_ms1_quant_fill_leaves_the_decoy_channels_qvalues_unscored():
     assert out["plex_Area"].tolist() == [5.0, 0.0, 0.0]                   # the rest as before
     assert out["ms1_cor"].tolist() == [0.9, 0.0, 0.2]
     assert not (out["BestChannel_Qvalue"] < 0.01).iloc[2]
+    # the per-scan arrays: None where there is no quant, not 0
+    assert out["plexfittrace_all"].iloc[0].tolist() == [1.0, 2.0]
+    assert out["plexfittrace_all"].iloc[1] is None and out["plexfittrace_all"].iloc[2] is None
 
 
 def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
@@ -483,7 +487,7 @@ def test_ms1_quality_pass_is_a_fixed_pearson_cut_on_quantified_ids():
 
 def test_full_parquet_keeps_types_and_stringifies_mixed_columns(tmp_path):
     """_write_full_parquet: list and numeric columns keep their types; a column mixing
-    numbers and strings (plexfittrace) is written as strings, nulls kept."""
+    numbers and strings is written as strings, nulls kept."""
     import numpy as np
     import pandas as pd
     import pyarrow as pa
@@ -494,7 +498,7 @@ def test_full_parquet_keeps_types_and_stringifies_mixed_columns(tmp_path):
         "coeff": [1.5, 2.0, np.nan],
         "is_decoy": [False, True, False],
         "frag_errors": [np.array([1.0, 2.0]), None, np.array([3.0])],
-        "plexfittrace": pd.Series([0, "235502.4;189496.8", np.nan], dtype=object),
+        "mixed": pd.Series([0, "235502.4;189496.8", np.nan], dtype=object),
     })
     path = tmp_path / "precursors.parquet"
     _write_full_parquet(df, str(path))
@@ -502,8 +506,8 @@ def test_full_parquet_keeps_types_and_stringifies_mixed_columns(tmp_path):
     assert t.schema.field("coeff").type == pa.float64()
     assert t.schema.field("is_decoy").type == pa.bool_()
     assert pa.types.is_list(t.schema.field("frag_errors").type)
-    assert t.schema.field("plexfittrace").type == pa.string()
-    assert t.column("plexfittrace").to_pylist() == ["0", "235502.4;189496.8", None]
+    assert t.schema.field("mixed").type == pa.string()
+    assert t.column("mixed").to_pylist() == ["0", "235502.4;189496.8", None]
     assert t.column("frag_errors").to_pylist() == [[1.0, 2.0], None, [3.0]]
 
 
@@ -559,8 +563,8 @@ def test_process_data_flags_and_filters_the_decoy_channel(tmp_path, monkeypatch)
                         lambda fdc, *args, **kwargs: fdc.assign(PredVal=0.9, Qvalue=0.001))
     monkeypatch.setattr("src.fdr_analysis.ms1_quant",
                         lambda *args, **kwargs: args[0].assign(plex_Area=100.0, plex_bg=5.0, plex_snr=20.0,
-                                                               plexfitMS1_p=0.9, plexfittrace_spec_all=0,
-                                                               plexfittrace_all=0, ms1_apex_scan=0))
+                                                               plexfitMS1_p=0.9, plexfittrace_spec_all=None,
+                                                               plexfittrace_all=None, ms1_apex_scan=0))
     # The channel FDR needs spectra; not what this tests
     monkeypatch.setattr("src.channel_fdr.run_channel_fdr", lambda *args, **kwargs: None)
     monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
@@ -592,7 +596,7 @@ def test_ms1_quant_leaves_the_decoy_channel_out_of_the_fit(monkeypatch):
 
     def fake_fit(spectra, fdc, dc, **kwargs):
         seen["channels"], seen["tag"] = fdc["channel"].tolist(), kwargs["tag"]
-        return [None] * 8
+        return pd.DataFrame(index=fdc.index)
 
     monkeypatch.setattr(fdr_analysis.ms1_mod, "ms1_cor_channels", fake_fit)
     monkeypatch.setattr(fdr_analysis, "process_ms1_quant", lambda dat, *args, **kwargs: dat)

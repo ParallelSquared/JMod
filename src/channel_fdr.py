@@ -64,7 +64,7 @@ _ID_COLUMNS = ["file_name", "seq", "untag_seq", "untag_prec", "protein", "channe
                "is_decoy_channel", "BestChannel_Qvalue"]
 
 # ms1_quant's outputs the MS1 features read: this channel's plex-fit coefficient
-# and the joint fit's quality at every scan of the set's fit window (";"-joined),
+# and the joint fit's quality at every scan of the set's fit window (arrays),
 # the window's scans, this channel's MS1 apex in it, and the MS1 scan of the MS2
 # apex.  Read, not written: the traces stay in all_precursors.parquet
 _MS1_COLUMNS = ["plexfittrace_all", "plexfittrace_ps_all", "plexfittrace_spec_all",
@@ -398,12 +398,11 @@ def _peptide_context(sites, n_tags, n_residues):
 
 
 def _trace(value):
-    """A ";"-joined ms1_quant trace as floats, or None where there is none:
-    ms1_quant merges its outputs in with fillna(0), so a row with no MS1 fit
-    window has a 0 there, not a trace."""
-    if not isinstance(value, str) or value == "":
+    """An ms1_quant per-scan trace as floats, or None where there is none (a
+    row with no MS1 fit window has None)."""
+    if value is None or not hasattr(value, "__len__") or len(value) == 0:
         return None
-    return np.array(value.split(";"), dtype=float)
+    return np.asarray(value, dtype=float)
 
 
 _MS1_FEATURES = ["ms1_trace_nonzero", "ms1_trace_frac_nonzero", "plexfit_gauss_r2", "plexfit_sigma",
@@ -417,7 +416,7 @@ def ms1_features(coeff_trace, ps_trace, spec_trace, ms1_apex_scan, ms1_spec_id,
     *coeff_trace* is the channel's coefficient at each scan of the set's MS1 fit
     window, *ps_trace* the joint fit's quality there (the same for every channel
     of the set), *spec_trace* the window's scans; the three are ms1_quant's
-    ";"-joined strings, or its 0 where it fitted no window.
+    per-scan arrays, or None where it fitted no window.
 
     - ms1_trace_nonzero: whether the channel has any positive coefficient
     - ms1_trace_frac_nonzero: the share of the window's points that are positive
@@ -434,8 +433,7 @@ def ms1_features(coeff_trace, ps_trace, spec_trace, ms1_apex_scan, ms1_spec_id,
     - ms1_ms2_apex_delta: this channel's MS1 apex minus the MS1 scan of its MS2
       apex, in scan numbers
 
-    All null where ms1_quant fitted no window: its 0s there are placeholders,
-    not an empty trace.  The shape features need min_points points and a
+    All null where ms1_quant fitted no window.  The shape features need min_points points and a
     positive coefficient somewhere.  The window is a contiguous run of the
     run's MS1 scans (ms1_cor_channels.minmax_spec_window, then a slice of it),
     so point i is cycle i.

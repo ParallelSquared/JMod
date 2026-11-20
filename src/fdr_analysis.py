@@ -40,6 +40,8 @@ import pandas as pd
 
 # from src.ms1_cor_channels import ms1_cor_channels
 import src.ms1_cor_channels as ms1_mod
+from src.ms1_cor_channels import (MS1_LIST_COLUMNS, MS1_SCALAR_COLUMNS, area, argmax_within_radius,
+                                  walk_to_local_max)
 
 #from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 from src.utils.misc_functions import unstring_floats
@@ -141,87 +143,6 @@ def _compute_med_frag_error_from_polars(fdc_list_cols):
     ).to_pandas()
 
 
-def area(x, apex_idx, area_radius=1):
-    """Sum of ``x`` over the apex and ``area_radius`` scans on either side"""
-    return np.sum(x[max(0, apex_idx-area_radius):apex_idx+area_radius+1])
-
-
-def argmax_within_radius(fitted, start_pos, radius=None, area_radius=1):
-    """Pick the index with the highest ``fitted`` value within
-    ``start_pos ± radius`` cycles, capped ``area_radius`` positions in from
-    either edge so ``area`` always has its full window. When ``radius`` is
-    ``None`` the cap is the full interior of ``fitted``.
-    """
-    n = len(fitted)
-    if n < 2 * area_radius + 1:
-        return start_pos
-    lo = area_radius
-    hi = n - 1 - area_radius
-    if radius is not None:
-        lo = max(lo, start_pos - radius)
-        hi = min(hi, start_pos + radius)
-    return lo + int(np.argmax(fitted[lo:hi + 1]))
-
-
-def walk_to_local_max(fitted, start_pos, apex_jitter=None, area_radius=1):
-    """Slide the apex from ``start_pos`` toward a local maximum, one cycle at a
-    time, while strictly increasing. Capped ``area_radius`` positions in from
-    either edge so the picked apex always has the full window for ``area`` to
-    sum. When ``apex_jitter`` is given, the walk additionally stops
-    once it has moved ``apex_jitter`` cycles from ``start_pos`` in either
-    direction.
-
-    Returns the new apex index. Identical to ``start_pos`` when the voted apex
-    is already a local maximum.
-    """
-    n = len(fitted)
-    if n < 2 * area_radius + 1:
-        return start_pos
-    lo_cap = area_radius
-    hi_cap = n - 1 - area_radius
-    if apex_jitter is not None:
-        lo_cap = max(lo_cap, start_pos - apex_jitter)
-        hi_cap = min(hi_cap, start_pos + apex_jitter)
-    i = start_pos
-    while True:
-        left_ok = (i - 1 >= lo_cap)
-        right_ok = (i + 1 <= hi_cap)
-        left_higher = left_ok and (fitted[i - 1] > fitted[i])
-        right_higher = right_ok and (fitted[i + 1] > fitted[i])
-        if not (left_higher or right_higher):
-            return i
-        if left_higher and right_higher:
-            # Voted apex is in a saddle — step toward the higher side.
-            i = i - 1 if fitted[i - 1] >= fitted[i + 1] else i + 1
-        elif left_higher:
-            i -= 1
-        else:
-            i += 1
-
-
-# MS1_quality: how far to trust each ID's MS1 quant (plex_Area).
-# gauss_r2_joint: one Gaussian elution peak fit to the ID's MS1 and MS2
-# coefficient traces together (shared center and sigma, each trace its own
-# amplitude and counted equally), by grid search over center and sigma; the mean
-# over the two traces of the uncentered R^2 (cos^2 of trace and Gaussian). The
-# MS1 trace is plexfittrace_all over the MS1 fit window, the MS2 trace the run's
-# MS2 coefficients of the same precursor on those MS1 scans (matched on
-# Ms1_spec_id, 0 where there is none).
-# MS1_quality = geometric mean of pct(PredVal, or ChannelScore when the channel
-# FDR was fitted), pct(plexfitMS1_p) and pct(plex_snr) -- the ID's confidence, the plex fit's Pearson at the voted
-# apex and the quant's signal over the fitted on-grid background -- percentiles within the
-# run's filtered IDs, a missing value counting as 0; x 0.01 when plex_Area == 0,
-# which puts IDs without an MS1 quant at the bottom.  gauss_r2_joint is not in
-# it: it is fit to 3 MS1 scans plus the MS2 coefficients on them, and is NaN
-# for ~12% of quantified IDs that have no MS2 coefficient on those scans.
-# MS1_quality_pass: MS1-quantified and plexfitMS1_p >= MS1_PASS_MIN_PEARSON.
-# A fixed cut on an absolute quantity, so it means the same in every run
-# (MS1_quality is made of within-run ranks, so any cut on it is a fixed
-# fraction).  plexfitMS1_p is plex-level, one value per group, so the cut
-# drops whole peptides and cannot favour a group's brighter channels; a cut on
-# plex_snr does (yeast slope 0.72 at plex_snr >= 1).  On the 200pg 5plex
-# plexfitMS1_p >= 0.5 removed 16% of the quantified IDs: yeast ratio slope 0.83
-# -> 0.88, human IQR 1.15 -> 1.05.
 SIGMA_GRID = np.geomspace(0.3, 6.0, 40)   # Gaussian sigmas tried, in MS1 scans
 SHIFT_GRID = np.linspace(-2.0, 2.0, 41)   # centers tried, in scans from the MS1 apex
 NO_MS1_QUANT_FACTOR = 0.01                # MS1_quality factor when plex_Area == 0
@@ -236,12 +157,12 @@ def gauss_r2_joint(ids, dc, timeplex=False):
     one in each. ``dc`` is the run's MS2 coefficients (polars: seq, z,
     Ms1_spec_id, coeff, and time_channel when ``timeplex``)."""
     out = np.full(len(ids), np.nan)
-    # IDs without an MS1 quant have 0 here (ms1_quant's fillna)
-    has_window = ids["plexfittrace_spec_all"].map(lambda s: isinstance(s, str) and s != "").to_numpy()
+    # IDs without an MS1 quant have None here
+    has_window = ids["plexfittrace_spec_all"].map(lambda s: isinstance(s, np.ndarray) and s.size > 0).to_numpy()
     if not has_window.any():
         return out
     df = ids[has_window]
-    lens = df["plexfittrace_spec_all"].str.count(";").to_numpy() + 1
+    lens = df["plexfittrace_spec_all"].map(len).to_numpy()
     width = int(lens.max())
     rows = np.repeat(np.arange(len(lens)), lens)
     pos = np.arange(lens.sum()) - np.repeat(np.cumsum(lens) - lens, lens)
@@ -249,7 +170,7 @@ def gauss_r2_joint(ids, dc, timeplex=False):
 
     def padded(col):
         values = np.full((len(lens), width), np.nan)
-        values[rows, pos] = np.array(";".join(df[col]).split(";"), dtype=float)
+        values[rows, pos] = np.concatenate(df[col].to_list()).astype(float)
         return values
 
     specs = padded("plexfittrace_spec_all")
@@ -373,13 +294,18 @@ def fill_ms1_quant_gaps(dat):
     """*dat* with every NaN 0, as ms1_quant has always left it, except in the
     q-values: a NaN there is "not scored" (the decoy channel's Qvalue, and the
     best channel's of a set where only the decoy channel was found), and a 0
-    would pass every threshold."""
-    return dat.fillna({c: 0 for c in dat.columns if c not in _UNFILLED_QVALUES})
+    would pass every threshold; and in the MS1 quant's per-scan arrays
+    (MS1_LIST_COLUMNS), where a row without a quant has None."""
+    skip = set(_UNFILLED_QVALUES) | set(MS1_LIST_COLUMNS)
+    dat = dat.fillna({c: 0 for c in dat.columns if c not in skip})
+    for c in MS1_LIST_COLUMNS:
+        if c in dat.columns:
+            dat[c] = dat[c].astype(object).where(dat[c].notna(), None)
+    return dat
 
 
 def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=False,vote_sigma=1.0):
     # X = fdc.iloc[:,6:-5]
-    fit_whole_MS1 = False
    
     logger.info("")
     logger.info("Performing MS1 Quantitation") 
@@ -402,11 +328,6 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=
     if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
         fdc = fdc[fdc["BestChannel_Qvalue"] < 0.01].reset_index(drop=True)
 
-    if timeplex:
-        all_keys = [(i,j,k) for i,j,k in zip(fdc.seq,fdc.z,fdc.time_channel)]
-    else:
-        all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
-
     if mass_tag:
         # The fit builds each set's channels from the tag, which carries the decoy
         # channel (run_jmod resolves it into config.tag): the real channels only
@@ -420,193 +341,35 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=
                             name="no_tag",
                             compositions=mass.Composition())
 
-    (
-    group_p_corrs,
-    group_ms1_traces,
-    group_ms2_traces,
-    group_iso_ratios,
-    group_keys,
-    group_fitted,
-    new_output_dict,
-    fake_fdc_dict
-    ) = ms1_mod.ms1_cor_channels(DIAspectra, 
-                                fdc, 
-                                dc, 
-                                mz_ppm=mz_ppm, 
-                                rt_tol = rt_tol,
-                                tag=tag_to_use,
-                                SILAC=SILAC,
-                                timeplex=timeplex,
-                                num_iso = config.num_iso_ms1,
-                                num_iso_r = config.num_iso_r,
-                                additional_scans = config.args.additional_scans,
-                                vote_sigma = vote_sigma,
-                                # Gate MS1 peaks to those co-mobile with the
-                                # precursor; inert when the data has no IM.
-                                im_tol = im_tol,
-                                fit_whole_MS1=fit_whole_MS1
-                                )
-    
-    dat = process_ms1_quant(dat,
-                            fdc,
-                            all_keys,
-                            group_p_corrs,
-                            group_ms1_traces,
-                            group_ms2_traces,
-                            group_iso_ratios,
-                            group_keys,
-                            group_fitted,
-                            new_output_dict,
-                            fake_fdc_dict,
-                            DIAspectra,
-                            fit_whole_MS1=fit_whole_MS1
-                            )
+    quant = ms1_mod.ms1_cor_channels(DIAspectra,
+                                     fdc,
+                                     dc,
+                                     mz_ppm=mz_ppm,
+                                     rt_tol=rt_tol,
+                                     tag=tag_to_use,
+                                     SILAC=SILAC,
+                                     timeplex=timeplex,
+                                     num_iso=config.num_iso_ms1,
+                                     num_iso_r=config.num_iso_r,
+                                     additional_scans=config.args.additional_scans,
+                                     vote_sigma=vote_sigma,
+                                     # Gate MS1 peaks to those co-mobile with the
+                                     # precursor; inert when the data has no IM.
+                                     im_tol=im_tol)
+
+    dat = process_ms1_quant(dat, fdc, quant)
 
     return dat
 
 
-
-def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group_ms2_traces, group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict, DIAspectra, fit_whole_MS1=False):
-    
-    ## create dictionary  that links keys to data so we can match the order of "fdc"
-    linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}
-    
-    p_corrs = [group_p_corrs[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-    ms1_traces = [group_ms1_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-    ms2_traces = [group_ms2_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-    iso_ratios = [group_iso_ratios[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-    extracted_keys = [group_keys[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-
-    if fit_whole_MS1 is False:
-        extracted_fitted = [group_fitted[linker_dict[key][0]][0][:,linker_dict[key][1]] for key in all_keys]
-        extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in all_keys]
-        extracted_bg = [group_fitted[linker_dict[key][0]][5] for key in all_keys]
-        extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in all_keys]
-
-    else:
-        ##TODO deal with fake_fdc_dict values make sure they get properly assigned
-        all_fdc_idxs = list(set(key for ms1_spec_idx in new_output_dict.keys() for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys()))
-        extracted_fitted_specs = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
-        extracted_fitted_p = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
-        for ms1_spec_idx in new_output_dict.keys():
-            for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys():
-                if key not in fake_fdc_dict.keys():
-                    extracted_fitted_specs[key].append(ms1_spec_idx)
-                    extracted_fitted_p[key].append(p_result(r_sq=np.nan, p=np.nan))
-
-        extracted_fitted = []
-        for fdc_idx in all_fdc_idxs:
-            if fdc_idx not in fake_fdc_dict.keys():
-                fdc_coeffs = []
-                for scan in extracted_fitted_specs[fdc_idx]:
-                    fdc_coeffs.append(new_output_dict[scan]["mapped_pred_coeffs"][fdc_idx])
-                
-                extracted_fitted.append(np.array(fdc_coeffs))
-    
-    
-    fdc["plexfitMS1"] = [np.max(i) for i in extracted_fitted]
-    # The plex fit's Pearson at the group's voted apex, the center of the fit
-    # window: one value for every channel of the group.
-    fdc["plexfitMS1_p"] = [j[len(i) // 2].statistic if type(j[len(i) // 2]) != float else 0 for i, j in zip(extracted_fitted, extracted_fitted_p)]
-
-    plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
-    plexfit_ps = [[i[k].statistic if type(i[k])!=float else 0 for k in j] for i,j in zip(extracted_fitted_p,plexfittrace_idxs)]
-    # fdc["plexfitMS1_new"] = [np.max(i) for i in plexfittrace]
-    fdc["plexfittrace"] = [";".join(map(str,i)) for i in plexfittrace] ###spec ids come from ms2_traces
-    fdc["plexfit_ps"] = [";".join(map(str,i)) for i in plexfit_ps]
-    
-    fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    # ms1_cor_channels fit a ±fit_radius window around the group's voted apex.
-    # The voted apex is at the center of fitted/specs. Each channel can drift
-    # away from that center monotonically (only while values are strictly
-    # increasing), capped plex_area_scan_radius positions in from the edge so
-    # area() always has its full window.
-    area_radius = int(config.args.plex_area_scan_radius)
-    plex_areas = []
-    plex_bgs = []
-    apex_scans = []
-    for idx in range(len(fdc)):
-        fitted = extracted_fitted[idx]
-        specs = extracted_fitted_specs[idx]
-        center = len(fitted) // 2
-        # Per-channel apex selection: optionally argmax-pick a seed within
-        # ±additional_scans of the group-voted center, then let the monotonic
-        # walk drift from that seed within ±apex_jitter. The two knobs are
-        # independent — apex_jitter still matters when free_apex is on, and
-        # vice versa.
-        if config.args.free_apex:
-            seed = argmax_within_radius(fitted, center, radius=int(config.args.additional_scans), area_radius=area_radius)
-        else:
-            seed = center
-        apex_pos = walk_to_local_max(fitted, seed, apex_jitter=int(config.args.apex_jitter), area_radius=area_radius)
-        plex_areas.append(area(fitted, apex_pos, area_radius))
-        plex_bgs.append(area(extracted_bg[idx], apex_pos, area_radius) if fit_whole_MS1 is False else np.nan)
-        apex_scans.append(int(specs[apex_pos]))
-    fdc["plex_Area"] = plex_areas
-    # The fitted on-grid background per isotope row over the same scans, and
-    # the quant's signal-to-background.
-    # TODO: the MS1 quant columns (plex_Area, plex_bg, plex_snr, MS1_quality)
-    # are computed here in fdr_analysis; ms1_quant, process_ms1_quant and the
-    # quality scores belong in a quant module.
-    fdc["plex_bg"] = plex_bgs
-    fdc["plex_snr"] = np.asarray(plex_areas) / np.maximum(np.asarray(plex_bgs, dtype=float), 1.0)
-    fdc["ms1_apex_scan"] = apex_scans
-       
-
-
-    
-    
-    fdc["ms1_cor"] = [i[0] for i in p_corrs]
-    
-    for idx in range(config.num_iso_r):
-        iso_num = idx+1
-        fdc[f"iso{iso_num}_cor"] = [i[iso_num] for i in p_corrs]
-    # fdc["iso1_cor"] = [i[1] for i in p_corrs]
-    # fdc["iso2_cor"] = [i[2] for i in p_corrs]
-    
-    # Rescale correlations from [-1,1] to [0,1] before computing product
-    _ms1_cor_scaled = (fdc["ms1_cor"] + 1) / 2
-    _iso1_cor_scaled = (fdc["iso1_cor"] + 1) / 2
-    _iso2_cor_scaled = (fdc["iso2_cor"] + 1) / 2
-    fdc["traceproduct"] = np.log10(_ms1_cor_scaled * _iso1_cor_scaled * _iso2_cor_scaled + 1e-6)
-    
-    # fdc["MS1_is1cor"] = [stats.pearsonr(list(i[0].values())[:10], list(i[1].values())[:10]).statistic for i in ms1_traces]
-    
-    
-    fdc["iso_cor"] = [i[0].statistic for i in iso_ratios]
-    
-    fdc["MS1_Int"] = [i[2][0] for i in iso_ratios]
-    fdc["MS1_Int"] = [np.linalg.lstsq(np.array(i[1])[:,np.newaxis], i[2], rcond=-1)[0][0] for i in iso_ratios]
-    
-    # X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
-    fdc["all_ms1_specs"] = [";".join(map(str,trace[0].keys())) for trace in ms1_traces]
-    for i in range(config.num_iso_ms1):
-        fdc[f"all_ms1_iso{i}vals"] = [";".join(map(str,trace[i].values())) for trace in ms1_traces]
-    # fdc["ms2_trace"] = [";".join(map(str,trace.values())) for trace in ms2_traces]
-    
-    fdc["MS1_Area"]=[auc(list(map(float,fdc.all_ms1_specs.iloc[idx].split(";"))),list(map(float,fdc.all_ms1_iso0vals.iloc[idx].split(";")))) for idx in range(len(fdc))]
-
-
-        # Define selected columns that we want to merge
-    selected_cols = [
-        "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps",
-        "plexfittrace_spec_all", "plexfittrace_all", "plexfittrace_ps_all",
-        "plex_Area", "plex_bg", "plex_snr", "ms1_apex_scan", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
-        "all_ms1_specs", "MS1_Area"
-    ] + [f"all_ms1_iso{i}vals" for i in range(config.num_iso_ms1)]
-    
-    # Ensure we only select columns that actually exist in fdc
-    existing_cols = [col for col in selected_cols if col in fdc.columns]
-    
-    # Perform the merge safely
-    dat = dat.merge(fdc[["untag_prec", "channel","silac_channel"] + existing_cols], how="left", on=["untag_prec", "channel","silac_channel"])
-    dat = fill_ms1_quant_gaps(dat)
-
-
-    return dat
+def process_ms1_quant(dat, fdc, quant):
+    """*dat* with the MS1 quant (ms1_cor_channels' frame, on fdc's rows) merged
+    in on (untag_prec, channel, silac_channel), its gaps filled (fill_ms1_quant_gaps).
+    TODO: the MS1 quant columns are merged here in fdr_analysis; ms1_quant and
+    the quality scores belong in a quant module."""
+    keys = ["untag_prec", "channel", "silac_channel"]
+    dat = dat.merge(pd.concat([fdc[keys], quant], axis=1), how="left", on=keys)
+    return fill_ms1_quant_gaps(dat)
 
 
 
@@ -1357,10 +1120,10 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
 def _write_full_parquet(df, path):
     """Write *df* to Parquet, column by column.
 
-    Each column keeps the type pyarrow infers (lists stay lists).  A column
-    pyarrow cannot type -- an object column mixing numbers with strings, such
-    as plexfittrace's ';'-joined values next to numeric placeholders -- is
-    written as strings, as the CSV this replaces wrote everything.
+    Each column keeps the type pyarrow infers (lists stay lists, as the MS1
+    quant's per-scan arrays do).  A column pyarrow cannot type -- an object
+    column mixing numbers with strings -- is written as strings, as the CSV
+    this replaces wrote everything.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq

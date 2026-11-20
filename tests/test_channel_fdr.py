@@ -21,6 +21,11 @@ from src.utils.frag_encoding import encode_frag_names
 from tests.models.spec_lib.test_decoy_differential import _entry
 
 
+def _T(values):
+    """An ms1_quant per-scan trace (an array) from "a;b;c"."""
+    return np.array(values.split(";"), dtype=float)
+
+
 def _codes(*names):
     return np.asarray(encode_frag_names(list(names)), dtype=np.int32)
 
@@ -211,8 +216,9 @@ def _ids(rows):
         "is_decoy_channel": [r[3] for r in rows], "Qvalue": 0.001,
         "BestChannel_Qvalue": [r[4] for r in rows], "PredVal": 0.9, "rt": 61.5,
         # ms1_quant's outputs: one MS1 fit window of five scans, a peak in the middle
-        "plexfittrace_all": "0;1;4;1;0", "plexfittrace_ps_all": "0.9;0.9;0.9;0.9;0.9",
-        "plexfittrace_spec_all": "10;31;52;73;94", "ms1_apex_scan": 52, "Ms1_spec_id": 52,
+        "plexfittrace_all": [_T("0;1;4;1;0") for _ in rows],
+        "plexfittrace_ps_all": [_T("0.9;0.9;0.9;0.9;0.9") for _ in rows],
+        "plexfittrace_spec_all": [_T("10;31;52;73;94") for _ in rows], "ms1_apex_scan": 52, "Ms1_spec_id": 52,
         "gauss_r2_joint": 0.8,
         "__fdc_idx": list(range(len(rows))),
     })
@@ -362,10 +368,10 @@ class TestMS1Features:
     symmetric trace 0, 1, 4, 1, 0 has its weighted mean at cycle 2 and weighted
     variance (1 + 0 + 1) / 6 = 1/3."""
 
-    peak, specs = "0;1;4;1;0", "10;31;52;73;94"
+    peak, specs = _T("0;1;4;1;0"), _T("10;31;52;73;94")
 
     def test_gaussian_moments_and_spread(self):
-        f = ms1_features(self.peak, "0.9;0.9;0.9;0.9;0.9", self.specs, 52, 31)
+        f = ms1_features(self.peak, _T("0.9;0.9;0.9;0.9;0.9"), self.specs, 52, 31)
         assert f["ms1_trace_nonzero"] == 1.0
         assert f["plexfit_sigma"] == pytest.approx(np.sqrt(1 / 3))
         assert f["ms1_trace_frac_nonzero"] == pytest.approx(3 / 5)
@@ -374,37 +380,37 @@ class TestMS1Features:
         assert f["ms1_ms2_apex_delta"] == 52 - 31
 
     def test_a_peak_fits_a_gaussian_better_than_noise(self):
-        peak = ms1_features("0.1;1;5;9;5;1;0.1", "1;1;1;1;1;1;1", "1;2;3;4;5;6;7", 4, 4)
-        noise = ms1_features("5;0;6;0;5;0;6", "1;1;1;1;1;1;1", "1;2;3;4;5;6;7", 4, 4)
+        peak = ms1_features(_T("0.1;1;5;9;5;1;0.1"), _T("1;1;1;1;1;1;1"), _T("1;2;3;4;5;6;7"), 4, 4)
+        noise = ms1_features(_T("5;0;6;0;5;0;6"), _T("1;1;1;1;1;1;1"), _T("1;2;3;4;5;6;7"), 4, 4)
         assert peak["plexfit_gauss_r2"] > 0.95
         assert noise["plexfit_gauss_r2"] < 0.2
 
     def test_fit_quality_at_the_apex_and_weighted_by_the_coefficients(self):
         # quality per scan 0.1 0.2 0.9 0.3 nan: the apex is scan 2; the weights are
         # the coefficients, the unknown fifth scan left out
-        f = ms1_features(self.peak, "0.1;0.2;0.9;0.3;nan", self.specs, 52, 52)
+        f = ms1_features(self.peak, _T("0.1;0.2;0.9;0.3;nan"), self.specs, 52, 52)
         assert f["plexfit_ps_at_apex"] == pytest.approx(0.9)
         assert f["plexfit_ps_weighted"] == pytest.approx((1 * 0.2 + 4 * 0.9 + 1 * 0.3) / 6)
 
     def test_no_fit_window_is_null_throughout(self):
-        """ms1_quant merges its outputs with fillna(0): a 0 is no window, not a
-        flat trace, and 0 - Ms1_spec_id is not an apex delta."""
-        f = ms1_features(0, 0, 0, 0, 52)
+        """A row with no MS1 fit window has None for its traces, and its apex
+        scan 0 - Ms1_spec_id is not an apex delta."""
+        f = ms1_features(None, None, None, 0, 52)
         assert all(np.isnan(v) for v in f.values())
 
     def test_too_few_points_or_a_flat_trace(self):
-        short = ms1_features("0;4;0", "1;1;1", "1;2;3", 2, 2)
-        flat = ms1_features("0;0;0;0;0", "1;1;1;1;1", self.specs, 52, 52)
+        short = ms1_features(_T("0;4;0"), _T("1;1;1"), _T("1;2;3"), 2, 2)
+        flat = ms1_features(_T("0;0;0;0;0"), _T("1;1;1;1;1"), self.specs, 52, 52)
         assert short["ms1_trace_nonzero"] == 1.0 and np.isnan(short["plexfit_sigma"])
         assert flat["ms1_trace_nonzero"] == 0.0 and np.isnan(flat["plexfit_gauss_r2"])
         assert short["ms1_trace_frac_nonzero"] == pytest.approx(1 / 3) and flat["ms1_trace_frac_nonzero"] == 0.0
         # one positive point has no spread to measure
-        assert np.isnan(ms1_features("0;0;4;0;0", "1;1;1;1;1", self.specs, 52, 52)["plexfit_trace_cv_nonzero"])
+        assert np.isnan(ms1_features(_T("0;0;4;0;0"), _T("1;1;1;1;1"), self.specs, 52, 52)["plexfit_trace_cv_nonzero"])
         assert short["ms1_ms2_apex_delta"] == 0 and flat["ms1_ms2_apex_delta"] == 0
 
     def test_fit_quality_must_cover_the_trace(self):
         with pytest.raises(ValueError, match="points for a trace of"):
-            ms1_features(self.peak, "0.9;0.9", self.specs, 52, 52)
+            ms1_features(self.peak, _T("0.9;0.9"), self.specs, 52, 52)
 
     def test_in_the_table_without_the_traces(self):
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
