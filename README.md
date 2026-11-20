@@ -374,7 +374,7 @@ JMod produces multiple output files. Each search writes them to a folder determi
 - ```JMod_config.json```: Configuration file for this current search
 - ```JMod_log.log```: Log of the search
 - ```filtered_IDs.parquet```: IDs filtered at 1% FDR with select columns
-- ```filtered_IDs.csv```: IDs filtered at 1% FDR with extended columns
+- ```filtered_precursors.parquet```: IDs filtered at 1% FDR with every column
 - ```Summary.txt```: Summary of precursor & protein identifications
 
 With `--mbr`, the first search of each file is in `first_pass/` and the match between runs library is in `mbr_library/`.
@@ -518,7 +518,7 @@ experiment_folder (-o, or 'Output Folder' entry in GUI)
 │   └── [experiment_plots].png
 └── [file]_results/
     ├── filtered_IDs.parquet
-    ├── filtered_IDs.csv
+    ├── filtered_precursors.parquet
     ├── Summary.txt
     ├── first_search/
     │   └── firstSearch.tsv
@@ -530,7 +530,7 @@ experiment_folder (-o, or 'Output Folder' entry in GUI)
     │       └── [feature].png
     ├── outputs/
     │   ├── all_IDs_filtered.parquet
-    │   ├── all_IDs.csv
+    │   ├── all_precursors.parquet
     │   ├── config.json
     │   ├── decoylibsearch_coeffs.parquet
     │   └── params.txt

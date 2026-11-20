@@ -66,7 +66,7 @@ _ID_COLUMNS = ["file_name", "seq", "untag_seq", "untag_prec", "protein", "channe
 # ms1_quant's outputs the MS1 features read: this channel's plex-fit coefficient
 # and the joint fit's quality at every scan of the set's fit window (";"-joined),
 # the window's scans, this channel's MS1 apex in it, and the MS1 scan of the MS2
-# apex.  Read, not written: the traces stay in all_IDs
+# apex.  Read, not written: the traces stay in all_precursors.parquet
 _MS1_COLUMNS = ["plexfittrace_all", "plexfittrace_ps_all", "plexfittrace_spec_all",
                 "ms1_apex_scan", "Ms1_spec_id"]
 # A Gaussian fit to fewer points than this says nothing
