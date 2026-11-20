@@ -577,3 +577,26 @@ def test_process_data_flags_and_filters_the_decoy_channel(tmp_path, monkeypatch)
     filtered = pd.read_parquet(tmp_path.parent / "filtered_IDs.parquet")
     assert filtered["channel"].tolist() == [0, 0]
     assert "is_decoy_channel" in pd.read_parquet(tmp_path.parent / "outputs/all_IDs_filtered.parquet").columns
+
+
+def test_ms1_quant_leaves_the_decoy_channel_out_of_the_fit(monkeypatch):
+    """The decoy channel is a null draw, not a sample: neither its rows nor its
+    channel go into the MS1 plex fit."""
+    from src import fdr_analysis
+    from src.mass_tags import available_tags
+    mass_tag = available_tags["PSMtag_5plex"].select_channels(["0", "4"]).with_decoy_channel()
+    dat = pd.DataFrame({"seq": [f"(PSMtag_5plex-{c})AAAA" for c in (0, 4, 8)], "z": 2.0,
+                        "channel": [0, 4, 8], "is_decoy": False, "is_decoy_channel": [False, False, True],
+                        "BestChannel_Qvalue": 0.001})
+    seen = {}
+
+    def fake_fit(spectra, fdc, dc, **kwargs):
+        seen["channels"], seen["tag"] = fdc["channel"].tolist(), kwargs["tag"]
+        return [None] * 8
+
+    monkeypatch.setattr(fdr_analysis.ms1_mod, "ms1_cor_channels", fake_fit)
+    monkeypatch.setattr(fdr_analysis, "process_ms1_quant", lambda dat, *args, **kwargs: dat)
+    fdr_analysis.ms1_quant(dat, None, None, mass_tag, None, None, 10e-6, 1.0, 0.01)
+    assert seen["channels"] == [0, 4]
+    assert seen["tag"].channel_names == ["0", "4"]
+

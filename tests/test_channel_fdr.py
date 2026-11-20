@@ -689,6 +689,15 @@ class TestWriteChannelFeatures:
                    "PredVal", "cosine_chan", "ChannelScore", "Channel_Qvalue"]
         assert model_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
 
+    def test_the_model_leaves_out_the_ms1_plex_fit_features(self):
+        """MS1 quant does not fit the decoy channel, so features made from its fit
+        (and their set comparisons) would mark the decoy channel by being missing."""
+        columns = ["PredVal", "cosine_chan", "plexfitMS1_p", "gauss_r2_joint", "ms1_cor", "plexfit_gauss_r2",
+                   "ms1_ms2_apex_delta", "plexfitMS1_p_from_max", "gauss_r2_joint_from_best",
+                   "cosine_chan_from_best"]
+        assert model_columns(pl.DataFrame({c: [1.0] for c in columns})) == [
+            "PredVal", "cosine_chan", "cosine_chan_from_best"]
+
     def test_the_plots_and_ecdfs_always(self, tmp_path):
         tag = available_tags["PSMtag_5plex"].with_decoy_channel()
         ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])

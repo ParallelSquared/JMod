@@ -384,7 +384,19 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=
     logger.info("")
     logger.info("Performing MS1 Quantitation") 
     
-    fdc = dat[~dat["is_decoy"]].copy().reset_index(drop=True)  #remove decoys
+    # Targets only, and not the decoy channel: it is a null draw for the channel
+    # FDR, not a sample, and fitted with the real channels it would share rows
+    # with the last of them and change their quant.  Its rows come back with no
+    # MS1 quant (process_ms1_quant's left merge, then fill_ms1_quant_gaps).
+    # TODO: the channel FDR reads its MS1 evidence (the plex-fit traces,
+    # plexfitMS1_p, gauss_r2_joint, ...) from this quant, so with the decoy
+    # channel left out it has none for the null and leaves those features out
+    # (channel_fdr._MS1_FIT_FEATURES).  The channel FDR should compute its own MS1
+    # evidence for every channel, decoy included, instead of reusing the quant's.
+    real = ~dat["is_decoy"]
+    if "is_decoy_channel" in dat.columns:
+        real &= ~dat["is_decoy_channel"].astype(bool)
+    fdc = dat[real].copy().reset_index(drop=True)
     
     #only quantify confident precs
     if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
@@ -396,7 +408,10 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=
         all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
 
     if mass_tag:
-        tag_to_use = mass_tag
+        # The fit builds each set's channels from the tag, which carries the decoy
+        # channel (run_jmod resolves it into config.tag): the real channels only
+        tag_to_use = (mass_tag if mass_tag.decoy_channel is None else
+                      mass_tag.select_channels([c for c in mass_tag.channel_names if c != mass_tag.decoy_channel]))
     else:
         tag_to_use = massTag(rules="nK",
                             base_mass=0.00,

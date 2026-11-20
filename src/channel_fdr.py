@@ -664,10 +664,24 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
         .hstack(pl.DataFrame(ms1, schema={name: pl.Float64 for name in _MS1_FEATURES})))
 
 
+# The features made from ms1_quant's plex fit.  MS1 quant leaves the decoy
+# channel out (fdr_analysis.ms1_quant), so the decoy channel has none of them and
+# every real channel does: fitted on, they would tell the model which rows are the
+# decoy channel by their presence alone.  Kept in the feature table, out of the
+# model.
+# TODO: give the channel FDR its own MS1 evidence for every channel, decoy
+# included, instead of reusing the quant's fit, and put these back.
+# With them, their comparisons within the set (add_set_comparisons).
+_MS1_FIT_FEATURES = _MS1_FEATURES + ["ms1_cor", "iso_cor", "traceproduct", "gauss_r2_joint", "plexfitMS1_p"]
+_MS1_FIT_COLUMNS = _MS1_FIT_FEATURES + [f"{f}_from_{end}" for f in _MS1_FIT_FEATURES
+                                        for end in ("max", "min", "best")]
+
+
 def model_columns(features):
     """The columns of the channel feature table the channel FDR is fitted on:
-    every one but the identity columns and its own outputs."""
-    return [c for c in features.columns if c not in _ID_COLUMNS + SCORE_COLUMNS]
+    every one but the identity columns, its own outputs and the MS1 plex-fit
+    features with their set comparisons (_MS1_FIT_COLUMNS)."""
+    return [c for c in features.columns if c not in _ID_COLUMNS + SCORE_COLUMNS + _MS1_FIT_COLUMNS]
 
 
 # ---------------------------------------------------------------------------
