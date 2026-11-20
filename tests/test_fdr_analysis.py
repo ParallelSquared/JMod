@@ -561,10 +561,8 @@ def test_process_data_flags_and_filters_the_decoy_channel(tmp_path, monkeypatch)
                         lambda *args, **kwargs: args[0].assign(plex_Area=100.0, plex_bg=5.0, plex_snr=20.0,
                                                                plexfitMS1_p=0.9, plexfittrace_spec_all=0,
                                                                plexfittrace_all=0, ms1_apex_scan=0))
-    # The channel FDR and the MS2 plex quant need spectra; not what this tests
+    # The channel FDR needs spectra; not what this tests
     monkeypatch.setattr("src.channel_fdr.run_channel_fdr", lambda *args, **kwargs: None)
-    monkeypatch.setattr("src.ms2_plex_quant.add_plex_coeff", lambda df, *args, **kwargs: df)
-    monkeypatch.setattr("src.ms2_plex_quant.ms2_quant_quality", lambda ids: np.zeros(len(ids)))
     monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
                         lambda df, results_folder=None, **kwargs: df.assign(Protein_Qvalue=1.0,
                                                                             protein="P12345"))
