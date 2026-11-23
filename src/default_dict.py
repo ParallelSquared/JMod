@@ -238,6 +238,21 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    # Normalization of plex_Area into plex_Area_norm (src/rt_normalization.py):
+    # run_rt (RT-dependent, each run a sample; one curve per run, channel
+    # ratios within a run unchanged) or channel_rt (RT-dependent, each channel
+    # of a run a sample; works on one file).  Not given: no normalization
+    'norm': {
+        'flags': ('--norm',),
+        'default': None,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': ['run_rt', 'channel_rt']
+    },
     # Worker processes for isotope generation (--iso).  Each is a separate
     # process with its own memory; capped at the number of CPUs.
     ##TODO fold into -t/--threads like the rest of JMod's parallelism; a separate

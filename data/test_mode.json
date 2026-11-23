@@ -39,6 +39,7 @@
     "free_apex": false,
     "additional_scans": 0,
     "plex_area_scan_radius": 1,
+    "norm": null,
     "iso_workers": 3,
     "channels": null,
     "plexDIA": false,

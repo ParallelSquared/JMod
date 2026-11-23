@@ -207,7 +207,7 @@ class TestGroupedResults:
         runs = {i: _write_run(tmp_path, name, rows) for i, name in enumerate("abc", start=1)}
         experiment_dir = tmp_path / "experiment"
         experiment_dir.mkdir()
-        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
+        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01, norm="run_rt")
         assert sorted(p.name for p in (experiment_dir / "experiment_results").iterdir()) == [
             "01_precursors_per_run.png", "02_proteins_per_run.png", "03_precursor_data_completeness.png",
             "04_protein_data_completeness.png", "05_intensity_per_run.png", "06_run_correlation.png",
@@ -220,7 +220,7 @@ class TestGroupedResults:
         runs = {1: _write_run(tmp_path, "a", rows, channels=[0, 4, 0])}
         experiment_dir = tmp_path / "experiment"
         experiment_dir.mkdir()
-        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
+        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01, norm="run_rt")
         # One run of two channels is two (run, channel) units, enough to compare
         names = {p.name for p in (experiment_dir / "experiment_results").iterdir()}
         assert {"00_channel_colors.png", "03_precursor_data_completeness.png"} <= names
@@ -229,7 +229,7 @@ class TestGroupedResults:
         runs = {1: _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001), ("DDD", True, 0.1, 0.9)])}
         experiment_dir = tmp_path / "experiment"
         experiment_dir.mkdir()
-        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
+        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01, norm="run_rt")
         assert sorted(p.name for p in (experiment_dir / "experiment_results").iterdir()) == [
             "01_precursors_per_run.png", "02_proteins_per_run.png", "05_intensity_per_run.png",
             "run_index.txt"]
@@ -239,7 +239,7 @@ class TestGroupedResults:
         experiment_dir = tmp_path / "experiment"
         (experiment_dir / "experiment_results").mkdir(parents=True)
         (experiment_dir / "combined_filtered_IDs.parquet").write_text("earlier experiment")
-        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01)
+        combine_runs(runs, str(experiment_dir), target_decoy_ratio=1.0, fdr_threshold=0.01, norm="run_rt")
         assert (experiment_dir / "combined_filtered_IDs.parquet").read_text() == "earlier experiment"
         # Both datestamped
         assert len(list(experiment_dir.glob("combined_filtered_IDs_*.parquet"))) == 1

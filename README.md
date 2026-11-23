@@ -234,6 +234,9 @@ Some commonly used search parameters are listed below. A more extensive list of 
 --plex_area_scan_radius
   Number of MS1 scans on either side of the apex summed for plex_Area.
   default = 1
+--norm
+  Normalization of plex_Area into plex_Area_norm in combined_filtered_IDs.parquet: run_rt (RT-dependent, each run is a sample) or channel_rt (RT-dependent, each channel of a run is a sample; works on one file). Not given: no normalization.
+  default = None
 --timeplex
   Use timePlex mode for search
   default = False
@@ -379,6 +382,15 @@ JMod produces multiple output files. Each search writes them to a folder determi
 
 With `--mbr`, the first search of each file is in `first_pass/` and the match between runs library is in `mbr_library/`.
 
+#### RT-dependent normalization
+
+With `--norm run_rt` or `--norm channel_rt`, `combined_filtered_IDs.parquet` has `plex_Area_norm` beside `plex_Area`, which is left unchanged. It corrects intensity bias that varies along the gradient within a run (e.g. spray instability), which one factor per run cannot. Reference precursors (observed in at least half of the samples, the 40% least variable across them) give each precursor's deviation from its reference level, and a running median of those deviations over RT is the correction. Only the shape over RT is corrected: each run or channel keeps its overall level, so loading differences, and samples that are empty, are left as they are.
+
+- `--norm run_rt`: each run is a sample. One correction per run, applied to all of its channels, so channel ratios within a run are unchanged.
+- `--norm channel_rt`: each channel of a run is a sample, so a single file can be normalized. One correction per channel.
+
+A run or channel with too few reference precursors is left empty (with a warning) rather than given a single factor. Timeplex is not normalized yet. The corrections are plotted in `experiment_results/` (`13_rt_norm_factors.png`, `14_rt_norm_deviation.png`). The method assumes that most precursors in any stretch of RT are unchanged between samples: a change concentrated in one RT region is partly removed.
+
 #### Channel-level FDR
 
 With a tag searching two or more channels, JMod also searches a decoy channel (`--decoy_channel`). Its IDs are false by construction, so they are the null for a model that scores each channel of a plex set (`ChannelScore`) and gives it a q-value of its own against the decoy channel (`Channel_Qvalue`). Proteins get one per channel the same way (`Protein_Channel_Qvalue`).
@@ -482,6 +494,7 @@ A comprehensive list of all output columns and descriptions for each one can be 
 | `plexfittrace_all` | All fitted MS1 coefficients (list) |
 | `plexfittrace_ps_all` | Correlation of theoretical MS1 isotope distribution with observed peaks for each fit (list; NaN where nothing was fitted) |
 | `plex_Area` | Area under fitted MS1 coefficients |
+| `plex_Area_norm` | plex_Area with its RT-dependent bias removed (`--norm`); in combined_filtered_IDs.parquet only |
 | `ms1_apex_scan` | MS1 apex scan selected for MS quantitation |
 | `ms1_cor` | Correlation between MS2 coefficients and monoisotopic trace |
 | `traceproduct` | Product of MS1xMS1 correlations |

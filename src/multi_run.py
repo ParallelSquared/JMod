@@ -29,6 +29,7 @@ from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from src.fdr_analysis import target_decoy_qvalues
 from src.logger import logger
+from src.rt_normalization import normalize_rt, running_median_curve, window_size
 from src.utils.parse_peptides import untag_sequences
 from src.utils.errors import JModError
 from src.utils.misc_functions import datestamped
@@ -58,6 +59,11 @@ _SURFACE_COLOR = "#ffffff"
 # light surface).  More channels than this fall back to _BLUE for all
 _CHANNEL_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
                    "#008300", "#4a3aa7", "#e34948", "#9b4dca"]
+# The palette's diverging pair, blue to red through its neutral grey, for the
+# RT normalization heatmaps (log2 factors either side of 0)
+_DIVERGING = ["#2a78d6", "#f0efec", "#e34948"]
+# The RT grid the RT normalization heatmaps are drawn on
+_RT_GRID_POINTS = 300
 
 
 class _Level(NamedTuple):
@@ -107,14 +113,15 @@ _ID_LEVELS = [
 _PRECURSOR_STACK_COLORS = [_BLUE_RAMP[1], _BLUE_RAMP[2], _BLUE_RAMP[4], _BLUE_RAMP[6]]
 
 
-def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_threshold):
+def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_threshold, norm):
     """Combine the completed runs into one table, and plot it.
 
     *completed_run_folders* maps each completed run's index to its results
     folder.  Writes combined_filtered_IDs.parquet in *experiment_dir*: every
     run's IDs that pass the run-level FDR, with a global q-value per untagged
-    precursor and per protein.  Nothing is filtered on the global q-values;
-    that is left to the user.  The plots and run_index.txt go in an
+    precursor and per protein, and plex_Area_norm, plex_Area normalized over
+    RT per *norm* (rt_normalization.normalize_rt; None leaves it out).
+    Nothing is filtered on the global q-values; that is left to the user.  The plots and run_index.txt go in an
     experiment_results folder beside it; those that compare runs only when
     there are enough runs to compare.  Each is datestamped if its name is
     taken.  Returns the combined table.
@@ -123,6 +130,7 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     logger.info(f"Combining the results of {len(completed_run_folders)} run(s)")
     df, untag_prec_global_qs, protein_global_qs = collect_results(completed_run_folders, target_decoy_ratio,
                                                                   fdr_threshold)
+    df, rt_curves = normalize_rt(df, norm, fdr_threshold)
 
     combined_path = datestamped(os.path.join(experiment_dir, "combined_filtered_IDs.parquet"))
     df.write_parquet(combined_path)
@@ -154,6 +162,9 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
         plot_lost_to_global_q(precursors, _PRECURSOR_LEVEL, units, fdr_threshold, results_dir)
         plot_lost_to_global_q(proteins, _PROTEIN_LEVEL, units, fdr_threshold, results_dir,
                               precursors_per_protein(df, fdr_threshold))
+    if rt_curves:
+        plot_rt_norm_factors(rt_curves, results_dir)
+        plot_rt_norm_deviation(rt_curves, results_dir)
     # Not made for now (10-12): summed intensity, and which run the best scores came from
     # plot_summed_intensity_per_run(precursors, units, results_dir)
     # if units.n_units >= 2:
@@ -773,6 +784,122 @@ def plot_run_correlation(precursors, units, results_dir):
     ax.set_ylabel(units.axis_name, color=_MUTED_COLOR)
     ax.set_title("Run-to-run correlation of log2 plex_Area", loc="center", color=_TEXT_COLOR)
     _save(fig, results_dir, "06_run_correlation.png")
+
+
+def plot_rt_norm_factors(curves, results_dir):
+    """The RT normalization's factor over RT, for each normalized unit: lines
+    above, and the same as a heatmap of units x RT below.  Each line is in its
+    channel's colour."""
+    rt_grid = _rt_grid(curves)
+    factors = np.array([np.interp(rt_grid, c.curve_rt, c.curve_factor) for c in curves])
+    colors = _curve_colors(curves)
+    labels = [_curve_label(c) for c in curves]
+
+    n = len(curves)
+    fig, (ax_lines, ax_map) = plt.subplots(2, 1, figsize=(9, 4 + min(8, 0.12 * n)), sharex=True,
+                                           gridspec_kw={"height_ratios": [1, max(1.0, min(3.0, n / 15))]})
+    for curve, color in zip(curves, colors):
+        ax_lines.plot(curve.curve_rt, curve.curve_factor, color=color, linewidth=1, alpha=0.7)
+    ax_lines.axhline(0, color=_MUTED_COLOR, linewidth=0.8)
+    ax_lines.spines[["top", "right"]].set_visible(False)
+    ax_lines.spines[["left", "bottom"]].set_color(_GRID_COLOR)
+    ax_lines.tick_params(colors=_MUTED_COLOR, length=0)
+    ax_lines.grid(axis="y", color=_GRID_COLOR, linewidth=0.8)
+    ax_lines.set_axisbelow(True)
+    ax_lines.set_ylabel("log2 factor", color=_MUTED_COLOR)
+    handles = _curve_legend_handles(curves)
+    if handles:
+        legend = ax_lines.legend(handles=handles, loc="upper left", bbox_to_anchor=(1, 1), frameon=False,
+                                 fontsize=9)
+        for text in legend.get_texts():
+            text.set_color(_MUTED_COLOR)
+    ax_lines.set_title("RT normalization factor", loc="center", color=_TEXT_COLOR)
+
+    _rt_heatmap(fig, ax_map, factors, rt_grid, labels, "log2 factor")
+    _save(fig, results_dir, "13_rt_norm_factors.png")
+
+
+def plot_rt_norm_deviation(curves, results_dir):
+    """The reference precursors' deviation from their reference level over RT,
+    smoothed as the normalization smooths it, before and after: heatmaps of
+    units x RT on one colour scale.  After, each unit should be flat over RT
+    (at its own level, which is kept)."""
+    rt_grid = _rt_grid(curves)
+    before, after = [], []
+    for c in curves:
+        k = window_size(len(c.ref_rt))
+        for rows, d in ((before, c.ref_d), (after, c.ref_d - c.ref_factor)):
+            curve_rt, curve = running_median_curve(c.ref_rt, d, k)
+            rows.append(np.interp(rt_grid, curve_rt, curve))
+    labels = [_curve_label(c) for c in curves]
+    scale = _symmetric_scale(np.concatenate([np.ravel(before), np.ravel(after)]))
+
+    n = len(curves)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 2.5 + min(10, 0.12 * n)), sharey=True)
+    for ax, values, title in ((axes[0], before, "Before"), (axes[1], after, "After")):
+        _rt_heatmap(fig, ax, np.array(values), rt_grid, labels, "log2 deviation", scale=scale,
+                    colorbar=ax is axes[1], ylabel=ax is axes[0])
+        ax.set_title(title, loc="center", color=_TEXT_COLOR)
+    fig.suptitle("Reference precursors' deviation over RT", color=_TEXT_COLOR)
+    _save(fig, results_dir, "14_rt_norm_deviation.png")
+
+
+def _rt_grid(curves):
+    lo = min(c.curve_rt[0] for c in curves)
+    hi = max(c.curve_rt[-1] for c in curves)
+    return np.linspace(lo, hi, _RT_GRID_POINTS)
+
+
+def _symmetric_scale(values):
+    # Either side of 0, to the 99th percentile so a few extreme cells don't wash out the rest
+    finite = np.abs(values[np.isfinite(values)])
+    return max(float(np.percentile(finite, 99)), 1e-6) if finite.size else 1.0
+
+
+def _rt_heatmap(fig, ax, values, rt_grid, labels, colorbar_label, scale=None, colorbar=True, ylabel=True):
+    """*values* (units x RT grid) as a heatmap on the diverging scale, 0 in the middle."""
+    scale = _symmetric_scale(values) if scale is None else scale
+    cmap = LinearSegmentedColormap.from_list("diverging", _DIVERGING)
+    image = ax.imshow(values, cmap=cmap, vmin=-scale, vmax=scale, aspect="auto", interpolation="nearest",
+                      extent=(rt_grid[0], rt_grid[-1], len(values) - 0.5, -0.5))
+    if colorbar:
+        bar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.02)
+        bar.set_label(colorbar_label, color=_MUTED_COLOR)
+        bar.ax.tick_params(colors=_MUTED_COLOR, length=0)
+        bar.outline.set_visible(False)
+    step = math.ceil(len(labels) / 30)  # at most about 30 labels
+    ticks = list(range(0, len(labels), step))
+    ax.set_yticks(ticks)
+    ax.set_yticklabels([labels[i] for i in ticks], fontsize=7)
+    ax.tick_params(colors=_MUTED_COLOR, length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.set_xlabel("RT", color=_MUTED_COLOR)
+    if ylabel:
+        ax.set_ylabel("Run, channel" if "·" in labels[0] else "Run", color=_MUTED_COLOR)
+
+
+def _curve_label(curve):
+    # e.g. "3", or "3·8" for run 3's channel 8, as the other plots label units
+    return "·".join(_Units._value(v) for v in curve.unit)
+
+
+def _curve_colors(curves):
+    """Each curve's colour: its innermost channel's, in the fixed channel order;
+    blue for all without channels, or with more channels than colours."""
+    innermost = sorted({c.unit[-1] for c in curves if len(c.unit) > 1})
+    if not innermost or len(innermost) > len(_CHANNEL_COLORS):
+        return [_BLUE] * len(curves)
+    colors = dict(zip(innermost, _CHANNEL_COLORS))
+    return [colors[c.unit[-1]] for c in curves]
+
+
+def _curve_legend_handles(curves):
+    innermost = sorted({c.unit[-1] for c in curves if len(c.unit) > 1})
+    if len(innermost) < 2 or len(innermost) > len(_CHANNEL_COLORS):
+        return []
+    return [Patch(facecolor=color, label=f"Channel {_Units._value(value)}")
+            for value, color in zip(innermost, _CHANNEL_COLORS)]
 
 
 def plot_library_size_by_run(targets, fdr_threshold, qvalue_column, mbr_dir):

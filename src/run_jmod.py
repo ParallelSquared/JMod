@@ -158,7 +158,8 @@ def _combine(completed_run_folders, parent_dir, target_decoy_ratio):
     """combine_runs over the completed runs, in *parent_dir*.  Returns the
     combined table, or None when no run completed."""
     if len(completed_run_folders) >= 1:
-        return combine_runs(completed_run_folders, parent_dir, target_decoy_ratio, config.fdr_threshold)
+        return combine_runs(completed_run_folders, parent_dir, target_decoy_ratio, config.fdr_threshold,
+                            config.args.norm)
     return None
 
 
@@ -272,7 +273,8 @@ def run_combine_results(experiment_dir):
     set_log_filepath(datestamped(os.path.join(experiment_dir, "JMod_log.log")))
     logger.info(f"Combining the results of {os.path.abspath(experiment_dir)}", extra={"highlight": True})
     logger.info(f"{len(run_folders)} completed run(s)")
-    combine_runs(run_folders, experiment_dir, _library_target_decoy_ratio(run_folders), config.fdr_threshold)
+    combine_runs(run_folders, experiment_dir, _library_target_decoy_ratio(run_folders), config.fdr_threshold,
+                 config.args.norm)
     logger.info("")
     logger.info(f"Output at {os.path.abspath(experiment_dir)}", extra={"highlight": True})
 
@@ -335,7 +337,7 @@ def _experiment_ids(experiment_dir, run_folders):
         return pl.read_parquet(combined_path)
     logger.info("No combined IDs yet: combining the runs first")
     return combine_runs(run_folders, experiment_dir, _library_target_decoy_ratio(run_folders),
-                        config.fdr_threshold)
+                        config.fdr_threshold, config.args.norm)
 
 
 def _library_target_decoy_ratio(run_folders):
