@@ -324,6 +324,22 @@ class TestFitPlexScoring:
         assert (q[~is_decoy] <= 0.01).mean() > 0.5
         assert len(importance) > 0
 
+    def test_fitted_with_its_own_xgboost_parameters(self, monkeypatch):
+        # depth 6, over the precursor scoring's defaults
+        from src import fdr_analysis
+        made = []
+        real = fdr_analysis.score_model
+
+        def recording(model_type, **kwargs):
+            made.append(kwargs)
+            return real(model_type, **kwargs)
+
+        monkeypatch.setattr(fdr_analysis, "score_model", recording)
+        features = set_features(_separable_sets())
+        fit_plex_scoring(features, model_columns(features), 1.0, model_type="xg", n_iterations=2)
+        assert len(made) == 2
+        assert all(kwargs.get("xgb_params", {}).get("max_depth") == 6 for kwargs in made)
+
     def test_too_few_decoy_sets_fits_nothing(self, app_log):
         features = set_features(_separable_sets(n_targets=50, n_decoys=MIN_DECOYS - 1))
         assert fit_plex_scoring(features, model_columns(features), 1.0) is None

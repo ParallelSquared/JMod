@@ -121,6 +121,11 @@ FRAGMENT_MIN_COMMON = 3
 # Too few decoy sets and the q-values are too coarse to mean much
 MIN_DECOYS = 100
 N_ITERATIONS = 3
+# The model's XGBoost parameters, over score_model's (the precursor scoring's,
+# which keeps max_depth 10).  At 500 rounds, depths 6, 8 and 10 gave the same
+# IDs at matched entrapment FDP on a 9-plex nPOP run (56k sets), within +-1.5%:
+# the shallower trees, which overfit a small run less
+XGB_PARAMS = {"max_depth": 6}
 TRAIN_Q = 0.01          # a target set this confident is a positive for the refit
 PEP_CUT = 0.90          # a target set this decoy-like is relabelled a decoy for it
 # Models that take a missing value as it is; a set of one channel has no spread
@@ -621,7 +626,7 @@ def fit_plex_scoring(features, columns, target_decoy_ratio, model_type=None,
     score = q = model = None
     for iteration in range(n_iterations):
         logger.info(f"  scoring iteration {iteration + 1}/{n_iterations}")
-        fitter = score_model(model_type)
+        fitter = score_model(model_type, xgb_params=XGB_PARAMS)
         if iteration == 0:
             score = fitter.run_model(X, y, groups=groups)
         else:
