@@ -118,7 +118,10 @@ DECOY_CHANNEL_COMPARED = ["hyperscore", "gof_stats", "scribe_scores", "n_scans",
 # both matched
 FRAGMENT_MIN_COMMON = 3
 
-# Too few decoy sets and the q-values are too coarse to mean much
+# Below this many decoy sets the q-values are coarse (the smallest is 1 / the
+# sets ahead of the first decoy): still fitted, as the precursor scoring is
+# whatever its decoys, but with a warning.  With no decoy set or no target one
+# there is nothing to fit
 MIN_DECOYS = 100
 N_ITERATIONS = 3
 # The model's XGBoost parameters, over score_model's (the precursor scoring's,
@@ -604,15 +607,20 @@ def fit_plex_scoring(features, columns, target_decoy_ratio, model_type=None,
                      n_iterations=N_ITERATIONS, train_q=TRAIN_Q, pep_cut=PEP_CUT):
     """PlexSetScore and PlexSet_Qvalue for every row of *features* (set_features'
     table), fitted on its *columns*.  Returns (score, q-values, feature
-    importance), aligned with the rows; or None, with a warning, when there are
-    too few decoy sets or no target ones."""
+    importance), aligned with the rows; or None, with a warning, when there is
+    no decoy set or no target one, fewer sets than fdr_analysis.CV_FOLDS, or no
+    feature with information.  Fewer than MIN_DECOYS decoy sets are fitted,
+    with a warning that the q-values are coarse."""
     from src.channel_fdr import feature_importance, model_matrix
-    from src.fdr_analysis import estimate_pep, score_model, target_decoy_qvalues
+    from src.fdr_analysis import CV_FOLDS, estimate_pep, score_model, target_decoy_qvalues
     is_decoy = features["is_decoy"].to_numpy().astype(bool)
-    if is_decoy.sum() < MIN_DECOYS or is_decoy.all():
-        logger.warning(f"Plex-set scoring: {int(is_decoy.sum())} decoy and {int((~is_decoy).sum())} target "
-                       f"plex sets; needs at least {MIN_DECOYS} decoy ones and a target. No PlexSet_Qvalue")
+    n_decoys, n_targets = int(is_decoy.sum()), int((~is_decoy).sum())
+    if n_decoys == 0 or n_targets == 0:
+        logger.warning(f"Plex-set scoring: no {'decoy' if n_decoys == 0 else 'target'} plex sets. "
+                       f"No PlexSet_Qvalue")
         return None
+    if n_decoys < MIN_DECOYS:
+        logger.warning(f"Plex-set scoring: only {n_decoys} decoy plex sets; PlexSet_Qvalue is coarse")
     groups = features[GROUP_COLUMN].to_numpy()
     X, dead = model_matrix(features, columns)
     model_type = model_type or config.score_model
@@ -621,6 +629,11 @@ def fit_plex_scoring(features, columns, target_decoy_ratio, model_type=None,
         model_type = "xg"
     left_out = f" ({len(dead)} left out, no information on this run: {', '.join(dead)})" if dead else ""
     logger.info(f"{X.shape[1]} plex-set features{left_out}")
+    if features.height < CV_FOLDS or X.shape[1] == 0:
+        problem = (f"only {features.height} plex sets" if features.height < CV_FOLDS
+                   else "no feature varies")
+        logger.warning(f"Plex-set scoring: {problem}. No PlexSet_Qvalue")
+        return None
     y = (~is_decoy).astype(int)
 
     score = q = model = None

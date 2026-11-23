@@ -872,9 +872,18 @@ class TestFit:
         assert fits[:5] == [(6, 0.1, 0.8, 100)] * 5                             # the rest of the parameters as before
         assert fits[5:] == [(6, 0.1, 0.8, 50)] * 10
 
-    def test_too_few_decoys_is_no_fit(self):
+    def test_too_few_decoys_still_fits_with_a_warning(self, app_log):
+        # as the precursor scoring does: coarse q-values, not none
         features = _fit_run(n_peptides=MIN_DECOYS - 1)
+        score, q, importance = fit_channel_fdr(features, ["signal", "noise"])
+        real = ~features["is_decoy_channel"].to_numpy()
+        assert np.isfinite(q[real]).all() and np.isnan(q[~real]).all()
+        assert any("Channel_Qvalue is coarse" in r.getMessage() for r in app_log)
+
+    def test_no_decoy_channel_rows_is_no_fit(self, app_log):
+        features = _fit_run().filter(~pl.col("is_decoy_channel"))
         assert fit_channel_fdr(features, ["signal", "noise"]) is None
+        assert any("No Channel_Qvalue" in r.getMessage() for r in app_log)
 
 
 class TestProteinChannelQvalues:

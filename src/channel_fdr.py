@@ -716,8 +716,10 @@ XGB_ROUNDS = 100        # the first fit's boosting rounds
 XGB_REFIT_ROUNDS = 50   # each refit's (iterations 2 and on)
 TRAIN_Q = 0.01          # a real row this confident is a positive for the refit
 PEP_CUT = 0.90          # a real row this decoy-like is relabelled a decoy for it
-# Below this many decoy-channel rows the q-values are too coarse to mean much
-# (the smallest is 1 / n), so there is no channel FDR
+# Below this many decoy-channel rows the q-values are coarse (the smallest is
+# 1 / n): still fitted, as the precursor scoring is whatever its decoys, but
+# with a warning.  With no decoy-channel row or no real one there is nothing to
+# fit
 MIN_DECOYS = 100
 # The CV groups: a peptide's channels, and its charges, in one fold
 GROUP_COLUMN = "untag_seq"
@@ -793,16 +795,20 @@ def fit_channel_fdr(features, columns, n_iterations=N_ITERATIONS, train_q=TRAIN_
 
     Returns (score, q-values, feature importance), the first two aligned with
     the rows, the q-values NaN for the decoy channel's rows; or None, with a
-    warning, when there are too few decoy-channel rows or no real ones.
+    warning, when there is no decoy-channel row or no real one, fewer rows
+    than fdr_analysis.CV_FOLDS, or no feature with information.  Fewer than MIN_DECOYS
+    decoy-channel rows are fitted, with a warning that the q-values are coarse.
     """
-    from src.fdr_analysis import score_model      # here, so the plots' worker processes need not load the models
+    from src.fdr_analysis import CV_FOLDS, score_model   # here, so the plots' worker processes need not load the models
     is_decoy = features["is_decoy_channel"].to_numpy().astype(bool)
     channel = features["channel"].to_numpy().astype(float)
-    if is_decoy.sum() < MIN_DECOYS or is_decoy.all():
-        logger.warning(f"Channel FDR: {int(is_decoy.sum())} decoy-channel and {int((~is_decoy).sum())} "
-                       f"real-channel precursors scored; needs at least {MIN_DECOYS} decoy-channel ones "
-                       f"and a real one. No Channel_Qvalue")
+    n_decoys, n_real = int(is_decoy.sum()), int((~is_decoy).sum())
+    if n_decoys == 0 or n_real == 0:
+        logger.warning(f"Channel FDR: no {'decoy-channel' if n_decoys == 0 else 'real-channel'} precursors. "
+                       f"No Channel_Qvalue")
         return None
+    if n_decoys < MIN_DECOYS:
+        logger.warning(f"Channel FDR: only {n_decoys} decoy-channel precursors; Channel_Qvalue is coarse")
     groups = features[GROUP_COLUMN].to_numpy()
     if pd.isna(groups).any():
         raise ValueError(f"Channel FDR: null {GROUP_COLUMN} in the channel features")
@@ -814,6 +820,10 @@ def fit_channel_fdr(features, columns, n_iterations=N_ITERATIONS, train_q=TRAIN_
         model_type = "xg"
     left_out = f" ({len(dead)} left out, no information on this run: {', '.join(dead)})" if dead else ""
     logger.info(f"{X.shape[1]} features{left_out}")
+    if len(features) < CV_FOLDS or X.shape[1] == 0:
+        problem = f"only {len(features)} precursors" if len(features) < CV_FOLDS else "no feature varies"
+        logger.warning(f"Channel FDR: {problem}. No Channel_Qvalue")
+        return None
     y = (~is_decoy).astype(int)
 
     # Logged as score_precursors logs its iterations; run_model logs the first's samples

@@ -413,6 +413,16 @@ class model_instance():
         return output
         
         
+# score_model's cross-validation folds: fewer rows than this cannot be split
+# into them, so nothing can be scored
+CV_FOLDS = 5
+# Below this many decoys the q-values are coarse (the smallest is 1 / the rows
+# ahead of the first decoy): still scored, with a warning.  The channel FDR and
+# the plex-set scoring keep their own (channel_fdr.MIN_DECOYS,
+# plex_scoring.MIN_DECOYS)
+MIN_DECOYS = 100
+
+
 class score_model():
     """*xgb_params* override the XGBoost parameters below; *xgb_rounds* is
     run_model's boosting rounds and *xgb_refit_rounds* run_model_filtered's
@@ -759,6 +769,17 @@ def score_precursors(fdc, target_decoy_ratio, model_type="rf",fdr_t=0.01, folder
     is_decoy = fdc["is_decoy"].to_numpy(bool)
     real = (~fdc["is_decoy_channel"].to_numpy(bool) if "is_decoy_channel" in fdc.columns
             else np.ones(len(fdc), bool))
+    # As the channel FDR and the plex-set scoring check theirs, except that
+    # everything downstream needs a Qvalue: too few rows to cross-validate is an
+    # error, and without decoys (or targets) it is still scored, with a warning
+    n_decoys, n_targets = int((is_decoy & real).sum()), int((~is_decoy & real).sum())
+    if n_decoys + n_targets < CV_FOLDS:
+        raise JModError(f"Precursor scoring: only {n_decoys + n_targets} precursors. Too few to score")
+    if n_decoys == 0 or n_targets == 0:
+        logger.warning(f"Precursor scoring: no {'decoy' if n_decoys == 0 else 'target'} precursors; "
+                       f"Qvalue is not an FDR estimate")
+    elif n_decoys < MIN_DECOYS:
+        logger.warning(f"Precursor scoring: only {n_decoys} decoy precursors; Qvalue is coarse")
 
     X = fdc.drop([c for c in NOT_FEATURES if c in fdc.columns], axis=1)
     # Internal bookkeeping columns are never features. __fdc_idx in particular is

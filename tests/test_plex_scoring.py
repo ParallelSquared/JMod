@@ -340,8 +340,15 @@ class TestFitPlexScoring:
         assert len(made) == 2
         assert all(kwargs.get("xgb_params", {}).get("max_depth") == 6 for kwargs in made)
 
-    def test_too_few_decoy_sets_fits_nothing(self, app_log):
+    def test_too_few_decoy_sets_still_fits_with_a_warning(self, app_log):
+        # as the precursor scoring does: coarse q-values, not none
         features = set_features(_separable_sets(n_targets=50, n_decoys=MIN_DECOYS - 1))
+        score, q, importance = fit_plex_scoring(features, model_columns(features), 1.0, n_iterations=1)
+        assert np.isfinite(score).all() and np.isfinite(q).all()
+        assert any("PlexSet_Qvalue is coarse" in r.getMessage() for r in app_log)
+
+    def test_no_decoy_sets_fits_nothing(self, app_log):
+        features = set_features(_separable_sets(n_targets=50, n_decoys=0))
         assert fit_plex_scoring(features, model_columns(features), 1.0) is None
         assert any("No PlexSet_Qvalue" in r.getMessage() for r in app_log)
 

@@ -102,6 +102,32 @@ def test_score_precursors_minimal_fixed(tmp_path):
     assert len(out) == len(fdc)
 
 
+def _precursors(n, is_decoy):
+    rng = np.random.default_rng(0)
+    return pd.DataFrame({"is_decoy": is_decoy, "stripped_seq": [f"SEQ{i}" for i in range(n)],
+                         "rt_error": rng.uniform(0.0, 1.0, n), "mz_error": rng.uniform(0.0, 0.1, n),
+                         "feature1": rng.uniform(1.0, 5.0, n) + np.where(is_decoy, 0.0, 1.0)})
+
+
+def test_score_precursors_warns_with_few_decoys_and_still_scores(app_log):
+    # as the channel FDR and the plex-set scoring do: coarse q-values, with a warning
+    out = score_precursors(_precursors(60, np.array([False, True] * 30)), model_type="xg", target_decoy_ratio=1.0)
+    assert out["Qvalue"].notna().all()
+    assert any("only 30 decoy precursors; Qvalue is coarse" in r.getMessage() for r in app_log)
+
+
+def test_score_precursors_without_decoys_still_scores_but_warns(app_log):
+    # everything downstream needs a Qvalue, so it is not left out as the other models' are
+    out = score_precursors(_precursors(30, np.zeros(30, bool)), model_type="xg", target_decoy_ratio=1.0)
+    assert out["Qvalue"].notna().all()
+    assert any("no decoy precursors; Qvalue is not an FDR estimate" in r.getMessage() for r in app_log)
+
+
+def test_score_precursors_too_few_to_cross_validate_is_an_error():
+    with pytest.raises(JModError, match="only 4 precursors"):
+        score_precursors(_precursors(4, np.array([False, True] * 2)), model_type="xg", target_decoy_ratio=1.0)
+
+
 def test_score_precursors_scores_the_decoy_channel_but_never_trains_on_or_counts_it(monkeypatch):
     import xgboost
     np.random.seed(0)
