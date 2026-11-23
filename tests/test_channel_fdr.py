@@ -711,6 +711,16 @@ class TestWriteChannelFeatures:
         _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01)
         assert calls[1][3:] == ("all", 0.01)                           # the default: one panel
 
+    def test_the_score_plot_whatever_the_plots_option(self, tmp_path, monkeypatch):
+        import src.channel_fdr_plots
+        calls = []
+        monkeypatch.setattr(src.channel_fdr_plots, "plot_channel_scores",
+                            lambda features, folder, split, fdr_threshold: calls.append((folder, split, fdr_threshold)))
+        tag = available_tags["PSMtag_5plex"].with_decoy_channel()
+        ids = _ids([("(PSMtag_5plex-0)PEPTIDER", 0, False, False, 0.001)])
+        _write(ids, _list_cols([(["b2_1"], [1.0])]), _store(), tag, str(tmp_path), 0.01, plots="off")
+        assert calls == [(os.path.join(str(tmp_path), FEATURE_FOLDER), "off", 0.01)]
+
     def test_feature_importance_round_trips_through_its_file(self, tmp_path):
         write_feature_importance(_IMPORTANCE, str(tmp_path))
         back = read_feature_importance(str(tmp_path))

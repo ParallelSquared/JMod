@@ -848,6 +848,9 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
         and the feature importance (channel_fdr_plots.plot_channel_fdr); with
         *plots* an amino acid ("K"), every plot but the importance split into
         the peptides ending in it and the rest; none with "off"
+      - always, "off" or not, once fitted: logit(ChannelScore) per channel,
+        with each channel's score cutoff at *fdr_threshold*
+        (channel_fdr_plots.plot_channel_scores)
 
     Returns the table, for channel_qvalues to put Channel_Qvalue onto the run's
     IDs.  Without a decoy channel there is nothing to measure the channels
@@ -878,9 +881,12 @@ def run_channel_fdr(ids, list_cols, scan_coeffs, spectra, library, mass_tag, res
             write_feature_importance(importance, folder)
     features.write_parquet(os.path.join(folder, FEATURE_FILE))
     if features.height:
-        from src.channel_fdr_plots import plot_channel_fdr
+        from src.channel_fdr_plots import plot_channel_fdr, plot_channel_scores
         plot_channel_fdr(features, folder, importance=importance, split=plots,
                          fdr_threshold=fdr_threshold, workers=workers)
+        # always, whatever *plots* says: one figure, and the quickest look at
+        # where each channel's cutoff sits
+        plot_channel_scores(features, folder, split=plots, fdr_threshold=fdr_threshold)
     return features
 
 

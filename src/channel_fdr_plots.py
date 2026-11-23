@@ -8,7 +8,9 @@ that is there from one that is not.  --channel_fdr_plots "all" (the default)
 plots every precursor together; an amino acid, such as "K", the peptides
 ending in it and the rest side by side, in every plot but the importance --
 under a K-tagging tag every y ion of a K-ending peptide carries the tag, so
-the two behave differently; "off" makes none of them.  For a written feature
+the two behave differently; "off" makes none of them.  Whatever it says, a
+fitted run always gets logit(ChannelScore) per channel with each channel's
+score cutoff at the FDR threshold (plot_channel_scores).  For a written feature
 table on its own: scripts/channel_fdr_plots.py.
 """
 import multiprocessing
@@ -398,6 +400,112 @@ def plot_ids_retained(features, folder, split="all", fdr_threshold=0.01):
     fig.suptitle(f"IDs retained at Channel_Qvalue <= {fdr_threshold:g}")
     fig.tight_layout()
     _save(fig, os.path.join(folder, RETAINED_PLOT))
+
+
+SCORE_PLOT = "channel_score_by_channel.png"
+# logit(ChannelScore) is drawn with the score clipped to [SCORE_CLIP,
+# 1 - SCORE_CLIP]: it saturates near 0 and 1, and the logit of those runs off
+SCORE_CLIP = 1e-4
+# A channel with fewer scores than this gets its median but no violin
+MIN_VIOLIN = 20
+
+
+def score_cutoffs(features, fdr_threshold):
+    """{real channel: its lowest ChannelScore at Channel_Qvalue <=
+    *fdr_threshold*, None if no row gets there}, in channel order: the score
+    the channel's q-values cut at."""
+    rows = features.filter(~pl.col("is_decoy_channel"))
+    passed = (rows.filter(pl.col("Channel_Qvalue") <= fdr_threshold)
+              .group_by("channel").agg(pl.col("ChannelScore").min()))
+    lowest = dict(passed.iter_rows())
+    return {channel: lowest.get(channel) for channel in sorted(rows["channel"].unique().to_list())}
+
+
+def _logit(p):
+    p = np.clip(np.asarray(p, dtype=float), SCORE_CLIP, 1 - SCORE_CLIP)
+    return np.log(p / (1 - p))
+
+
+def _violin(ax, values, x, colour, side=None):
+    """A violin of *values* at *x*, its median as a white line; with *side*
+    "left" or "right", only that half (two halves make a split violin)."""
+    if values.size >= MIN_VIOLIN:
+        body = ax.violinplot(values, positions=[x], widths=0.8, showextrema=False, bw_method=0.15)["bodies"][0]
+        if side is not None:
+            verts = body.get_paths()[0].vertices
+            verts[:, 0] = np.minimum(verts[:, 0], x) if side == "left" else np.maximum(verts[:, 0], x)
+        body.set_facecolor(colour)
+        body.set_edgecolor("none")
+        body.set_alpha(0.9)
+    if values.size:
+        lo, hi = {None: (x - 0.18, x + 0.18), "left": (x - 0.25, x), "right": (x, x + 0.25)}[side]
+        ax.plot([lo, hi], [np.median(values)] * 2, color="white", linewidth=1.6, solid_capstyle="butt")
+
+
+def _passing(rows, channel, fdr_threshold):
+    """(rows of *channel* at Channel_Qvalue <= *fdr_threshold*, its rows with a score)."""
+    rows = rows.filter((pl.col("channel") == channel) & pl.col("ChannelScore").is_not_null())
+    return int((rows["Channel_Qvalue"] <= fdr_threshold).sum()), rows.height
+
+
+def plot_channel_scores(features, folder, split="all", fdr_threshold=0.01):
+    """A violin per channel of logit(ChannelScore), the decoy channel in grey,
+    with each channel's median (white) and, for a real channel, the score its
+    Channel_Qvalue cuts at at *fdr_threshold* (black; score_cutoffs), and its
+    rows passing out of those scored above it.  Where the cutoff sits against
+    the scores shows how much the decoy channel holds each channel back.
+    *split*: an amino acid ("K"): split violins, the peptides ending in it on
+    the left (the channel's colour) and the rest on the right (a lighter shade
+    of it), each half with its own median and counts, the cutoff across both
+    (one per channel: the q-values are the channel's); anything else, whole
+    violins.  Into *folder*/SCORE_PLOT; nothing if there are no scores (no fit)."""
+    if "ChannelScore" not in features.columns or features["ChannelScore"].drop_nulls().len() == 0:
+        logger.info("Channel FDR plots: no ChannelScore, so no score by channel plot")
+        return
+    value = str(split).strip().upper()
+    halves = panels(features, value if len(value) == 1 and value in _AMINO_ACIDS else "all")
+    sides = [None] if len(halves) == 1 else ["left", "right"]
+    # the halves' names: "K-term", and the rest, which under trypsin end in R
+    names = [] if len(halves) == 1 else [f"{value}-term", {"K": "R-term", "R": "K-term"}.get(value, "other")]
+    has_q = _has_channel_qvalues(features)
+    cutoffs = score_cutoffs(features, fdr_threshold) if has_q else {}
+    groups = _by_channel(features, "ChannelScore")
+    fig, ax = plt.subplots(figsize=(max(5.0, (0.9 if len(sides) == 1 else 1.3) * len(groups) + 1.5), 4.8))
+    for i, ((channel, decoy, _, _), style) in enumerate(zip(groups, _styles(groups))):
+        colour = (0.5, 0.5, 0.5) if decoy else style["color"]
+        notes = []
+        for side, (_, rows) in zip(sides, halves):
+            scores = rows.filter(pl.col("channel") == channel)["ChannelScore"].drop_nulls().to_numpy()
+            _violin(ax, _logit(scores), i, _lighter(colour, 0.5) if side == "right" else colour, side)
+            if decoy or not has_q:
+                notes.append(f"n={scores.size:,}")
+            else:
+                kept, n = _passing(rows, channel, fdr_threshold)
+                # one line per half when split; whole violins have room for two
+                notes.append((f"{kept:,} / {n:,}" + (" " if names else "\n") + f"({kept / n:.0%})") if n else "0")
+        if cutoffs.get(channel) is not None and not decoy:
+            ax.plot([i - 0.42, i + 0.42], [_logit(cutoffs[channel])] * 2, color="black", linewidth=1.6)
+        ax.annotate("\n".join(notes), (i, 1.0), xycoords=("data", "axes fraction"), ha="center", va="bottom",
+                    fontsize=7 if names else 7.5)
+    if names:     # each line of counts' half, to their left
+        ax.annotate("\n".join(f"{name}:" for name in names), (0, 1.0), xycoords="axes fraction", ha="right",
+                    va="bottom", fontsize=7, fontweight="bold")
+    ax.set_xticks(range(len(groups)), [f"{channel:g}{chr(10) + '(decoy)' if decoy else ''}"
+                                       for channel, decoy, _, _ in groups])
+    ax.set_xlim(-0.6, len(groups) - 0.4)
+    ax.set_xlabel("Channel")
+    ax.set_ylabel("logit(ChannelScore)")
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
+    handles = [plt.Line2D([0], [0], color="black", linewidth=1.6, label=f"Channel_Qvalue = {fdr_threshold:g}")]
+    if names:
+        from matplotlib.patches import Patch
+        handles += [Patch(facecolor=(0.35, 0.35, 0.35), label=names[0]),
+                    Patch(facecolor=_lighter((0.35, 0.35, 0.35), 0.5), label=names[1])]
+    fig.legend(handles=handles, loc="lower center", ncol=len(handles), fontsize=8, frameon=False)
+    fig.suptitle("ChannelScore", fontsize=11)
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    _save(fig, os.path.join(folder, SCORE_PLOT))
 
 
 def plot_channel_fdr(features, folder, importance=None, split="all", fdr_threshold=0.01, workers=1):

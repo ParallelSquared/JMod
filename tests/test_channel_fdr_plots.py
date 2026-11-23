@@ -4,8 +4,9 @@ import polars as pl
 
 from src.channel_fdr import _AMINO_ACIDS
 from src.channel_fdr_plots import (BEST_CHANNEL_PLOT, ECDF_FOLDER, IDS_PLOT, IMPORTANCE_PLOT, RETAINED_PLOT,
-                                   ECDF_MAX_POINTS, best_channel_counts, ecdf_steps, feature_columns, ks_distance, panels, plot_channel_fdr,
-                                   plot_feature_ecdfs, plot_feature_importance, retained_counts, tied_sets)
+                                   SCORE_PLOT, ECDF_MAX_POINTS, best_channel_counts, ecdf_steps, feature_columns,
+                                   ks_distance, panels, plot_channel_fdr, plot_channel_scores, plot_feature_ecdfs,
+                                   plot_feature_importance, retained_counts, score_cutoffs, tied_sets)
 
 
 class TestFeatureEcdfs:
@@ -131,3 +132,43 @@ class TestChannelFdrPlots:
     def test_feature_importance(self, tmp_path):
         plot_feature_importance(self._importance(), str(tmp_path), top=2)
         assert (tmp_path / IMPORTANCE_PLOT).exists()
+
+
+class TestChannelScores:
+    @staticmethod
+    def _scored(n=30):
+        # channels 0 and 4 real, 20 the decoy; channel 4 has no row at q <= 0.01
+        rng = np.random.default_rng(0)
+        channel = np.repeat([0.0, 4.0, 20.0], n)
+        score = rng.uniform(0, 1, channel.size)
+        q = np.where(channel == 0, np.linspace(0, 0.1, channel.size), 0.5)
+        return pl.DataFrame({"untag_prec": [f"P{i % n}" for i in range(channel.size)], "channel": channel,
+                             "is_decoy_channel": channel == 20, "ChannelScore": score,
+                             "Channel_Qvalue": np.where(channel == 20, np.nan, q),
+                             "last_aa_code": np.where(np.arange(channel.size) % 2 == 0, _AMINO_ACIDS.index("K"),
+                                                      _AMINO_ACIDS.index("R"))}).with_columns(
+            pl.col("Channel_Qvalue").fill_nan(None))
+
+    def test_the_cutoff_is_the_lowest_passing_score(self):
+        f = self._scored()
+        passing = f.filter((pl.col("channel") == 0) & (pl.col("Channel_Qvalue") <= 0.01))
+        assert score_cutoffs(f, 0.01) == {0.0: passing["ChannelScore"].min(), 4.0: None}
+
+    def test_written(self, tmp_path):
+        plot_channel_scores(self._scored(), str(tmp_path))
+        assert [p.name for p in tmp_path.iterdir()] == [SCORE_PLOT]
+
+    def test_split_or_off_still_written(self, tmp_path):
+        for split in ("K", "off", "KQ"):
+            (tmp_path / split).mkdir()
+            plot_channel_scores(self._scored(), str(tmp_path / split), split=split)
+            assert (tmp_path / split / SCORE_PLOT).exists()
+
+    def test_a_channel_too_small_for_a_violin(self, tmp_path):
+        plot_channel_scores(self._scored(n=3), str(tmp_path))
+        assert (tmp_path / SCORE_PLOT).exists()
+
+    def test_nothing_without_scores(self, tmp_path):
+        plot_channel_scores(self._scored().with_columns(pl.lit(None, pl.Float64).alias("ChannelScore")), str(tmp_path))
+        plot_channel_scores(self._scored().drop("ChannelScore"), str(tmp_path))
+        assert not list(tmp_path.iterdir())

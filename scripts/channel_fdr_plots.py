@@ -2,8 +2,9 @@
 """The channel-FDR plots of a run, from a written channel feature table, into
 the table's folder (src.channel_fdr_plots.plot_channel_fdr): the best channel
 by PredVal, IDs vs Channel_Qvalue, the IDs retained at the FDR threshold, the
-feature importance if the fit wrote it beside the table, and every feature's
-ECDF (into ECDF/).
+feature importance if the fit wrote it beside the table, every feature's ECDF
+(into ECDF/), and logit(ChannelScore) per channel with each channel's 1%
+cutoff (plot_channel_scores).
 
     python scripts/channel_fdr_plots.py <run>/channel_fdr/channel_features.parquet
     python scripts/channel_fdr_plots.py <run>/channel_fdr/channel_features.parquet --split K
@@ -30,8 +31,10 @@ if __name__ == "__main__":
     # JMod's config parses the command line when it is imported, and these are not its options
     sys.argv[1:] = []
     import polars as pl
-    from src.channel_fdr_plots import plot_channel_fdr, read_feature_importance
+    from src.channel_fdr_plots import plot_channel_fdr, plot_channel_scores, read_feature_importance
 
     folder = os.path.dirname(os.path.abspath(args.features))
-    plot_channel_fdr(pl.read_parquet(args.features), folder, importance=read_feature_importance(folder),
+    features = pl.read_parquet(args.features)
+    plot_channel_fdr(features, folder, importance=read_feature_importance(folder),
                      split=args.split, workers=args.workers)
+    plot_channel_scores(features, folder, split=args.split)
