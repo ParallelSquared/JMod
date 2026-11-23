@@ -50,7 +50,7 @@ class TestChangeSeq:
     
     def test_convert_frags_shuffle_masses(self):
         """Test that fragment m/z values are correctly recomputed after shuffle."""
-        from pyteomics import mass as pmass
+        from src import mass as pmass
 
         seq = "AAAEQAISVR"
         frags = {

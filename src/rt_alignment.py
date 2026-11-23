@@ -48,7 +48,7 @@ from src.utils.misc_functions import within_tol,moving_average, \
     closest_ms1spec, closest_peak_diff, unstring_floats, fragment_cor
 
 
-from src.finetune_funs import fine_tune_rt, one_hot_encode_sequence
+from src.rt_predictor import JmodRTPredictor
 from src.utils.io.read_output import names, dtypes
 
 from src.logger import logger
@@ -402,6 +402,9 @@ def fit_errors(errors,limit=10,percentile=.999):
     """
     ### try to fit half gaussian or exponential to absolute rt errors
     
+    # TODO: filters signed errors (errors < limit, not abs(errors) < limit), so every
+    # negative error passes the cutoff, then fits half-normal and exponential CDFs as
+    # if the errors were absolute.  Check whether the callers pass |errors|.
     errors_filtered = np.array(errors)[np.array(errors)<limit]
     errors_filtered = np.sort(np.append(errors_filtered,limit))
     
@@ -613,7 +616,7 @@ def process_prelim_search(fit_outputs,
     all_frag_errors = [unstring_floats(mz) for mz in all_output_df.frag_errors]
     all_median  = np.median(np.concatenate([i for i in all_frag_errors]))
     all_output_df["med_frag_error"] = [np.median(np.abs(all_median-i)) for i in all_frag_errors]
-    all_output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in all_output_df["seq"]])
+    all_output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub(r"\(.*?\)","",i)) for i in all_output_df["seq"]])
     all_output_df["last_aa"]=[i[-1] for i in all_output_df.stripped_seq]
 
     #output_df = pd.DataFrame([i[j] for i,j in zip(output,max_ids)],columns=names[:len(output[0][0])])
@@ -631,7 +634,7 @@ def process_prelim_search(fit_outputs,
     median  = np.median(np.concatenate([i for i in frag_errors]))
     output_df["med_frag_error"] = [np.median(np.abs(median-i)) for i in frag_errors]
     
-    output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in output_df["seq"]])
+    output_df["stripped_seq"]=np.array([re.sub("Decoy_","",re.sub(r"\(.*?\)","",i)) for i in output_df["seq"]])
     output_df["last_aa"]=[i[-1] for i in output_df.stripped_seq]
 
     return output_df, all_output_df, id_keys, feature_mzs
@@ -661,7 +664,13 @@ def empirical_fit(output_df, results_folder=None):
     import src.quality_pca as quality_pca
     pc1 = quality_pca.first_search_pc1(output_df)
 
-    for feature_percentile in range(20, 100, 5):
+    # Every 5th percentile, then finer steps at the top for first searches
+    # whose IDs are mostly noise even in the best 5%.
+    percentiles = list(range(20, 100, 5)) + [96, 97, 98, 99, 99.5, 99.9]
+    converged = False
+    tested = []  # (partial posterior, percentile, cor_filter, rt diffs, rt tolerance)
+
+    for feature_percentile in percentiles:
 
         cor_filter = pc1 > np.percentile(pc1, feature_percentile)
 
@@ -728,11 +737,24 @@ def empirical_fit(output_df, results_folder=None):
             f"Ratio: {outside_ratio:.4f}, #IDs: {cor_filter.sum()}, Partial Posterior: {partial_posterior:.4f}"
         )
 
-        # new + existing stopping criteria
-        if (partial_posterior >= 0.99 or
-                outside_ratio < 0.05 or
-                (cor_filter.sum() - bad_IDs.sum()) < 800):
+        # Too few good IDs left to calibrate on: stop, and do not use this one
+        # if any earlier percentile kept enough.
+        if (cor_filter.sum() - bad_IDs.sum()) < 800:
             break
+        tested.append((partial_posterior, feature_percentile, cor_filter,
+                       first_rt_diffs, first_rt_tolerance))
+        if partial_posterior >= 0.99 or outside_ratio < 0.05:
+            converged = True
+            break
+
+    # No percentile met the stopping criteria: use the one whose IDs were
+    # cleanest, by partial posterior.
+    if not converged and tested:
+        best = max(tested, key=lambda t: t[0])
+        _, feature_percentile, cor_filter, first_rt_diffs, first_rt_tolerance = best
+        logger.info(f"Using Percentile: {feature_percentile} (highest Partial Posterior, "
+                    f"{best[0]:.4f})")
+    del tested
 
     cor_filter = np.logical_and(
         cor_filter,
@@ -928,7 +950,7 @@ def _im_error_model(im_error):
 
 
 def fit_im_tolerance(im_error):
-    """
+    """ #TODO what is this function even for?
     Derive an ion-mobility (1/K0) tolerance from per-PSM IM errors.
 
     Follows the RT/MS1 tolerance pattern: Gaussian 4-sigma outlier removal, then a
@@ -1016,9 +1038,6 @@ def fit_im_alignment(lib_im, obs_im):
     gm = GaussianMixture(2, random_state=0, n_init=1).fit(sub)
     lo = int(np.argmin(gm.means_.ravel()))
     band = gm.predict(resid.reshape(-1, 1)) == lo
-    n_cloud = int((~band).sum())
-    logger.info(f"IM alignment: removed {n_cloud} of {n} pairs as "
-                f"off-band (+1/cross-charge) interference before fitting")
     if int(band.sum()) < 10:
         return None
 
@@ -1034,27 +1053,183 @@ def fit_im_alignment(lib_im, obs_im):
     return _im_loess(x[band][keep], y[band][keep])
 
 
-def aligned_library_im(library, im_spl):
-    """Library ion mobility mapped onto observed 1/K0 by the fitted alignment.
+# Below this many anchors the model choice and the accuracy fit are scored on a
+# handful of held-out rows (20% of 100 is 20), which says nothing about the
+# calibration.  An IM run with fewer is broken upstream, so it is an error.
+MIN_IM_ANCHORS = 100
 
-    Returns an all-NaN array when the library has no IM column or the alignment
-    (*im_spl*) did not fit, so every IM gate keyed off this value is inert on
-    such runs.
+
+class IMCalibration:
+    """This run's ion-mobility calibration: two predictors and the winner.
+
+    ``jrif`` predicts observed 1/K0 from (sequence, charge) and is always
+    present.  ``spline`` maps the library's own IM onto observed 1/K0 and is
+    None when the library has no IM.  ``winner`` ("JRIF" or "library") is the
+    one that scored better on held-out anchors; the other fills the winner's
+    gaps in :func:`aligned_library_im`.
     """
-    lib_im = np.asarray(library.ion_mob, dtype=np.float64)
-    aligned = np.full(lib_im.shape, np.nan, dtype=np.float64)
-    ok = np.isfinite(lib_im)
-    if im_spl is not None and ok.any():
-        aligned[ok] = im_spl(lib_im[ok])
-        logger.info(f"Aligned library IM for {int(ok.sum())} of {ok.size} entries "
-                    f"(range {np.nanmin(aligned):.4f}-{np.nanmax(aligned):.4f})")
-    elif library.has_ion_mobility:
-        # The library has IM but there is no calibration to map it with; the
-        # admission gate would be comparing un-aligned values against observed
-        # ones, so it stays off rather than silently mis-gating.
-        logger.info("Library has IM but no alignment was fitted; "
-                    "IM candidate admission disabled")
+
+    def __init__(self, winner, jrif, spline=None):
+        if winner not in ("JRIF", "library"):
+            raise ValueError(f"unknown IM model {winner!r}")
+        if winner == "library" and spline is None:
+            raise ValueError("library IM cannot win without a library-IM alignment")
+        self.winner = winner
+        self.jrif = jrif
+        self.spline = spline
+
+
+def calibrate_im(mod_seqs, charges, obs_im, lib_im, *, tag=None,
+                 holdout_fraction=0.2, seed=42):
+    """Calibrate IM prediction on this run's anchors and choose a model.
+
+    JRIF is calibrated on (sequence, charge, observed 1/K0).  When the library
+    carries IM, the library-IM alignment is fitted on the same training rows,
+    and both are scored on the same held-out rows by median absolute error --
+    robust to the false-match tail the anchors always carry.  The winner's
+    held-out residuals set the run's IM accuracy.
+
+    Nothing here falls back: too few anchors, an alignment that cannot fit a
+    library that has IM, or an accuracy fit that fails all raise.
+
+    Returns ``(im_cal, holdout, resid_model)``: the calibration, the held-out
+    anchors with each model's prediction, and the accuracy fit
+    (``_im_error_model``) on the winner's residuals.
+    """
+    from src.rt_predictor import JmodIMPredictor
+    from src.utils.errors import JModError
+
+    anchors = pd.DataFrame({
+        "mod_seq": list(mod_seqs),
+        "z": np.asarray(charges, dtype=float),
+        "im": np.asarray(obs_im, dtype=float),
+        "lib_im": np.asarray(lib_im, dtype=float),
+    })
+    anchors = anchors[np.isfinite(anchors["im"]) & np.isfinite(anchors["z"])]
+    if len(anchors) < MIN_IM_ANCHORS:
+        raise JModError(
+            f"Ion mobility data, but only {len(anchors)} first-search anchors carry an "
+            f"observed 1/K0 (need {MIN_IM_ANCHORS}); cannot calibrate IM")
+
+    holdout = anchors.sample(frac=holdout_fraction, random_state=seed)
+    train = anchors.drop(holdout.index)
+    holdout = holdout.copy()
+
+    jrif = JmodIMPredictor.calibrate(train, tag=tag)
+    holdout["JRIF"] = jrif.predict(holdout["mod_seq"].tolist(), holdout["z"].to_numpy())
+
+    spline = None
+    if np.isfinite(anchors["lib_im"]).any():
+        spline = fit_im_alignment(train["lib_im"].to_numpy(), train["im"].to_numpy())
+        if spline is None:
+            raise JModError(
+                "The library has ion mobility, but it could not be aligned to the "
+                f"observed 1/K0 of {len(train)} training anchors")
+        lib = holdout["lib_im"].to_numpy()
+        pred = np.full(len(holdout), np.nan)
+        pred[np.isfinite(lib)] = spline(lib[np.isfinite(lib)])
+        holdout["library"] = pred
+
+    models = ["JRIF"] + (["library"] if spline is not None else [])
+    scored = np.logical_and.reduce([np.isfinite(holdout[m].to_numpy()) for m in models])
+    if not scored.any():
+        raise JModError(f"No held-out anchor has a prediction from every IM model ({models})")
+    obs = holdout["im"].to_numpy()[scored]
+    scores = {m: float(np.median(np.abs(holdout[m].to_numpy()[scored] - obs))) for m in models}
+    winner = min(scores, key=scores.get)
+    logger.info("Fine-tuned ion mobilities chosen" if winner == "JRIF" else "Empirical ion mobilities chosen")
+
+    resid = (holdout["im"] - holdout[winner]).to_numpy()
+    resid_model = _im_error_model(resid[np.isfinite(resid)])
+    if resid_model is None:
+        raise JModError(
+            f"Could not fit the IM accuracy from {int(np.isfinite(resid).sum())} "
+            f"held-out {winner} residuals")
+
+    return IMCalibration(winner, jrif, spline), holdout, resid_model
+
+
+def aligned_library_im(library, im_cal):
+    """Every library entry's 1/K0 in this run's observed units.
+
+    Uses the chosen model of *im_cal*, filling its gaps from the other model
+    (an entry with no library IM, or a peptide JRIF cannot represent).  Decoys
+    take their parent's value -- unlike m/z there is no decoy offset, since
+    shifting it would reject decoys systematically and break FDR; decoys with
+    no parent are predicted from their own sequence.
+
+    All-NaN only when *im_cal* is None, i.e. the data has no ion mobility.
+    """
+    n = len(library)
+    if im_cal is None:
+        return np.full(n, np.nan, dtype=np.float64)
+
+    parents = np.asarray(library.parent_idx)
+    own = np.flatnonzero(parents < 0)  # targets, and decoys with no parent
+
+    from_library = np.full(own.size, np.nan)
+    if im_cal.spline is not None:
+        lib_im = np.asarray(library.ion_mob, dtype=np.float64)[own]
+        ok = np.isfinite(lib_im)
+        from_library[ok] = im_cal.spline(lib_im[ok])
+
+    # JRIF only where it is needed: everywhere when it won, else the gaps.
+    need = np.ones(own.size, dtype=bool) if im_cal.winner == "JRIF" else ~np.isfinite(from_library)
+    from_jrif = np.full(own.size, np.nan)
+    if need.any():
+        idx = own[need]
+        from_jrif[need] = im_cal.jrif.predict([library.mod_seq[i] for i in idx],
+                                              np.asarray(library.prec_z)[idx])
+
+    first, second = ((from_jrif, from_library) if im_cal.winner == "JRIF"
+                     else (from_library, from_jrif))
+    values = np.where(np.isfinite(first), first, second)
+
+    aligned = np.full(n, np.nan, dtype=np.float64)
+    aligned[own] = values
+    has_parent = parents >= 0
+    aligned[has_parent] = aligned[parents[has_parent]]
+
+    n_filled = int((~np.isfinite(first) & np.isfinite(second)).sum())
+    n_missing = int((~np.isfinite(aligned)).sum())
+    # TODO: keep this log line?  RT has no counterpart.
+    logger.info(f"Library IM from {im_cal.winner} for {n} entries"
+                + (f" ({n_filled} filled from the other model)" if n_filled else "")
+                + f", range {np.nanmin(aligned):.4f}-{np.nanmax(aligned):.4f}")
+    if n_missing:
+        logger.warning(f"{n_missing} of {n} library entries have no IM prediction "
+                       f"and pass the IM candidate gate unchecked")
     return aligned
+
+
+def plot_im_prediction(obs_im, pred_im, results_folder=None, label="JRIF"):
+    """Observed against predicted 1/K0 on held-out anchors (IMfit.png).
+
+    The sequence-model counterpart of plot_im_alignment's IMfit.png, whose x
+    axis is the library's own IM and so does not exist for this model.
+    """
+    if results_folder is None:
+        return
+    obs = np.asarray(obs_im, dtype=float)
+    pred = np.asarray(pred_im, dtype=float)
+    good = np.isfinite(obs) & np.isfinite(pred)
+    obs, pred = obs[good], pred[good]
+    if obs.size == 0:
+        return
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.scatter(pred, obs, s=2, alpha=0.3, edgecolors="none", color="tab:blue")
+    lo = min(pred.min(), obs.min())
+    hi = max(pred.max(), obs.max())
+    ax.plot([lo, hi], [lo, hi], color="grey", linestyle=":", linewidth=1, label="identity")
+    ax.set_xlabel(f"predicted 1/K0 ({label})")
+    ax.set_ylabel("observed 1/K0 (held out)")
+    ax.set_title(f"IM prediction (n={obs.size}, "
+                 f"median |error| {np.median(np.abs(obs - pred)):.4f})")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(results_folder + "/first_search/IMfit.png", dpi=600, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_im_error_mixture(im_error, results_folder=None, grid_delta=0.00127,
@@ -1641,7 +1816,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         updatedLibrary: The library with its own iRT column (fine-tuned predictions
                         when fine-tuning wins); ``.iRT`` is row-aligned with it
 
-        im_spl: Library IM -> observed 1/K0 calibration, or None when not fitted
+        im_cal: The run's IMCalibration, or None when the data has no ion mobility
 
     The fitted tolerances are set on *runState* (opt_rt_tol, opt_ms1_tol,
     opt_im_precision, opt_im_accuracy).
@@ -1676,6 +1851,10 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
 
     # Run a preliminary search returning results at the PSM level
     import src.preliminary_search as preliminary_search
+    # TODO: raise the first search's fragment tolerance (ms2_ppm_error) to 20 ppm,
+    # matching the MS1 lookup (ms1_ppm_error=20): there is no reason for the MS1
+    # window to be wider than the MS2 one.  Change the default in
+    # preliminary_search.fit_with_features to match.
     output_df = preliminary_search.fit_with_features(dia_spectra, librarySpectra, mass_tag, SILAC, ms1_ppm_error=20, ms2_ppm_error=10)
 
     # Calculate the elution width and add cluster_size column
@@ -1755,8 +1934,6 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     percentile = config.rt_percentile
     #percentile = 0.99
     
-    limit=3 ## exlcude RT diffs larger than this (outliers)
-    
     ###############################################################
     ####### fine tuning
     ###############################################################
@@ -1765,42 +1942,74 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         ## filter for only a single channel for each
         logger.info("")
         logger.info("Trying RT Prediction")
+        # Group by modified sequence: the RT model sees the modifications, so
+        # labeled channels of one peptide are separate entries rather than
+        # being averaged together.  The library key is already the modified
+        # sequence, so s[0] is it.
         seq_rt = {}
         for s,rt in zip(np.array(id_keys)[cor_filter],np.array(output_df.rt)[cor_filter]):
-            key=librarySpectra[(s[0],float(s[1]))]["seq"]
+            key=s[0]
             seq_rt.setdefault(key,[])
             seq_rt[key].append(rt)
-        # exclude those with ambiguity (differences between channels/charge states)
-        filtered_seq_rt = {s:np.median(seq_rt[s]) for s in seq_rt if np.ptp(seq_rt[s])<1}
-            
-        ## use observed rt for fine_tuning
-        # grouped_df = pd.DataFrame({'Stripped.Sequence':[librarySpectra[(i[0],float(i[1]))]["seq"] for i in id_keys],"RT":[i for i in np.array(dia_rt)]})[cor_filter]
-        grouped_df =  pd.DataFrame({'Stripped.Sequence':[s for s in filtered_seq_rt],"RT":[filtered_seq_rt[s] for s in filtered_seq_rt]})
-        data_split, models, convertor = fine_tune_rt(grouped_df,qc_plots=True,results_path=results_folder)
-        
-        
+        # exclude those with ambiguity: charge states of one peptide that do
+        # not co-elute within an elution width
+        filtered_seq_rt = {s:np.median(seq_rt[s]) for s in seq_rt if np.ptp(seq_rt[s])<fwhm}
+
+        ## use observed rt for calibration
+        grouped_df =  pd.DataFrame({'mod_seq':[s for s in filtered_seq_rt],"RT":[filtered_seq_rt[s] for s in filtered_seq_rt]})
+        rt_model, holdout = JmodRTPredictor.calibrate(grouped_df, tag=mass_tag)
+        rt_model.qc_plot(holdout, results_folder)
+
+
         all_emp_diffs = (emp_rt_spl(output_df.lib_rt)-np.array(output_df.rt))[cor_filter]
-        
-        
-        lib_seqs = [one_hot_encode_sequence(librarySpectra[key]["seq"]) for key in id_keys]
-        predicted_rts = convertor(np.mean([model.predict(np.array(lib_seqs)) for model in models],axis=0).flatten())
-    
-        validation_rts = convertor(np.mean([model.predict(np.array(data_split[1])) for model in models],axis=0).flatten())
-        validation_rt_diffs = data_split[3]-validation_rts
-        
-        pred_rt_spl = fast_modal_lowess(predicted_rts[cor_filter],
-                               np.array(output_df.rt)[cor_filter],
+
+
+        predicted_rts = rt_model.predict_seqs([key[0] for key in id_keys])
+
+        # Scored on rows held out of calibration, so the comparison against the
+        # empirical alignment below is not reading back the training data.
+        validation_rts = rt_model.predict_seqs(holdout['mod_seq'].tolist())
+        validation_rt_diffs = holdout['RT'].to_numpy() - validation_rts
+        # NaN: peptides the RT model cannot represent (predict_seqs logged them)
+        validation_rt_diffs = validation_rt_diffs[np.isfinite(validation_rt_diffs)]
+
+        pred_fit = np.logical_and(cor_filter, np.isfinite(predicted_rts))
+        pred_rt_spl = fast_modal_lowess(predicted_rts[pred_fit],
+                               np.array(output_df.rt)[pred_fit],
                                local_frac=.01,
                                anchors=1000,
                                grid_size=1000,
                                post_smooth_frac=0.01)
-        
-        all_pred_diffs = (pred_rt_spl(predicted_rts) - np.array(output_df.rt))[cor_filter]
-        
+
         all_pred_diffs = validation_rt_diffs
-        
-        emp_data, emp_p, emp_cdf_auc = cdf_data(all_emp_diffs,limit=limit)
-        pred_data, pred_p, pred_cdf_auc = cdf_data(all_pred_diffs,limit=limit)
+
+        # The empirical alignment, scored on the same held-out peptides: refit
+        # without them, then predicted per peptide as the median over its rows,
+        # as its observed RT in holdout is.
+        row_seqs = np.array([key[0] for key in id_keys])
+        emp_train = np.logical_and(cor_filter, ~np.isin(row_seqs, holdout['mod_seq'].to_numpy()))
+        emp_train_spl = fast_modal_lowess(np.array(output_df.lib_rt)[emp_train],
+                                          np.array(output_df.rt)[emp_train],
+                                          .01,
+                                          anchors=1000,
+                                          grid_size=1000,
+                                          post_smooth_frac=0.01)
+        emp_seq_rt = (pd.Series(emp_train_spl(np.array(output_df.lib_rt))[cor_filter],
+                                index=row_seqs[cor_filter])
+                      .groupby(level=0).median())
+        # TODO: untested end to end (no test runs MZRTfit); needs a real run on a .d
+        # and an mzML file.  Expect the model choice to change on .d data.
+        holdout_emp_diffs = holdout['RT'].to_numpy() - holdout['mod_seq'].map(emp_seq_rt).to_numpy()
+        holdout_pred_diffs = holdout['RT'].to_numpy() - validation_rts
+        scored = np.logical_and(np.isfinite(holdout_emp_diffs), np.isfinite(holdout_pred_diffs))
+        holdout_emp_diffs = holdout_emp_diffs[scored]
+        holdout_pred_diffs = holdout_pred_diffs[scored]
+
+        # No cutoff: both CDFs close just past the largest error of either
+        # model, so the areas track their mean absolute errors.
+        cdf_end = np.nextafter(np.abs(np.concatenate([holdout_emp_diffs, holdout_pred_diffs])).max(), np.inf)
+        emp_data, emp_p, emp_cdf_auc = cdf_data(holdout_emp_diffs,limit=cdf_end)
+        pred_data, pred_p, pred_cdf_auc = cdf_data(holdout_pred_diffs,limit=cdf_end)
 
         updatedLibrary = _OwnIRT(librarySpectra)
         all_lib_keys = list(librarySpectra)
@@ -1811,9 +2020,9 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
 
         if use_predictions:
             if pred_cdf_auc > emp_cdf_auc:
-                logger.info("Fine Tuned Library Chosen")
+                logger.info("Fine-tuned retention times chosen")
             else:
-                logger.info(f"Fine Tuned Library Chosen (forced for decoy prediction; empirical AUC={emp_cdf_auc:.4f} vs pred AUC={pred_cdf_auc:.4f})")
+                logger.info(f"Fine-tuned retention times chosen (forced for decoy prediction; empirical AUC={emp_cdf_auc:.4f} vs pred AUC={pred_cdf_auc:.4f})")
             # Fit 2-component zero-mean GMM to residuals
             weights, sigmas = fit_zero_mean_gmm_1d(all_pred_diffs, n_components=2)
             order = np.argsort(sigmas)
@@ -1830,18 +2039,20 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
             # Combine elution width and GMM sigma, take 4th standard deviation
             boundary = 4 * sigmas[0] + 8 * elution_sd
             rt_spl = pred_rt_spl
-            # Deduplicate sequences to avoid redundant predictions
-            unique_seqs = list(set(updatedLibrary[key]["seq"] for key in all_lib_keys))
-            unique_encoded = np.array([one_hot_encode_sequence(s) for s in unique_seqs], dtype=np.float32)
-            unique_rts = convertor(np.mean([model.predict(unique_encoded, batch_size=4096) for model in models], axis=0).flatten())
-            seq_to_rt = dict(zip(unique_seqs, unique_rts))
+            lib_mod_seqs = [updatedLibrary[key]["mod_seq"] for key in all_lib_keys]
+            seq_to_rt = dict(zip(lib_mod_seqs, rt_model.predict_seqs(lib_mod_seqs)))
 
             for key in all_lib_keys:
-                updatedLibrary[key]["iRT"] = seq_to_rt[updatedLibrary[key]["seq"]]
+                updatedLibrary[key]["iRT"] = seq_to_rt[updatedLibrary[key]["mod_seq"]]
 
         else:
-            logger.info("Empirical Library Chosen")
+            logger.info("Empirical retention times chosen")
             # Fit 2-component zero-mean GMM to residuals
+            # TODO: when empirical wins, the RT tolerance (boundary) comes from a GMM on
+            # in-sample residuals (all_emp_diffs, the rows the spline was fitted on);
+            # when fine-tuned wins it comes from held-out residuals.  Should the
+            # empirical boundary use the held-out peptides too?  That would change the
+            # RT tolerance, not just the model choice.
             weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
             order = np.argsort(sigmas)
             sigmas = sigmas[order]
@@ -1874,10 +2085,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         all_emp_diffs = (emp_rt_spl(output_df.lib_rt)-np.array(output_df.rt))[cor_filter]
 
         pred_data = pred_p = None
-        emp_data = np.sort(np.abs(all_emp_diffs)[np.abs(all_emp_diffs) < limit])
-        emp_data = np.append(emp_data,limit)
-        emp_p = np.arange(len(emp_data)) / (len(emp_data) - 1)
-        emp_cdf_auc = auc(emp_data,emp_p)
+        emp_data, emp_p, emp_cdf_auc = cdf_data(
+            all_emp_diffs, limit=np.nextafter(np.abs(all_emp_diffs).max(), np.inf))
         # Fit 2-component zero-mean GMM to residuals
         weights, sigmas = fit_zero_mean_gmm_1d(all_emp_diffs, n_components=2)
         plot_rt_residuals_mixture(
@@ -1933,6 +2142,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     # plt.hist(((mz_func(id_mzs,rts)-orig_mzs)/id_mzs)[rt_filter_bool],100)
     
     corrected_mz_diffs = (diffs-(f_rt_mz(new_lib_rt)+mz_spl(output_df.mz)))[cor_filter]
+    # TODO: the MS1 tolerance collapses when the first search keeps few IDs
+    # (15-min 200pg runs: ~1,100 at percentile 98 gave 7.7 and 3.2 ppm, against
+    # 12-14 ppm on the long-gradient runs).  local_frac=.01 leaves ~11 points
+    # per window, so the modal LOWESS fits each point's own error and piles the
+    # corrected errors up at 0; the narrower GMM component is that spike, and
+    # 4 sigma of it is the tolerance.  Give the smoother a minimum number of
+    # points per window, and set the tolerance from residuals not fitted to
+    # themselves (cross-fitted), not from the narrow component alone.
     mz_weights, mz_sigmas = fit_zero_mean_gmm_1d(corrected_mz_diffs, n_components=2)
     mz_order = np.argsort(mz_sigmas)
     mz_sigmas = mz_sigmas[mz_order]
@@ -1994,10 +2211,11 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     ########### Optimize IM tolerance       ########
     ################################################
 
-    # Defaults, replaced below when the run's data supports a fit
+    # Defaults, only ever used on data without ion mobility: with IM, both are
+    # fitted below or the run stops.
     runState.opt_im_precision = config.im_precision
     runState.opt_im_accuracy = config.im_accuracy
-    im_spl = None
+    im_cal = None
 
     def _median_skipnull(vals):
         if vals is None:
@@ -2045,7 +2263,14 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
             out.append(dev)
         return np.concatenate(out) if out else np.empty(0, dtype=float)
 
-    if {"frag_mobilities", "precursor_mobility"}.issubset(output_df.columns):
+    if not dia_spectra.has_ion_mobility:
+        logger.info("No ion mobility in this data; IM is not calibrated")
+    else:
+        from src.utils.errors import JModError
+
+        if not {"frag_mobilities", "precursor_mobility"}.issubset(output_df.columns):
+            raise JModError("Ion mobility data, but the first search reported no "
+                            "fragment/precursor mobilities")
         frag_median = np.array([_median_skipnull(v)
                                 for v in output_df["frag_mobilities"]])
         precursor = pd.to_numeric(output_df["precursor_mobility"],
@@ -2054,8 +2279,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         has_prec = np.isfinite(precursor).any()
 
         if not has_frag and not has_prec:
-            logger.info("No ion mobility data; keeping default IM band tolerance: "
-                        f"{runState.opt_im_precision}")
+            raise JModError("Ion mobility data, but no first-search PSM carries a "
+                            "fragment or precursor mobility")
         elif has_frag != has_prec:
             raise ValueError(
                 "Inconsistent ion mobility data: one of frag_mobilities / "
@@ -2067,16 +2292,13 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
             # the quantity _match_mz_im gates on.
             frag_dev = _frag_deviations(frag_lists)
             new_im_tol = fit_im_tolerance(frag_dev)
-            if new_im_tol is not None:
-                runState.opt_im_precision = round(float(np.abs(new_im_tol)), 5)
-                logger.info(
-                    f"IM fragment spread fit: band width {4*runState.opt_im_precision:.5f}; "
-                    f"{frag_dev.size} fragment deviations from {len(frag_lists)} PSMs")
-                _opt_block.append(
-                    f"Optimized IM fragment spread: {runState.opt_im_precision:.5f}")
-            else:
-                logger.info("IM fragment-spread fit failed; keeping default band tol: "
-                            f"{runState.opt_im_precision}")
+            if new_im_tol is None:
+                raise JModError(f"Could not fit the IM fragment spread from "
+                                f"{frag_dev.size} fragment deviations of "
+                                f"{len(frag_lists)} PSMs")
+            runState.opt_im_precision = round(float(np.abs(new_im_tol)), 5)
+            _opt_block.append(
+                f"Optimized IM fragment spread: {runState.opt_im_precision:.5f}")
 
             if results_folder is not None:
                 plot_im_error_mixture(frag_dev, results_folder=results_folder,
@@ -2091,63 +2313,59 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
                         tol=runState.opt_im_precision)
 
             ############################################
-            ###### Align library IM to observed IM #####
+            ###### Calibrate predicted IM          #####
             ############################################
-            # Mirrors the RT alignment: calibrate the library's predicted 1/K0
-            # onto what was actually observed.  Independent of the tolerance
-            # above, which never looks at the library.  Nothing consumes the
-            # result yet -- it is fitted, logged, dilled and plotted only.
-            if "lib_im" not in output_df.columns:
-                logger.info("No lib_im column; skipping IM alignment")
+            # Mirrors the RT alignment: a JRIF model calibrated on this run's
+            # IDs, compared with the library's own IM (when it has any) on the
+            # same held-out anchors.  The chosen model sets column 2 of rt_mz and its
+            # held-out error sets the IM candidate gate (opt_im_accuracy).
+            #
+            # Observed IM = median of the matched fragments' 1/K0, not
+            # `precursor`.  The MS1 value comes from lookup_ms1_data,
+            # which took the nearest-m/z MS1 peak with no mobility
+            # constraint, so on IM-unbanded MS1 frames it frequently picked
+            # a co-isolated ion at an unrelated mobility (observed values
+            # outside the acquisition's own window range); it is now the
+            # most intense peak within the MS2 spectrum's band.  The fragment
+            # median is IM-gated by construction -- the fragments come from
+            # an IM-banded MS2 spectrum -- and tracks library IM better at
+            # every PSM-confidence level.
+            obs_anchor = frag_median[cor_filter]
+            if "lib_im" in output_df.columns:
+                lib_anchor = pd.to_numeric(output_df["lib_im"], errors="coerce"
+                                           ).to_numpy(dtype=float)[cor_filter]
             else:
-                lib_im_all = pd.to_numeric(output_df["lib_im"],
-                                           errors="coerce").to_numpy(dtype=float)
-                if not np.isfinite(lib_im_all).any():
-                    # A library without an IM column is normal, not an error.
-                    logger.info("Library has no ion mobility values; skipping IM alignment")
+                lib_anchor = np.full(obs_anchor.shape, np.nan)
+
+            im_cal, im_holdout, _rmodel = calibrate_im(
+                output_df["seq"].to_numpy()[cor_filter],
+                output_df["z"].to_numpy()[cor_filter],
+                obs_anchor, lib_anchor, tag=mass_tag)
+
+            # Reported as the Laplace core rather than an SD -- the anchors keep
+            # a heavy tail of false matches whose IM is unrelated to either
+            # model, and an SD would describe that background.
+            runState.opt_im_accuracy = round(float(np.abs(_rmodel["tolerance"])), 5)
+            _opt_block.append(
+                f"Optimized IM tolerance: {runState.opt_im_accuracy:.5f}")
+
+            if results_folder is not None:
+                if im_cal.winner == "library":
+                    plot_im_alignment(lib_anchor, obs_anchor, im_cal.spline,
+                                      results_folder=results_folder,
+                                      resid_model=_rmodel)
                 else:
-                    # Observed IM = median of the matched fragments' 1/K0, not
-                    # `precursor`.  The MS1 value comes from lookup_ms1_data_list,
-                    # which takes the nearest-m/z MS1 peak with no mobility
-                    # constraint, so on IM-unbanded MS1 frames it frequently picks
-                    # a co-isolated ion at an unrelated mobility (observed values
-                    # outside the acquisition's own window range).  The fragment
-                    # median is IM-gated by construction -- the fragments come from
-                    # an IM-banded MS2 spectrum -- and tracks library IM better at
-                    # every PSM-confidence level.
-                    lib_anchor = lib_im_all[cor_filter]
-                    obs_anchor = frag_median[cor_filter]
-                    im_spl = fit_im_alignment(lib_anchor, obs_anchor)
-                    if im_spl is not None:
-                        resid = obs_anchor - im_spl(lib_anchor)
-                        resid = resid[np.isfinite(resid)]
-                        n_anchor = int((np.isfinite(lib_anchor)
-                                        & np.isfinite(obs_anchor)).sum())
-                        # Library IM accuracy: how far observed 1/K0 sits from the
-                        # aligned library prediction.  Fitted once here and stored;
-                        # the log line and the figures read the stored value rather
-                        # than refitting, so they cannot disagree.  Reported as the
-                        # Laplace core rather than an SD -- the anchors keep a heavy
-                        # tail of false matches whose IM is unrelated to the library,
-                        # and an SD would describe that background, not the calibration.
-                        _rmodel = _im_error_model(resid)
-                        if _rmodel is None:
-                            logger.info(f"IM alignment fitted on {n_anchor} anchors "
-                                        f"(residual mixture fit failed; keeping default "
-                                        f"IM accuracy {runState.opt_im_accuracy})")
-                        else:
-                            runState.opt_im_accuracy = round(float(np.abs(_rmodel["tolerance"])), 5)
-                            logger.info(
-                                f"IM alignment fit: core SD {_rmodel['b'] * np.sqrt(2.0):.5f}; "
-                                f"{_rmodel['weight']:.0%} of {n_anchor} anchors in core")
-                            _opt_block.append(
-                                f"Optimized IM tolerance: {runState.opt_im_accuracy:.5f}")
-                        if results_folder is not None:
-                            plot_im_alignment(lib_anchor, obs_anchor, im_spl,
-                                              results_folder=results_folder,
-                                              resid_model=_rmodel)
-                            with open(results_folder + "/first_search/im_spl", "wb") as dill_file:
-                                dill.dump(im_spl, dill_file)
+                    plot_im_prediction(im_holdout["im"], im_holdout["JRIF"],
+                                       results_folder=results_folder)
+                    plot_im_error_mixture(
+                        (im_holdout["im"] - im_holdout["JRIF"]).to_numpy(),
+                        results_folder=results_folder, filename="IMdiff.png",
+                        xlabel="observed - predicted 1/K0 (held out)",
+                        title="IM accuracy (JRIF)")
+                im_cal.jrif.save(results_folder + "/first_search/im_model.pt")
+                if im_cal.spline is not None:
+                    with open(results_folder + "/first_search/im_spl", "wb") as dill_file:
+                        dill.dump(im_cal.spline, dill_file)
 
 
     for _line in _opt_block:
@@ -2259,7 +2477,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         # plt.scatter(elbow_pred_x, elbow_pred_y, color='red', label=f'Finetuned Elbow at {elbow_pred_x:.2f}', zorder=3)
         
         
-        emp_abs_errors_med = np.median(np.abs(all_emp_diffs[all_emp_diffs<limit]-np.median(all_emp_diffs[all_emp_diffs<limit])))
+        emp_abs_errors_med = np.median(np.abs(all_emp_diffs-np.median(all_emp_diffs)))
 
         plt.plot(emp_data,stats.expon.cdf(emp_data,loc=0,scale=emp_abs_errors_med/np.log(2)),linestyle="--",color=colours[0],label="Emp Expon CDF")
         emp_exp_999 = stats.expon.ppf(percentile,scale=emp_abs_errors_med/np.log(2))
@@ -2269,7 +2487,7 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
         plt.scatter([emp_gauss_999], [percentile],c=colours[0],label=f"Emp Norm {percentile}: {emp_gauss_999:.2f}")
         if not config.args.use_emp_rt:
             plt.plot(pred_data, pred_p, label="Finetuned CDF", linestyle='-')
-            pred_abs_errors_med = np.median(np.abs(all_pred_diffs[all_pred_diffs<limit]-np.median(all_pred_diffs[all_pred_diffs<limit])))
+            pred_abs_errors_med = np.median(np.abs(all_pred_diffs-np.median(all_pred_diffs)))
             plt.plot(pred_data,stats.expon.cdf(pred_data,loc=0,scale=pred_abs_errors_med/np.log(2)),linestyle="--",color=colours[1],label="Pred Exp CDF")
             pred_exp_999 = stats.expon.ppf(percentile,scale=pred_abs_errors_med/np.log(2))
             plt.scatter([pred_exp_999], [percentile],c=colours[1],label=f"Pred Expon {percentile}: {pred_exp_999:.2f}",marker="*")
@@ -2332,8 +2550,8 @@ def MZRTfit(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms1=False,r
     #     return (rt_spl, mz_func, ms2_func), updatedLibrary
     # else:
     if return_rt_models and not config.args.use_emp_rt:
-        return (rt_spl, mz_func), updatedLibrary, (models, convertor), fwhm, vote_sigma, im_spl
-    return (rt_spl, mz_func), updatedLibrary, None, fwhm, vote_sigma, im_spl
+        return (rt_spl, mz_func), updatedLibrary, rt_model, fwhm, vote_sigma, im_cal
+    return (rt_spl, mz_func), updatedLibrary, None, fwhm, vote_sigma, im_cal
 
 ###################################################################################################
 ###################################################################################################
@@ -2357,7 +2575,9 @@ def filter_rts_by_dense(rts,n_bins=20):
 
     """
 
-    hist,bins = np.histogram(rts,n_bins)
+    rts = np.asarray(rts)
+    # NaN (no predicted RT) is never in the dense region: comparisons below are False
+    hist,bins = np.histogram(rts[np.isfinite(rts)],n_bins)
     med = np.mean(hist[hist!=0])
     where_larger = np.where(hist>med/2)[0]
     smallest,largest = (bins[where_larger[0]],bins[min(where_larger[-1]+1,len(bins)-1)])
@@ -2781,6 +3001,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     # rt_offsets2 = np.array([i[0] for i in t_vals[2]])-[i[0] for i in t_vals[1]] ## for column 2 vs 3
     all_rt_offsets = [np.array([i[0] for i in t_vals[idx+1]])-[i[0] for i in t_vals[idx]] 
                       for idx in range(n_timeplex-1)]
+    # TODO: timeplex still assumes RT in minutes (on .d data RT is in seconds):
+    # offset_tolerance here and limit below.  Timeplex doesn't call empirical_fit,
+    # so it needs its own scale derived from the data.
     offset_tolerance = 1 ## 1 minute
     # expected_offset = stats.mode(np.round(all_rt_offsets[0][all_rt_offsets[0]>.5],1)).mode
     exp_offsets = [stats.mode(np.round(rt_off[rt_off>.5],1)).mode for rt_off in all_rt_offsets] ## ensure it's around zero
@@ -2837,6 +3060,9 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     
     
     percentile = config.rt_percentile
+    # TODO: assumes RT in minutes (3 s on .d data), and drives both the fine-tuned vs
+    # empirical comparison and fit_errors, which sets the RT tolerance.  MZRTfit no
+    # longer has a limit.  See the offset_tolerance TODO above.
     limit = 3 ## exlcude RT diffs larger than this (outliers)
     
     
@@ -2847,19 +3073,21 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
     if not config.args.use_emp_rt:
             
             
-        ## use observed rt for fine_tuning
-        grouped_df = pd.DataFrame({'Stripped.Sequence':[librarySpectra[(i[0],float(i[1]))]["seq"] for i in t_seqs[0]],"RT":[i[0] for i in t_vals[0]]})[diff_bool]
-        data_split, models, convertor = fine_tune_rt(grouped_df,qc_plots=True,results_path=results_folder)
+        ## use observed rt for calibration.  The library key is already the
+        ## modified sequence, so i[0] is it.
+        grouped_df = pd.DataFrame({'mod_seq':[i[0] for i in t_seqs[0]],"RT":[i[0] for i in t_vals[0]]})[diff_bool]
+        rt_model, holdout = JmodRTPredictor.calibrate(grouped_df, tag=config.tag)
+        rt_model.qc_plot(holdout, results_folder)
 
-        
+
         ### recalculate RT_spls...
         keys = [(i,float(j)) for i,j in t_seqs[0]]
-        
-        lib_seqs = [one_hot_encode_sequence(librarySpectra[key]["seq"]) for key in keys]
-        new_lib_rts = convertor(np.mean([model.predict(np.array(lib_seqs)) for model in models],axis=0).flatten())
-        
+
+        new_lib_rts = rt_model.predict_seqs([key[0] for key in keys])
+
         t0_rts = new_lib_rts
         ## exclude regions where there are no IDs
+        # excludes NaN: peptides the RT model cannot represent (predict_seqs logged them)
         rt_filter_bool = filter_rts_by_dense(t0_rts,30)
         rt_spls = []
         for idx in range(n_timeplex):
@@ -2893,20 +3121,21 @@ def MZRTfit_timeplex(dia_spectra,librarySpectra,dino_features,mz_tol,runState,ms
         ### compare original empirical RTs to fintuned RTs
         
         if pred_cdf_auc>emp_cdf_auc: ## Predictions are better
-            logger.info("Fine Tuned Library Chosen")
+            logger.info("Fine-tuned retention times chosen")
     
             boundary = fit_errors(all_pred_diffs,limit,percentile)
     
-            all_lib_seqs = [one_hot_encode_sequence(updatedLibrary[key]["seq"]) for key in all_lib_keys]
-            all_new_lib_rts = convertor(np.mean([model.predict(np.array(all_lib_seqs)) for model in models],axis=0).flatten())
-            
+            all_lib_mod_seqs = [updatedLibrary[key]["mod_seq"] for key in all_lib_keys]
+            all_new_lib_rts = rt_model.predict_seqs(all_lib_mod_seqs)
+
+
             for key,rt in zip(all_lib_keys,all_new_lib_rts):
                 updatedLibrary[key]["iRT"] = rt
                 
         else: ### empirical are better
             ## keep the library RTs the same
     
-            logger.info("Empirical Library Chosen")
+            logger.info("Empirical retention times chosen")
             
             boundary = fit_errors(all_emp_diffs,limit,percentile)
     

@@ -64,9 +64,9 @@ _ID_COLUMNS = ["file_name", "seq", "untag_seq", "untag_prec", "protein", "channe
                "is_decoy_channel", "BestChannel_Qvalue"]
 
 # ms1_quant's outputs the MS1 features read: this channel's plex-fit coefficient
-# and the joint fit's quality at every scan of the set's fit window (";"-joined),
+# and the joint fit's quality at every scan of the set's fit window (arrays),
 # the window's scans, this channel's MS1 apex in it, and the MS1 scan of the MS2
-# apex.  Read, not written: the traces stay in all_IDs
+# apex.  Read, not written: the traces stay in all_precursors.parquet
 _MS1_COLUMNS = ["plexfittrace_all", "plexfittrace_ps_all", "plexfittrace_spec_all",
                 "ms1_apex_scan", "Ms1_spec_id"]
 # A Gaussian fit to fewer points than this says nothing
@@ -398,12 +398,11 @@ def _peptide_context(sites, n_tags, n_residues):
 
 
 def _trace(value):
-    """A ";"-joined ms1_quant trace as floats, or None where there is none:
-    ms1_quant merges its outputs in with fillna(0), so a row with no MS1 fit
-    window has a 0 there, not a trace."""
-    if not isinstance(value, str) or value == "":
+    """An ms1_quant per-scan trace as floats, or None where there is none (a
+    row with no MS1 fit window has None)."""
+    if value is None or not hasattr(value, "__len__") or len(value) == 0:
         return None
-    return np.array(value.split(";"), dtype=float)
+    return np.asarray(value, dtype=float)
 
 
 _MS1_FEATURES = ["ms1_trace_nonzero", "ms1_trace_frac_nonzero", "plexfit_gauss_r2", "plexfit_sigma",
@@ -417,7 +416,7 @@ def ms1_features(coeff_trace, ps_trace, spec_trace, ms1_apex_scan, ms1_spec_id,
     *coeff_trace* is the channel's coefficient at each scan of the set's MS1 fit
     window, *ps_trace* the joint fit's quality there (the same for every channel
     of the set), *spec_trace* the window's scans; the three are ms1_quant's
-    ";"-joined strings, or its 0 where it fitted no window.
+    per-scan arrays, or None where it fitted no window.
 
     - ms1_trace_nonzero: whether the channel has any positive coefficient
     - ms1_trace_frac_nonzero: the share of the window's points that are positive
@@ -434,8 +433,7 @@ def ms1_features(coeff_trace, ps_trace, spec_trace, ms1_apex_scan, ms1_spec_id,
     - ms1_ms2_apex_delta: this channel's MS1 apex minus the MS1 scan of its MS2
       apex, in scan numbers
 
-    All null where ms1_quant fitted no window: its 0s there are placeholders,
-    not an empty trace.  The shape features need min_points points and a
+    All null where ms1_quant fitted no window.  The shape features need min_points points and a
     positive coefficient somewhere.  The window is a contiguous run of the
     run's MS1 scans (ms1_cor_channels.minmax_spec_window, then a slice of it),
     so point i is cycle i.
@@ -664,10 +662,24 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
         .hstack(pl.DataFrame(ms1, schema={name: pl.Float64 for name in _MS1_FEATURES})))
 
 
+# The features made from ms1_quant's plex fit.  MS1 quant leaves the decoy
+# channel out (fdr_analysis.ms1_quant), so the decoy channel has none of them and
+# every real channel does: fitted on, they would tell the model which rows are the
+# decoy channel by their presence alone.  Kept in the feature table, out of the
+# model.
+# TODO: give the channel FDR its own MS1 evidence for every channel, decoy
+# included, instead of reusing the quant's fit, and put these back.
+# With them, their comparisons within the set (add_set_comparisons).
+_MS1_FIT_FEATURES = _MS1_FEATURES + ["ms1_cor", "iso_cor", "traceproduct", "gauss_r2_joint", "plexfitMS1_p"]
+_MS1_FIT_COLUMNS = _MS1_FIT_FEATURES + [f"{f}_from_{end}" for f in _MS1_FIT_FEATURES
+                                        for end in ("max", "min", "best")]
+
+
 def model_columns(features):
     """The columns of the channel feature table the channel FDR is fitted on:
-    every one but the identity columns and its own outputs."""
-    return [c for c in features.columns if c not in _ID_COLUMNS + SCORE_COLUMNS]
+    every one but the identity columns, its own outputs and the MS1 plex-fit
+    features with their set comparisons (_MS1_FIT_COLUMNS)."""
+    return [c for c in features.columns if c not in _ID_COLUMNS + SCORE_COLUMNS + _MS1_FIT_COLUMNS]
 
 
 # ---------------------------------------------------------------------------

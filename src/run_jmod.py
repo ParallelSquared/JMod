@@ -15,6 +15,7 @@
 
 # Update imports to relative imports
 import src.config as config
+from collections import deque
 import numpy as np
 import os
 import time
@@ -24,12 +25,16 @@ import json
 import gc
 import glob
 import subprocess
+import sys
+import sysconfig
+import platform
 
 from src import _version
-from src.utils.io import file_reader
+from src.utils.io import file_reader, bruker_d
 from src.utils.set_seeds import set_seeds
+from src.utils.numba_threads import prime_type_cache
 from src.models.spec_lib import spec_lib
-from src.spectral_fitting import fit_to_lib2
+from src.spectral_fitting import fit_to_lib2, hits_to_arrow, protein_column
 from src.rt_alignment import MZRTfit, MZRTfit_timeplex, aligned_library_im
 from src.utils.misc_functions import datestamped
 import polars as pl
@@ -38,7 +43,6 @@ from src.utils.io.read_output import get_parquet_schema
 from src import iso_functions as iso_f
 from src.mass_tags import tag_library, available_tags, set_config_tag, resolve_decoy_channel
 from src.fdr_analysis import process_data
-from src.finetune_funs import predict_decoy_rts
 from src.utils.gui_utils import load_settings, save_settings
 from src.models.run_state import RunState
 from src.utils.errors import JModError, report_error, mark_run_failed
@@ -53,6 +57,8 @@ def main(GUI_config_json=None):
     --combine_results only combine its runs again, or with --inspect_library
     only report a library's modifications."""
     try:
+        # Before any worker thread calls numba (see numba_threads)
+        prime_type_cache()
         if config.args.inspect_library:
             run_inspect_library(config.args.inspect_library)
         elif config.args.make_library:
@@ -377,6 +383,14 @@ def _prepare_readers(run_files):
     It is only needed for a .d with no peaks.parquet yet, where it supplies the
     calibration for centroiding.  Returns the Bruker SDK path, or None.
     """
+    # TODO: handle the Thermo and Bruker paths the same way.  Thermo's CLI-vs-
+    # settings logic is inline here, saves a CLI path to settings.json before it
+    # is validated, and a missing path only fails as Path(None) inside
+    # load_rawfilereader; Bruker's goes through resolve_bruker_setting, which
+    # validates before saving.  Add a resolve_rawfilereader_setting like it, with
+    # the same "required" error.  The one real difference stays: Thermo's .NET
+    # DLLs load into this process, while Bruker's library runs in a subprocess
+    # per .d, so its path is returned and passed down to each run.
     if any(f.lower().endswith(".raw") for f in run_files):
         settings = load_settings()
 
@@ -390,7 +404,12 @@ def _prepare_readers(run_files):
         file_reader.load_rawfilereader(reader_path)
 
     if any(f.rstrip("/").lower().endswith(".d") for f in run_files):
-        return file_reader.resolve_bruker_setting(config.args.bruker_sdk_path)
+        sdk_path = bruker_d.resolve_bruker_setting(config.args.bruker_sdk_path)
+        # .d data is always read raw with Bruker's calibration, so the SDK is
+        # required (on macOS its Windows library runs under Wine).
+        if sdk_path is None:
+            bruker_d._fail_bruker("Reading .d data needs the Bruker timsdata SDK")
+        return sdk_path
     return None
 
 
@@ -434,6 +453,7 @@ def _start_experiment_log():
     logfile_path = datestamped(os.path.join(experiment_dir, "JMod_log.log"))
     set_log_filepath(logfile_path)
     _log_jmod_version(experiment_dir)
+    _log_python()
     if why:
         logger.info(f"{why}: this experiment writing to {experiment_dir}")
 
@@ -472,6 +492,19 @@ def _git(*args):
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout if done.returncode == 0 else None
+
+
+def _log_python():
+    """Log the Python version, and warn when the GIL is on: threads then run one
+    at a time.  On a free-threaded build an imported extension that does not
+    declare free-threading support turns the GIL back on for the whole process."""
+    logger.info(f"Python {platform.python_version()}")
+    if not sys._is_gil_enabled():
+        return
+    if sysconfig.get_config_var("Py_GIL_DISABLED"):
+        logger.warning("GIL re-enabled by an imported extension: threads will not run in parallel (set PYTHON_GIL=0 to override)")
+    else:
+        logger.warning("Not a free-threaded Python build: threads will not run in parallel")
 
 
 def _log_jmod_version(experiment_dir):
@@ -564,16 +597,16 @@ def process_run(runState, spectrumLibrary, mass_tag, SILAC, bruker_sdk_path, res
     logger.info(f"Results will be saved to {os.path.abspath(runState.results_folder)}")
     DIAspectra = _load_spectra(mzml_file, bruker_sdk_path)
 
-    funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma = first_search(
+    funcs, target_iRT, rt_models_data, im_cal, elution_fwhm, vote_sigma = first_search(
         DIAspectra, spectrumLibrary, mass_tag, SILAC, runState.results_folder, runState)
 
     # On timeplex this is a per-channel copy of the library; otherwise it is the
     # shared library itself - unchanged (calibration is in rt_mz, there is also in_window mask).
     # The shared library stays untouched for the next run.
     searchLibrary, rt_mz, in_window = calibrate_library(
-        spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl,
+        spectrumLibrary, funcs, target_iRT, rt_models_data, im_cal,
         DIAspectra.ms2scans, runState)
-    del funcs, target_iRT, rt_models_data, im_spl
+    del funcs, target_iRT, rt_models_data, im_cal
 
     decoylib_search_path = main_search(DIAspectra, searchLibrary, rt_mz, in_window,
                                        runState.results_folder, runState)
@@ -610,6 +643,14 @@ def _create_results_folder(mzml_file, results_parent):
     <data file>_results, in *results_parent* (the experiment folder, or an
     MBR experiment's first_pass/), with a datestamp added if the name is taken.
     """
+    # TODO: write scratch files to a local temporary directory, not the output
+    # folder, and put only the final results in the output folder.  The output
+    # folder is often a network share (SMB), which is slow and does not behave
+    # like local disk: the library memory maps (<experiment>/library_mmap)
+    # crashed a run there with SIGBUS, and the main search's per-batch parquets
+    # (outputs/decoylibsearch_coeffs_batch*.parquet) are written and re-read over
+    # the network.  Also check what else is written mid-run, e.g.
+    # the Bruker calibration tables cached inside the .d (bruker_calibration/).
     spec_file_name = mzml_file.split("/")[-1].rsplit(".",1)[0]
     os.makedirs(results_parent, exist_ok=True)
     results_folder_path = datestamped(os.path.join(results_parent, spec_file_name + "_results"))
@@ -783,6 +824,7 @@ def load_library(lib_file, mass_tag, mod_edits):
         # Pre-filter the library to speed up processing
         # Note: This is a rough filter that will be refined after RT alignment
         filtered_library = {}
+        # TODO: rt_tolerance is unused (only read in the commented-out filter below)
         rt_tolerance = config.rt_tol * 2  # Use a wider tolerance initially
         mz_tolerance = (config.args.ppm * 1e-6) * 2
         
@@ -844,6 +886,13 @@ def prepare_library(spectrumLibrary, work_dir, mass_tag, SILAC, library_tag_bool
 
     ######################################################
     #### Isotopes (after tagging: the tag changes each fragment's composition)
+    # TODO: make the library's in-memory layout the same with and without --iso.
+    # Only the non-iso branch memory-maps the large arrays (finalize_spectra,
+    # above 100M fragments); iso_library_multi rebuilds them in RAM, so the same
+    # library behaves differently depending on --iso, which makes problems hard
+    # to reproduce.  Either memory-map after iso_library_multi too, or not at all.
+    # The maps also go to <output folder>/library_mmap: on a network share (SMB)
+    # that crashed a run with SIGBUS (exit -10), so they belong on local disk.
     if config.args.iso:
         # iso_library_multi rebuilds spectra from frags and discards the
         # sort permutation -- it is the finalizer on iso runs.  The frags stay
@@ -876,12 +925,12 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC, results_folder_pa
     calibrate_library applies the result.  Sets the fitted tolerances on *runState*
     (opt_rt_tol, opt_ms1_tol, opt_im_precision, opt_im_accuracy).
 
-    Returns (funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma).
+    Returns (funcs, target_iRT, rt_models_data, im_cal, elution_fwhm, vote_sigma).
     ``funcs`` starts with the RT spline (one per time channel on timeplex) and
     the m/z function; ``target_iRT`` holds the aligned iRT of every target,
     indexed like the library; ``rt_models_data`` is None unless decoy RTs are
-    to be predicted; ``im_spl`` maps library IM to observed 1/K0, or is None
-    when no IM alignment was fitted.
+    to be predicted; ``im_cal`` is the run's IMCalibration, or None when the
+    data has no ion mobility.
     """
     ######################################################
     #### RT/MZ Alignment (initial search uses monoisotopic target entries only) #####
@@ -897,11 +946,11 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC, results_folder_pa
         # Timeplex path doesn't compute elution SD yet — use the historical default.
         vote_sigma = 1.0
         rt_models_data = None
-        im_spl = None
+        im_cal = None
 
     else:
         # MZRTfit takes MS1 features but no longer uses them
-        funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma, im_spl = MZRTfit(
+        funcs, updated_targets, rt_models_data, elution_fwhm, vote_sigma, im_cal = MZRTfit(
             DIAspectra, target_view, None, (config.args.ppm * 1e-6),
             results_folder=results_folder_path,
             ms2=config.args.ms2_align, mass_tag=mass_tag, SILAC=SILAC,
@@ -929,12 +978,12 @@ def first_search(DIAspectra, spectrumLibrary, mass_tag, SILAC, results_folder_pa
     ## band spectrum alive while the new, larger set is allocated -- on a large .d
     ## that is an extra ~18 GB held for no reason.
     if DIAspectra.has_ion_mobility:
-        file_reader.reband_ms2(DIAspectra, 4.0 * runState.opt_im_precision)
+        bruker_d.reband_ms2(DIAspectra, 4.0 * runState.opt_im_precision)
 
-    return funcs, target_iRT, rt_models_data, im_spl, elution_fwhm, vote_sigma
+    return funcs, target_iRT, rt_models_data, im_cal, elution_fwhm, vote_sigma
 
 
-def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl, ms2scans, runState):
+def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_cal, ms2scans, runState):
     """Map the frozen library into this run's coordinates.
 
     Every per-run change to what the search sees of the library happens here,
@@ -942,8 +991,8 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
 
     - iRT: the aligned iRT of each target, copied to its decoys, or predicted
       for them with --predict_decoys.  Only used to build rt_mz.
-    - rt_mz: each entry's RT, precursor m/z and 1/K0 (via *im_spl*) in this
-      run's observed coordinates.
+    - rt_mz: each entry's RT, precursor m/z and 1/K0 (predicted via *im_cal*)
+      in this run's observed coordinates.
     - in_window: the entries some isolation window of this run can select;
       main_search leaves the rest out of the fragment index.
     - runState.target_decoy_ratio: targets over decoys among those entries.
@@ -975,7 +1024,7 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         rt_mz = np.concatenate(rt_mz)
         # Column 2 as in the standard path.  This path replicates the library once
         # per plex, so the aligned IM has to be tiled to match row-for-row.
-        _plex_im = aligned_library_im(spectrumLibrary, im_spl)
+        _plex_im = aligned_library_im(spectrumLibrary, im_cal)
         rt_mz = np.column_stack([rt_mz, np.tile(_plex_im, len(rt_spls))])
 
         from src.models.spec_lib.library_store import SpectrumLibraryStore
@@ -983,14 +1032,17 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         del plex_lib
 
     else:
-        # Predict independent RTs for decoy sequences using CNN
+        # Predict independent RTs for decoy sequences.  These must be the
+        # modified sequences: targets above are scored on mod_seq, and scoring
+        # decoys on the stripped sequence instead would shift them as a group
+        # and bias the FDR estimate.
         if config.args.predict_decoys and rt_models_data is not None:
-            models, convertor = rt_models_data
-            decoy_seqs = [spectrumLibrary.seq[i] for i in range(n_targets, n_entries)]
-            predicted_rts = predict_decoy_rts(decoy_seqs, models, convertor)
+            decoy_seqs = [spectrumLibrary.mod_seq[i] for i in range(n_targets, n_entries)]
+            logger.info(f"Predicting RTs for {len(decoy_seqs)} decoy sequences")
+            predicted_rts = rt_models_data.predict_seqs(decoy_seqs)
             if predicted_rts is not None:
                 iRT[n_targets:n_targets + len(predicted_rts)] = predicted_rts
-            del models, convertor
+            del rt_models_data
         elif config.args.predict_decoys:
             logger.warning("Decoy RT prediction requested but no RT models available (using empirical RT?)")
 
@@ -998,12 +1050,9 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
         # Build rt_mz for ALL entries (target + decoy).  The RT and m/z
         # alignments are interpolators, applied to every entry at once
         rt_mz = np.column_stack([rt_spl(iRT), mz_func(spectrumLibrary.prec_mz, iRT)])
-        # Column 2: the library's IM mapped onto observed 1/K0 by the alignment.
-        # Left all-NaN when the library carries no IM or the alignment did not
-        # fit, which leaves every downstream IM gate inert.  Decoys keep their
-        # parent's IM unchanged -- unlike m/z there is no decoy offset, since
-        # shifting it would reject decoys systematically and break FDR.
-        rt_mz = np.column_stack([rt_mz, aligned_library_im(spectrumLibrary, im_spl)])
+        # Column 2: each entry's predicted 1/K0 (see aligned_library_im; decoys
+        # take their parent's).  All-NaN only on data without ion mobility.
+        rt_mz = np.column_stack([rt_mz, aligned_library_im(spectrumLibrary, im_cal)])
         # Apply decoy m/z offset to decoy entries
         rt_mz[n_targets:, 1] -= config.decoy_mz_offset
         search_library = spectrumLibrary
@@ -1047,12 +1096,26 @@ def calibrate_library(spectrumLibrary, funcs, target_iRT, rt_models_data, im_spl
 def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_path, runState):
     """Fit every MS2 spectrum against the calibrated library.
 
-    Builds the fragment index, writes the search parameters, fits the spectra
-    in batches, and merges the batch parquets into
-    ``outputs/decoylibsearch_coeffs.parquet``.  Returns that path.
+    Builds the fragment index, writes the search parameters, fits the spectra in
+    batches (``outputs/decoylibsearch_coeffs_batch<i>.parquet``; merged after
+    scoring by ``merge_main_search``).
+    Returns the batch paths, in the order they are read as one table.
     """
     logger.info("")
     logger.info("Starting Main Search")
+
+    # On a .d, the MS2 tolerance is the fitted MS1 tolerance for everything after
+    # the first search (fragment index, fits, scoring-time fragment correlations
+    # all read config.args.ppm).  Other inputs keep --ppm.
+    # TODO: calculate the MS2 tolerance from the first-search fragment errors
+    # instead of borrowing the MS1 one, for every input type, and drop this gate.
+    # TODO: this overwrites --ppm unconditionally, so on .d input a user-set MS2
+    # tolerance (--ppm 15) is silently ignored; only --ms1_ppm reaches MS2, and it
+    # sets MS1 too.  Let an explicit --ppm win here (config.cli_args holds the
+    # typed options), or at least warn that it is ignored.
+    if runState.file_name.rstrip("/\\").lower().endswith(".d"):
+        config.args.ppm = round(float(runState.opt_ms1_tol) * 1e6, 5)
+        logger.info(f"MS2 tolerance set to the MS1 tolerance: {config.args.ppm} ppm")
 
     spectra_to_fit = DIAspectra.ms2scans
     all_keys = list(spectrumLibrary)
@@ -1097,12 +1160,18 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     # write_to_csv(ms2scans_info,ms2_info_path)
     
     ## process in batches
+    # TODO: when the batch count becomes variable, return the batch paths below in
+    # batch-index order instead of sorted(glob): the text sort puts batch10 before
+    # batch2, and downstream row order (__parquet_row) must follow spectrum/RT order.
     num_batches = 10
     num_per_batch = int(np.ceil(len(spectra_to_fit)/num_batches))
 
     from concurrent.futures import ThreadPoolExecutor
 
-    n_threads = 3
+    # Measured on the 9plex speed-test file: 4 threads is fastest (2.34x one
+    # thread), 5 the same, more is slower -- the solver's own scaling, not
+    # Python, is the limit now.  With 3 it was 2.06x.  Capped at 10.
+    n_threads = min(10, os.cpu_count() or 1)
     logger.info(f"Using {n_threads} threads for main search")
 
     # Precompute MS1 RT array once (shared across all threads, read-only)
@@ -1129,12 +1198,19 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     _pa_schema = pl.DataFrame(schema=_pl_schema).to_arrow().schema
     _BUFFER_SIZE = 1000  # results to buffer before flushing to disk
 
-    # Spectra submitted per chunk.  Bounds how many results are held at once.
-    _CHUNK = 100
+    # Fits submitted ahead of the one being drained.  Bounds how many results are
+    # held at once while keeping every thread fed.
+    _IN_FLIGHT = 32 * n_threads
 
-    # The IM candidate gate needs an aligned library IM; without one the IM
-    # column of rt_mz is all NaN and the gate stays off
-    _im_accuracy = runState.opt_im_accuracy if np.isfinite(rt_mz[:, 2]).any() else None
+    # The IM candidate gate is on whenever the data has ion mobility: MZRTfit
+    # either calibrated IM prediction or stopped the run.  Timeplex has no IM
+    # calibration yet, so it has no gate.
+    if DIAspectra.has_ion_mobility and not config.args.timeplex:
+        if not np.isfinite(rt_mz[:, 2]).any():
+            raise JModError("Ion mobility data, but no library entry has a predicted IM")
+        _im_accuracy = runState.opt_im_accuracy
+    else:
+        _im_accuracy = None
 
     # Constant across every spectrum and every batch, so build the kwargs once.
     _fit_kwargs = dict(library=spectrumLibrary,
@@ -1149,18 +1225,12 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
                        file_name=runState.file_name,
                        mz_tol=(config.args.ppm * 1e-6),
                        ms1_spectra=DIAspectra.ms1scans,
-                       return_frags=False,
                        decoy=True,
                        output_folder=results_folder_path,
                        frag_index=frag_index,
                        ms1_rt=_ms1_rt,
-                       im_bin_ms1=_im_bin_ms1)
-
-    # Measure CPU utilization across the search to assess GIL contention
-    import psutil as _psutil
-    _search_proc = _psutil.Process(os.getpid())
-    _search_proc.cpu_percent()  # prime the measurement
-    _search_wall_t0 = time.time()
+                       im_bin_ms1=_im_bin_ms1,
+                       proteins=protein_column(spectrumLibrary))
 
     for batch_idx in range(num_batches):
         start_time = time.time()
@@ -1168,58 +1238,42 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
 
         logger.info(f"Fitting batch {batch_idx+1} of {num_batches}")
 
-        batch_parquet_path = results_folder_path + f"/decoylibsearch_coeffs_batch{batch_idx}.parquet"
+        batch_parquet_path = results_folder_path + f"/outputs/decoylibsearch_coeffs_batch{batch_idx}.parquet"
         n_results = 0
 
-        # ``with`` guarantees ``writer.close()`` even when a worker crashes or
-        # a network write fails — otherwise the OS handle (and the server-side
-        # SMB/NFS oplock on network mounts like Synology) leaks and the file
-        # stays "Resource busy" until the next mount cycle.
+        # TODO: test snappy (pyarrow's default, used here) against zstd for these
+        # batches and the merged file: on one 15 min 200 pg 5plex batch, zstd was
+        # ~37% smaller.  Check write/read time too, locally and over SMB.
         with pq.ParquetWriter(batch_parquet_path, _pa_schema) as writer:
-            buffer = []
-            # Submit in chunks and drain each before submitting the next.
-            # Holding every future for the whole batch (the previous dict, keyed
-            # by an index nothing read) kept each completed future -- and so its
-            # result rows -- alive until the batch ended, so flushing ``buffer``
-            # freed nothing and peak memory grew with the task count.  ~190k
-            # tasks was enough to exhaust the machine.
+            buffer = []           # SpectrumHits, one per spectrum with results
+            n_buffered = 0
             with ThreadPoolExecutor(max_workers=n_threads) as pool, \
                     tqdm.tqdm(total=len(batch_spectra)) as bar:
-                for _start in range(0, len(batch_spectra), _CHUNK):
-                    futures = [pool.submit(fit_to_lib2, dia_spec, **_fit_kwargs)
-                               for dia_spec in batch_spectra[_start:_start + _CHUNK]]
-                    # Drain in submission order, not completion order, so rows are
-                    # written in spectrum order every run.  Scoring depends on row
-                    # order (apex_pc1 ties, CV folds), so completion order made
-                    # repeat runs of the same file give different IDs.
-                    for f in futures:
-                        result = f.result()
-                        bar.update(1)
-                        if result:
-                            buffer.extend(result)
-                            n_results += len(result)
-                            if len(buffer) >= _BUFFER_SIZE:
-                                _col_data = {col: [row[i] for row in buffer]
-                                             for i, col in enumerate(_pl_schema)}
-                                writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
-                                buffer.clear()
-                    futures.clear()
+                # Sliding window: keep up to _IN_FLIGHT fits submitted and drain the
+                # oldest by submission order, so the pool always has queued work.
+                inflight = deque()
+                _next = 0
+                while _next < len(batch_spectra) or inflight:
+                    while _next < len(batch_spectra) and len(inflight) < _IN_FLIGHT:
+                        inflight.append(pool.submit(fit_to_lib2, batch_spectra[_next], **_fit_kwargs))
+                        _next += 1
+                    hits = inflight.popleft().result()
+                    bar.update(1)
+                    if hits is not None:
+                        buffer.append(hits)
+                        n_buffered += len(hits.coeff)
+                        n_results += len(hits.coeff)
+                        if n_buffered >= _BUFFER_SIZE:
+                            writer.write_table(hits_to_arrow(buffer, _pa_schema))
+                            buffer.clear()
+                            n_buffered = 0
 
             # Flush remaining buffered results
             if buffer:
-                _col_data = {col: [row[i] for row in buffer]
-                             for i, col in enumerate(_pl_schema)}
-                writer.write_table(pl.DataFrame(_col_data, schema=_pl_schema).to_arrow())
+                writer.write_table(hits_to_arrow(buffer, _pa_schema))
                 buffer.clear()
         logger.info(f"Fit {len(batch_spectra)} spectra in {(round(time.time()-start_time))//60} mins and {(round(time.time()-start_time))%60} sec")
         logger.info(f"Batch {batch_idx+1}: {n_results} results written")
-
-    # Report CPU utilization for GIL contention assessment
-    _search_wall = time.time() - _search_wall_t0
-    _search_cpu = _search_proc.cpu_percent()
-    logger.info(f"[CPU] Search wall time: {_search_wall:.1f}s, "
-                f"CPU: {_search_cpu:.0f}%, "
-                f"Effective cores: {_search_cpu/100:.1f}/{n_threads}")
 
     # Free large objects no longer needed after search (keep spectrumLibrary
     # alive for fragment correlation features computed inside process_data).
@@ -1227,27 +1281,11 @@ def main_search(DIAspectra, spectrumLibrary, rt_mz, in_window, results_folder_pa
     del _fit_kwargs, frag_index, _ms1_rt, _im_bin_ms1, spectra_to_fit, all_keys
     gc.collect()
 
-    # Merge batch parquets into single file (streaming, one batch at a time)
+    # The batches in sorted path order, the order the former merge concatenated
+    # them, so row numbers are unchanged; read as one table, by RT chunk
+    # (read_output.get_large_prec), never all at once.
     import glob as _glob
-    batch_files = sorted(_glob.glob(results_folder_path + "/decoylibsearch_coeffs_batch*.parquet"))
-    decoylib_search_path = results_folder_path + "/outputs/decoylibsearch_coeffs.parquet"
-    merge_writer = None
-    try:
-        for bf in batch_files:
-            table = pq.read_table(bf)
-            if merge_writer is None:
-                merge_writer = pq.ParquetWriter(decoylib_search_path, table.schema)
-            merge_writer.write_table(table)
-            del table
-    finally:
-        # Guarantee close even on read/write failure mid-merge — same Synology
-        # oplock leak story as the batch writer above.
-        if merge_writer is not None:
-            merge_writer.close()
-    for bf in batch_files:
-        os.remove(bf)
-
-    return decoylib_search_path
+    return sorted(_glob.glob(results_folder_path + "/outputs/decoylibsearch_coeffs_batch*.parquet"))
 
 
 def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
@@ -1266,4 +1304,31 @@ def score_and_report(decoylib_search_path, DIAspectra, spectrumLibrary,
                  ms1_tol=runState.opt_ms1_tol,
                  rt_tol=runState.opt_rt_tol,
                  im_tol=runState.opt_im_precision,
-                 target_decoy_ratio=runState.target_decoy_ratio)
+                 target_decoy_ratio=runState.target_decoy_ratio,
+                 im_accuracy=getattr(runState, "opt_im_accuracy", None))
+    merge_main_search(decoylib_search_path,
+                      os.path.join(runState.results_folder, "outputs", "decoylibsearch_coeffs.parquet"))
+
+
+# TODO: this rewrites the whole main search output once more at the end of every
+# run (3.5 GB on a 15 min 200 pg 5plex, slow on the SMB share), only to give one
+# file.  Find a layout that is one file without the rewrite, or settle for the
+# batches read as one table (pl.scan_parquet over them).
+def merge_main_search(batch_files, merged_path):
+    """Stream the main search's batch parquets, in order, into one file at
+    ``merged_path``, one row group at a time, then delete them.
+
+    Runs after scoring, which reads the batches; memory is one row group.
+    Written beside the target and renamed, so an interrupted merge leaves the
+    batches and no partial file under the final name.
+    """
+    logger.info("Merging main search output")
+    tmp_path = merged_path + ".partial"
+    with pq.ParquetWriter(tmp_path, pq.ParquetFile(batch_files[0]).schema_arrow) as writer:
+        for f in batch_files:
+            pf = pq.ParquetFile(f)
+            for i in range(pf.metadata.num_row_groups):
+                writer.write_table(pf.read_row_group(i))
+    os.replace(tmp_path, merged_path)
+    for f in batch_files:
+        os.remove(f)

@@ -35,6 +35,8 @@ thread-independent, and setup is safe to run concurrently.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import numba as nb
 import pandas as pd
@@ -42,6 +44,7 @@ import tqdm
 
 from src.logger import logger
 from src.utils.frag_encoding import is_isotope
+from src.utils.io.bruker_d import gather_range, nearest_peak
 from src.utils.io.load_files import (
     PEAK_MZ_DTYPE, PEAK_INT_DTYPE, PEAK_MOB_DTYPE,
 )
@@ -65,8 +68,24 @@ FEATURE_COLUMNS = (
     # Top-10 pairwise correlations (sorted descending; -1 = missing)
     *[f"top{i}_pair_corr" for i in range(1, 11)],
     # Precursor–fragment correlation (unfragmented precursor in MS2 vs fragment traces)
+    # TODO: add the MS1 precursor to these correlations: the precursor's MS1
+    # isotope-envelope trace (monoisotopic + M+1, within the MS1 tolerance and
+    # IM gate, one point per MS1 frame) correlated with each fragment trace, as
+    # mean/max features alongside these MS2 ones.  Presence or intensity of MS1
+    # alone does not separate weak real IDs from the decoys competing with them
+    # (decoys share the target's precursor m/z and RT/IM priors, so 96% of the
+    # decoys above the q=5% cut have an MS1 envelope at their apex), but the MS1
+    # trace should co-elute with a real candidate's fragments and not with a
+    # decoy's.  Not computed before scoring today: ms1_cor/iso_cor/MS1_Area come
+    # from quantitation, after scoring, for passing IDs only.
     "mean_prec_frag_corr",     # mean Pearson r between precursor trace and each fragment
     "max_prec_frag_corr",      # max r
+    # Sparse-trace scores over every fragment with any signal (not min_obs-filtered):
+    # sum over fragments of max(0, r), r against the summed trace of the other
+    # fragments (consensus) or against a Gaussian of the run's elution width
+    # centred on the apex scan (profile).
+    "cons_sum_frag_corr",
+    "gau_sum_frag_corr",
     # Same correlation taken across the ION MOBILITY axis instead of RT: at the
     # apex scan only, each fragment's matched intensity is binned by its peaks'
     # own 1/K0 across the band, giving a mobility profile per fragment.  A real
@@ -94,6 +113,8 @@ FEATURE_COLUMNS = (
 # silently breaks the moment any column is appended.
 _IDX_PREC_MEAN = FEATURE_COLUMNS.index("mean_prec_frag_corr")
 _IDX_PREC_MAX = FEATURE_COLUMNS.index("max_prec_frag_corr")
+_IDX_CONS_SUM = FEATURE_COLUMNS.index("cons_sum_frag_corr")
+_IDX_GAU_SUM = FEATURE_COLUMNS.index("gau_sum_frag_corr")
 _IDX_IM_MEAN = FEATURE_COLUMNS.index("im_prec_frag_mean")
 _IDX_IM_MAX = FEATURE_COLUMNS.index("im_prec_frag_max")
 # Start of the 38-slot IM pairwise block (same layout as the RT block).
@@ -102,7 +123,7 @@ _IDX_IM_PAIRWISE = FEATURE_COLUMNS.index("im_mean_frag_corr")
 # Every IM-derived column is a suffix of FEATURE_COLUMNS, starting here.
 _N_NON_IM_FEATURES = _IDX_IM_MEAN
 
-# Gaussian width on the mobility axis for the grid-free kernel, as a fraction
+# Gaussian width on the mobility axis for the pairwise IM kernel, as a fraction
 # of the fitted IM tolerance. opt_im_precision is the 99% coverage of the Laplace
 # core, b*ln(100), and the core SD is b*sqrt(2), so sigma = sqrt(2)/ln(100).
 # Expressed as a fraction so it tracks the fitted tolerance instead of being a
@@ -157,39 +178,51 @@ def _scan_metadata(ms2scans):
 
 
 def _build_peak_lists(ms2scans, need_mob):
-    """Wrap the existing per-scan peak arrays in numba typed lists.
+    """The scans' peaks for the numba kernels, without copying them.
 
-    The kernels only ever read one scan's peaks at a time, so they need
-    per-scan contiguity -- which the scans already have. Handing them typed
-    lists therefore costs no per-peak memory at all, where the previous
-    CSR-flattening built a second full copy of the run alongside the first: for
-    a ~1e9-peak timsTOF .d that was ~18 GB extra, and on Windows (no
-    overcommit) it failed outright at np.empty.
+    Returns ``(gmz, gint, gmob, tab)``: typed lists of peak buffers, and per scan
+    ``tab[i] = (buffer, s0, s1, s2, s3)``.  An IM band (``BandSpectrum``) points
+    into its (frame, window) group's buffer, where its peaks are three sorted runs
+    (``src/utils/io/bruker_d.py``), so each peak is passed once; the kernels read
+    the runs with ``gather_range`` / ``nearest_peak``, which give exactly the
+    merged band's slices.  Any other spectrum is its own buffer of one run
+    (s0 = s1 = 0, s2 = s3 = n), read as is.
 
-    All three ingest paths now normalize to the peak dtypes at read time, so
-    ``ascontiguousarray`` is a no-op here and the lists are pure views. It stays
-    as a cheap guard: numba needs one concrete element type per list, and a
-    single stray dtype would otherwise fail to compile deep inside a kernel.
+    ``ascontiguousarray`` is a no-op guard: numba needs one element type per list.
     """
-    peaks_mz = nb.typed.List()
-    peaks_int = nb.typed.List()
-    peaks_mob = nb.typed.List()
-
-    for s in ms2scans:
-        peaks_mz.append(np.ascontiguousarray(s.mz, dtype=PEAK_MZ_DTYPE))
-        peaks_int.append(np.ascontiguousarray(s.intens, dtype=PEAK_INT_DTYPE))
-        if need_mob:
-            mob = getattr(s, "mobility", None)
-            if mob is None:
-                mob = np.full(len(s.mz), np.nan, dtype=PEAK_MOB_DTYPE)
-            peaks_mob.append(np.ascontiguousarray(mob, dtype=PEAK_MOB_DTYPE))
-
-    if not need_mob:
-        # Never indexed (the IM kernels only run when mobility exists), but the
-        # list still needs a concrete element type for numba to compile against.
-        peaks_mob.append(np.empty(0, dtype=PEAK_MOB_DTYPE))
-
-    return peaks_mz, peaks_int, peaks_mob
+    gmz = nb.typed.List()
+    gint = nb.typed.List()
+    gmob = nb.typed.List()
+    tab = np.empty((len(ms2scans), 5), dtype=np.int64)
+    seen = {}
+    for i, s in enumerate(ms2scans):
+        group = getattr(s, "_group", None)
+        if group is not None and getattr(s, "_own", None) is None:
+            gi = seen.get(id(group[0]))
+            if gi is None:
+                gi = seen[id(group[0])] = len(gmz)
+                gmz.append(np.ascontiguousarray(group[0], dtype=PEAK_MZ_DTYPE))
+                gint.append(np.ascontiguousarray(group[1], dtype=PEAK_INT_DTYPE))
+                gmob.append(np.ascontiguousarray(group[2], dtype=PEAK_MOB_DTYPE))
+            tab[i, 0] = gi
+            tab[i, 1:] = s._runs
+            continue
+        mz = s.mz
+        n = len(mz)
+        gi = len(gmz)
+        gmz.append(np.ascontiguousarray(mz, dtype=PEAK_MZ_DTYPE))
+        gint.append(np.ascontiguousarray(s.intens, dtype=PEAK_INT_DTYPE))
+        mob = getattr(s, "mobility", None)
+        if mob is None:
+            mob = np.full(n, np.nan, dtype=PEAK_MOB_DTYPE) if need_mob else np.empty(0, dtype=PEAK_MOB_DTYPE)
+        gmob.append(np.ascontiguousarray(mob, dtype=PEAK_MOB_DTYPE))
+        tab[i] = (gi, 0, 0, n, n)
+    if len(gmz) == 0:
+        # never indexed, but numba needs a concrete element type to compile against
+        gmz.append(np.empty(0, dtype=PEAK_MZ_DTYPE))
+        gint.append(np.empty(0, dtype=PEAK_INT_DTYPE))
+        gmob.append(np.empty(0, dtype=PEAK_MOB_DTYPE))
+    return gmz, gint, gmob, tab
 
 
 def _build_window_csr(scan_rt, scan_win_lo, scan_win_hi):
@@ -236,6 +269,9 @@ def _build_window_csr(scan_rt, scan_win_lo, scan_win_hi):
         win_scan_offsets[w + 1] = cursor
 
     return win_lo, win_hi, win_scan_offsets, win_scan_idx, win_scan_rt
+
+
+_ROWS_PER_TASK = 2000   # rows per thread-pool task in compute_fragment_correlations
 
 
 # ---------------------------------------------------------------------------
@@ -285,8 +321,10 @@ def _covering_scans_numba(
 
 @nb.njit(cache=False, nogil=True)
 def _match_and_fill_numba(
-    peaks_mz,
-    peaks_int,
+    gmz,
+    gint,
+    gmob,
+    tab,
     scan_idx,
     n_scans_used,
     frag_mz,
@@ -305,29 +343,27 @@ def _match_and_fill_numba(
     n_frags = frag_mz.shape[0]
     for i in range(n_scans_used):
         s = scan_idx[i]
-        scan_mz = peaks_mz[s]
-        scan_in = peaks_int[s]
-        n_peaks = scan_mz.shape[0]
-        if n_peaks == 0:
+        g, s0, s1, s2, s3 = tab[s, 0], tab[s, 1], tab[s, 2], tab[s, 3], tab[s, 4]
+        if s3 - s0 == 0:
             for j in range(n_frags):
                 out_matrix[i, j] = 0.0
             continue
         for j in range(n_frags):
             q = frag_mz[j]
             tol = q * ppm_tol
-            lo_pos = np.searchsorted(scan_mz, q - tol)
-            hi_pos = np.searchsorted(scan_mz, q + tol, side="right")
+            _m, scan_in, _b = gather_range(gmz[g], gint[g], gmob[g], s0, s1, s2, s3, q - tol, q + tol)
             summed_int = 0.0
-            for p in range(lo_pos, hi_pos):
+            for p in range(scan_in.shape[0]):
                 summed_int += scan_in[p]
             out_matrix[i, j] = summed_int
 
 
 @nb.njit(cache=False, nogil=True)
 def _match_and_fill_im_numba(
-    peaks_mz,
-    peaks_int,
-    peaks_mob,
+    gmz,
+    gint,
+    gmob,
+    tab,
     scan_idx,
     n_scans_used,
     frag_mz,
@@ -366,23 +402,25 @@ def _match_and_fill_im_numba(
         n_matched = 0
         for i in range(n_scans_used):
             s = scan_idx[i]
-            scan_mz = peaks_mz[s]
-            scan_mob = peaks_mob[s]
-            n_peaks = scan_mz.shape[0]
-            if n_peaks == 0:
+            g, s0, s1, s2, s3 = tab[s, 0], tab[s, 1], tab[s, 2], tab[s, 3], tab[s, 4]
+            scan_mz = gmz[g]
+            scan_mob = gmob[g]
+            if s3 - s0 == 0:
                 continue
             for j in range(n_frags):
                 q = frag_mz[j]
-                pos = np.searchsorted(scan_mz, q)
-                if pos == 0:
-                    cand = 0
-                elif pos >= n_peaks:
-                    cand = n_peaks - 1
+                # the merged band's peaks at searchsorted(q) - 1 and searchsorted(q),
+                # as buffer positions (-1 if none)
+                pred, succ = nearest_peak(scan_mz, gint[g], scan_mob, s0, s1, s2, s3, q)
+                if pred < 0:
+                    cand = succ
+                elif succ < 0:
+                    cand = pred
                 else:
-                    if q - scan_mz[pos - 1] <= scan_mz[pos] - q:
-                        cand = pos - 1
+                    if q - scan_mz[pred] <= scan_mz[succ] - q:
+                        cand = pred
                     else:
-                        cand = pos
+                        cand = succ
                 diff = scan_mz[cand] - q
                 if diff < 0.0:
                     diff = -diff
@@ -409,21 +447,17 @@ def _match_and_fill_im_numba(
     # ── Summation pass: sum all peaks within m/z tol (and, if gating, im_tol) ──
     for i in range(n_scans_used):
         s = scan_idx[i]
-        scan_mz = peaks_mz[s]
-        scan_in = peaks_int[s]
-        scan_mob = peaks_mob[s]
-        n_peaks = scan_mz.shape[0]
-        if n_peaks == 0:
+        g, s0, s1, s2, s3 = tab[s, 0], tab[s, 1], tab[s, 2], tab[s, 3], tab[s, 4]
+        if s3 - s0 == 0:
             for j in range(n_frags):
                 out_matrix[i, j] = 0.0
             continue
         for j in range(n_frags):
             q = frag_mz[j]
             tol = q * ppm_tol
-            lo_pos = np.searchsorted(scan_mz, q - tol)
-            hi_pos = np.searchsorted(scan_mz, q + tol, side="right")
+            _m, scan_in, scan_mob = gather_range(gmz[g], gint[g], gmob[g], s0, s1, s2, s3, q - tol, q + tol)
             summed_int = 0.0
-            for p in range(lo_pos, hi_pos):
+            for p in range(scan_in.shape[0]):
                 if gate:
                     mob = scan_mob[p]
                     if mob == mob and abs(mob - prec_im) <= im_tol:
@@ -633,24 +667,36 @@ def _pairwise_corr_and_features_numba(matrix, out_features):
 
 
 @nb.njit(cache=False, nogil=True)
-def _kernel_pairwise_numba(peaks_mz, peaks_int, peaks_mob,
+def _kernel_pairwise_numba(gmz, gint, gmob, tab,
                            scans, n_scans, queries, mz_tol, sigma_im,
-                           out_features, prec_out):
-    """Grid-free RT x IM similarity between ions, and its feature block.
+                           band_lo, band_hi, out_features, prec_out):
+    """RT x IM similarity between ions, and its feature block.
 
-    No binning.  Fragments of one precursor are recorded in the *same* MS2
-    spectra, so their RT coordinates coincide exactly -- peaks are paired only
-    within a scan, with no RT kernel.  On the mobility axis, where two peaks of
-    the same ion differ by measurement jitter, pairs are weighted by a Gaussian
-    of width ``sigma_im``:
+    Fragments of one precursor are recorded in the *same* MS2 spectra, so their
+    RT coordinates coincide exactly -- peaks are paired only within a scan, with
+    no RT kernel.  On the mobility axis, where two peaks of the same ion differ by
+    measurement jitter, pairs are weighted by a Gaussian of width ``sigma_im``:
 
         <A,B> = sum_scans sum_{i in A(s)} sum_{j in B(s)} wi*wj*exp(-dIM^2 / 2s^2)
         sim   = <A,B> / sqrt(<A,A> * <B,B>)
 
     That is a cosine similarity in the kernel's feature space: bounded [0,1],
-    invariant to intensity scale, and free of the bin-edge artefacts a grid
-    introduces (two peaks 1e-4 apart can straddle a bin boundary while two
-    0.005 apart share one).
+    invariant to intensity scale, and free of the bin-edge artefacts of a coarse
+    grid.
+
+    The pair sum is not taken pair by pair (that is quadratic in the peaks in the
+    two m/z windows, which grows with load on raw timsTOF data).  The Gaussian
+    kernel is the overlap of two Gaussians of width sigma_im / sqrt(2):
+
+        exp(-d^2 / 2 sigma^2) = (1 / (sqrt(pi) s)) * int g(x - mi) g(x - mj) dx,
+        g(u) = exp(-u^2 / 2 s^2),  s = sigma_im / sqrt(2)
+
+    so each query's peaks are spread onto a mobility grid (step s / 2, over the
+    apex scan's band ``[band_lo, band_hi]`` plus 8 s either side, each peak's
+    Gaussian cut at 8 s) and <A,B> is the dot product of two grid profiles, per
+    scan.  The constant factor cancels in ``sim``.  At step s / 2 the sum of a
+    Gaussian on the grid matches its integral to ~exp(-8 pi^2), and the 8 s cut
+    drops < 1e-13, so the result equals the pairwise sum to rounding.
 
     ``queries[0]`` is the precursor; ``queries[1:]`` the fragments.  Pairwise
     features are computed over the fragments only; ``prec_out`` receives the
@@ -658,38 +704,60 @@ def _kernel_pairwise_numba(peaks_mz, peaks_int, peaks_mob,
     """
     n_q = queries.shape[0]
     gram = np.zeros((n_q, n_q), dtype=np.float64)
-    inv2s2 = 1.0 / (2.0 * sigma_im * sigma_im)
-    p0 = np.empty(n_q, dtype=np.int64)
-    p1 = np.empty(n_q, dtype=np.int64)
+    s_g = sigma_im / np.sqrt(2.0)
+    step = 0.5 * s_g
+    reach = 8.0 * s_g
+    inv2s2 = 1.0 / (2.0 * s_g * s_g)
+    g0 = band_lo - reach
+    n_grid = int(np.ceil((band_hi + reach - g0) / step)) + 1
+    prof = np.zeros((n_q, n_grid), dtype=np.float64)
+    k_lo = np.empty(n_q, dtype=np.int64)
+    k_hi = np.empty(n_q, dtype=np.int64)
 
     for si in range(n_scans):
         sc = scans[si]
-        scan_mz = peaks_mz[sc]
-        scan_int = peaks_int[sc]
-        scan_mob = peaks_mob[sc]
-        if scan_mz.shape[0] == 0:
+        g, s0, s1, s2, s3 = tab[sc, 0], tab[sc, 1], tab[sc, 2], tab[sc, 3], tab[sc, 4]
+        if s3 - s0 == 0:
             continue
         for j in range(n_q):
             q = queries[j]
             tol = q * mz_tol
-            p0[j] = np.searchsorted(scan_mz, q - tol)
-            p1[j] = np.searchsorted(scan_mz, q + tol, side="right")
+            _m, scan_int, scan_mob = gather_range(gmz[g], gint[g], gmob[g], s0, s1, s2, s3, q - tol, q + tol)
+            k_lo[j] = n_grid
+            k_hi[j] = -1
+            for i in range(scan_int.shape[0]):
+                m = scan_mob[i]
+                w = scan_int[i]
+                a0 = int(np.floor((m - reach - g0) / step))
+                a1 = int(np.ceil((m + reach - g0) / step))
+                if a0 < 0:
+                    a0 = 0
+                if a1 > n_grid - 1:
+                    a1 = n_grid - 1
+                for k in range(a0, a1 + 1):
+                    d = g0 + k * step - m
+                    prof[j, k] += w * np.exp(-d * d * inv2s2)
+                if a0 < k_lo[j]:
+                    k_lo[j] = a0
+                if a1 > k_hi[j]:
+                    k_hi[j] = a1
         for a in range(n_q):
-            if p1[a] <= p0[a]:
+            if k_hi[a] < 0:
                 continue
             for b in range(a, n_q):
-                if p1[b] <= p0[b]:
+                if k_hi[b] < 0:
                     continue
+                lo = k_lo[a] if k_lo[a] > k_lo[b] else k_lo[b]
+                hi = k_hi[a] if k_hi[a] < k_hi[b] else k_hi[b]
                 acc = 0.0
-                for i in range(p0[a], p1[a]):
-                    mi = scan_mob[i]
-                    wi = scan_int[i]
-                    for k in range(p0[b], p1[b]):
-                        d = mi - scan_mob[k]
-                        acc += wi * scan_int[k] * np.exp(-d * d * inv2s2)
+                for k in range(lo, hi + 1):
+                    acc += prof[a, k] * prof[b, k]
                 gram[a, b] += acc
                 if b != a:
                     gram[b, a] += acc
+        for j in range(n_q):
+            for k in range(k_lo[j], k_hi[j] + 1):
+                prof[j, k] = 0.0
 
     n_frag = n_q - 1
     max_pairs = n_frag * (n_frag - 1) // 2
@@ -737,6 +805,79 @@ def _kernel_pairwise_numba(peaks_mz, peaks_int, peaks_mob,
     else:
         prec_out[0] = np.nan
         prec_out[1] = np.nan
+
+
+@nb.njit(cache=False, nogil=True)
+def _pearson_cols_numba(x, y):
+    """Pearson r of two equal-length vectors; 0 when either has no variance."""
+    n = x.shape[0]
+    mx = 0.0
+    my = 0.0
+    for i in range(n):
+        mx += x[i]
+        my += y[i]
+    mx /= n
+    my /= n
+    sxx = 0.0
+    syy = 0.0
+    sxy = 0.0
+    for i in range(n):
+        dx = x[i] - mx
+        dy = y[i] - my
+        sxx += dx * dx
+        syy += dy * dy
+        sxy += dx * dy
+    if sxx == 0.0 or syy == 0.0:
+        return 0.0
+    return sxy / np.sqrt(sxx * syy)
+
+
+@nb.njit(cache=False, nogil=True)
+def _sparse_trace_scores_numba(matrix, profile, out):
+    """Consensus and elution-profile scores for sparse fragment traces.
+
+    ``matrix`` (n_scans, n_frags), ``profile`` (n_scans,) the expected elution
+    shape at the apex.  Over fragments with any signal, sums max(0, r) of each
+    fragment against (a) the summed trace of the other fragments and (b)
+    ``profile``.  Writes out[0], out[1]; NaN with fewer than two such fragments.
+    """
+    n_scans, n_frags = matrix.shape
+    out[0] = np.nan
+    out[1] = np.nan
+    if n_scans < 2:
+        return
+    total = np.zeros(n_scans)
+    n_sig = 0
+    for j in range(n_frags):
+        s = 0.0
+        for i in range(n_scans):
+            s += matrix[i, j]
+        if s > 0.0:
+            n_sig += 1
+            for i in range(n_scans):
+                total[i] += matrix[i, j]
+    if n_sig < 2:
+        return
+    rest = np.empty(n_scans)
+    cons = 0.0
+    gau = 0.0
+    for j in range(n_frags):
+        s = 0.0
+        for i in range(n_scans):
+            s += matrix[i, j]
+        if s <= 0.0:
+            continue
+        col = matrix[:, j]
+        for i in range(n_scans):
+            rest[i] = total[i] - col[i]
+        r = _pearson_cols_numba(col, rest)
+        if r > 0.0:
+            cons += r
+        r = _pearson_cols_numba(col, profile)
+        if r > 0.0:
+            gau += r
+    out[0] = cons
+    out[1] = gau
 
 
 @nb.njit(cache=False, nogil=True)
@@ -816,6 +957,7 @@ def compute_fragment_correlations(
     min_obs=3,
     im_tol=0.0,
     prec_im=None,
+    n_threads=None,
 ):
     """Compute pairwise fragment-ion correlation features for every row of ``fdc``.
 
@@ -844,6 +986,8 @@ def compute_fragment_correlations(
     min_obs : int, default 3
         Fragment columns with fewer than this many non-zero entries are dropped
         before correlation.
+    n_threads : int or None, default None
+        Worker threads for the per-row loop; ``config.args.threads`` when None.
 
     Returns
     -------
@@ -885,7 +1029,7 @@ def compute_fragment_correlations(
     (win_lo, win_hi, win_scan_offsets,
      win_scan_idx, win_scan_rt) = _build_window_csr(scan_rt, scan_win_lo, scan_win_hi)
 
-    peaks_mz, peaks_int, peaks_mob = _build_peak_lists(ms2scans, _use_im)
+    gmz, gint, gmob, tab = _build_peak_lists(ms2scans, _use_im)
     if _use_im:
         logger.info(f"IM-aware fragment correlations (im_tol={im_tol:.5f})")
         # Per-scan IM-bin bounds (parallel to ms2scans / scan indices), used to
@@ -904,17 +1048,22 @@ def compute_fragment_correlations(
 
     rt_halfwidth = float(fwhm_multiplier) * float(fwhm)
 
-    # Bound for the scan-index scratch buffer: a precursor cannot match more
-    # scans than there are MS2 scans total.
-    scan_buf = np.empty(len(ms2scans), dtype=np.int64)
     # Derived from the precursor slot's position, not the total column count, so
     # appending feature columns cannot shift it.
     _n_pairwise_feats = _IDX_PREC_MEAN - 2
-    feat_scratch = np.empty(_n_pairwise_feats, dtype=np.float64)
-    im_feat_scratch = np.empty(_n_pairwise_feats, dtype=np.float64)
-    im_prec_scratch = np.empty(2, dtype=np.float64)
-    prec_corr_mean = np.empty(1, dtype=np.float64)
-    prec_corr_max = np.empty(1, dtype=np.float64)
+
+    def _scratch():
+        # One set per worker thread: the kernels write into these.  scan_buf is
+        # bounded by the run's MS2 scan count (no precursor can match more).
+        return (np.empty(len(ms2scans), dtype=np.int64),
+                np.empty(_n_pairwise_feats, dtype=np.float64),
+                np.empty(_n_pairwise_feats, dtype=np.float64),
+                np.empty(2, dtype=np.float64),
+                np.empty(1, dtype=np.float64),
+                np.empty(1, dtype=np.float64),
+                np.empty(2, dtype=np.float64))
+    # Elution profile width: the run's FWHM as a Gaussian sigma (seconds)
+    _profile_sigma = float(fwhm) / 2.3548200450309493
 
     seqs = fdc["seq"].to_numpy()
     zs = fdc["z"].to_numpy()
@@ -928,24 +1077,29 @@ def compute_fragment_correlations(
     frag_names = library.frag_names_data
     prec_mz_arr = library.prec_mz
 
-    for row in tqdm.tqdm(range(n_rows)):
+    # Each row is independent and writes only its own row of ``out``, so rows
+    # are processed on a thread pool (free-threaded Python; the kernels are
+    # nogil), each worker with its own scratch buffers.  Same results as the
+    # serial loop.
+    def _row(row, scan_buf, feat_scratch, im_feat_scratch, im_prec_scratch,
+             prec_corr_mean, prec_corr_max, sparse_scratch):
         if not (coeffs[row] > 0) or not np.isfinite(rts[row]):
-            continue
+            return
         key = (seqs[row], int(zs[row]))
         lib_idx = key_to_idx.get(key)
         if lib_idx is None:
-            continue
+            return
 
         off = int(spec_off[lib_idx])
         ln = int(spec_len[lib_idx])
         if ln == 0:
-            continue
+            return
 
         frag_mz = spec_mz[off:off + ln]
         frag_codes = frag_names[off:off + ln]
         keep_mask = ~is_isotope(frag_codes)
         if not keep_mask.any():
-            continue
+            return
         frag_mz_kept = np.ascontiguousarray(frag_mz[keep_mask], dtype=np.float64)
 
         prec_mz = float(prec_mz_arr[lib_idx])
@@ -957,7 +1111,7 @@ def compute_fragment_correlations(
         )
         out[row, 0] = float(n_scans)
         if n_scans == 0:
-            continue
+            return
 
         n_frags_kept = frag_mz_kept.shape[0]
 
@@ -981,7 +1135,7 @@ def compute_fragment_correlations(
                 use_scans = np.ascontiguousarray(cov[order][first])
             out[row, 0] = float(use_scans.shape[0])
             if use_scans.shape[0] == 0:
-                continue
+                return
             n_use = use_scans.shape[0]
             matrix = np.empty((n_use, n_frags_kept), dtype=np.float64)
             _mob_scratch = np.empty((n_use, n_frags_kept), dtype=np.float64)
@@ -989,7 +1143,7 @@ def compute_fragment_correlations(
             # intensity only when its peak mobility is within `im_tol` of prec_im.
             # Cheap here because use_scans holds one scan per RT (not all bands).
             _match_and_fill_im_numba(
-                peaks_mz, peaks_int, peaks_mob,
+                gmz, gint, gmob, tab,
                 use_scans, n_use, frag_mz_kept, float(mz_tol), float(im_tol),
                 prec_im, matrix, _mob_scratch,
             )
@@ -998,21 +1152,36 @@ def compute_fragment_correlations(
             n_use = n_scans
             matrix = np.empty((n_use, n_frags_kept), dtype=np.float64)
             _match_and_fill_numba(
-                peaks_mz, peaks_int,
+                gmz, gint, gmob, tab,
                 use_scans, n_use, frag_mz_kept, float(mz_tol), matrix,
             )
 
         nonzero_counts = np.count_nonzero(matrix, axis=0)
+
+        # Sparse-trace scores over every fragment with any signal.  The profile is
+        # centred on this row's apex scan (rts[row], the scan the apex selection
+        # chose), the same anchor the IM block below uses.
+        _profile = np.exp(-0.5 * ((scan_rt[use_scans] - float(rts[row])) / _profile_sigma) ** 2)
+        _sparse_trace_scores_numba(np.ascontiguousarray(matrix), _profile, sparse_scratch)
+        out[row, _IDX_CONS_SUM] = sparse_scratch[0]
+        out[row, _IDX_GAU_SUM] = sparse_scratch[1]
+
         keep_cols = nonzero_counts >= min_obs
         n_frags_final = int(keep_cols.sum())
         out[row, 1] = float(n_frags_final)
         if n_frags_final < 2:
-            continue
+            return
 
         sub_matrix = np.ascontiguousarray(matrix[:, keep_cols])
         _pairwise_corr_and_features_numba(sub_matrix, feat_scratch)
         out[row, 2:2 + _n_pairwise_feats] = feat_scratch
 
+        # TODO: review precursor peak picking here against the MS1 precursor peak
+        # (most intense within the ppm window and IM gate).  The precursor trace
+        # sums every MS2 peak within mz_tol (and the IM gate) of the library's
+        # uncalibrated prec_mz; the IM kernel weights every peak in the window;
+        # and _match_and_fill_im_numba's reference-IM fallback takes the
+        # nearest-m/z peak.
         # Precursor–fragment correlation: extract unfragmented precursor
         # intensity from the SAME single-bin scan set and correlate with fragments.
         prec_mz_arr_q = np.array([prec_mz], dtype=np.float64)
@@ -1022,13 +1191,13 @@ def compute_fragment_correlations(
             # measured at the fragment-derived mobility.
             _prec_mob_scratch = np.empty((n_use, 1), dtype=np.float64)
             _match_and_fill_im_numba(
-                peaks_mz, peaks_int, peaks_mob,
+                gmz, gint, gmob, tab,
                 use_scans, n_use, prec_mz_arr_q, float(mz_tol), float(im_tol),
                 prec_im, prec_matrix, _prec_mob_scratch,
             )
         else:
             _match_and_fill_numba(
-                peaks_mz, peaks_int,
+                gmz, gint, gmob, tab,
                 use_scans, n_use, prec_mz_arr_q, float(mz_tol), prec_matrix,
             )
         _precursor_frag_corr_numba(
@@ -1062,7 +1231,7 @@ def compute_fragment_correlations(
                 _band_scans = np.ascontiguousarray(use_scans[_same_band])
                 _n_band = int(_band_scans.shape[0])
                 if _n_band == 0:
-                    continue
+                    return
                 # queries[0] is the precursor so the kernel can produce both the
                 # pairwise block and the precursor-vs-fragment pair in one pass
                 # over the peaks.
@@ -1072,13 +1241,29 @@ def compute_fragment_correlations(
                 _sigma_im = _IM_KERNEL_SIGMA_FRAC * float(im_tol)
                 if _sigma_im > 0.0:
                     _kernel_pairwise_numba(
-                        peaks_mz, peaks_int, peaks_mob,
+                        gmz, gint, gmob, tab,
                         _band_scans, _n_band, _q, float(mz_tol), _sigma_im,
-                        im_feat_scratch, im_prec_scratch,
+                        band_lo, band_hi, im_feat_scratch, im_prec_scratch,
                     )
                     out[row, _IDX_IM_MEAN] = im_prec_scratch[0]
                     out[row, _IDX_IM_MAX] = im_prec_scratch[1]
                     out[row, _IDX_IM_PAIRWISE:_IDX_IM_PAIRWISE + _n_pairwise_feats] = \
                         im_feat_scratch
+
+
+    def _chunk(rows):
+        scr = _scratch()
+        for row in rows:
+            _row(row, *scr)
+        return len(rows)
+
+    if n_threads is None:
+        from src import config
+        n_threads = int(config.args.threads)
+    chunks = [range(i, min(i + _ROWS_PER_TASK, n_rows)) for i in range(0, n_rows, _ROWS_PER_TASK)]
+    with ThreadPoolExecutor(max_workers=max(1, n_threads)) as pool, \
+            tqdm.tqdm(total=n_rows) as bar:
+        for done in pool.map(_chunk, chunks):
+            bar.update(done)
 
     return pd.DataFrame(out, index=fdc.index, columns=columns)

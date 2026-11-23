@@ -54,8 +54,14 @@ if %ERRORLEVEL% neq 0 goto uvFailed
 @rem If UV successfully found, set up environment
 :uvFound
 
+@rem Update UV: free-threaded Python 3.14.3+ needs UV 0.13 or newer. A UV installed with pip can not
+@rem update itself, so fall back to pip
+uv self update >nul 2>&1
+if %ERRORLEVEL% neq 0 pip install -U uv
+
 @rem Sync UV environment
-uv sync --python 3.11
+@rem TODO: if uv sync fails, the GUI still launches and the window closes; stop and pause so the error stays readable
+uv sync --python 3.14t
 
 @rem Launch GUI application
 start "" uv run pythonw run_jmod_from_GUI.py

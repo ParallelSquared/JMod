@@ -92,6 +92,9 @@ ran_from_GUI = False
 ms1_ppm = 20
 ms1_tol = ms1_ppm*10**(-6)
 
+# TODO: unit-bound default; check whether anything still reads it.  It reaches
+# fit_to_lib in rt_alignment.fit_with_features with rt_filter=False, and run_jmod's
+# test-mode rt_tolerance only in a commented-out line.
 rt_tol = 9
 # Ion mobility, two distinct quantities (both half-widths; gates are |d| <= tol):
 #   im_precision -- spread of a precursor's fragments about their own median.
@@ -138,9 +141,6 @@ max_num_prelim_search = 1e5
 # protein_column = 'protein_name'
 protein_column = 'protein_group'
 
-
-### the minimum number of IDs necessary for fine-tuning
-FT_minimum = 1e3
 
 ### minimum ms1 tolerance; set to 0 to ignore
 min_ms1_tol = 0#3e-6
@@ -277,30 +277,6 @@ diann_mods = {
 # diann_mods for one experiment; setup() restores it first.  Modules import
 # the dict itself, so it is changed in place, never rebound
 _BUILTIN_DIANN_MODS = dict(diann_mods)
-
-
-# Held so the limiter is not garbage collected -- threadpoolctl restores the
-# original limits when the object is released, which would undo the cap.
-_BLAS_LIMITER = None
-
-
-def limit_blas_threads():
-    """Pool initializer: pin the calling worker's BLAS to a single thread.
-
-    Each spawned worker loads its own OpenBLAS, which by default sizes its
-    thread pool to the machine's core count and allocates per-thread buffers.
-    With N workers on an N-core box that is N*N BLAS threads and their buffers
-    sharing one machine.
-
-    Scoped to workers on purpose: the parent is untouched, so threaded BLAS
-    stays available for the main search and everything downstream of it.
-
-    Setting OPENBLAS_NUM_THREADS would be too late here -- BLAS is already
-    loaded by the time an initializer runs -- so reconfigure it at runtime.
-    """
-    global _BLAS_LIMITER
-    from threadpoolctl import threadpool_limits
-    _BLAS_LIMITER = threadpool_limits(limits=1)
 
 
 # Function to load configuration from JSON

@@ -17,7 +17,6 @@ import os
 import numpy.typing as npt
 import csv
 import re
-from pyteomics import mass
 import src.config as config
 import pandas as pd
 from src.utils.parse_peptides import split_frag_name

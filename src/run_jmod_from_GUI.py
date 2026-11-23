@@ -30,7 +30,7 @@ from src.default_dict import default_dict
 import shlex
 from pathlib import Path
 import subprocess
-from pyteomics import mass
+from src import mass
 import re
 from src.logger import logger, ElapsedFormatter
 import logging
@@ -615,8 +615,8 @@ class JModGUI(ThemedTk):
         """
         if not path:
             return None
-        from src.utils.io import file_reader
-        return file_reader.resolve_bruker_sdk_path(path, strict=False)
+        from src.utils.io import bruker_d
+        return bruker_d.resolve_bruker_sdk_path(path, strict=False)
 
 
     # Info button
@@ -807,7 +807,10 @@ class JModGUI(ThemedTk):
 
         # Only needed to centroid a .d that has no peaks.parquet yet; an already
         # centroided folder is read without it.
-        if not os.path.exists(os.path.join(folder, "peaks.parquet")):
+        # .d data is always read raw with Bruker's calibration, so the SDK is
+        # always needed, whether or not the folder holds a peaks.parquet.
+        # if not os.path.exists(os.path.join(folder, "peaks.parquet")):
+        if True:
             settings = load_settings()
             if not self._bruker_sdk_path_resolved(settings.get("bruker_sdk_path")):
                 new_path = self.locate_bruker_sdk_path()
@@ -819,14 +822,22 @@ class JModGUI(ThemedTk):
                 settings["bruker_sdk_path"] = resolved
                 save_settings(settings)
 
+            # Without the SDK the run fails at start (_prepare_readers), so the
+            # folder is not added.
+            # if not settings.get("bruker_sdk_path"):
+            #     proceed = messagebox.askyesno(
+            #         "Continue without the Bruker SDK?",
+            #         "Without the SDK, m/z and 1/K0 are approximated from "
+            #         "analysis.tdf and will not match an SDK-centroided run.\n\n"
+            #         "Add this file anyway?")
+            #     if not proceed:
+            #         return
             if not settings.get("bruker_sdk_path"):
-                proceed = messagebox.askyesno(
-                    "Continue without the Bruker SDK?",
-                    "Without the SDK, m/z and 1/K0 are approximated from "
-                    "analysis.tdf and will not match an SDK-centroided run.\n\n"
-                    "Add this file anyway?")
-                if not proceed:
-                    return
+                messagebox.showerror(
+                    "Bruker SDK required",
+                    "Reading .d data needs the Bruker timsdata SDK. "
+                    "Select the SDK folder to add this file.")
+                return
 
         self.file_dropdown.add_files([folder])
         self.last_opened_dir = os.path.dirname(folder)

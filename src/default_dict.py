@@ -126,6 +126,8 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # TODO: -d/--diaPASEF does nothing: nothing reads config.args.diaPASEF.
+    # timsTOF/diaPASEF handling keys off .d input instead.  Remove it.
     'diaPASEF': {
         'flags': ('-d', '--diaPASEF'),
         'default': False,
@@ -148,6 +150,10 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # TODO: misnamed -- the minimum number of a candidate's top-N library fragments
+    # that must match.  It was applied as "> atleast_m" in spectral_fitting but
+    # ">= atleast_m" in fragment_index; rename (e.g. min_topn_matched) and make every
+    # use the same "at least" comparison.
     'atleast_m': {
         'flags': ('-m','--atleast_m'),
         'default': 3,
@@ -158,6 +164,34 @@ default_dict = {
         'tk_handle': None,
         'special_upload': False,
         'values': '+<10'
+    },
+    # Per-spectrum cap on candidates entering the fit: targets and decoys ranked
+    # together by matched top-N ions, then matched fraction of library intensity.
+    # Per channel: the search multiplies it by the plex size (tag channels, decoy
+    # channel included, times SILAC channels; spectral_fitting.plex_size), since
+    # each precursor has a copy in every channel.  A flat 100 on the 9plex cost
+    # 9.5% of IDs (230,838 vs 252,868 uncapped) and let the decoy channel take
+    # slots from the real ones.  None = no cap.  100 from a sweep on the
+    # uncentroided timsTOF 200 pg test
+    # (precursors at 1% FDR / also in DIA-NN): 1000 -> 12,781 / 10,488,
+    # 250 -> 13,750 / 10,871, 100 -> 13,908 / 11,053.  Fewer weak candidates per
+    # spectrum give cleaner coefficients and goodness-of-fit for the real ones.
+    # TODO: optimize this automatically per run (e.g. from the first search, or a
+    # quick sweep on a subset of spectra) instead of a fixed value: the best cap
+    # depends on the data (centroided spectra hit 1000 in 2% of spectra,
+    # uncentroided in 27%), the library and the load.  Below 250 the share of IDs
+    # not in DIA-NN rose (17.9% -> ~20.5%), so whatever chooses it needs an
+    # FDR check (entrapment), not just the ID count.
+    'max_candidates': {
+        'flags': ('--max_candidates',),
+        'default': 100,
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'int',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': 'any'
     },
     'apex_jitter': {
         'flags': ('--apex_jitter',),
@@ -206,6 +240,8 @@ default_dict = {
     },
     # Worker processes for isotope generation (--iso).  Each is a separate
     # process with its own memory; capped at the number of CPUs.
+    ##TODO fold into -t/--threads like the rest of JMod's parallelism; a separate
+    # worker count for one stage (and processes, not threads) is out of step with them
     'iso_workers': {
         'flags': ('--iso_workers',),
         'default': 3,
@@ -229,6 +265,9 @@ default_dict = {
         'special_upload': False,
         'values': '+'
     },
+    ##TODO -p reads as "processes"; give the MS2 tolerance an unambiguous flag (e.g.
+    # --ms2_ppm, no one-letter form).  On .d input it only sets the first-search
+    # tolerance: run_jmod.py replaces it with the fitted MS1 tolerance afterwards
     'ppm': {
         'flags': ('-p', '--ppm'),
         'default': 10,
@@ -295,6 +334,10 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    # TODO: --unmatched does nothing but label the ModelScore.png title
+    # (fdr_analysis).  The unmatched-fragment handling is fixed at type "c" (a
+    # zero-intensity penalty row per unmatched library fragment, in
+    # spectral_fitting._assemble_coo_jit); "a" and "b" no longer exist.  Remove it.
     'unmatched': {
         'flags': ('--unmatched',),
         'default': 'c',
@@ -308,14 +351,17 @@ default_dict = {
     },
     'decoy': {
         'flags': ('--decoy',),
-        'default': 'rev',
+        # rev_tag: reversed with tagged positions (and the C-terminus) fixed, so
+        # every b/y ion carries the same number of tags in target and decoy.
+        # Without a tag nothing is anchored and it gives the same decoys as rev.
+        'default': 'rev_tag',
         'takes_value': True,
         'in_GUI': False,
         'type': 'str',
         'widget': '',
         'tk_handle': None,
         'special_upload': False,
-        'values': ['rev', 'rev_nc', 'shuffle']
+        'values': ['rev', 'rev_nc', 'rev_tag', 'shuffle']
     },
     'tag': {
         'flags': ('--tag',),

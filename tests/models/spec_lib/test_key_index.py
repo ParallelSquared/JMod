@@ -48,6 +48,14 @@ class TestKeyIndex:
                         for i in range(len(store.mod_seq))]
         assert [i for _, i in store.key_to_idx.items()] == list(range(len(keys)))
 
+    def test_iteration_order_is_row_order_with_decoys(self):
+        # fit_to_lib2 takes all_keys = list(library) and uses all_keys' positions
+        # as library indices directly, on the combined target + decoy store
+        from src.models.spec_lib.spec_lib import create_decoy_lib
+        store = create_decoy_lib(edgecases_store(), rules="rev", tag=None)
+        keys = list(store)
+        assert store.resolve_indices(keys) == list(range(len(keys)))
+
     def test_collision_verify_scan(self, monkeypatch):
         # Force every hash equal: lookups must still resolve via the verify scan
         store = edgecases_store()

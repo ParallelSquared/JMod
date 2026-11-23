@@ -29,6 +29,8 @@ Kevin McDonnell, Daniel J. Geiszler, Nathan Wamsley, Jason Derks, Sarah Sipe, Za
 
 ### Windows Setup
 
+<!-- TODO: Windows-specific section on launching the GUI directly from the .bat; the file is launch_JMod.bat, not launch.bat (step 2) -->
+
 <details>
 <summary><strong> Setup Steps </strong>
 </summary>
@@ -48,6 +50,8 @@ If you would like to set up the UV environment with the command line, please fol
 
 ### Linux/MacOS Setup
 
+<!-- TODO: a Linux/macOS launcher like launch_JMod.bat (install/update UV, uv sync, open the GUI). The executable bit gets lost on download, so document it as 'bash launch_JMod.sh' (needs only read permission), with chmod +x as the optional step for double-clicking -->
+
 <details>
 <summary><strong> Setup Steps </strong>
 </summary>
@@ -59,8 +63,13 @@ If you would like to set up the UV environment with the command line, please fol
 
     ```pip install uv``` 
  
-    or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. 
+    or [via wget/curl](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) if it is not already installed. JMod needs UV 0.13 or newer. To update an existing UV, run
 
+    ```uv self update```
+
+    or, if UV was installed with pip, ```pip install -U uv```.
+
+<!-- TODO: add a separate step for navigating to the JMod directory (cd path/to/JMod), and run uv self update right before uv sync -->
 3. Open a new terminal and navigate to the JMod directory. The directory contains a `pyproject.toml` that lists all required packages and dependencies. Run the following command to install the environment: 
 
     ```uv sync```
@@ -70,6 +79,8 @@ If you would like to set up the UV environment with the command line, please fol
 </details>
 
 <!-- TODO: review this -->
+
+<!-- TODO: a macOS section on reading .d data: it runs Bruker's Windows timsdata library under Wine, so users need wine on PATH and a Windows Python installed in their Wine prefix (WINEPREFIX, default ~/.wine) and on its PATH, so that 'wine python --version' works (see _MAC_WINE_REQUIREMENTS in src/utils/io/bruker_d.py) -->
 
 ### Thermo Raw File Support
 
@@ -203,7 +214,7 @@ Some commonly used search parameters are listed below. A more extensive list of 
   Number of MS2 isotopes to consider if using them
   default = 2
 --iso_workers
-  Number of processes used to generate isotopes.
+  Number of threads used to generate isotopes.
   default = 3
 -m --atleast_m
   Required number of fragments matched from top N fragments (N=10)
@@ -363,7 +374,7 @@ JMod produces multiple output files. Each search writes them to a folder determi
 - ```JMod_config.json```: Configuration file for this current search
 - ```JMod_log.log```: Log of the search
 - ```filtered_IDs.parquet```: IDs filtered at 1% FDR with select columns
-- ```filtered_IDs.csv```: IDs filtered at 1% FDR with extended columns
+- ```filtered_precursors.parquet```: IDs filtered at 1% FDR with every column
 - ```Summary.txt```: Summary of precursor & protein identifications
 
 With `--mbr`, the first search of each file is in `first_pass/` and the match between runs library is in `mbr_library/`.
@@ -465,20 +476,20 @@ A comprehensive list of all output columns and descriptions for each one can be 
 | `Protein_Global_Qvalue` | (combined_filtered_IDs) Q-value of the protein over every run |
 | `plexfitMS1` | Fitted MS1 coefficient at max |
 | `plexfitMS1_p` | Correlation of theoretical MS1 isotope distribution with observed peaks |
-| `plexfittrace` | Fitted MS1 coefficients of elution trace |
-| `plexfit_ps` | Correlation of theoretical MS1 isotope distribution with observed peaks for each fit in elution trace |
-| `plexfittrace_spec_all` | All MS1 spectra used for MS1 fitting |
-| `plexfittrace_all` | All fitted MS1 coefficients |
-| `plexfittrace_ps_all` | Correlation of theoretical MS1 isotope distribution with observed peaks for each fit |
+| `plexfittrace` | Fitted MS1 coefficients of elution trace (list, one per MS1 scan of the fit window) |
+| `plexfit_ps` | Correlation of theoretical MS1 isotope distribution with observed peaks for each fit in elution trace (list; 0 where nothing was fitted) |
+| `plexfittrace_spec_all` | All MS1 spectra used for MS1 fitting (list of scan numbers) |
+| `plexfittrace_all` | All fitted MS1 coefficients (list) |
+| `plexfittrace_ps_all` | Correlation of theoretical MS1 isotope distribution with observed peaks for each fit (list; NaN where nothing was fitted) |
 | `plex_Area` | Area under fitted MS1 coefficients |
 | `ms1_apex_scan` | MS1 apex scan selected for MS quantitation |
 | `ms1_cor` | Correlation between MS2 coefficients and monoisotopic trace |
 | `traceproduct` | Product of MS1xMS1 correlations |
 | `iso_cor` | Correlation between theoretical and observed MS1 isotopes |
 | `MS1_Int` | Observed intensity of MS1 monoisotopic peak at max |
-| `all_ms1_specs` | MS1 spectra searched for monoisotopic peak |
+| `all_ms1_specs` | MS1 spectra searched for monoisotopic peak (list of scan numbers) |
 | `MS1_Area` | Area under elution trace of MS1 monoisotopic trace |
-| `all_ms1_iso[n]vals` | Observed MS1 intensities for the [n]th isotopic peak (0 being the monoisotopic peak) |
+| `all_ms1_iso[n]vals` | Observed MS1 intensities for the [n]th isotopic peak (0 being the monoisotopic peak): its fit row's summed intensity at each scan (list) |
 | `last_aa` | Last amino acid in the peptide sequence |
 | `seq_len` | Length of the amino acid sequence |
 | `run_chan` | Sample run and channel concatenated |
@@ -507,7 +518,7 @@ experiment_folder (-o, or 'Output Folder' entry in GUI)
 │   └── [experiment_plots].png
 └── [file]_results/
     ├── filtered_IDs.parquet
-    ├── filtered_IDs.csv
+    ├── filtered_precursors.parquet
     ├── Summary.txt
     ├── first_search/
     │   └── firstSearch.tsv
@@ -519,7 +530,7 @@ experiment_folder (-o, or 'Output Folder' entry in GUI)
     │       └── [feature].png
     ├── outputs/
     │   ├── all_IDs_filtered.parquet
-    │   ├── all_IDs.csv
+    │   ├── all_precursors.parquet
     │   ├── config.json
     │   ├── decoylibsearch_coeffs.parquet
     │   └── params.txt

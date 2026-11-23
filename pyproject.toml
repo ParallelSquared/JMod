@@ -4,14 +4,26 @@
 [project]
 name = "jmod"
 version = "2.0.0"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.14.3"
 
 [tool.uv]
+required-version = ">=0.13"
 managed = true
 default-groups = ["deps"]
 
 required-environments = [
     "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
+[tool.uv.sources]
+# Free-threaded polars-runtime-32, repacked from conda-forge:
+# https://github.com/ParallelSquared/jmod-polars-mirror
+polars-runtime-32 = [
+  { url = "https://github.com/ParallelSquared/jmod-polars-mirror/releases/download/v1.44.2/polars_runtime_32-1.44.2-cp314-cp314t-win_amd64.whl", marker = "sys_platform == 'win32' and platform_machine == 'AMD64'" },
+  { url = "https://github.com/ParallelSquared/jmod-polars-mirror/releases/download/v1.44.2/polars_runtime_32-1.44.2-cp314-cp314t-macosx_11_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
+  { url = "https://github.com/ParallelSquared/jmod-polars-mirror/releases/download/v1.44.2/polars_runtime_32-1.44.2-cp314-cp314t-macosx_11_0_x86_64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'x86_64'" },
+  { url = "https://github.com/ParallelSquared/jmod-polars-mirror/releases/download/v1.44.2/polars_runtime_32-1.44.2-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { url = "https://github.com/ParallelSquared/jmod-polars-mirror/releases/download/v1.44.2/polars_runtime_32-1.44.2-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
 ]
 
 [dependency-groups]
@@ -22,15 +34,13 @@ deps = [
   "dill",
   "pandas",
   "numba",
-  "pyteomics",
   "pymzml",
+  "mzmlpy",
   "psims",
-  "brain-isotopic-distribution",
-  "biosaur2",
   "lxml",
   "regex",
   "tqdm",
-  "peppy_sage>=0.2.0",
+  "peppy_sage==0.3.0",
 
   # Visualization
   "matplotlib",
@@ -42,7 +52,11 @@ deps = [
 
   # Data engineering / IO
   "pyarrow<26.0.0",
-  "polars<2.0.0",
+  # polars-runtime-32 is polars' compiled half; PyPI has no free-threaded build,
+  # so it comes from jmod-polars-mirror (see [tool.uv.sources]).  polars needs
+  # it at its own exact version: bump the two, and the URLs, together.
+  "polars==1.44.2",
+  "polars-runtime-32==1.44.2",
 
   # Classical ML / stats
   "scikit-learn",
@@ -50,50 +64,31 @@ deps = [
   "statsmodels",
   "joblib",
 
-  # Optimization / math extras
-  "cvxopt",
-  "ptinnls",
-
   # Profiling & perf tools
   "line-profiler",
   "memory-profiler",
   "pyinstrument",
 
-  # GUI (Qt + optional Tk themes)
-  "PySide6",
-  "shiboken6",
+  # GUI (Tk themes)
   "sv-ttk",
   "ttkthemes",
 
   # OS-specific helper
-  "pywin32; platform_system == 'Windows'",
   "pythonnet",
 
-  # TensorFlow per platform
-  # Mac
-  "tensorflow==2.15.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
-  "tensorflow-metal==1.2.*; platform_system == 'Darwin' and platform_machine == 'arm64'",
-
-  # Windows
-  "tensorflow-intel==2.15.1; sys_platform == 'win32' and platform_machine == 'AMD64'",
-
-  # Linux
-  "tensorflow==2.15.1; platform_system == 'Linux'",
-
-  # Important: keep TF-Keras (2.15) and block standalone Keras 3
-  "keras==2.15.*",
-
-  # Shared TF tooling
-  "tensorboard",
-  "tensorboard-data-server",
-  "tensorflow-io-gcs-filesystem",
+  # Retention-time prediction
+  "jrif==0.3.0",
+  # torch<2.11: from 2.11 torch's bundled libomp has install name
+  # /opt/llvm-openmp/lib/libomp.dylib instead of Homebrew's path, so on
+  # macOS/arm64 dyld loads it as a SECOND OpenMP runtime alongside the one
+  # xgboost uses and the next threaded call segfaults.  With <2.11 the install
+  # names match and dyld loads one image.  See src/__init__.py and
+  # pytorch/pytorch#155201.
+  "torch<2.11",
 
   # Testing
   "pytest",
   "pytest-cov"
-]
-dev = [
-    "pyside6<6.8",
 ]
 
 [tool.coverage.run]

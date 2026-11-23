@@ -15,7 +15,8 @@
 
 import subprocess
 import numpy as np
-from pyteomics import mzml
+from mzmlpy import Mzml
+from mzmlpy.constants import SpectrumMSAccession, TimeUnitAccession
 import os
 import matplotlib.pyplot as plt
 import re
@@ -131,6 +132,8 @@ class Spectrum:
         from ThermoFisher.CommonCore.Data.Business import Scan  # type: ignore
 
         scan_number = self.scan_num
+        # Minutes, as RawFileReader gives it.  TODO: harmonize retention time
+        # units across vendors (see _VENDOR_RT_UNITS)
         self.RT = raw_file.RetentionTimeFromScanNumber(scan_number)
 
         trailer = raw_file.GetTrailerExtraInformation(scan_number)
@@ -223,6 +226,92 @@ class Spectrum:
         return int(re.search("scan=(\d+)", scanname)[1])
 
     
+# Source file formats in an mzML's fileDescription, and the retention time unit
+# JMod reads that vendor's data in: Thermo .raw in minutes (RawFileReader),
+# Bruker .d in seconds (analysis.tdf).
+# TODO: harmonize retention time units across vendors (one unit for all input).
+_VENDOR_RT_UNITS = {
+    "MS:1000563": "minute",  # Thermo RAW format
+    "MS:1000768": "minute",  # Thermo nativeID format
+    "MS:1002817": "second",  # Bruker TDF format
+    "MS:1002818": "second",  # Bruker TDF nativeID format
+}
+_TIME_UNIT_NAMES = {
+    TimeUnitAccession.SECOND: "second",
+    TimeUnitAccession.MINUTE: "minute",
+}
+
+
+def _mzml_rt_unit(run):
+    """The retention time unit JMod reads this mzML's source vendor in, or
+    None when the source is not Thermo or Bruker."""
+    description = run.file_description
+    for source in (description.source_files if description is not None else ()):
+        for accession, unit in _VENDOR_RT_UNITS.items():
+            if source.has_cv_param(accession):
+                return unit
+    return None
+
+
+def _scan_start_time(scan, rt_unit):
+    """A scan's start time in *rt_unit* ("minute" or "second"), or as the file
+    records it when *rt_unit* is None."""
+    param = scan.get_cv_param(SpectrumMSAccession.SCAN_START_TIME)
+    value = scan.cv_float(SpectrumMSAccession.SCAN_START_TIME)
+    if param is None or value is None or rt_unit is None:
+        return value
+    if _TIME_UNIT_NAMES.get(param.unit_accession) == rt_unit:
+        return value
+    seconds = scan.rt  # mzmlpy converts any recorded time unit to seconds
+    return seconds / 60 if rt_unit == "minute" else seconds
+
+
+def _mzml_scans(mzml_file):
+    """The spectra of an mzML file, as dicts with the keys and nesting
+    Spectrum.get_vals reads (pyteomics' layout).
+
+    Read with mzmlpy, which needs no lxml: lxml would turn the GIL back on.
+    Scan start time is in the unit of the instrument the file was converted
+    from (see _mzml_rt_unit).
+    """
+    with Mzml(mzml_file) as run:
+        rt_unit = _mzml_rt_unit(run)
+        for spec in run.spectra:
+            scan = spec.scans[0]
+            window = scan.scan_windows[0]
+            entry = {
+                "scan start time": _scan_start_time(scan, rt_unit),
+                "scanWindowList": {"scanWindow": [{
+                    "scan window lower limit": window.lower_mz,
+                    "scan window upper limit": window.upper_mz,
+                }]},
+            }
+            if scan.ion_injection_time is not None:
+                entry["ion injection time"] = scan.ion_injection_time  # milliseconds
+            out = {
+                "id": spec.id,
+                "ms level": spec.ms_level,
+                "scanList": {"scan": [entry]},
+                "m/z array": spec.mz,
+                "intensity array": spec.intensity,
+                "total ion current": spec.total_ion_current,
+            }
+            if spec.ms_level == 2:
+                precursor = spec.precursors[0]
+                activation = precursor.activation
+                window = precursor.isolation_window
+                out["precursorList"] = {"precursor": [{
+                    "activation": ({"collision energy": activation.collision_energy}
+                                   if activation is not None and activation.collision_energy is not None else {}),
+                    "isolationWindow": {
+                        "isolation window target m/z": window.isolation_mz,
+                        "isolation window lower offset": window.lower_offset,
+                        "isolation window upper offset": window.upper_offset,
+                    },
+                }]}
+            yield out
+
+
 class SpectrumFile:
 
     def __init__(self, mzml_file=None, raw_file=None):
@@ -299,20 +388,19 @@ class SpectrumFile:
         self.ms1_by_id = {}
         self.ms2_by_id = {}
 
-        with mzml.MzML(mzml_file) as reader:
-            for scan in reader:
-                if scan["ms level"] == 1:
-                    spec = Spectrum(scan)
-                    idx = len(self.ms1scans)
-                    self.ms1scans.append(spec)
-                    self.ms1_by_id[spec.scan_num] = idx
-                    self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms1scans)-1]
-                if scan["ms level"] == 2:
-                    spec = Spectrum(scan)
-                    idx = len(self.ms2scans)
-                    self.ms2scans.append(spec)
-                    self.ms2_by_id[spec.scan_num] = idx
-                    self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms2scans)-1]
+        for scan in _mzml_scans(mzml_file):
+            if scan["ms level"] == 1:
+                spec = Spectrum(scan)
+                idx = len(self.ms1scans)
+                self.ms1scans.append(spec)
+                self.ms1_by_id[spec.scan_num] = idx
+                self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms1scans)-1]
+            if scan["ms level"] == 2:
+                spec = Spectrum(scan)
+                idx = len(self.ms2scans)
+                self.ms2scans.append(spec)
+                self.ms2_by_id[spec.scan_num] = idx
+                self.scan_pos[spec.scan_num] = [scan["ms level"],len(self.ms2scans)-1]
 
         self.build_ms2_to_ms1_map()
 

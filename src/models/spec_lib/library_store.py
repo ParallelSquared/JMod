@@ -31,12 +31,15 @@ _SCALAR_FLOAT_FIELDS = frozenset({
 })
 _ALL_SCALAR_FIELDS = _SCALAR_STR_FIELDS | _SCALAR_FLOAT_FIELDS
 
-_STANDARD_RESIDUES = frozenset("ACDEFGHIJKLMNOPQRSTUVWY")
+# The 20 canonical amino acids.  Anything else is dropped at load: B/X/Z have
+# no mass, and U/O/J have one but the RT/IM models (JRIF) cannot represent them.
+_STANDARD_RESIDUES = frozenset("ACDEFGHIKLMNPQRSTVWY")
 
 # Version stamp for the .npz binary cache. Bump whenever parsing semantics
 # change so stale caches are re-parsed instead of silently loaded.
 # 6: both the N-term semantics change and the dtype narrowing shipped as 5
-STORE_VERSION = 6
+# 7: U/O/J dropped from the accepted residues
+STORE_VERSION = 7
 
 
 class StaleStoreCacheError(ValueError):
@@ -1680,7 +1683,7 @@ class SpectrumLibraryStore:
         from src.utils.parse_peptides import (
             parse_peptide, decoy_permutation, change_seq, extract_mod, split_nterm,
         )
-        from pyteomics.mass import std_aa_mass
+        from src.mass import std_aa_mass
         from src import config
         from src.logger import logger
         from array import array
@@ -1739,7 +1742,9 @@ class SpectrumLibraryStore:
                 nterm = tag_re.sub("", nterm)
             else:
                 stripped = tokens
-            perm = decoy_permutation(stripped, rules)
+            perm = decoy_permutation(
+                stripped, rules,
+                anchored=[j for j, t in enumerate(tag_lists) if t] if tag else ())
             new_tokens = [stripped[j] for j in perm]
             L = len(new_tokens)
 
@@ -1812,7 +1817,7 @@ class SpectrumLibraryStore:
 
             ((sum + H2O) + delta_ion + z*H+)/z  -  loss/z  +  (tag_sum + mod_sum)/z
         """
-        from pyteomics.mass import std_ion_comp, nist_mass, calculate_mass
+        from src.mass import std_ion_comp, nist_mass, calculate_mass
         from src.utils.frag_encoding import get_ion_type, get_index, get_charge, get_loss
 
         H2O = nist_mass['H'][0][0] * 2 + nist_mass['O'][0][0]
@@ -2578,8 +2583,9 @@ class SpectrumLibraryStore:
 
         lf = lf.with_columns(pl.col("_mod_pep_raw").alias("_mod_pep"))
 
-        # Skip precursors carrying residues with no defined mass rather than
-        # letting them reach decoy generation, where fast_mass raises.
+        # Skip precursors carrying non-canonical residues: those with no mass
+        # would make fast_mass raise in decoy generation, and the RT/IM models
+        # cannot represent any of them.
         nonstd_mask = _utf8("StrippedPeptide").str.contains(
             "[^" + "".join(sorted(_STANDARD_RESIDUES)) + "]"
         ).fill_null(False)

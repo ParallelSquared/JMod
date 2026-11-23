@@ -17,12 +17,14 @@ Tests for functions in spectral_fitting.py
 #  limitations under the License.
 
 import numpy as np
+import pytest
 from scipy import sparse
 
 # Import the functions we want to test
 from src.spectral_fitting import (
     get_closest_ms1, get_scribe, get_residuals, max_matched_residual, get_manhattan_distance, hyperscore2, merge_spectrum_peaks, create_entries, gof_stat, huber_nnls_irls,
     _dia_prep_2d_jit, _match_mz_only, _match_mz_im, _create_entries_direct_jit,
+    _keep_passing, _resp_ent_angle_jit, plex_size,
 )
 from src.utils.frag_encoding import encode_frag_name
 
@@ -56,13 +58,60 @@ class TestDiaPrep2D:
             np.array([0], dtype=np.int64), np.array([2], dtype=np.int32),
             np.array([0, 1], dtype=np.int32), np.array([0], dtype=np.int64),
             np.array([2], dtype=np.int32), np.array([0], dtype=np.int64),
-            np.array([500.0]), np.array([500.0]), np.array([0.90]), 20e-6,
+            np.array([500.0]), np.array([500.0]), np.array([1.0]), np.array([0.90]), 20e-6,
             0.0, 0, False,
-            bmz, bint, bmob, 20e-6, 0.05, True)
+            bmz, bint, bmob, 20e-6, 0.05, True,
+            np.zeros(2, dtype=np.int32), bint)
         passing, flat_rows, all_coords = res[0], res[1], res[6]
         assert passing.tolist() == [0]
         assert all(c % 2 == 1 for c in all_coords)              # both matched
         assert sorted(bint[flat_rows].tolist()) == [500.0, 900.0]  # clean, not the 100 interferer
+
+class TestMainSearchMs1Error:
+    """The main search's MS1 error is to the most intense MS1 peak within the
+    ppm window and the candidate's IM gate, not to the nearest by m/z."""
+
+    @staticmethod
+    def _ms1_error(ms1_mz, ms1_int, ms1_mob, ms1_tol=20e-6):
+        # One candidate (library spectrum 200/400) matched in a 2-peak DIA spectrum
+        # at IM 0.90, precursor m/z 500.
+        mz = np.array([200.0, 400.0]); ints = np.array([900.0, 500.0]); mob = np.array([0.90, 0.90])
+        bmz, bint, bmob = _dia_prep_2d_jit(mz, ints, mob, 20e-6, 0.05)
+        res = _create_entries_direct_jit(
+            np.zeros(0), np.array([200.0, 400.0]), np.array([1.0, 1.0]),
+            np.array([0], dtype=np.int64), np.array([2], dtype=np.int32),
+            np.array([0, 1], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([2], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([500.0]),
+            np.asarray(ms1_mz, float), np.asarray(ms1_int, float), np.asarray(ms1_mob, float),
+            ms1_tol, 0.0, 0, False,
+            bmz, bint, bmob, 20e-6, 0.05, True,
+            np.zeros(2, dtype=np.int32), bint)
+        passing, ms1_error = res[0], res[5]
+        assert passing.tolist() == [0]
+        return ms1_error[0]
+
+    def test_most_intense_not_nearest(self):
+        # 500.0005 (1 ppm, weak) vs 500.004 (8 ppm, intense), both at IM 0.90
+        e = self._ms1_error([500.0005, 500.004], [10.0, 1000.0], [0.90, 0.90])
+        assert abs(e - 0.004 / 500.0) < 1e-12
+
+    def test_im_gate_still_applies(self):
+        # the intense peak is at another mobility, so the weak in-gate one wins
+        e = self._ms1_error([500.0005, 500.004], [10.0, 1000.0], [0.90, 1.30])
+        assert abs(e - 0.0005 / 500.0) < 1e-12
+
+    def test_outside_the_ppm_window_is_ignored(self):
+        e = self._ms1_error([500.0005, 500.02], [10.0, 1000.0], [0.90, 0.90])
+        assert abs(e - 0.0005 / 500.0) < 1e-12
+
+    def test_none_in_window_is_nan(self):
+        assert np.isnan(self._ms1_error([500.5], [10.0], [0.90]))
+
+    def test_ties_go_to_the_lowest_mz(self):
+        e = self._ms1_error([499.999, 500.001], [5.0, 5.0], [0.90, 0.90])
+        assert abs(e - (-0.001 / 500.0)) < 1e-12
+
 
 class TestGetClosestMS1:
     def test_get_closest_ms1(self):
@@ -329,3 +378,319 @@ class TestHuberNnlsIrls:
         assert 'x' in result
         x = np.array(result['x']).flatten()
         assert x.shape == (5,)
+
+
+# The dense-Gram implementation _coo_gram_and_Aty replaced (it allocated an
+# n_cols x n_cols matrix per fit), kept as the bit-identity reference.
+from numba import njit  # noqa: E402
+
+@njit(nogil=True)
+def _dense_gram_reference(rows, cols, vals, y, n_cols):
+    """A^T y and the largest absolute correlation between two different
+    columns of A, from COO arrays.
+
+    The correlation is computed exactly as numpy would from the Gram matrix:
+    gram / outer(norms, norms) with zero norms set to 1 and the diagonal
+    zeroed, then max(abs(.)) -- the same operations in the same order, so
+    the result is bit-identical.  Returns (Aty, max_corr)."""
+    gram = np.zeros((n_cols, n_cols))
+    Aty = np.zeros(n_cols)
+    # Group entries by row for outer-product accumulation
+    # First pass: A^T y
+    for i in range(len(vals)):
+        Aty[cols[i]] += vals[i] * y[rows[i]]
+    # Gram matrix: for each pair of entries sharing a row, accumulate
+    # Sort by row for efficient grouping
+    order = np.argsort(rows)
+    i = 0
+    n = len(order)
+    while i < n:
+        r = rows[order[i]]
+        j = i
+        while j < n and rows[order[j]] == r:
+            j += 1
+        # entries order[i:j] all share row r
+        for a in range(i, j):
+            ca = cols[order[a]]
+            va = vals[order[a]]
+            for b in range(a, j):
+                cb = cols[order[b]]
+                vb = vals[order[b]]
+                gram[ca, cb] += va * vb
+                if ca != cb:
+                    gram[cb, ca] += va * vb
+        i = j
+    norms = np.empty(n_cols)
+    for c in range(n_cols):
+        norms[c] = np.sqrt(gram[c, c])
+        if norms[c] == 0:
+            norms[c] = 1.0
+    max_corr = 0.0
+    for a in range(n_cols):
+        for b in range(n_cols):
+            if a != b:
+                v = abs(gram[a, b] / (norms[a] * norms[b]))
+                if v != v:
+                    return Aty, v          # NaN: np.max propagates it
+                if v > max_corr:
+                    max_corr = v
+    return Aty, max_corr
+
+
+
+def _random_coo(rng, n_rows, n_cols, n, dup=True):
+    rows = rng.integers(0, n_rows, n).astype(np.int32)
+    cols = rng.integers(0, n_cols, n).astype(np.int32)
+    if not dup:
+        key = np.unique(rows.astype(np.int64) * n_cols + cols)
+        rows = (key // n_cols).astype(np.int32)
+        cols = (key % n_cols).astype(np.int32)
+        perm = rng.permutation(len(rows))
+        rows, cols = rows[perm], cols[perm]
+    vals = rng.random(len(rows))
+    return rows, cols, vals, rng.random(n_rows)
+
+
+def _search_like_coo(rng, n_rows, n_cols):
+    """Each candidate (column) matches 8-36 peaks (rows), unique per column,
+    rows ordered the way the matcher emits them (by candidate)."""
+    rows, cols = [], []
+    for c in range(n_cols):
+        k = int(rng.integers(8, 37))
+        rows.append(np.sort(rng.choice(n_rows, k, replace=False)))
+        cols.append(np.full(k, c))
+    rows = np.concatenate(rows).astype(np.int32)
+    cols = np.concatenate(cols).astype(np.int32)
+    return rows, cols, rng.random(len(rows)), rng.random(n_rows)
+
+
+class TestCooGramSparseMatchesDense:
+    """The sparse _coo_gram_and_Aty must return exactly what the dense-Gram
+    version did: Aty and max_corr bit for bit, NaN included."""
+
+    @staticmethod
+    def _check(rows, cols, vals, y, n_cols):
+        from src.spectral_fitting import _coo_gram_and_Aty
+        Aty, mc = _coo_gram_and_Aty(rows, cols, vals, y, n_cols)
+        Aty_ref, mc_ref = _dense_gram_reference(rows, cols, vals, y, n_cols)
+        assert np.array_equal(Aty, Aty_ref, equal_nan=True)
+        if mc_ref != mc_ref:
+            assert mc != mc
+        else:
+            assert mc == mc_ref
+
+    @pytest.mark.parametrize("seed", range(40))
+    def test_random_with_duplicate_entries(self, seed):
+        rng = np.random.default_rng(seed)
+        n_rows = int(rng.integers(1, 60)); n_cols = int(rng.integers(1, 80))
+        self._check(*_random_coo(rng, n_rows, n_cols, int(rng.integers(1, 600))), n_cols)
+
+    @pytest.mark.parametrize("seed", range(10))
+    def test_random_without_duplicates(self, seed):
+        rng = np.random.default_rng(100 + seed)
+        self._check(*_random_coo(rng, 200, 300, 4000, dup=False), 300)
+
+    @pytest.mark.parametrize("seed", range(3))
+    def test_search_like(self, seed):
+        rng = np.random.default_rng(200 + seed)
+        self._check(*_search_like_coo(rng, 3000, 2500), 2500)
+
+    def test_columns_without_entries(self):
+        rng = np.random.default_rng(7)
+        rows, cols, vals, y = _random_coo(rng, 30, 20, 200)
+        cols = np.where(cols % 3 == 0, 1, cols).astype(np.int32)  # columns 0, 3, 6, ... empty
+        self._check(rows, cols, vals, y, 20)
+
+    def test_single_column_and_no_entries(self):
+        rng = np.random.default_rng(8)
+        self._check(*_random_coo(rng, 10, 1, 30), 1)
+        empty = np.empty(0, np.int32)
+        self._check(empty, empty, np.empty(0), np.ones(3), 4)
+
+    @pytest.mark.parametrize("where", ["shared_row", "isolated_column"])
+    def test_nan(self, where):
+        rng = np.random.default_rng(9)
+        rows, cols, vals, y = _random_coo(rng, 30, 20, 200)
+        if where == "isolated_column":
+            # column 19 alone in its own row: no shared row, NaN only via its norm
+            rows = np.append(rows[cols != 19], 30).astype(np.int32)
+            vals = np.append(vals[cols != 19], np.nan)
+            cols = np.append(cols[cols != 19], 19).astype(np.int32)
+            y = np.append(y, 1.0)
+        else:
+            vals[5] = np.nan
+        self._check(rows, cols, vals, y, 20)
+
+
+class TestCooGramMaxCorr:
+    """_coo_gram_and_Aty's max column correlation must equal the numpy
+    computation it replaced, bit for bit (it sets huber_nnls_irls' l1_ratio)."""
+
+    @staticmethod
+    def _numpy(rows, cols, vals, y, n_cols):
+        A = np.zeros((int(rows.max()) + 1, n_cols))
+        np.add.at(A, (rows, cols), vals)
+        gram = np.zeros((n_cols, n_cols))
+        order = np.argsort(rows, kind="quicksort")   # same accumulation order as the kernel
+        for r in np.unique(rows):
+            idx = [k for k in order if rows[k] == r]
+            for a_i, a in enumerate(idx):
+                for b in idx[a_i:]:
+                    gram[cols[a], cols[b]] += vals[a] * vals[b]
+                    if cols[a] != cols[b]:
+                        gram[cols[b], cols[a]] += vals[a] * vals[b]
+        norms = np.sqrt(np.diag(gram))
+        norms[norms == 0] = 1
+        corr = gram / np.outer(norms, norms)
+        np.fill_diagonal(corr, 0)
+        return A.T @ y, np.max(np.abs(corr))
+
+    @pytest.mark.parametrize("n_cols, empty_col", [(6, None), (6, 3), (1, None)])
+    def test_matches_numpy(self, n_cols, empty_col):
+        from src.spectral_fitting import _coo_gram_and_Aty
+        rng = np.random.default_rng(n_cols)
+        n = 40
+        rows = rng.integers(0, 15, n).astype(np.int32)
+        cols = rng.integers(0, n_cols, n).astype(np.int32)
+        if empty_col is not None:
+            cols[cols == empty_col] = (empty_col + 1) % n_cols   # a column with no entries: norm 0
+        vals = rng.random(n)
+        y = rng.random(15)
+        Aty, max_corr = _coo_gram_and_Aty(rows, cols, vals, y, n_cols)
+        _, expected = self._numpy(rows, cols, vals, y, n_cols)
+        assert max_corr == expected
+
+
+class TestEntropyNormalizedAngle:
+    """theta / sqrt(D1 - 1) over monoisotopic library fragments, from the matcher."""
+
+    @staticmethod
+    def _run(lib_int, codes, dia):
+        mz = np.array([200.0, 400.0]); ints = np.asarray(dia, float); mob = np.array([0.90, 0.90])
+        bmz, bint, bmob = _dia_prep_2d_jit(mz, ints, mob, 20e-6, 0.05)
+        res = _create_entries_direct_jit(
+            np.zeros(0), np.array([200.0, 400.0]), np.asarray(lib_int, float),
+            np.array([0], dtype=np.int64), np.array([2], dtype=np.int32),
+            np.array([0, 1], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([2], dtype=np.int32), np.array([0], dtype=np.int64),
+            np.array([500.0]), np.array([500.0]), np.array([1.0]), np.array([0.90]), 20e-6,
+            0.0, 0, False,
+            bmz, bint, bmob, 20e-6, 0.05, True,
+            np.asarray(codes, dtype=np.int32), bint)
+        return res[10]
+
+    def test_matches_the_formula(self):
+        lib = [1.0, 3.0]; dia = [900.0, 500.0]
+        a = np.sqrt(dia); b = np.sqrt(lib)
+        theta = np.arccos(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+        p = np.array(lib) / sum(lib); d1 = np.exp(-(p * np.log(p)).sum())
+        out = self._run(lib, [0, 0], dia)
+        assert out.shape == (1,)
+        assert abs(out[0] - theta / np.sqrt(d1 - 1)) < 1e-9
+
+    def test_proportional_spectrum_scores_zero(self):
+        assert abs(self._run([9.0, 5.0], [0, 0], [900.0, 500.0])[0]) < 1e-9
+
+    def test_isotope_fragments_are_ignored(self):
+        # second fragment flagged as isotope 1 (bits 17-20): only one monoisotopic
+        # ion remains, D1 = 1, so the score is theta / sqrt(1e-6) with theta = 0
+        out = self._run([1.0, 3.0], [0, 1 << 17], [900.0, 500.0])
+        assert abs(out[0]) < 1e-9
+
+
+class TestKeepPassing:
+    """The candidate cap cuts the flat COO arrays per candidate and renumbers columns."""
+
+    def test_keeps_segments_and_renumbers(self):
+        passing = np.array([3, 5, 9], dtype=np.int64)
+        offsets = np.array([0, 2, 3, 6], dtype=np.int32)
+        rows = np.array([10, 11, 12, 13, 14, 15], dtype=np.int32)
+        cols = np.array([0, 0, 1, 2, 2, 2], dtype=np.int32)
+        vals = np.arange(6, dtype=np.float64)
+        extra = np.array([0.1, 0.2, 0.3])
+        p, r, c, v, o, e = _keep_passing(np.array([True, False, True]),
+                                         passing, rows, cols, vals, offsets, extra)
+        assert p.tolist() == [3, 9]
+        assert r.tolist() == [10, 11, 13, 14, 15]
+        assert c.tolist() == [0, 0, 1, 1, 1]
+        assert v.tolist() == [0, 1, 3, 4, 5]
+        assert o.tolist() == [0, 2, 5]
+        assert o.dtype == offsets.dtype and c.dtype == cols.dtype
+        assert e.tolist() == [0.1, 0.3]
+
+    def test_keep_none(self):
+        p, r, c, v, o = _keep_passing(np.array([False]), np.array([1], dtype=np.int64),
+                                      np.array([4], dtype=np.int32), np.array([0], dtype=np.int32),
+                                      np.array([1.0]), np.array([0, 1], dtype=np.int32))
+        assert len(p) == 0 and len(r) == 0 and o.tolist() == [0]
+
+
+class TestResponsibilityEntropyAngle:
+    """theta / sqrt(D1 - 1) against each peak's responsibility-split intensity."""
+
+    @staticmethod
+    def _run(lib_a, lib_b, coeffs, obs, b_bins=(0, 1)):
+        # Two candidates (library entries 0 and 1), two monoisotopic fragments each.
+        # Candidate a's fragments sit on DIA peaks 0 and 1; b's on b_bins.
+        spec_int = np.array(list(lib_a) + list(lib_b), float)
+        spec_off = np.array([0, 2], np.int64); spec_len = np.array([2, 2], np.int32)
+        codes = np.zeros(4, np.int32)
+        coords = np.array([2 * 0 + 1, 2 * 1 + 1, 2 * b_bins[0] + 1, 2 * b_bins[1] + 1], np.int64)
+        norm = np.concatenate([np.asarray(lib_a, float) / sum(lib_a), np.asarray(lib_b, float) / sum(lib_b)])
+        frag_off = np.array([0, 2, 4], np.int32)
+        n_peaks = max(2, max(b_bins) + 1)
+        lookup = np.arange(n_peaks, dtype=np.int32)
+        x = np.asarray(coeffs, float)
+        y = np.zeros(n_peaks)
+        for c, bins in ((0, (0, 1)), (1, b_bins)):
+            for k, r in enumerate(bins):
+                y[r] += x[c] * norm[2 * c + k]
+        return _resp_ent_angle_jit(np.array([0, 1], np.int64), np.array([0, 1], np.int64), 0, x,
+                                   spec_off, spec_len, spec_int, codes, coords, norm, frag_off,
+                                   lookup, y, np.asarray(obs, float))
+
+    def test_unshared_peaks_match_the_plain_angle(self):
+        # b on its own peaks 2, 3: a's peaks are a's alone, so a's angle is the plain one.
+        lib = [1.0, 3.0]; obs = [900.0, 500.0, 0.0, 0.0]
+        out = self._run(lib, [1.0, 1.0], [1.0, 1.0], obs, b_bins=(2, 3))
+        a = np.sqrt(obs[:2]); b = np.sqrt(lib)
+        theta = np.arccos(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+        p = np.array(lib) / sum(lib); d1 = np.exp(-(p * np.log(p)).sum())
+        assert abs(out[0] - theta / np.sqrt(d1 - 1)) < 1e-9
+
+    def test_shared_peak_is_split_by_share(self):
+        # Both candidates on peaks 0 and 1 with the same library: each gets half
+        # of every peak, so both see the observed shape and the same angle.
+        out = self._run([1.0, 3.0], [1.0, 3.0], [2.0, 2.0], [900.0, 500.0])
+        assert abs(out[0] - out[1]) < 1e-12
+
+    def test_zero_coefficient_is_nan(self):
+        out = self._run([1.0, 3.0], [1.0, 1.0], [1.0, 0.0], [900.0, 500.0, 0.0, 0.0], b_bins=(2, 3))
+        assert np.isfinite(out[0]) and np.isnan(out[1])
+
+
+class TestPlexSize:
+    """--max_candidates is per channel: the cap is multiplied by plex_size()."""
+
+    def test_label_free_is_one(self, monkeypatch):
+        import src.config as config
+        monkeypatch.setattr(config, "tag", None, raising=False)
+        monkeypatch.setattr(config, "SILAC", None, raising=False)
+        assert plex_size() == 1
+
+    def test_counts_the_decoy_channel(self, monkeypatch):
+        import src.config as config
+        from src.mass_tags import available_tags, set_config_tag, resolve_decoy_channel
+        tag = set_config_tag(available_tags, "PSMtag_9plex", None)
+        monkeypatch.setattr(config, "SILAC", None, raising=False)
+        monkeypatch.setattr(config, "tag", tag, raising=False)
+        assert plex_size() == 9
+        monkeypatch.setattr(config, "tag", resolve_decoy_channel(tag, "auto"), raising=False)
+        assert plex_size() == 10
+
+    def test_tag_and_silac_multiply(self, monkeypatch):
+        import src.config as config
+        from types import SimpleNamespace
+        monkeypatch.setattr(config, "tag", SimpleNamespace(n_channels=3), raising=False)
+        monkeypatch.setattr(config, "SILAC", SimpleNamespace(n_channels=2), raising=False)
+        assert plex_size() == 6

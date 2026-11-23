@@ -20,7 +20,7 @@ from src.utils.errors import JModError
 import json
 import numpy as np
 from pathlib import Path
-from pyteomics import mass
+from src import mass
 from src.models.spec_lib.library_store import SpectrumLibraryStore
 
 def assert_frags_approx(actual, expected, rtol=3e-7):

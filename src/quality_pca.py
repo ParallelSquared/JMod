@@ -236,9 +236,12 @@ FIT_SAMPLE_PRECURSORS = 50_000
 def fit_main_apex_pc1(lf, group_cols, seed):
     """Fit main-search apex PC1 on a sample of precursors; return loadings.
 
-    ``lf`` is the un-collapsed main-search LazyFrame. The sample is taken as a hash
-    predicate so polars pushes it into the parquet scan and reads row groups in file
-    order -- a row-index gather would scatter reads across a multi-GB file.
+    ``lf`` is the un-collapsed main-search LazyFrame, every row with its
+    ``__parquet_row``.  The sample is taken as a hash predicate so polars pushes
+    it into the parquet scan, and the count and the sample run on the streaming
+    engine, so only the sample is held.  The streaming engine returns rows in no
+    fixed order, and the fit's floating-point sums depend on it, so the sample is
+    put in row order (the order the smoothness sort gives) before fitting.
     """
     import polars as pl
 
@@ -247,13 +250,15 @@ def fit_main_apex_pc1(lf, group_cols, seed):
 
     # Hash buckets, sized from the actual precursor count so the sample is a fixed
     # number rather than a fixed fraction. Scans two columns; cheap next to the fit.
-    n_precursors = lf.select(group_cols).unique().select(pl.len()).collect().item()
+    n_precursors = (lf.select(group_cols).unique().select(pl.len())
+                    .collect(engine="streaming").item())
     keep = min(1000, max(1, -(-1000 * FIT_SAMPLE_PRECURSORS // max(n_precursors, 1))))
 
-    sample = (lf
-              .filter(keys.hash(seed=seed).mod(1000) < keep)
-              .select(cols + list(group_cols))
-              .collect())
+    sample = (lf.filter(keys.hash(seed=seed).mod(1000) < keep)
+              .select(cols + list(group_cols) + ["__parquet_row"])
+              .collect(engine="streaming")
+              .sort("__parquet_row")
+              .select(cols + list(group_cols)))
     _, v = fit_within_group_pc1(sample, MAIN_APEX_FEATURES, group_cols,
                                 anchor="coeff", label="Main-search apex PC1")
     return v

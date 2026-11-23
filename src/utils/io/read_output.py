@@ -20,6 +20,7 @@ import os
 
 import src.config as config
 import src.quality_pca as quality_pca
+from src.logger import logger
 
 
 names = ["coeff", "spec_id", "Ms1_spec_id",
@@ -53,6 +54,8 @@ names = ["coeff", "spec_id", "Ms1_spec_id",
          "mz",
          "tic",
          "im_error",
+         "ent_norm_angle",
+         "resp_ent_norm_angle",
          "frag_names",
          "frag_errors",
          "frag_mz",
@@ -100,6 +103,8 @@ dtypes  = {"coeff":np.float32,
             "mz":np.float32,
             "tic":np.float32,
             "im_error":np.float32,
+            "ent_norm_angle":np.float32,
+            "resp_ent_norm_angle":np.float32,
             "frag_names":str,
             "frag_errors":str,
             "frag_mz":str,
@@ -126,7 +131,7 @@ _SCHEMA_SPEC = [
     ("window_mz",                   pl.Float32,             0.0),
     ("rt",                          pl.Float32,             0.0),
     ("prec_im",                     pl.Float32,             0.0),
-    # 28 feature columns
+    # 30 feature columns
     ("num_lib",                     pl.Float32,             0.0),
     ("frac_lib_int",                pl.Float32,             0.0),
     ("frac_dia_int",                pl.Float32,             0.0),
@@ -156,6 +161,11 @@ _SCHEMA_SPEC = [
     ("tic",                         pl.Float32,             0.0),
     # observed prec_im minus the aligned library IM; NaN on non-IM runs, as prec_im is
     ("im_error",                    pl.Float32,             0.0),
+    # theta / sqrt(D1 - 1) over monoisotopic library fragments; lower is better
+    ("ent_norm_angle",              pl.Float32,             0.0),
+    # the same, against each matched peak's intensity split by responsibility
+    # (the candidate's share of the fitted peak); lower is better
+    ("resp_ent_norm_angle",         pl.Float32,             0.0),
     # 7 fragment list columns
     ("frag_names",                  pl.List(pl.Int32),       None),
     ("frag_errors",                 pl.List(pl.Float64),     None),
@@ -183,13 +193,14 @@ def get_parquet_schema(timeplex=False):
 
 
 
-def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
+def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3, anchor_col="apex_pc1"):
     """
     Polars equivalent of find_extrema_in_nearby_scans.
 
     For each precursor, finds the minimum or maximum value of a specified column from
     nearby scans (N scans before and N scans after by retention time) relative to
-    the scan with the highest coefficient.
+    the apex scan: the scan with the highest *anchor_col* (the apex PC1 the
+    collapse keeps, so the nearby window and the reported apex are the same scan).
 
     Parameters
     ----------
@@ -201,6 +212,8 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
         If True, find the maximum value; if False, find the minimum value.
     n_scans : int, default=3
         The number of scans before and after to consider.
+    anchor_col : str, default="apex_pc1"
+        The column whose per-precursor maximum is the window's centre.
 
     Returns
     -------
@@ -209,6 +222,18 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
     """
 
     group_cols = ['seq', 'z'] + (['time_channel'] if 'time_channel' in df.collect_schema().names() else [])
+
+    # TODO: bug -- "nearby scans" are not adjacent scans.  rt_rank below ranks only
+    # this precursor's own fitted rows, so:
+    #   - gaps are invisible: if the precursor was not fitted for several cycles,
+    #     the next fitted row 10+ s away still counts as the neighbouring scan;
+    #   - IM bands count as scans: overlapping IM bands of one frame are separate
+    #     rows with the same rt, so the +/-n_scans window can be 2-3 bands of a
+    #     single cycle instead of the cycles before and after.
+    # The window should be on the run's cycle grid (best band per cycle, or every
+    # band of each cycle), with cycles where the precursor was not fitted counted
+    # as missing, not skipped.  Fixing it changes every *_nearby_* scoring
+    # feature, so it needs the entrapment validation.
 
     # 1. Use Expression to calculate n_scans (group length)
     df = df.with_columns(
@@ -230,11 +255,11 @@ def find_extrema_in_nearby_scans(df, column_names, find_max_list, n_scans=3):
         .alias("rt_rank")
     )
 
-    # 3. Find the rank of the row with the maximum 'coeff' within each group
-    #    (coeff ties broken on spec_id for the same reason)
+    # 3. Find the rank of the apex row (maximum anchor_col) within each group
+    #    (ties broken on spec_id for the same reason)
     df = df.with_columns(
         pl.col("rt_rank")
-        .sort_by(pl.struct(["coeff", "spec_id"]), descending=True)
+        .sort_by(pl.struct([anchor_col, "spec_id"]), descending=True)
         .first()
         .over(group_cols)
         .alias("max_coeff_rank")
@@ -312,12 +337,12 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
     # The calculation needs values relative to the current row, sorted by RT:
     #   weights[i-1], weights[i+1], rts[i-1], rts[i+1]
     #
-    # Sort on (rt, spec_id) rather than rt alone: rows arrive in parallel-search
-    # completion order, and with IM banding several band spectra share an rt, so
-    # sorting on rt alone leaves tied rows in an arbitrary order and shift(1) /
-    # shift(-1) pick different neighbours between otherwise identical runs.
-    _sort_keys = [rt_column, "spec_id"] if "spec_id" in df.collect_schema().names() else [rt_column]
-    df_with_shifts = df.sort(_sort_keys).with_columns(
+    # Sorted by row number: the main search writes its rows in spectrum order,
+    # which is RT order (and spec_id order), and each spectrum's candidates in a
+    # fixed order, so this is RT order with every tie broken the same way on every
+    # run.  (rt alone would leave the band spectra sharing an rt, and the
+    # candidates sharing a spectrum, in an arbitrary order.)
+    df_with_shifts = df.sort("__parquet_row").with_columns(
         # Weights (Value Column) shifts
         pl.col(value_column).shift(1).over(group_cols).alias("w_prev"),
         pl.col(value_column).shift(-1).over(group_cols).alias("w_next"),
@@ -364,7 +389,9 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
     # 6. Sum the squared derivatives within each group (smoothness)
     # Handle the group length <= 1 case and apex_weight == 0 case
 
-    smoothness_expr = (pl.when(pl.col("n_scans") <= 1)
+    # Group length computed here rather than read from the n_scans column, which
+    # find_extrema_in_nearby_scans adds and now runs after this (it needs apex_pc1).
+    smoothness_expr = (pl.when(pl.len().over(group_cols) <= 1)
             .then(0.0)  # Length <= 1
         .when(pl.col("apex_weight") == 0)
             .then(0.0)  # Apex weight is 0
@@ -385,181 +412,256 @@ def calculate_peak_smoothness(df, value_column='coeff', rt_column='rt', group_co
     )
 
 
-# Mapping from NumPy dtypes to Polars dtypes
-NP_TO_PL_DTYPES = {
-    np.float32: pl.Float32,
-    np.int32: pl.Int32,
-    str: pl.Utf8,
-    # Add other mappings if needed, e.g., np.float64: pl.Float64, np.int64: pl.Int64
-}
+# Rows per precursor partition of the main-search output.  Apex selection holds
+# one partition's rows at a time, so this bounds its memory: ~3M rows of the
+# scalar columns is a few GB.
+APEX_PART_ROWS = 3_000_000
 
 
-def numpy_dtypes_to_polars_schema(np_dtypes_dict):
-    """Converts a dictionary of column_name: np_dtype to column_name: pl_dtype."""
-    pl_schema = {}
-    for col, np_dtype in np_dtypes_dict.items():
-        pl_schema[col] = NP_TO_PL_DTYPES.get(np_dtype, pl.Utf8)  # Default to Utf8 for safety
-    return pl_schema
+# The main search's per-fragment list columns: most of its bytes, and not needed
+# until the kept rows (one per precursor) are known.
+LIST_COLS = ["frag_names", "frag_errors", "frag_mz", "frag_int",
+             "obs_int", "unique_frag_mz", "unique_obs_int"]
 
 
-# --- Converted Polars Function ---
+# TODO: give an informative error when reading these batch parquets dies with
+# SIGBUS (polars memory-maps them).  On a .raw run Mono's signal handler catches
+# it and prints a "Native Crash Reporting" dump that points at Mono, not at the
+# real cause: the file shrank or changed while mapped (another run writing the
+# same output folder), the output folder is on an external/network/cloud-synced
+# drive that dropped, the disk is full, or the parquet is corrupt.  Check those
+# (free space, readable footers) before the read and say which file and why.
+# Also let the user designate a temp folder for these intermediates, so they can
+# sit on a local disk even when the output folder is on external/network storage.
+class MainSearchFiles:
+    """The main search's batch parquets, read as one table in order.
 
-def get_large_prec(file,
-                   condense_output=True,
-                   timeplex=False):
+    ``scan(i)`` is batch i with each row's global row number (``__parquet_row``, its
+    index in the batches concatenated in order, what the former merged file's row
+    index was), so per-file reads keep the global order.
     """
-    Process peptide identification results to extract high-confidence precursors
-    using Polars, converting to Pandas for external function calls.
+
+    def __init__(self, files):
+        import pyarrow.parquet as pq
+        self.files = list(files)
+        counts = [pq.ParquetFile(f).metadata.num_rows for f in self.files]
+        self.offsets = np.concatenate(([0], np.cumsum(counts))).astype(np.int64)
+        self.n_rows = int(self.offsets[-1])
+
+    def scan(self, i):
+        return pl.scan_parquet(self.files[i]).with_row_index("__parquet_row", offset=int(self.offsets[i]))
+
+    def scan_all(self):
+        return pl.scan_parquet(self.files).with_row_index("__parquet_row")
+
+
+class MainSearchRows:
+    """The main search's per-scan rows for MS1 quant, read for given precursors only.
+
+    ``frame_for`` returns the ``cols`` of every scan of the precursors in ``rows``,
+    sorted by ``keys`` then original row order: exactly those groups of the former
+    all-rows frame.  Read one batch file at a time.
     """
-    col_names = list(names)
 
-    # 1. Convert NumPy dtypes to Polars schema for pl.read_csv
-    pl_schema = numpy_dtypes_to_polars_schema(dtypes)
+    def __init__(self, ms, cols, keys):
+        self.ms, self.cols, self.keys = ms, cols, keys
 
-    if timeplex:
-        col_names.insert(5, "time_channel")
-        # Ensure time_channel is added to the Polars schema
-        pl_schema["time_channel"] = pl.Float32
+    def frame_for(self, rows):
+        schema = self.ms.scan(0).collect_schema()
+        want = pl.from_pandas(rows[self.keys].drop_duplicates().reset_index(drop=True))
+        want = want.with_columns([pl.col(k).cast(schema[k]) for k in self.keys]).lazy()
+        out = [self.ms.scan(i).select(self.cols + ["__parquet_row"]).join(want, on=self.keys, how="semi").collect()
+               for i in range(len(self.ms.files))]
+        frame = pl.concat(out).sort(self.keys + ["__parquet_row"]).drop("__parquet_row")
+        return frame
 
-    # Explicitly fix string literal dtypes to override type inference
-    string_literal_cols = [
-        "frag_names", "frag_errors", "frag_mz", "frag_int",
-        "obs_int", "unique_frag_mz", "unique_obs_int"
-    ]
 
-    # Drop list columns from the lazy chain so the polars sort buffer holds
-    # only scalar columns. Sorting 37M rows with all 7 list cols intact OOMs
-    # at ~30-40 GB (no explicit projection means no pushdown). List cols are
-    # re-fetched after collect via a second parquet scan joined on a row
-    # index, then attached to fdx_quant just before to_csv.
-    _LIST_COLS = ["frag_names", "frag_errors", "frag_mz", "frag_int",
-                  "obs_int", "unique_frag_mz", "unique_obs_int"]
-    _scan = pl.scan_parquet(file)
-    _scan_cols = set(_scan.collect_schema().names())
-    _present_list_cols = [c for c in _LIST_COLS if c in _scan_cols]
-    decoy_coeffs_lf = (_scan
-                        .with_row_index("__parquet_row")
-                        .drop(_present_list_cols))
-    decoy_coeffs_lf = find_extrema_in_nearby_scans(
-        decoy_coeffs_lf,
-        ["manhattan_distances", "max_matched_residuals", "gof_stats", "scribe_scores"],
-        [True, False, False, False],
-        n_scans=2)
+def get_large_prec(files,
+                   rt_tol,
+                   timeplex=False,
+                   rt_sigma=None,
+                   im_scale=None):
+    """
+    Select each precursor's apex scan from the main-search output and build the
+    one-row-per-precursor frame, using Polars, converting to Pandas for external
+    function calls.
 
-    # Convert to Pandas for external function calls
-    decoy_coeffs_lf = calculate_peak_smoothness(
-        df=decoy_coeffs_lf,
-        value_column='coeff',
-        rt_column='rt',
-        group_columns=None
-    )
+    ``files`` is the main search's batch parquets, read as one table in order.  Every step is per precursor except the apex PC1 fit, which
+    uses a hash sample of precursors.  The main search admits a precursor to a
+    spectrum only within ``rt_tol`` of its aligned RT, so a precursor's rows span
+    less than 2 * rt_tol: the run is processed in RT chunks, each reading only the
+    rows within 2 * rt_tol of it, and a precursor belongs to the chunk holding its
+    earliest row.  Only the kept rows (one per precursor) are ever held together;
+    their order is restored to what one global pass gave: stable sort by
+    apex_score over the frame in row order, keep the last row per
+    precursor.
+
+    Returns ``large_prec``, the kept-row frame, a ``MainSearchRows`` for MS1 quant
+    and the kept rows' list columns.
+    """
+    # Only scalar columns go through the lazy chain, so the polars sort buffer
+    # holds no list columns. List cols are re-fetched for the kept rows only, by
+    # joining on the row number.
+    ms = MainSearchFiles(files)
 
     # Rank each precursor's scans by how apex-like they are, replacing max-coeff.
     # The group key must match the unique() subset below, or the collapse would pick
     # an apex from a different partition than the one it keeps.
     apex_group_cols = ["seq", "z"] + (["time_channel"] if timeplex else [])
-    loadings = quality_pca.fit_main_apex_pc1(decoy_coeffs_lf, apex_group_cols,
-                                              seed=config.RANDOM_SEED)
-    decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
-        quality_pca.main_apex_pc1_expr(loadings, apex_group_cols).alias("apex_pc1"))
 
-    # maintain_order: the default sort is unstable, so apex_pc1 ties would feed
-    # the unique() below in a different order per run.
-    sorted_decoy_coeffs_lf = decoy_coeffs_lf.sort(by="apex_pc1", maintain_order=True)
+    # RT chunks of ~APEX_PART_ROWS rows, edges at RT quantiles of the rows
+    rt_all = np.concatenate([ms.scan(i).select("rt").collect().to_series().to_numpy()
+                             for i in range(len(ms.files))])
+    file_rt = [(float(np.min(rt_all[ms.offsets[i]:ms.offsets[i + 1]])),
+                float(np.max(rt_all[ms.offsets[i]:ms.offsets[i + 1]])))
+               if ms.offsets[i + 1] > ms.offsets[i] else (np.inf, -np.inf)
+               for i in range(len(ms.files))]
+    n_chunks = max(1, -(-ms.n_rows // APEX_PART_ROWS))
+    edges = np.unique(np.quantile(rt_all, np.linspace(0, 1, n_chunks + 1)[1:-1])) if n_chunks > 1 else np.array([])
+    edges = np.concatenate(([-np.inf], edges, [np.inf]))
+    del rt_all
+    # A precursor's rows span < 2 * rt_tol (the main search's strict |lib - spec| <
+    # rt_tol); the small absolute slack covers float32 rounding of the stored RT.
+    span_max = 2.0 * float(rt_tol) + 1e-3
+    margin = span_max + 1e-3
 
-    # Polars equivalent of drop_duplicates(..., keep='last')
+    loadings = quality_pca.fit_main_apex_pc1(
+        ms.scan_all().drop(LIST_COLS), apex_group_cols, seed=config.RANDOM_SEED)
+
+    def _chunk_lf(lo, hi):
+        wlo, whi = lo - margin, hi + margin
+        sel = [i for i, (a, b) in enumerate(file_rt) if b >= wlo and a <= whi]
+        if not sel:
+            return None
+        lf = pl.concat([ms.scan(i).drop(LIST_COLS) for i in sel], how="vertical")
+        if np.isfinite(wlo) or np.isfinite(whi):
+            lf = lf.filter((pl.col("rt") >= wlo) & (pl.col("rt") <= whi))
+        return (lf.with_columns(pl.col("rt").min().over(apex_group_cols).alias("__rt_min"),
+                                pl.col("rt").max().over(apex_group_cols).alias("__rt_max"))
+                  .filter((pl.col("__rt_min") >= lo) & (pl.col("__rt_min") < hi))
+                  .with_columns((pl.col("__rt_max") - pl.col("__rt_min")).alias("__rt_span"))
+                  .drop(["__rt_min", "__rt_max"]))
+
+    kept_parts = []
+    for i in range(len(edges) - 1):
+        part_lf = _chunk_lf(edges[i], edges[i + 1])
+        if part_lf is None:
+            continue
+        decoy_coeffs_lf = calculate_peak_smoothness(
+            df=part_lf,
+            value_column='coeff',
+            rt_column='rt',
+            group_columns=None
+        )
+        decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
+            quality_pca.main_apex_pc1_expr(loadings, apex_group_cols).alias("apex_pc1"))
+        # Apex score: the spectral PC1 plus log priors for agreement with the predicted
+        # RT (Gaussian, the RT tolerance's core sigma) and IM (Laplace, the IM accuracy
+        # fit's core scale).  PC1 alone has no RT/IM term, and putting rt_error into the
+        # PCA does not add one: it varies independently of the spectral features, so
+        # PC1 gives it a loading of ~0.  Decoys inherit their target's RT and IM, so the
+        # priors treat both alike.  NaN errors (no IM data) contribute 0.
+        _rt_lp = (pl.lit(0.0) if not rt_sigma else
+                  (-0.5 * (pl.col("rt_error").cast(pl.Float64) / float(rt_sigma)) ** 2).fill_nan(0.0).fill_null(0.0))
+        _im_lp = (pl.lit(0.0) if not im_scale else
+                  (-(pl.col("im_error").cast(pl.Float64).abs()) / float(im_scale)).fill_nan(0.0).fill_null(0.0))
+        decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
+            _rt_lp.alias("rt_logprior"), _im_lp.alias("im_logprior"))
+        decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
+            (pl.col("apex_pc1") + pl.col("rt_logprior") + pl.col("im_logprior")).alias("apex_score"))
+        # What the priors overrode, as scoring features.  The spectral apex (max PC1)
+        # and the chosen apex (max apex_score) come from the same PC1 values: for a
+        # real peptide they usually agree; a null's best spectral evidence is anywhere
+        # in its RT window.  Moving the apex toward the prediction would otherwise hide
+        # that from rt_error / im_error at the chosen apex.  Same for targets and decoys.
+        _spec = pl.struct(["apex_pc1", "spec_id"])
+        _chosen = pl.struct(["apex_score", "spec_id"])
+        decoy_coeffs_lf = decoy_coeffs_lf.with_columns(
+            pl.col("rt_error").cast(pl.Float64).abs().fill_nan(0.0).fill_null(0.0)
+            .sort_by(_spec, descending=True).first().over(apex_group_cols)
+            .alias("spec_apex_rt_error"),
+            pl.col("im_error").cast(pl.Float64).abs().fill_nan(0.0).fill_null(0.0)
+            .sort_by(_spec, descending=True).first().over(apex_group_cols)
+            .alias("spec_apex_im_error"),
+            (pl.col("apex_pc1").max().over(apex_group_cols)
+             - pl.col("apex_pc1").sort_by(_chosen, descending=True).first().over(apex_group_cols))
+            .alias("apex_pc1_cost"),
+        )
+        # Nearby-scan extrema around the apex PC1 scan, the scan the collapse below
+        # keeps; not around the max-coefficient scan, which is a different scan for
+        # about a third of precursors.
+        decoy_coeffs_lf = find_extrema_in_nearby_scans(
+            decoy_coeffs_lf,
+            ["manhattan_distances", "max_matched_residuals", "gof_stats", "scribe_scores",
+             # TODO: evaluate whether the adjacent-scan minimum of resp_ent_norm_angle
+             # helps, on single-channel and multiplexed data.
+             "ent_norm_angle", "resp_ent_norm_angle"],
+            [True, False, False, False, False, False],
+            n_scans=2, anchor_col="apex_score")
+
+        # maintain_order: the default sort is unstable, so apex_pc1 ties would feed
+        # the unique() below in a different order per run.  apex_score and the priors
+        # stay until the partitions are combined (they order the kept rows).
+        sorted_decoy_coeffs_lf = decoy_coeffs_lf.sort(by="apex_score", maintain_order=True)
+        if timeplex:
+            # Calculate lib_rt and add column
+            sorted_decoy_coeffs_lf = sorted_decoy_coeffs_lf.with_columns(
+                (pl.col("rt") - pl.col("rt_error")).alias("lib_rt")
+            )
+        # Polars equivalent of drop_duplicates(..., keep='last'): the highest apex_score
+        kept = (sorted_decoy_coeffs_lf
+                .unique(subset=apex_group_cols, keep="last", maintain_order=True)
+                .filter(pl.col("seq") != "0")
+                .collect())
+        kept_parts.append(kept)
+        if kept.height and kept["__rt_span"].max() >= span_max:
+            from src.utils.errors import JModError
+            raise JModError(f"A precursor's main-search rows span {kept['__rt_span'].max():.3f} in RT, "
+                            f"more than 2 x rt_tol ({rt_tol}): apex selection by RT chunk would miss rows")
+        kept_parts[-1] = kept.drop("__rt_span")
+
+    # The kept rows in the order a single global pass leaves them: by apex_score,
+    # ties in row order, the frame's order after the smoothness sort.
+    _fdc_polars = (pl.concat(kept_parts)
+                   .sort(["apex_score", "__parquet_row"])
+                   # selection only: kept out of the scoring features
+                   .drop(["rt_logprior", "im_logprior", "apex_score"]))
+    del kept_parts
+
+    # Create large_prec dictionary
+    large_prec_rows = _fdc_polars.filter(pl.col("coeff") > 1)
     if timeplex:
-        # Calculate lib_rt and add column
-        sorted_decoy_coeffs_lf = sorted_decoy_coeffs_lf.with_columns(
-            (pl.col("rt") - pl.col("rt_error")).alias("lib_rt")
-        )
-
-        # Drop duplicates by "seq", "z", "time_channel" keeping the last (highest 'coeff')
-        filtered_decoy_coeffs_lf = sorted_decoy_coeffs_lf.unique(
-            subset=["seq", "z", "time_channel"],
-            keep="last",
-            maintain_order=True
-        )
-
-        # Filter out rows where seq is "0"
-        filtered_decoy_coeffs_lf = filtered_decoy_coeffs_lf.filter(pl.col("seq") != "0")
-
-        # Create large_prec dictionary
-        large_prec_lf = filtered_decoy_coeffs_lf.filter(pl.col("coeff") > 1).select(
-            ["seq", "z", "coeff", "time_channel"]
-        )
-
-        # Polars to native Python for dictionary creation
-        large_prec = {
-            (i, j, l): k
-            for i, j, k, l in large_prec_lf.collect().iter_rows()
-        }
-
+        large_prec = {(i, j, l): k for i, j, k, l in
+                      large_prec_rows.select(["seq", "z", "coeff", "time_channel"]).iter_rows()}
     else:
-        # Drop duplicates by "seq", "z" keeping the last (highest 'coeff')
-        filtered_decoy_coeffs_lf = sorted_decoy_coeffs_lf.unique(
-            subset=["seq", "z"],
-            keep="last",
-            maintain_order=True
-        )
+        large_prec = {(i, j): k for i, j, k in large_prec_rows.select(["seq", "z", "coeff"]).iter_rows()}
+    del large_prec_rows
 
-        # Filter out rows where seq is "0"
-        filtered_decoy_coeffs_lf = filtered_decoy_coeffs_lf.filter(pl.col("seq") != "0")
-
-        # Create large_prec dictionary
-        large_prec_lf = filtered_decoy_coeffs_lf.filter(pl.col("coeff") > 1).select(
-            ["seq", "z", "coeff"]
-        )
-
-        # Polars to native Python for dictionary creation
-        large_prec = {
-            (i, j): k
-            for i, j, k in large_prec_lf.collect().iter_rows()
-        }
-
-    # Collect the slim frame (list cols already dropped at the top of the
-    # lazy chain, so the sort buffer is scalar-only).
-    _fdc_polars = filtered_decoy_coeffs_lf.collect()
     _fdc_polars = _fdc_polars.with_row_index("__fdc_idx")
 
-    # Re-fetch list cols for the kept rows only. Inner-join on the original
-    # parquet row index (added to the slim chain via with_row_index above)
-    # bounds the materialized list cols to ~1.83M rows instead of 37M.
-    if _present_list_cols:
-        _row_keys = _fdc_polars.select(["__parquet_row", "__fdc_idx"]).lazy()
-        fdc_list_cols = (pl.scan_parquet(file)
-                           .with_row_index("__parquet_row")
-                           .select(["__parquet_row"] + _present_list_cols)
-                           .join(_row_keys, on="__parquet_row", how="inner")
-                           .drop("__parquet_row")
-                           .collect())
-    else:
-        fdc_list_cols = pl.DataFrame({"__fdc_idx": []})
+    # Re-fetch list cols for the kept rows only, joined on the row number.
+    _row_keys = _fdc_polars.select(["__parquet_row", "__fdc_idx"]).lazy()
+    fdc_list_cols = (pl.concat([ms.scan(i).select(["__parquet_row"] + LIST_COLS)
+                                  .join(_row_keys, on="__parquet_row", how="inner")
+                                  .collect()
+                                for i in range(len(ms.files))])
+                     .drop("__parquet_row")
+                     .sort("__fdc_idx"))
 
     filtered_decoy_coeffs = _fdc_polars.drop("__parquet_row").to_pandas()
     del _fdc_polars
 
-    # ``dc`` (decoy_coeffs) is consumed only by ms1_cor_channels, which reads a
-    # handful of numeric columns and groups by (seq, z[, time_channel]). Drop
-    # the list columns and the lazy-frame feature augmentations here — full
-    # pandas materialization of the augmented frame OOMs at ~60GB on multiplexed
-    # low-input runs. Re-scan the parquet directly to skip the augmentation
-    # passes that the slim frame doesn't need.
+    # The scans of each precursor for MS1 quant (ms1_cor_channels), which reads a
+    # handful of numeric columns and groups by (seq, z[, time_channel]).  Not read
+    # here: MS1 quant asks for its precursors only (MainSearchRows.frame_for).
     dc_cols = ["seq", "z", "coeff", "rt", "Ms1_spec_id", "spec_id"]
     dc_sort_keys = ["seq", "z"]
     if timeplex:
         dc_cols.append("time_channel")
         dc_sort_keys.append("time_channel")
-    decoy_coeffs = (pl.scan_parquet(file)
-                      .select(dc_cols)
-                      .sort(dc_sort_keys)
-                      .collect())
+    decoy_coeffs = MainSearchRows(ms, dc_cols, dc_sort_keys)
 
-    if condense_output:
-        return large_prec, filtered_decoy_coeffs
-    else:
-        return large_prec, filtered_decoy_coeffs, decoy_coeffs, fdc_list_cols
-
+    return large_prec, filtered_decoy_coeffs, decoy_coeffs, fdc_list_cols
 
 
 def read_results(file,
@@ -574,8 +676,8 @@ def read_results(file,
 
     results_folder = os.path.dirname(file)
 
-    all_fdx = pd.read_csv(results_folder+"/all_IDs.csv")
-    filtered_fdx = pd.read_csv(results_folder+"/filtered_IDs.csv")
+    all_fdx = pd.read_parquet(results_folder+"/all_precursors.parquet")
+    filtered_fdx = pd.read_parquet(os.path.join(os.path.dirname(results_folder), "filtered_precursors.parquet"))
 
     return decoy_coeffs,all_fdx,filtered_fdx
 

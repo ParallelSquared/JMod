@@ -20,10 +20,11 @@ import types
 import pytest
 
 from src.utils.errors import JModError
+from src.utils.io.read_output import MainSearchFiles, MainSearchRows
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
                                compute_protein_FDR, id_counts, id_table_lines, report_id_counts, target_decoy_qvalues,
                                untag_prec_qvalues, fill_ms1_quant_gaps,
-                               area, walk_to_local_max, gauss_r2_joint, ms1_quality)
+                               area, walk_to_local_max, gauss_r2_joint, ms1_quality, ms1_quality_pass)
 
 def test_score_model_minimal_fixed():
     # 12 samples, 2 classes
@@ -70,18 +71,23 @@ def test_score_model_xgboost_defaults_and_overrides(monkeypatch):
     assert set(fits) == {(6, 0.1, 50)}
 
 def test_score_precursors_minimal_fixed(tmp_path):
-    # Need enough samples for 5-fold CV with iterative negative mining
-    np.random.seed(42)
-    n = 30
-    is_decoy = [False, True] * (n // 2)
+    # Need enough samples for 5-fold CV with iterative negative mining.  Targets
+    # are separated from decoys as in a real run (higher coeff and features,
+    # smaller errors), with overlap, so the model has something to learn and its
+    # scores spread out; identical target and decoy distributions give every row
+    # the same score, which no real run does.
+    rng = np.random.default_rng(42)
+    n = 60
+    is_decoy = np.array([False, True] * (n // 2))
+    shift = np.where(is_decoy, 0.0, 1.0)
     fdc = pd.DataFrame({
-        "coeff": np.random.uniform(0.5, 3.0, n),
+        "coeff": rng.uniform(0.5, 3.0, n) + 1.5 * shift,
         "is_decoy": is_decoy,
         "stripped_seq": [f"SEQ{i}" for i in range(n)],
-        "rt_error": np.random.uniform(0.0, 1.0, n),
-        "mz_error": np.random.uniform(0.0, 0.1, n),
-        "feature1": np.random.uniform(1.0, 5.0, n),
-        "feature2": np.random.uniform(1.0, 5.0, n),
+        "rt_error": rng.uniform(0.0, 1.0, n) * (1.0 - 0.5 * shift),
+        "mz_error": rng.uniform(0.0, 0.1, n) * (1.0 - 0.5 * shift),
+        "feature1": rng.uniform(1.0, 5.0, n) + shift,
+        "feature2": rng.uniform(1.0, 5.0, n) + shift,
     })
 
     out = score_precursors(
@@ -187,28 +193,40 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
     spectra = None
     library = None
 
+    # get_large_prec's four outputs: the kept rows (one per precursor), their list
+    # columns, and the main-search rows MS1 quant reads, over a real batch parquet
+    fdc = pd.DataFrame({
+        "seq": ["AAAA", "BBBB"],
+        "z": [2.0, 2.0],
+        "rt": [10.0, 20.0],
+        "mz": [500.0, 600.0],
+        "rt_error": [0.1, -0.2],
+        "mz_error": [5, -10],
+        "gof_stats": [0.1, 0.2],
+        "scribe_scores": [1, 2],
+        "max_matched_residuals": [0.5, 0.8],
+        "manhattan_distances": [5, 6],
+        "frac_lib_int": [1, 1],
+        "file_name": ["f", "f"],
+        "time_channel": [0, 0],
+        "silac_channel": [np.nan, np.nan],
+        "is_decoy": [False, False],
+        "stripped_seq": ["AAAA", "BBBB"],
+        "__fdc_idx": [0, 1],
+    })
+    fdc_list_cols = pl.DataFrame({
+        "__fdc_idx": [0, 1],
+        "frag_errors": [[1.0, 2.0], [2.0, 3.0]],
+        "frag_mz": [[100.0, 200.0], [150.0]],
+        "frag_int": [[1.0, 2.0], [3.0]],
+    })
+    batch = tmp_path / "decoylibsearch_coeffs_batch0.parquet"
+    dc_cols = ["seq", "z", "coeff", "rt", "Ms1_spec_id", "spec_id"]
+    pl.DataFrame({"seq": ["AAAA", "BBBB"], "z": [2.0, 2.0], "coeff": [1.0, 2.0], "rt": [10.0, 20.0],
+                  "Ms1_spec_id": [1, 2], "spec_id": [1, 2]}).write_parquet(batch)
+    dc = MainSearchRows(MainSearchFiles([str(batch)]), dc_cols, ["seq", "z"])
     monkeypatch.setattr("src.fdr_analysis.get_large_prec",
-                        lambda *args, **kwargs: (None,
-                                                 pd.DataFrame({
-                                                     "seq": ["AAAA", "BBBB"],
-                                                     "z": [2, 2],
-                                                     "rt": [10.0, 20.0],
-                                                     "mz": [500.0, 600.0],
-                                                     "rt_error": [0.1, -0.2],
-                                                     "mz_error": [5, -10],
-                                                     "gof_stats": [0.1, 0.2],
-                                                     "scribe_scores": [1, 2],
-                                                     "max_matched_residuals": [0.5, 0.8],
-                                                     "manhattan_distances": [5, 6],
-                                                     "frag_errors": [[1.0, 2.0], [2.0, 3.0]],
-                                                     "frac_lib_int": [1, 1],
-                                                     "file_name": ["f", "f"],
-                                                     "time_channel": [0, 0],
-                                                     "silac_channel": [np.nan, np.nan],
-                                                     "is_decoy": [False, False],
-                                                     "stripped_seq": ["AAAA", "BBBB"],
-                                                 }),
-                                                 None))
+                        lambda *args, **kwargs: (None, fdc, dc, fdc_list_cols))
 
     monkeypatch.setattr("src.fdr_analysis.score_precursors",
                         lambda fdc, *args, **kwargs: fdc.assign(
@@ -217,7 +235,11 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
                         ))
 
     monkeypatch.setattr("src.fdr_analysis.ms1_quant",
-                        lambda *args, **kwargs: args[0].assign(plex_Area=[100.0, 0.0]))
+                        lambda *args, **kwargs: args[0].assign(plex_Area=[100.0, 0.0], plex_bg=[5.0, 5.0],
+                                                               plex_snr=[20.0, 0.0], plexfitMS1_p=[0.9, 0.1],
+                                                               # no MS1 fit window
+                                                               plexfittrace_spec_all=[None, None],
+                                                               plexfittrace_all=[None, None], ms1_apex_scan=[0, 0]))
 
     monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
                         lambda df, results_folder=None, **kwargs: df.assign(
@@ -230,12 +252,12 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
         lambda x: x if isinstance(x, list) else [1.0, 2.0]
     )
 
-    process_data(str(dummy_file), spectra, library,
+    process_data([str(dummy_file)], spectra, library,
                  ms1_tol=20e-6, rt_tol=1.0, im_tol=0.01, target_decoy_ratio=1.0)
 
     expected_files = [
-        "outputs/all_IDs.csv",
-        "filtered_IDs.csv",
+        "outputs/all_precursors.parquet",
+        "filtered_precursors.parquet",
         "outputs/all_IDs_filtered.parquet",
     ]
 
@@ -244,10 +266,10 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
     # Label-free: each untagged precursor is one row, so its q-value is the row's
     written = pd.read_parquet(tmp_path.parent / "outputs/all_IDs_filtered.parquet")
     assert written["untag_prec_Qvalue"].tolist() == written["Qvalue"].tolist()
-    # gauss_r2_joint in all_IDs.csv; MS1_quality only with the filtered IDs
-    assert "gauss_r2_joint" in pd.read_csv(tmp_path.parent / "outputs/all_IDs.csv").columns
-    assert "MS1_quality" not in pd.read_csv(tmp_path.parent / "outputs/all_IDs.csv").columns
-    assert "MS1_quality" in pd.read_csv(tmp_path.parent / "filtered_IDs.csv").columns
+    # gauss_r2_joint in all_precursors.parquet; MS1_quality only with the filtered IDs
+    assert "gauss_r2_joint" in pd.read_parquet(tmp_path.parent / "outputs/all_precursors.parquet").columns
+    assert "MS1_quality" not in pd.read_parquet(tmp_path.parent / "outputs/all_precursors.parquet").columns
+    assert "MS1_quality" in pd.read_parquet(tmp_path.parent / "filtered_precursors.parquet").columns
     assert "MS1_quality" in pd.read_parquet(tmp_path.parent / "filtered_IDs.parquet").columns
 
 
@@ -388,8 +410,8 @@ def _ids(ms1_traces, apexes):
     return pd.DataFrame({
         "seq": [f"PEP{i}K" for i in range(len(ms1_traces))],
         "z": 2.0,
-        "plexfittrace_spec_all": [";".join(map(str, SCANS)) if t is not None else 0 for t in ms1_traces],
-        "plexfittrace_all": [";".join(map(str, t)) if t is not None else 0 for t in ms1_traces],
+        "plexfittrace_spec_all": [SCANS if t is not None else None for t in ms1_traces],
+        "plexfittrace_all": [np.asarray(t, dtype=float) if t is not None else None for t in ms1_traces],
         "ms1_apex_scan": apexes,
     })
 
@@ -422,7 +444,8 @@ def test_ms1_quant_fill_leaves_the_decoy_channels_qvalues_unscored():
                         "Qvalue": [0.001, np.nan, np.nan],
                         "BestChannel_Qvalue": [0.001, 0.001, np.nan],      # the last: decoy channel alone
                         "untag_prec_Qvalue": [0.001, 0.001, np.nan],
-                        "plex_Area": [5.0, np.nan, np.nan], "ms1_cor": [0.9, np.nan, 0.2]})
+                        "plex_Area": [5.0, np.nan, np.nan], "ms1_cor": [0.9, np.nan, 0.2],
+                        "plexfittrace_all": [np.array([1.0, 2.0]), np.nan, None]})
     out = fill_ms1_quant_gaps(dat)
     assert out["Qvalue"].isna().tolist() == [False, True, True]
     assert out["BestChannel_Qvalue"].isna().tolist() == [False, False, True]
@@ -430,25 +453,69 @@ def test_ms1_quant_fill_leaves_the_decoy_channels_qvalues_unscored():
     assert out["plex_Area"].tolist() == [5.0, 0.0, 0.0]                   # the rest as before
     assert out["ms1_cor"].tolist() == [0.9, 0.0, 0.2]
     assert not (out["BestChannel_Qvalue"] < 0.01).iloc[2]
+    # the per-scan arrays: None where there is no quant, not 0
+    assert out["plexfittrace_all"].iloc[0].tolist() == [1.0, 2.0]
+    assert out["plexfittrace_all"].iloc[1] is None and out["plexfittrace_all"].iloc[2] is None
 
 
 def test_ms1_quality_ranks_within_the_run_and_puts_no_ms1_quant_last():
     ids = pd.DataFrame({"PredVal": [0.9, 0.95, 0.99, 0.99],
                         "gauss_r2_joint": [0.5, 0.9, np.nan, 0.7],
+                        "plexfitMS1_p": [0.8, 0.8, 0.8, 0.8],
+                        "plex_snr": [1.0, 2.0, 3.0, 4.0],
                         "plex_Area": [10.0, 10.0, 10.0, 0.0]})
     qq = ms1_quality(ids)
-    # percentiles: PredVal 1/4, 2/4, 3.5/4, 3.5/4; gauss_r2_joint 1/3, 3/3, missing = 0, 2/3
-    assert np.allclose(qq, [np.sqrt(1 / 4 * 1 / 3), np.sqrt(2 / 4), 0.0, 0.01 * np.sqrt(3.5 / 4 * 2 / 3)])
+    # percentiles: PredVal 1/4, 2/4, 3.5/4, 3.5/4; plexfitMS1_p all tied at 2.5/4;
+    # plex_snr 1/4 .. 4/4; geometric mean of the three.  gauss_r2_joint (NaN in
+    # row 3) is not used.
+    g = lambda *p: np.prod(p) ** (1 / 3)
+    assert np.allclose(qq, [g(1 / 4, 2.5 / 4, 1 / 4), g(2 / 4, 2.5 / 4, 2 / 4), g(3.5 / 4, 2.5 / 4, 3 / 4),
+                            0.01 * g(3.5 / 4, 2.5 / 4, 1.0)])
     # ChannelScore, where the channel FDR was fitted, in place of PredVal: 4/4, 3/4, 2/4, 1/4
     assert np.allclose(ms1_quality(ids.assign(ChannelScore=[4.0, 3.0, 2.0, 1.0])),
-                       [np.sqrt(1 / 3), np.sqrt(3 / 4), 0.0, 0.01 * np.sqrt(1 / 4 * 2 / 3)])
+                       [g(1.0, 2.5 / 4, 1 / 4), g(3 / 4, 2.5 / 4, 2 / 4), g(2 / 4, 2.5 / 4, 3 / 4),
+                        0.01 * g(1 / 4, 2.5 / 4, 1.0)])
     assert np.allclose(ms1_quality(ids.assign(ChannelScore=np.nan)), qq)   # not fitted
 
 
+def test_ms1_quality_pass_is_a_fixed_pearson_cut_on_quantified_ids():
+    ids = pd.DataFrame({"plexfitMS1_p": [0.2, 0.49, 0.5, 0.9, 0.95],
+                        "plex_Area": [5.0, 5.0, 5.0, 5.0, 0.0]})
+    # >= 0.5 passes; a row with no MS1 quant fails whatever its Pearson
+    assert ms1_quality_pass(ids).tolist() == [False, False, True, True, False]
+
+
+def test_full_parquet_keeps_types_and_stringifies_mixed_columns(tmp_path):
+    """_write_full_parquet: list and numeric columns keep their types; a column mixing
+    numbers and strings is written as strings, nulls kept."""
+    import numpy as np
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from src.fdr_analysis import _write_full_parquet
+    df = pd.DataFrame({
+        "seq": ["PEPTIDEK", "PEPTIDER", "PEPK"],
+        "coeff": [1.5, 2.0, np.nan],
+        "is_decoy": [False, True, False],
+        "frag_errors": [np.array([1.0, 2.0]), None, np.array([3.0])],
+        "mixed": pd.Series([0, "235502.4;189496.8", np.nan], dtype=object),
+    })
+    path = tmp_path / "precursors.parquet"
+    _write_full_parquet(df, str(path))
+    t = pq.read_table(path)
+    assert t.schema.field("coeff").type == pa.float64()
+    assert t.schema.field("is_decoy").type == pa.bool_()
+    assert pa.types.is_list(t.schema.field("frag_errors").type)
+    assert t.schema.field("mixed").type == pa.string()
+    assert t.column("mixed").to_pylist() == ["0", "235502.4;189496.8", None]
+    assert t.column("frag_errors").to_pylist() == [[1.0, 2.0], None, [3.0]]
+
+
 def test_process_data_flags_and_filters_the_decoy_channel(tmp_path, monkeypatch):
-    """The tag's empty channel is scored like any other, so it is in all_IDs with
-    is_decoy_channel set, but it is never an identification: out of the filtered
-    IDs, which is what the combined results and the MBR library are built from."""
+    """The tag's empty channel is scored like any other, so it is in
+    all_precursors with is_decoy_channel set, but it is never an identification:
+    out of the filtered IDs, which is what the combined results and the MBR
+    library are built from."""
     from src.mass_tags import available_tags
 
     mass_tag = available_tags["PSMtag_5plex"].select_channels(["0", "4"]).with_decoy_channel()
@@ -459,45 +526,81 @@ def test_process_data_flags_and_filters_the_decoy_channel(tmp_path, monkeypatch)
     dummy_file.write_text("dummy")
     (tmp_path.parent / "outputs").mkdir(exist_ok=True)
 
+    # get_large_prec's four outputs, the main-search rows over a real batch parquet
+    fdc = pd.DataFrame({
+        "seq": seqs,
+        "z": [2.0] * 4,
+        "rt": [10.0] * 4,
+        "mz": [500.0] * 4,
+        "rt_error": [0.1] * 4,
+        "mz_error": [5] * 4,
+        "gof_stats": [0.1] * 4,
+        "scribe_scores": [1] * 4,
+        "max_matched_residuals": [0.5] * 4,
+        "manhattan_distances": [5] * 4,
+        "frac_lib_int": [1] * 4,
+        "file_name": ["f"] * 4,
+        "time_channel": [0] * 4,
+        "silac_channel": [np.nan] * 4,
+        "is_decoy": [False] * 4,
+        "stripped_seq": ["AAAA", "AAAA", "BBBB", "BBBB"],
+        "__fdc_idx": [0, 1, 2, 3],
+    })
+    fdc_list_cols = pl.DataFrame({
+        "__fdc_idx": [0, 1, 2, 3],
+        "frag_errors": [[1.0, 2.0]] * 4,
+        "frag_mz": [[200.0, 300.0]] * 4,
+        "frag_int": [[1.0, 2.0]] * 4,
+    })
+    batch = tmp_path / "decoylibsearch_coeffs_batch0.parquet"
+    dc_cols = ["seq", "z", "coeff", "rt", "Ms1_spec_id", "spec_id"]
+    pl.DataFrame({"seq": seqs, "z": [2.0] * 4, "coeff": [1.0] * 4, "rt": [10.0] * 4,
+                  "Ms1_spec_id": [1] * 4, "spec_id": [1] * 4}).write_parquet(batch)
+    dc = MainSearchRows(MainSearchFiles([str(batch)]), dc_cols, ["seq", "z"])
     monkeypatch.setattr("src.fdr_analysis.get_large_prec",
-                        lambda *args, **kwargs: (None,
-                                                 pd.DataFrame({
-                                                     "seq": seqs,
-                                                     "z": [2] * 4,
-                                                     "rt": [10.0] * 4,
-                                                     "mz": [500.0] * 4,
-                                                     "rt_error": [0.1] * 4,
-                                                     "mz_error": [5] * 4,
-                                                     "gof_stats": [0.1] * 4,
-                                                     "scribe_scores": [1] * 4,
-                                                     "max_matched_residuals": [0.5] * 4,
-                                                     "manhattan_distances": [5] * 4,
-                                                     "frag_errors": [[1.0, 2.0]] * 4,
-                                                     "frag_mz": [[200.0, 300.0]] * 4,
-                                                     "frag_int": [[1.0, 2.0]] * 4,
-                                                     "frac_lib_int": [1] * 4,
-                                                     "file_name": ["f"] * 4,
-                                                     "time_channel": [0] * 4,
-                                                     "silac_channel": [np.nan] * 4,
-                                                     "is_decoy": [False] * 4,
-                                                     "stripped_seq": ["AAAA", "AAAA", "BBBB", "BBBB"],
-                                                 }),
-                                                 None))
+                        lambda *args, **kwargs: (None, fdc, dc, fdc_list_cols))
     monkeypatch.setattr("src.fdr_analysis.score_precursors",
                         lambda fdc, *args, **kwargs: fdc.assign(PredVal=0.9, Qvalue=0.001))
     monkeypatch.setattr("src.fdr_analysis.ms1_quant",
-                        lambda *args, **kwargs: args[0].assign(plex_Area=100.0))
+                        lambda *args, **kwargs: args[0].assign(plex_Area=100.0, plex_bg=5.0, plex_snr=20.0,
+                                                               plexfitMS1_p=0.9, plexfittrace_spec_all=None,
+                                                               plexfittrace_all=None, ms1_apex_scan=0))
+    # The channel FDR needs spectra; not what this tests
+    monkeypatch.setattr("src.channel_fdr.run_channel_fdr", lambda *args, **kwargs: None)
     monkeypatch.setattr("src.fdr_analysis.compute_protein_FDR",
                         lambda df, results_folder=None, **kwargs: df.assign(Protein_Qvalue=1.0,
                                                                             protein="P12345"))
     monkeypatch.setattr("src.fdr_analysis.unstring_floats",
                         lambda x: x if isinstance(x, list) else [1.0, 2.0])
 
-    process_data(str(dummy_file), None, None, ms1_tol=20e-6, rt_tol=1.0, im_tol=0.01,
+    process_data([str(dummy_file)], None, None, ms1_tol=20e-6, rt_tol=1.0, im_tol=0.01,
                  target_decoy_ratio=1.0, mass_tag=mass_tag)
 
-    all_ids = pd.read_csv(tmp_path.parent / "outputs/all_IDs.csv")
+    all_ids = pd.read_parquet(tmp_path.parent / "outputs/all_precursors.parquet")
     assert dict(zip(all_ids["channel"], all_ids["is_decoy_channel"])) == {0: False, 8: True}
-    filtered = pd.read_csv(tmp_path.parent / "filtered_IDs.csv")
+    filtered = pd.read_parquet(tmp_path.parent / "filtered_IDs.parquet")
     assert filtered["channel"].tolist() == [0, 0]
     assert "is_decoy_channel" in pd.read_parquet(tmp_path.parent / "outputs/all_IDs_filtered.parquet").columns
+
+
+def test_ms1_quant_leaves_the_decoy_channel_out_of_the_fit(monkeypatch):
+    """The decoy channel is a null draw, not a sample: neither its rows nor its
+    channel go into the MS1 plex fit."""
+    from src import fdr_analysis
+    from src.mass_tags import available_tags
+    mass_tag = available_tags["PSMtag_5plex"].select_channels(["0", "4"]).with_decoy_channel()
+    dat = pd.DataFrame({"seq": [f"(PSMtag_5plex-{c})AAAA" for c in (0, 4, 8)], "z": 2.0,
+                        "channel": [0, 4, 8], "is_decoy": False, "is_decoy_channel": [False, False, True],
+                        "BestChannel_Qvalue": 0.001})
+    seen = {}
+
+    def fake_fit(spectra, fdc, dc, **kwargs):
+        seen["channels"], seen["tag"] = fdc["channel"].tolist(), kwargs["tag"]
+        return pd.DataFrame(index=fdc.index)
+
+    monkeypatch.setattr(fdr_analysis.ms1_mod, "ms1_cor_channels", fake_fit)
+    monkeypatch.setattr(fdr_analysis, "process_ms1_quant", lambda dat, *args, **kwargs: dat)
+    fdr_analysis.ms1_quant(dat, None, None, mass_tag, None, None, 10e-6, 1.0, 0.01)
+    assert seen["channels"] == [0, 4]
+    assert seen["tag"].channel_names == ["0", "4"]
+

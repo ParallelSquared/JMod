@@ -344,6 +344,36 @@ class TestEmpiricalFit:
         assert callable(emp_rt_spl)
         assert os.path.isdir(self.test_results_dir)
 
+def test_empirical_fit_uses_the_cleanest_percentile_when_none_converges(monkeypatch):
+    """A first search whose IDs never get clean enough to stop the sweep: the
+    fit must use the percentile with the highest partial posterior, and must
+    not use one that leaves fewer than 800 good IDs."""
+    import src.quality_pca as quality_pca
+    rng = np.random.default_rng(0)
+    n = 200_000
+    q = (np.arange(n) + 0.5) / n          # quality quantile of each row
+    # RT outlier fraction by quality band: noisy below the 97th percentile,
+    # cleanest in [98, 99), noisy again in the top 1%.  Top 2% (percentile 98)
+    # is the cleanest set; every set stays above the 5% outlier stop.
+    p_out = np.select([q < 0.97, q < 0.98, q < 0.99], [0.4, 0.4, 0.06], 0.3)
+    lib_rt = rng.uniform(0, 1800, n)
+    outlier = rng.random(n) < p_out
+    # Residuals shaped like the raw-data run: inliers ~25 s, outliers ~160 s.
+    rt = lib_rt + np.where(outlier, rng.normal(0, 160, n), rng.normal(0, 25, n))
+    df = pd.DataFrame({"lib_rt": lib_rt, "rt": rt})
+    monkeypatch.setattr(quality_pca, "first_search_pc1", lambda d: q.copy())
+    # Skip straight to the top percentiles (the sweep skips any that keep more
+    # than this many IDs), so the test stays fast.
+    from src import config
+    monkeypatch.setattr(config, "max_num_prelim_search", 12_000)
+
+    cor_filter, _ = empirical_fit(df, results_folder=None)
+
+    assert cor_filter.sum() > 800
+    assert q[cor_filter].min() > 0.98          # the top-2% set, not 97 or lower
+    assert q[cor_filter].min() < 0.99          # nor the noisier top 1%
+
+
 class TestFilterRtsByDense:
     def test_filter_rts_by_dense_basic(self):
 

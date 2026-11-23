@@ -17,7 +17,6 @@ import numpy as np
 
 
 import warnings
-import ptinnls as sparse_nnls
 
 from sklearn.linear_model import ElasticNet, Lasso
 from sklearn.linear_model._coordinate_descent import enet_path
@@ -36,7 +35,6 @@ warnings.filterwarnings(
 )
 
 from scipy import sparse
-from pyteomics import mass
 import re
 from src.utils.io.read_output import names
 import src.config as config
@@ -50,6 +48,19 @@ from src.utils.frag_encoding import is_b_ion, is_y_ion, is_isotope, get_index, d
 from numba import njit
 import time
 import threading
+from typing import NamedTuple, Optional
+
+import pyarrow as pa
+
+
+def plex_size():
+    """Copies of each precursor in the searched library: the mass tag's channels
+    (its decoy channel included) times the SILAC label's, 1 for label-free."""
+    n = 1
+    for label in (getattr(config, "tag", None), getattr(config, "SILAC", None)):
+        if label is not None:
+            n *= max(1, int(label.n_channels))
+    return n
 
 
 # ── Thread-local RandomState cache for enet_path ──
@@ -764,9 +775,82 @@ def _large_coeff_block_jit(coo_rows, coo_cols, coo_vals, n_rows,
     return predicted_spec, frac, subset_cosine
 
 
-def _split_flat(flat_arr, offsets):
-    """Split a flat array into a list of sub-arrays using an offset table."""
-    return [flat_arr[offsets[i]:offsets[i+1]] for i in range(len(offsets)-1)]
+@njit(nogil=True)
+def _frag_columns_jit(passing, cand_idx, spec_offsets, spec_mz, spec_int, frag_codes,
+                      all_coords, frag_offsets, flat_rows, flat_offsets,
+                      bin_centers, dia_int, single_match_lookup, peak_idx_lookup):
+    """The matched-fragment output columns of each passing candidate, flat.
+
+    For passing candidate k, its matched library peaks (odd coords) pair in
+    order with its DIA rows flat_rows[flat_offsets[k]:flat_offsets[k+1]].
+    Per matched peak: fragment code, relative m/z error against the DIA bin
+    centre, library m/z and intensity, observed intensity; and, for peaks on
+    a DIA row only one candidate matched, the library m/z and observed
+    intensity again (the unique columns).  Segments are delimited by offsets
+    (matched peaks) and unique_offsets (unique peaks).
+    """
+    n = passing.shape[0]
+    offsets = np.zeros(n + 1, dtype=np.int64)
+    unique_offsets = np.zeros(n + 1, dtype=np.int64)
+    for k in range(n):
+        c = passing[k]
+        m = 0
+        for p in range(frag_offsets[c], frag_offsets[c + 1]):
+            if all_coords[p] % 2 == 1:
+                m += 1
+        if m != flat_offsets[k + 1] - flat_offsets[k]:
+            raise ValueError("matched library peaks and DIA rows differ in number")
+        offsets[k + 1] = offsets[k] + m
+        u = 0
+        for t in range(flat_offsets[k], flat_offsets[k + 1]):
+            if single_match_lookup[peak_idx_lookup[flat_rows[t]]]:
+                u += 1
+        unique_offsets[k + 1] = unique_offsets[k] + u
+    total = offsets[n]
+    codes = np.empty(total, dtype=np.int32)
+    errors = np.empty(total, dtype=np.float64)
+    lib_mz = np.empty(total, dtype=np.float64)
+    lib_int = np.empty(total, dtype=np.float64)
+    obs_int = np.empty(total, dtype=np.float64)
+    unique_mz = np.empty(unique_offsets[n], dtype=np.float64)
+    unique_obs = np.empty(unique_offsets[n], dtype=np.float64)
+    for k in range(n):
+        c = passing[k]
+        first = spec_offsets[cand_idx[c]] - frag_offsets[c]
+        out = offsets[k]
+        row = flat_offsets[k]
+        uout = unique_offsets[k]
+        for p in range(frag_offsets[c], frag_offsets[c + 1]):
+            if all_coords[p] % 2 == 1:
+                lib = first + p
+                r = flat_rows[row]
+                centre = bin_centers[r]
+                mz = np.float64(spec_mz[lib])
+                codes[out] = frag_codes[lib]
+                errors[out] = (centre - mz) / centre
+                lib_mz[out] = mz
+                lib_int[out] = spec_int[lib]
+                obs_int[out] = dia_int[r]
+                if single_match_lookup[peak_idx_lookup[r]]:
+                    unique_mz[uout] = mz
+                    unique_obs[uout] = dia_int[r]
+                    uout += 1
+                out += 1
+                row += 1
+    return codes, errors, lib_mz, lib_int, obs_int, offsets, unique_mz, unique_obs, unique_offsets
+
+
+@njit(nogil=True)
+def _take_segments_jit(values, offsets, sel):
+    """Segments sel[0], sel[1], ... of a flat array, with their new offsets."""
+    out_offsets = np.zeros(sel.shape[0] + 1, dtype=np.int64)
+    for k in range(sel.shape[0]):
+        out_offsets[k + 1] = out_offsets[k] + offsets[sel[k] + 1] - offsets[sel[k]]
+    out = np.empty(out_offsets[-1], dtype=values.dtype)
+    for k in range(sel.shape[0]):
+        start = offsets[sel[k]]
+        out[out_offsets[k]:out_offsets[k + 1]] = values[start:start + out_offsets[k + 1] - out_offsets[k]]
+    return out, out_offsets
 
 
 @njit(nogil=True)
@@ -1133,9 +1217,10 @@ def _create_entries_direct_jit(
     spec_data_mz, spec_data_int, spec_offsets, spec_lengths,
     topn_data, topn_offsets, topn_lengths,
     cand_indices,
-    prec_mzs, ms1_mz, ms1_mob, ms1_tol,
+    prec_mzs, ms1_mz, ms1_int, ms1_mob, ms1_tol,
     frac_lib_threshold, atleast_m, match_ms1,
-    bin_mz, bin_int, bin_mob, mz_tol, im_tol, has_im):
+    bin_mz, bin_int, bin_mob, mz_tol, im_tol, has_im,
+    frag_names_data, dia_int):
     """Like _create_entries_core_jit but reads directly from library backing arrays.
 
     Instead of pre-flattened fragment arrays, this takes the library's contiguous
@@ -1155,6 +1240,7 @@ def _create_entries_direct_jit(
         cand_indices:  int32/int64[] — which library entries are candidates
         prec_mzs:      float64[n_cands] — precursor m/z per candidate
         ms1_mz:        float64[] — MS1 spectrum m/z (sorted)
+        ms1_int:       float64[] — MS1 spectrum intensities, parallel to ms1_mz
         ms1_tol:       float64 — relative MS1 tolerance
         frac_lib_threshold: float64 — minimum frac of lib intensity matched
         atleast_m:     int — minimum top-N fragments matched
@@ -1265,15 +1351,17 @@ def _create_entries_direct_jit(
             if all_coords[k] % 2 == 1:
                 frac_matched_arr[i] += all_norm_int[k]
 
-    # Step 4: MS1 closest-peak error.
+    # Step 4: MS1 precursor-peak error.
     #
-    # IM gate first, m/z as the selector.  Taking the nearest peak by m/z alone
-    # regularly lands on a co-isolated ion at unrelated mobility, because MS1
-    # frames are not IM-banded -- they carry per-peak mobility across the whole
-    # acquisition range.  So scan every MS1 peak within ms1_tol and keep the
-    # m/z-closest one that also sits within im_tol of this candidate's
-    # fragment-derived IM.  Falls back to pure m/z when there is no mobility to
-    # gate on: non-IM data, or a candidate whose fragments yielded no prec_im.
+    # IM gate first, intensity as the selector.  MS1 frames are not IM-banded --
+    # they carry per-peak mobility across the whole acquisition range -- so a
+    # peak is only eligible within ms1_tol of the precursor m/z and within
+    # im_tol of this candidate's fragment-derived IM.  Among those, the most
+    # intense is the precursor's peak (ties to the lowest m/z): the nearest by
+    # m/z is, on uncentroided data, usually a single-count ion whose error
+    # reflects the TOF grid rather than the precursor.  Falls back to the m/z
+    # window alone when there is no mobility to gate on: non-IM data, or a
+    # candidate whose fragments yielded no prec_im.
     n_ms1 = len(ms1_mz)
     ms1_error = np.full(n_cands, np.nan)
     ms1_has_mob = len(ms1_mob) == n_ms1
@@ -1284,30 +1372,85 @@ def _create_entries_direct_jit(
             gate_im = ms1_has_mob and im_tol > 0.0 and p_im == p_im
             tol_da = ms1_tol * q
             best = np.nan
-            best_abs = ms1_tol
+            best_int = -np.inf
             idx = np.searchsorted(ms1_mz, q)
+            # Upward (increasing m/z): strictly greater keeps the lower m/z on ties.
             j = idx
             while j < n_ms1 and (ms1_mz[j] - q) <= tol_da:
                 if (not gate_im) or abs(ms1_mob[j] - p_im) <= im_tol:
-                    d = (ms1_mz[j] - q) / q
-                    if abs(d) <= best_abs:
-                        best_abs = abs(d)
-                        best = d
+                    if ms1_int[j] > best_int:
+                        best_int = ms1_int[j]
+                        best = (ms1_mz[j] - q) / q
                 j += 1
+            # Downward (decreasing m/z): greater-or-equal takes the lower m/z on ties.
             j = idx - 1
             while j >= 0 and (q - ms1_mz[j]) <= tol_da:
                 if (not gate_im) or abs(ms1_mob[j] - p_im) <= im_tol:
-                    d = (ms1_mz[j] - q) / q
-                    if abs(d) <= best_abs:
-                        best_abs = abs(d)
-                        best = d
+                    if ms1_int[j] >= best_int:
+                        best_int = ms1_int[j]
+                        best = (ms1_mz[j] - q) / q
                 j -= 1
             ms1_error[i] = best
+
+    # Step 4b: entropy-normalized spectral angle, theta / sqrt(D1 - 1), over the
+    # candidate's MONOISOTOPIC library fragments.  theta is the angle between
+    # sqrt(library) and sqrt(observed) intensities (unmatched fragments observed
+    # as 0); D1 = exp(Shannon entropy of the library intensity shares), the
+    # effective number of library ions.  Lower is better.
+    ent_angle = np.full(n_cands, np.nan)
+    for i in range(n_cands):
+        lib_idx = cand_indices[i]
+        src_off = int(spec_offsets[lib_idx])
+        src_len = int(spec_lengths[lib_idx])
+        dst_off = int(frag_offsets[i])
+        lib_sum = 0.0
+        for k in range(src_len):
+            if ((frag_names_data[src_off + k] >> 17) & 0xF) == 0:
+                lib_sum += spec_data_int[src_off + k]
+        if lib_sum <= 0.0:
+            continue
+        dot = 0.0
+        a2 = 0.0
+        b2 = 0.0
+        ent = 0.0
+        for k in range(src_len):
+            if ((frag_names_data[src_off + k] >> 17) & 0xF) != 0:
+                continue
+            li = spec_data_int[src_off + k]
+            if li <= 0.0:
+                continue
+            p = li / lib_sum
+            ent -= p * math.log(p)
+            b2 += li
+            c = all_coords[dst_off + k]
+            if c % 2 == 1:
+                ob = dia_int[c // 2]
+                if ob > 0.0:
+                    dot += math.sqrt(ob) * math.sqrt(li)
+                    a2 += ob
+        if a2 > 0.0 and b2 > 0.0:
+            cosv = dot / math.sqrt(a2 * b2)
+            if cosv > 1.0:
+                cosv = 1.0
+            theta = math.acos(cosv)
+        else:
+            theta = math.pi / 2.0
+        d1m1 = math.exp(ent) - 1.0
+        if d1m1 < 1e-6:
+            d1m1 = 1e-6
+        ent_angle[i] = theta / math.sqrt(d1m1)
 
     # Candidate filtering
     n_passing = 0
     passing = np.empty(n_cands, dtype=np.int32)
     for i in range(n_cands):
+        # TODO: atleast_m is misnamed and inconsistent: this filter is
+        # top_n_matched > atleast_m ("at least atleast_m + 1") while fragment_index
+        # uses >= ("at least atleast_m").  Rename it to what it is (e.g.
+        # min_topn_matched) and make every use the same comparison, so one name
+        # means one threshold everywhere.  Switching this filter to >= (at least 3)
+        # lost about 1,000 precursors on the timsTOF 200 pg test, so retune when
+        # changing it.
         ok = frac_matched_arr[i] > frac_lib_threshold and top_n_matched[i] > atleast_m
         if match_ms1:
             ok = ok and not np.isnan(ms1_error[i])
@@ -1350,7 +1493,100 @@ def _create_entries_direct_jit(
     for j in range(n_passing):
         ms1_error_out[j] = ms1_error[passing[j]]
 
-    return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets, prec_im_out
+    ent_angle_out = np.empty(n_passing, dtype=np.float64)
+    topn_out = np.empty(n_passing, dtype=np.int32)
+    frac_out = np.empty(n_passing, dtype=np.float64)
+    for j in range(n_passing):
+        ent_angle_out[j] = ent_angle[passing[j]]
+        topn_out[j] = top_n_matched[passing[j]]
+        frac_out[j] = frac_matched_arr[passing[j]]
+
+    return passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, all_coords, all_norm_int, frag_offsets, prec_im_out, ent_angle_out, topn_out, frac_out
+
+
+@njit(nogil=True)
+def _resp_ent_angle_jit(passing, cand_idx, col_offset, coeffs,
+                        spec_offsets, spec_lengths, spec_data_int, frag_names_data,
+                        all_coords, all_norm_int, frag_offsets,
+                        peak_idx_lookup, y_pred, obs_rows):
+    """Entropy-normalized spectral angle against the candidate's share of each peak.
+
+    As in _create_entries_direct_jit step 4b -- theta / sqrt(D1 - 1) over the
+    candidate's monoisotopic library fragments, theta between sqrt(library) and
+    sqrt(observed), unmatched fragments observed as 0 -- but each matched peak's
+    observed intensity is first split by responsibility: the candidate's
+    predicted share of the fitted peak, coeff * library value / y_pred.  A peak
+    only this candidate explains keeps its whole intensity; a peak shared with
+    another fitted candidate gives this one only its share.  NaN for candidates
+    with a zero coefficient (they are not written out).
+    """
+    n = len(passing)
+    out = np.full(n, np.nan)
+    for j in range(n):
+        x = coeffs[col_offset + j]
+        if x <= 0.0:
+            continue
+        i = int(passing[j])
+        lib_idx = cand_idx[i]
+        src_off = int(spec_offsets[lib_idx])
+        src_len = int(spec_lengths[lib_idx])
+        dst_off = int(frag_offsets[i])
+        lib_sum = 0.0
+        for k in range(src_len):
+            if ((frag_names_data[src_off + k] >> 17) & 0xF) == 0:
+                lib_sum += spec_data_int[src_off + k]
+        if lib_sum <= 0.0:
+            continue
+        dot = 0.0
+        a2 = 0.0
+        b2 = 0.0
+        ent = 0.0
+        for k in range(src_len):
+            if ((frag_names_data[src_off + k] >> 17) & 0xF) != 0:
+                continue
+            li = spec_data_int[src_off + k]
+            if li <= 0.0:
+                continue
+            p = li / lib_sum
+            ent -= p * math.log(p)
+            b2 += li
+            c = all_coords[dst_off + k]
+            if c % 2 == 1:
+                b = c // 2
+                if b < len(peak_idx_lookup):
+                    r = peak_idx_lookup[b]
+                    if r >= 0 and y_pred[r] > 0.0:
+                        ob = obs_rows[r] * x * all_norm_int[dst_off + k] / y_pred[r]
+                        if ob > 0.0:
+                            dot += math.sqrt(ob) * math.sqrt(li)
+                            a2 += ob
+        if a2 > 0.0 and b2 > 0.0:
+            cosv = dot / math.sqrt(a2 * b2)
+            if cosv > 1.0:
+                cosv = 1.0
+            theta = math.acos(cosv)
+        else:
+            theta = math.pi / 2.0
+        d1m1 = math.exp(ent) - 1.0
+        if d1m1 < 1e-6:
+            d1m1 = 1e-6
+        out[j] = theta / math.sqrt(d1m1)
+    return out
+
+
+def _keep_passing(keep, passing, flat_rows, flat_cols, flat_vals, flat_offsets, *per_passing):
+    """Keep the passing candidates where *keep* is True, in their order: the flat
+    COO arrays are cut to their segments and their columns renumbered, and each
+    per-passing array is filtered the same way."""
+    kept = np.flatnonzero(keep)
+    seg = [np.arange(flat_offsets[j], flat_offsets[j + 1]) for j in kept]
+    take = np.concatenate(seg) if seg else np.empty(0, dtype=np.int64)
+    lengths = np.diff(flat_offsets)[kept]
+    new_offsets = np.zeros(len(kept) + 1, dtype=flat_offsets.dtype)
+    np.cumsum(lengths, out=new_offsets[1:])
+    new_cols = np.repeat(np.arange(len(kept), dtype=flat_cols.dtype), lengths)
+    return (passing[kept], flat_rows[take], new_cols, flat_vals[take], new_offsets,
+            *[a[kept] for a in per_passing])
 
 
 def create_entries_direct(centroid_breaks,
@@ -1358,7 +1594,6 @@ def create_entries_direct(centroid_breaks,
                           spec_offsets, spec_lengths,
                           topn_data, topn_offsets, topn_lengths,
                           candidate_indices,
-                          mass_window_candidates,
                           atleast_m,
                           prec_mzs,
                           ms1_spec,
@@ -1368,7 +1603,9 @@ def create_entries_direct(centroid_breaks,
                           bin_mob=None,
                           mz_tol=0.0,
                           im_tol=0.0,
-                          has_im=False):
+                          has_im=False,
+                          frag_names_data=None,
+                          dia_int=None):
     """Like create_entries but reads directly from library backing arrays.
 
     Eliminates Python-level flattening of candidate_peaks and top_n_idxs
@@ -1384,28 +1621,31 @@ def create_entries_direct(centroid_breaks,
         topn_offsets:  int64[] — top_n_offsets from library
         topn_lengths:  int32[] — top_n_lengths from library
         candidate_indices: int[] — internal library indices for each candidate
-        mass_window_candidates: list — candidate keys (for output reconstruction)
         atleast_m: int — minimum top-N fragments matched
         prec_mzs: float64[] — precursor m/z per candidate
         ms1_spec: MS1 spectrum object with .mz (and .mobility when the data carries IM)
         ms1_tol: float64 — relative MS1 tolerance
 
     Returns:
-        Same tuple as create_entries.
+        (passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error,
+         all_coords, all_norm_int, frag_offsets, prec_im, cand_idx):
+        passing indexes the candidates that pass; prec_im is per passing
+        candidate; cand_idx is candidate_indices as int64.
     """
     n_cands = len(candidate_indices)
     if n_cands == 0:
-        return ([], [], [], [],
+        return (np.empty(0, np.int64),
                 np.empty(0, np.int32), np.empty(0, np.int32), np.empty(0, np.float64),
-                np.zeros(1, np.int32), [], [],
+                np.zeros(1, np.int32),
                 np.array([], dtype=np.float64),
                 np.empty(0, np.int64), np.empty(0, np.float64),
-                np.zeros(1, np.int32), np.empty(0, np.int32), [])
+                np.zeros(1, np.int32), np.empty(0, np.float64), np.empty(0, np.int64),
+                np.empty(0, np.float64), np.empty(0, np.int32), np.empty(0, np.float64))
 
     cand_idx_arr = np.asarray(candidate_indices, dtype=np.int64)
 
     passing, flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out, \
-        all_coords, all_norm_int, frag_offsets, prec_im_out = \
+        all_coords, all_norm_int, frag_offsets, prec_im_out, ent_angle_out, topn_out, frac_out = \
         _create_entries_direct_jit(
             np.ascontiguousarray(centroid_breaks, dtype=np.float64),
             spec_data_mz, spec_data_int,
@@ -1414,6 +1654,7 @@ def create_entries_direct(centroid_breaks,
             cand_idx_arr,
             np.ascontiguousarray(prec_mzs, dtype=np.float64),
             np.ascontiguousarray(ms1_spec.mz, dtype=np.float64),
+            np.ascontiguousarray(ms1_spec.intens, dtype=np.float64),
             np.ascontiguousarray(ms1_spec.mobility, dtype=np.float64)
             if getattr(ms1_spec, "mobility", None) is not None
             else np.empty(0, dtype=np.float64),
@@ -1426,30 +1667,17 @@ def create_entries_direct(centroid_breaks,
                 bin_int if bin_int is not None else np.zeros(0), dtype=np.float64),
             np.ascontiguousarray(
                 bin_mob if bin_mob is not None else np.zeros(0), dtype=np.float64),
-            float(mz_tol), float(im_tol), bool(has_im))
+            float(mz_tol), float(im_tol), bool(has_im),
+            np.ascontiguousarray(frag_names_data if frag_names_data is not None
+                                 else np.zeros(len(spec_data_mz), dtype=np.int32)),
+            np.ascontiguousarray(dia_int if dia_int is not None else np.zeros(0), dtype=np.float64))
 
-    # Reconstruct Python lists from JIT output — only for passing candidates
-    peaks_in_dia = passing.tolist()
-    pep_cand_loc = [all_coords[frag_offsets[i]:frag_offsets[i + 1]] for i in peaks_in_dia]
-    # Reconstruct (n,2) spectrum arrays only for passing candidates from library arrays
-    pep_cand_list = []
-    for i in peaks_in_dia:
-        lib_idx = cand_idx_arr[i]
-        off = int(spec_offsets[lib_idx])
-        l = int(spec_lengths[lib_idx])
-        pep_cand_list.append(np.stack([spec_data_mz[off:off + l], spec_data_int[off:off + l]], axis=1))
-    pep_cand = [mass_window_candidates[i] for i in peaks_in_dia]
-    norm_intensities = [all_norm_int[frag_offsets[i]:frag_offsets[i + 1]] for i in peaks_in_dia]
-    lib_peaks_matched = [pep_cand_loc[j] % 2 == 1 for j in range(len(peaks_in_dia))]
-    # Precursor IM per passing candidate, aligned with pep_cand.
-    prec_im_passing = [float(prec_im_out[i]) for i in peaks_in_dia]
-
-    return (peaks_in_dia,
-            pep_cand,
-            pep_cand_loc,
-            pep_cand_list,
-            flat_rows, flat_cols, flat_vals, flat_offsets, norm_intensities, lib_peaks_matched, ms1_error_out,
-            all_coords, all_norm_int, frag_offsets, passing, prec_im_passing)
+    passing = passing.astype(np.int64)
+    return (passing,
+            flat_rows, flat_cols, flat_vals, flat_offsets, ms1_error_out,
+            all_coords, all_norm_int, frag_offsets,
+            prec_im_out[passing].astype(np.float64), cand_idx_arr,
+            ent_angle_out, topn_out, frac_out)
 
 
 def _flatten_splits(row_idx_split, col_idx_split, val_split):
@@ -1517,36 +1745,131 @@ def _lasso_nnls(A, b, sample_weight=None):
 
 @njit(nogil=True)
 def _coo_gram_and_Aty(rows, cols, vals, y, n_cols):
-    """Compute Gram matrix (A^T A) and A^T y from COO arrays in one pass.
-    Returns (gram, Aty) where gram is (n_cols, n_cols) and Aty is (n_cols,)."""
-    gram = np.zeros((n_cols, n_cols))
+    """A^T y and the largest absolute correlation between two different
+    columns of A, from COO arrays.  Returns (Aty, max_corr).
+
+    Bit-identical to forming the dense Gram matrix (gram / outer(norms, norms),
+    zero norms set to 1, diagonal zeroed, max(abs(.))), without allocating it:
+    that matrix is n_cols^2 float64 -- 22 GB for one 55,000-candidate fit.
+    Only columns that share a row have a non-zero Gram entry, so each column
+    accumulates its Gram row against later columns in an O(n_cols) scratch
+    vector, adding the same products in the same order as the dense build
+    (rows ascending, then row-sorted position, the earlier entry's value
+    first), and duplicate (row, column) entries included.  Memory is
+    O(nnz + n_cols).
+    """
     Aty = np.zeros(n_cols)
-    # Group entries by row for outer-product accumulation
-    # First pass: A^T y
     for i in range(len(vals)):
         Aty[cols[i]] += vals[i] * y[rows[i]]
-    # Gram matrix: for each pair of entries sharing a row, accumulate
-    # Sort by row for efficient grouping
+
+    n = len(vals)
+    # Entries grouped by row, in the dense build's order (same argsort).
     order = np.argsort(rows)
+    row_lo = np.empty(n, np.int64)   # [row_lo, row_hi): sorted span of the entry's row
+    row_hi = np.empty(n, np.int64)
     i = 0
-    n = len(order)
     while i < n:
         r = rows[order[i]]
         j = i
         while j < n and rows[order[j]] == r:
             j += 1
-        # entries order[i:j] all share row r
-        for a in range(i, j):
-            ca = cols[order[a]]
-            va = vals[order[a]]
-            for b in range(a, j):
-                cb = cols[order[b]]
-                vb = vals[order[b]]
-                gram[ca, cb] += va * vb
-                if ca != cb:
-                    gram[cb, ca] += va * vb
+        for t in range(i, j):
+            row_lo[t] = i
+            row_hi[t] = j
         i = j
-    return gram, Aty
+    s_cols = np.empty(n, np.int64)
+    s_vals = np.empty(n)
+    for t in range(n):
+        s_cols[t] = cols[order[t]]
+        s_vals[t] = vals[order[t]]
+
+    # Each column's sorted positions, ascending (so rows ascending).
+    col_ptr = np.zeros(n_cols + 1, np.int64)
+    for t in range(n):
+        col_ptr[s_cols[t] + 1] += 1
+    for c in range(n_cols):
+        col_ptr[c + 1] += col_ptr[c]
+    col_pos = np.empty(n, np.int64)
+    fill = col_ptr[:-1].copy()
+    for t in range(n):
+        c = s_cols[t]
+        col_pos[fill[c]] = t
+        fill[c] += 1
+
+    # Diagonal: per row, pairs (p, q), p <= q, both in the column.
+    norms = np.empty(n_cols)
+    for c in range(n_cols):
+        g = 0.0
+        k = col_ptr[c]
+        end = col_ptr[c + 1]
+        while k < end:
+            m = k
+            while m < end and row_lo[col_pos[m]] == row_lo[col_pos[k]]:
+                m += 1
+            for u in range(k, m):
+                vp = s_vals[col_pos[u]]
+                for w in range(u, m):
+                    g += vp * s_vals[col_pos[w]]
+            k = m
+        norms[c] = np.sqrt(g)
+        if norms[c] == 0:
+            norms[c] = 1.0
+    # A NaN norm makes the dense ratio NaN for every pair with that column,
+    # shared row or not, so the dense scan returns NaN.
+    if n_cols > 1:
+        for c in range(n_cols):
+            if norms[c] != norms[c]:
+                return Aty, norms[c]
+
+    # Off-diagonal: for column a, every later column b sharing a row.
+    acc = np.zeros(n_cols)
+    seen = np.zeros(n_cols, np.bool_)
+    touched = np.empty(n_cols, np.int64)
+    max_corr = 0.0
+    for a in range(n_cols):
+        n_touched = 0
+        k = col_ptr[a]
+        end = col_ptr[a + 1]
+        while k < end:
+            lo = row_lo[col_pos[k]]
+            hi = row_hi[col_pos[k]]
+            m = k
+            while m < end and row_lo[col_pos[m]] == lo:
+                m += 1
+            # Positions of column a in this row: col_pos[k:m].  Visit the row's
+            # pairs (p, q), p < q, that involve a, in the dense order.
+            for p in range(lo, hi):
+                cp = s_cols[p]
+                vp = s_vals[p]
+                if cp == a:
+                    for q in range(p + 1, hi):
+                        cq = s_cols[q]
+                        if cq > a:
+                            acc[cq] += vp * s_vals[q]
+                            if not seen[cq]:
+                                seen[cq] = True
+                                touched[n_touched] = cq
+                                n_touched += 1
+                elif cp > a:
+                    for u in range(k, m):
+                        q = col_pos[u]
+                        if q > p:
+                            acc[cp] += vp * s_vals[q]
+                            if not seen[cp]:
+                                seen[cp] = True
+                                touched[n_touched] = cp
+                                n_touched += 1
+            k = m
+        for x in range(n_touched):
+            b = touched[x]
+            v = abs(acc[b] / (norms[a] * norms[b]))
+            if v != v:
+                return Aty, v          # NaN: np.max propagates it
+            if v > max_corr:
+                max_corr = v
+            acc[b] = 0.0
+            seen[b] = False
+    return Aty, max_corr
 
 
 @njit(nogil=True)
@@ -1668,28 +1991,22 @@ def huber_nnls_irls(coo_vals, coo_rows, coo_cols, n_rows, n_cols, b,
     s = float(np.max(np.abs(b)) or 1.0)
     y = b / s
 
-    # Compute Gram matrix and A^T y in one JIT pass (nogil — releases GIL)
-    gram, Aty = _coo_gram_and_Aty(coo_rows, coo_cols, coo_vals, y, n_cols)
+    # A^T y and the max column correlation in one JIT pass (nogil)
+    Aty, max_corr = _coo_gram_and_Aty(coo_rows, coo_cols, coo_vals, y, n_cols)
 
     # Data-driven regularization
     alpha_max = np.max(np.abs(Aty)) / n_rows
     alpha = alpha_max * 1e-4  # dynamic range within a spectrum is roughly 1,000x
 
     # Data-driven l1_ratio from max pairwise column correlation
-    norms = np.sqrt(np.diag(gram))
-    norms[norms == 0] = 1
-    corr = gram / np.outer(norms, norms)
-    np.fill_diagonal(corr, 0)
-    max_corr = np.max(np.abs(corr))
     l1_ratio = min(max(1 - max_corr ** 2, 0.1), 0.9)
 
     # Build CSC once from COO via JIT (nogil) — only format enet_path accepts.
     # Replaces COO→CSR→CSC conversion chain that held the GIL.
-    # Also pre-allocate X_w for IRLS loop — mutate .data in-place to avoid
-    # reconstructing the csc_matrix object each iteration.
+    # One matrix for both solves: the first reads X_w as built (its data equals
+    # csc_data); the IRLS loop then reweights X_w.data in place from csc_data.
     csc_data, csc_indices, csc_indptr = _coo_to_csc_arrays(
         coo_rows, coo_cols, coo_vals, n_rows, n_cols)
-    A_csc = csc_matrix((csc_data, csc_indices, csc_indptr), shape=(n_rows, n_cols))
     X_w = csc_matrix((csc_data.copy(), csc_indices, csc_indptr), shape=(n_rows, n_cols))
 
     coef = np.zeros(n_cols)
@@ -1699,12 +2016,13 @@ def huber_nnls_irls(coo_vals, coo_rows, coo_cols, n_rows, n_cols, b,
     weights = np.ones(n_rows)
     _rng = _get_enet_rng()  # thread-local, reseeded to 42 (enet_path mutates rng state)
     _, coef_path, _, n_iters = _enet_path(
-        A_csc, y,
+        X_w, y,
         l1_ratio=l1_ratio,
         alphas=[alpha],
         positive=True,
         coef_init=coef,
         check_input=False,
+        precompute=False,  # sparse input: _pre_fit would only set this, after allocating
         return_n_iter=True,
         max_iter=20000,
         tol=1e-3,
@@ -1748,6 +2066,7 @@ def huber_nnls_irls(coo_vals, coo_rows, coo_cols, n_rows, n_cols, b,
             positive=True,
             coef_init=coef,
             check_input=False,
+            precompute=False,
             return_n_iter=True,
             max_iter=20000,
             tol=1e-3,
@@ -2062,62 +2381,42 @@ def hyperscore2(frag_intensities, frag_codes):
     dp = np.sum(frag_intensities[not_iso])
     return max(0, np.log(dp * math.factorial(num_b) * math.factorial(num_y))), num_b, num_y
     
-#@profile
-def get_features(
-    rt_mz,
-    prec_im,
-    ref_rows, ref_vals, ref_cols, ref_offsets,
-    dec_rows, dec_vals, dec_cols, dec_offsets,
-    ref_peaks_in_dia,
-    dia_spectrum,
-    prec_rt,
-    window_idxs,
-    dia_spec_int,
-    lib_coefficients,
-    sparse_row_indices,
-    sparse_col_indices,
-    sparse_values,
-    lib_peaks_matched,
-    ref_pep_cand,
-    all_row_indices,
-    all_values,
-    prec_frag_intensities,
-    ms1_error,
-    ref_spec_offset,
-    decoy_spec_offset,
-    ordered_frag_codes=None,
-    unique_lookup_dia=None):
-
+@njit(nogil=True, error_model="numpy")
+def _get_features_jit(rt_mz, prec_im,
+                      ref_rows, ref_vals, ref_cols, ref_offsets,
+                      dec_rows, dec_vals, dec_cols, dec_offsets,
+                      dia_spectrum, prec_rt, dia_spec_int, coeffs,
+                      sparse_row_indices, sparse_col_indices, sparse_values,
+                      matched_lib_int, matched_codes, matched_offsets,
+                      ms1_error, ref_spec_offset, decoy_spec_offset, unique_lookup):
+    """get_features in one GIL-free call.  The same steps as the numpy code it
+    replaced; only the sums round differently (numba sums sequentially, numpy
+    pairwise).  error_model="numpy": a zero TIC gives inf/nan, not an exception."""
     val_obs = dia_spectrum[:, 1]
-    coeffs = np.asarray(lib_coefficients).ravel()
     tic = np.sum(val_obs)
 
-    # Reconstruct split views where needed for per-candidate loops below
-    ref_spec_row_indices_split = _split_flat(ref_rows, ref_offsets)
-    ref_spec_values_split = _split_flat(ref_vals, ref_offsets)
-
-    # Build combined flat arrays (ref + decoy) for large_coeff JIT
+    # Combined flat arrays (ref + decoy) for the large-coeff block
     n_ref = len(ref_offsets) - 1
     n_dec = len(dec_offsets) - 1
     if n_dec > 0:
-        _all_flat_rows = np.concatenate([ref_rows, dec_rows])
-        _all_flat_vals = np.concatenate([ref_vals, dec_vals])
-        _all_flat_offsets = np.concatenate([ref_offsets, dec_offsets[1:] + ref_offsets[-1]])
+        all_rows = np.concatenate((ref_rows, dec_rows))
+        all_vals = np.concatenate((ref_vals, dec_vals))
+        all_offsets = np.empty(n_ref + n_dec + 1, dtype=ref_offsets.dtype)
+        all_offsets[:n_ref + 1] = ref_offsets
+        for k in range(n_dec):
+            all_offsets[n_ref + 1 + k] = dec_offsets[k + 1] + ref_offsets[n_ref]
     else:
-        _all_flat_rows = ref_rows
-        _all_flat_vals = ref_vals
-        _all_flat_offsets = ref_offsets
-
-    # Map sparse matrix column index → position in combined flat arrays
+        all_rows = ref_rows
+        all_vals = ref_vals
+        all_offsets = ref_offsets.copy()
     n_total = n_ref + n_dec
-    _max_col = max(int(ref_spec_offset + n_ref), int(decoy_spec_offset + n_dec)) if n_total > 0 else 0
-    _col_to_pos = np.full(_max_col, -1, dtype=np.int32)
-    if n_ref > 0:
-        _col_to_pos[ref_spec_offset:ref_spec_offset + n_ref] = np.arange(n_ref, dtype=np.int32)
-    if n_dec > 0:
-        _col_to_pos[decoy_spec_offset:decoy_spec_offset + n_dec] = np.arange(n_ref, n_ref + n_dec, dtype=np.int32)
+    max_col = max(ref_spec_offset + n_ref, decoy_spec_offset + n_dec) if n_total > 0 else 0
+    col_to_pos = np.full(max_col, -1, dtype=np.int32)
+    for k in range(n_ref):
+        col_to_pos[ref_spec_offset + k] = k
+    for k in range(n_dec):
+        col_to_pos[decoy_spec_offset + k] = n_ref + k
 
-    # ── Step 2: Build predicted spectrum y_pred = A * x ──
     y_pred = np.zeros(len(val_obs))
     if len(ref_rows) > 0:
         _build_y_pred_jit(ref_rows, ref_cols, ref_vals, ref_offsets, coeffs, ref_spec_offset, y_pred)
@@ -2125,16 +2424,7 @@ def get_features(
         _build_y_pred_jit(dec_rows, dec_cols, dec_vals, dec_offsets, coeffs, decoy_spec_offset, y_pred)
     residuals = val_obs - y_pred
 
-    # ── Step 3: Fused per-candidate features ──
-    # Replaces three separate functions that each looped over the same fragment data:
-    #   - get_scribe       → scribe_scores
-    #   - gof_stat         → gof_stats, max_unmatched_residuals, max_matched_residuals
-    #   - get_manhattan_distance → manhattan_distances, fitted_spectral_contrasts
-    # Also computes simple per-candidate stats that were previously list comprehensions:
-    #   - num_lib_peaks_matched  (was: np.array([np.sum(i) for i in lib_peaks_matched]))
-    #   - frac_lib_intensity     (was: [np.sum(i) for i in ref_spec_values_split])
-    #   - frac_dia_intensity     (was: [np.sum(dia_spectrum[i,1])/tic for i in ...])
-    n = len(ref_spec_row_indices_split)
+    n = n_ref
     scribe_scores = np.zeros(n)
     gof_stats = np.zeros(n)
     max_unmatched_residuals = np.zeros(n)
@@ -2144,7 +2434,6 @@ def get_features(
     num_lib_peaks_matched = np.zeros(n)
     frac_lib_intensity = np.zeros(n)
     frac_dia_intensity = np.zeros(n)
-
     if len(ref_rows) > 0:
         _compute_candidate_features_jit(
             ref_rows, ref_vals, ref_cols, ref_offsets,
@@ -2152,130 +2441,102 @@ def get_features(
             scribe_scores, gof_stats, max_unmatched_residuals, max_matched_residuals,
             manhattan_distances, fitted_spectral_contrasts,
             num_lib_peaks_matched, frac_lib_intensity, frac_dia_intensity,
-            tic
-        )
+            tic)
 
-    # mz tol
-    rel_error = np.where(~np.isnan(ms1_error), np.abs(ms1_error), -1.0)
-    rt_error = prec_rt-rt_mz[:,0]
-    # Observed IM minus the library's aligned prediction -- the IM analogue of
-    # rt_error, signed for the same reason.  rt_mz column 2 is the aligned
-    # library IM; both sides are NaN on non-IM runs, exactly as prec_im already
-    # is, so the feature is NaN there and finite whenever IM is in play.
-    im_error = np.asarray(prec_im, dtype=np.float64).ravel() - rt_mz[:, 2]
+    m = rt_mz.shape[0]
+    rel_error = np.empty(len(ms1_error))
+    for k in range(len(ms1_error)):
+        rel_error[k] = abs(ms1_error[k]) if not np.isnan(ms1_error[k]) else -1.0
+    rt_error = np.empty(m)
+    im_error = np.empty(m)
+    for k in range(m):
+        rt_error[k] = prec_rt - rt_mz[k, 0]
+        im_error[k] = prec_im[k] - rt_mz[k, 2]
+    sum_dia_spec_int = np.sum(dia_spec_int)
+    frac_int_matched = sum_dia_spec_int / tic
 
-    frac_int_matched = np.sum(dia_spec_int)/np.sum(dia_spectrum[:,1])
+    n_coo_rows = sparse_row_indices.max() + 1 if len(sparse_row_indices) > 0 else 0
+    predicted_spec_full, lc_frac, lc_cosine = _large_coeff_block_jit(
+        sparse_row_indices, sparse_col_indices, sparse_values, n_coo_rows,
+        coeffs, val_obs, all_rows, all_vals, all_offsets, col_to_pos)
+    predicted_spec = predicted_spec_full[:-1]   # drop penalty row (unmatched-fragment intensity)
 
-    # Compute predicted spectrum + large_coeff features in one JIT pass (nogil).
-    # Replaces: sparse_lib_matrix*lib_coefficients, np.isin, np.unique, .toarray(), cosim, etc.
-    _n_coo_rows = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
-    predicted_spec_full, _lc_frac, _lc_cosine = _large_coeff_block_jit(
-        sparse_row_indices, sparse_col_indices, sparse_values, _n_coo_rows,
-        coeffs, val_obs,
-        _all_flat_rows, _all_flat_vals, _all_flat_offsets,
-        _col_to_pos)
-    predicted_spec = predicted_spec_full[:-1]  # drop penalty row (unmatched-fragment intensity)
-
-    r2all = np.zeros_like(rt_error)
-    r2_lib_spec = np.zeros_like(rt_error)
-    
-    # Use precomputed DIA-space lookup from fit_to_lib2 if available
-    if unique_lookup_dia is not None:
-        _unique_lookup = unique_lookup_dia
-    else:
-        # Fallback: compute from COO arrays directly
-        _n_sm = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
-        _unique_lookup = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _n_sm)
-
-    r2_unique = np.zeros_like(rt_error)
-
-    # JIT: compute frac_unique_pred directly from flat arrays (GIL-free)
+    r2all = np.zeros(m)
+    r2_lib_spec = np.zeros(m)
+    r2_unique = np.zeros(m)
     frac_unique_pred = np.zeros(n)
     if len(ref_rows) > 0:
-        _compute_unique_frac_jit(
-            ref_rows, ref_vals, ref_offsets,
-            _unique_lookup, val_obs, coeffs, ref_spec_offset,
-            frac_unique_pred)
+        _compute_unique_frac_jit(ref_rows, ref_vals, ref_offsets,
+                                 unique_lookup, val_obs, coeffs, ref_spec_offset,
+                                 frac_unique_pred)
+    frac_dia_intensity_pred = np.empty(n)
+    for k in range(n):
+        d = frac_dia_intensity[k] if frac_dia_intensity[k] > 0 else 1.0
+        frac_dia_intensity_pred[k] = (frac_lib_intensity[k] * coeffs[ref_spec_offset + k]) / d
 
-    frac_dia_intensity_pred = (frac_lib_intensity * coeffs[ref_spec_offset:ref_spec_offset + n]) / np.where(frac_dia_intensity > 0, frac_dia_intensity, 1.0)
+    sum_predicted = np.sum(predicted_spec)
+    frac_int_pred = sum_predicted / tic if tic > 0 else 0.0
+    frac_int_matched_pred = sum_predicted / sum_dia_spec_int if sum_dia_spec_int > 0 else 0.0
 
-    #### stack spectrum features
-    # Compute scalar feature values (broadcast to all candidates below in JIT)
-    _sum_predicted = np.sum(predicted_spec)
-    _sum_dia_spec_int = np.sum(dia_spec_int)
-    _frac_int_matched_scalar = frac_int_matched  # already a scalar
-    _frac_int_pred_scalar = _sum_predicted / tic if tic > 0 else 0.0
-    _frac_int_matched_pred_scalar = _sum_predicted / _sum_dia_spec_int if _sum_dia_spec_int > 0 else 0.0
+    hyperscores = np.zeros(n)
+    b_counts = np.zeros(n)
+    y_counts = np.zeros(n)
+    longest_y_ions = np.zeros(n)
+    if n > 0:
+        _compute_hyperscores_jit(matched_lib_int, matched_codes, matched_offsets.astype(np.int32),
+                                 hyperscores, b_counts, y_counts, longest_y_ions)
 
-    # ── Hyperscores + ion counts ──
-    # Replaces per-candidate loop of hyperscore2() + get_index() calls (231K calls
-    # total across target+decoy). Batch-processes all candidates in one JIT'd pass.
-    if len(prec_frag_intensities) > 0 and ordered_frag_codes is not None:
-        # Flatten intensities and codes into contiguous arrays for numba
-        all_hyper_int = np.concatenate(prec_frag_intensities).astype(np.float64)
-        all_hyper_codes = np.concatenate(ordered_frag_codes).astype(np.int32)
-        n_hyper = len(prec_frag_intensities)
-        _hyper_lens = np.array([len(x) for x in prec_frag_intensities], dtype=np.int32)
-        hyper_offsets = np.zeros(n_hyper + 1, dtype=np.int32)
-        np.cumsum(_hyper_lens, out=hyper_offsets[1:])
-
-        hyperscores = np.zeros(n_hyper)
-        b_counts = np.zeros(n_hyper)
-        y_counts = np.zeros(n_hyper)
-        longest_y_ions = np.zeros(n_hyper)
-
-        _compute_hyperscores_jit(
-            all_hyper_int, all_hyper_codes, hyper_offsets,
-            hyperscores, b_counts, y_counts, longest_y_ions
-        )
-    else:
-        hyperscores = np.zeros_like(num_lib_peaks_matched)
-        b_counts = np.zeros_like(num_lib_peaks_matched)
-        y_counts = np.zeros_like(num_lib_peaks_matched)
-        longest_y_ions = np.zeros_like(num_lib_peaks_matched)
-
-    # ── Assemble feature matrix in one pass (nogil) ──
-    # Replaces ~5 np.ones_like*scalar broadcasts + np.stack of 26 arrays.
-    # Each row is a feature column; transposed at the end via -1 axis.
-    _prec_mz = rt_mz[:, 1].copy()  # contiguous for JIT
-    features = _assemble_features_jit(
-        num_lib_peaks_matched,          #  0: number of library peaks matched per candidate
-        frac_lib_intensity,             #  1: fraction of library intensity matched
-        frac_dia_intensity,             #  2: fraction of DIA intensity at matched peaks
-        rel_error,                      #  3: relative MS1 m/z error
-        rt_error,                       #  4: RT error (observed - calibrated)
-        _frac_int_matched_scalar,       #  5: fraction of total DIA intensity matched (scalar → broadcast)
-        _frac_int_pred_scalar,          #  6: fraction of TIC predicted by model (scalar → broadcast)
-        r2all,                          #  7: R² all (placeholder, currently zeros)
-        r2_lib_spec,                    #  8: R² library spectrum (placeholder, currently zeros)
-        r2_unique,                      #  9: R² unique (placeholder, currently zeros)
-        frac_unique_pred,               # 10: predicted intensity fraction at uniquely-matched peaks
-        frac_dia_intensity_pred,        # 11: predicted DIA intensity fraction per candidate
-        hyperscores,                    # 12: X!Tandem-style hyperscore
-        b_counts,                       # 13: number of b-ions matched
-        y_counts,                       # 14: number of y-ions matched
-        longest_y_ions,                 # 15: longest consecutive y-ion series
-        scribe_scores,                  # 16: scribe score (spectral similarity metric)
-        max_unmatched_residuals,        # 17: max residual at unmatched peaks
-        max_matched_residuals,          # 18: max residual at matched peaks
-        gof_stats,                      # 19: goodness-of-fit statistic (log2 residual/fitted ratio)
-        manhattan_distances,            # 20: manhattan distance between predicted and observed
-        fitted_spectral_contrasts,      # 21: spectral contrast angle between fitted and observed
-        _frac_int_matched_pred_scalar,  # 22: predicted/observed intensity ratio (scalar → broadcast)
-        _lc_frac,                       # 23: large-coeff predicted/observed intensity ratio (scalar → broadcast)
-        _lc_cosine,                     # 24: large-coeff subset cosine similarity (scalar → broadcast)
-        _prec_mz,                       # 25: calibrated precursor m/z
-        tic,                             # 26: total ion current (scalar → broadcast)
-        im_error                         # 27: observed IM - aligned library IM
-    )
-    return features
+    return _assemble_features_jit(
+        num_lib_peaks_matched, frac_lib_intensity, frac_dia_intensity,
+        rel_error, rt_error, frac_int_matched, frac_int_pred,
+        r2all, r2_lib_spec, r2_unique, frac_unique_pred, frac_dia_intensity_pred,
+        hyperscores, b_counts, y_counts, longest_y_ions,
+        scribe_scores, max_unmatched_residuals, max_matched_residuals,
+        gof_stats, manhattan_distances, fitted_spectral_contrasts,
+        frac_int_matched_pred, lc_frac, lc_cosine,
+        rt_mz[:, 1].copy(), tic, im_error)
 
 
 #@profile
+def get_features(
+    rt_mz,
+    prec_im,
+    ref_rows, ref_vals, ref_cols, ref_offsets,
+    dec_rows, dec_vals, dec_cols, dec_offsets,
+    dia_spectrum,
+    prec_rt,
+    dia_spec_int,
+    lib_coefficients,
+    sparse_row_indices,
+    sparse_col_indices,
+    sparse_values,
+    matched_lib_int,
+    matched_codes,
+    matched_offsets,
+    ms1_error,
+    ref_spec_offset,
+    decoy_spec_offset,
+    unique_lookup_dia=None):
 
+    """The 28 per-candidate features, as _assemble_features_jit lays them out.
 
+    All of it runs in _get_features_jit, so a candidate group crosses the GIL
+    once.  unique_lookup_dia is computed here only if the caller has none.
+    """
+    if unique_lookup_dia is None:
+        _n_sm = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
+        unique_lookup_dia = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _n_sm)
+    return _get_features_jit(
+        np.ascontiguousarray(rt_mz, dtype=np.float64), np.asarray(prec_im, dtype=np.float64).ravel(),
+        ref_rows, ref_vals, ref_cols, ref_offsets,
+        dec_rows, dec_vals, dec_cols, dec_offsets,
+        dia_spectrum, float(prec_rt), dia_spec_int,
+        np.asarray(lib_coefficients, dtype=np.float64).ravel(),
+        sparse_row_indices, sparse_col_indices, sparse_values,
+        matched_lib_int, matched_codes, matched_offsets,
+        np.asarray(ms1_error, dtype=np.float64),
+        int(ref_spec_offset), int(decoy_spec_offset), unique_lookup_dia)
 
-#@profile
 def _batch_closest_peak_diff(query_mzs, ref_mzs, max_diff):
     """Vectorized closest_peak_diff for an array of query m/z values.
 
@@ -2374,6 +2635,106 @@ def create_entries(centroid_breaks,
 
 
 #@profile
+class SpectrumHits(NamedTuple):
+    """fit_to_lib2's output for one spectrum, as columns: one row per library
+    entry with a non-zero coefficient, targets then decoys.
+
+    The fragment columns are flat, row k's segment delimited by
+    frag_offsets[k:k+2] (unique_offsets for the unique columns).  Scalars are
+    the spectrum's, shared by every row.  hits_to_arrow turns a batch into
+    the main-search parquet table.
+    """
+    coeff: np.ndarray
+    spec_id: int
+    ms1_spec_id: int
+    seq: list
+    z: np.ndarray
+    time_channel: Optional[np.ndarray]
+    window_mz: float
+    rt: float
+    prec_im: np.ndarray
+    features: np.ndarray
+    frag_codes: np.ndarray
+    frag_errors: np.ndarray
+    frag_mz: np.ndarray
+    frag_int: np.ndarray
+    obs_int: np.ndarray
+    frag_offsets: np.ndarray
+    unique_frag_mz: np.ndarray
+    unique_obs_int: np.ndarray
+    unique_offsets: np.ndarray
+    file_name: str
+    protein: list
+    is_decoy: np.ndarray
+
+
+def _concat_offsets(offsets_list):
+    """One offset array for segments laid end to end."""
+    out = [offsets_list[0]]
+    for o in offsets_list[1:]:
+        out.append(o[1:] + out[-1][-1])
+    return np.concatenate(out)
+
+
+def hits_to_arrow(hits, pa_schema):
+    """A batch of SpectrumHits as one Arrow table in *pa_schema* (the
+    main-search parquet schema, with or without time_channel)."""
+    n = np.array([len(h.coeff) for h in hits])
+
+    def per_spectrum(field, dtype):
+        return np.repeat(np.array([getattr(h, field) for h in hits], dtype=dtype), n)
+
+    def stacked(field, dtype):
+        return np.concatenate([getattr(h, field) for h in hits]).astype(dtype, copy=False)
+
+    def list_column(field, offsets_field):
+        return pa.LargeListArray.from_arrays(
+            _concat_offsets([getattr(h, offsets_field) for h in hits]),
+            np.concatenate([getattr(h, field) for h in hits]))
+
+    features = np.concatenate([h.features for h in hits]).astype(np.float32)
+    columns = [stacked("coeff", np.float32),
+               per_spectrum("spec_id", np.int32),
+               per_spectrum("ms1_spec_id", np.int32),
+               pa.array([s for h in hits for s in h.seq], type=pa.large_string()),
+               stacked("z", np.float32)]
+    if hits[0].time_channel is not None:
+        columns.append(stacked("time_channel", np.float32))
+    columns += [per_spectrum("window_mz", np.float64).astype(np.float32),
+                per_spectrum("rt", np.float64).astype(np.float32),
+                stacked("prec_im", np.float32)]
+    columns += [np.ascontiguousarray(features[:, j]) for j in range(features.shape[1])]
+    # TODO: the float list columns are written as float64, ~64% of the main search
+    # output.  frag_mz, frag_int, obs_int, unique_frag_mz and unique_obs_int come
+    # from float32 library/spectrum values, so float32 is lossless for them (checked
+    # on the 15 min 200 pg 5plex); frag_errors is computed in float64, and as
+    # float32 it would move med_frag_error (a scoring feature) in the last digits.
+    columns += [list_column("frag_codes", "frag_offsets"),
+                list_column("frag_errors", "frag_offsets"),
+                list_column("frag_mz", "frag_offsets"),
+                list_column("frag_int", "frag_offsets"),
+                list_column("obs_int", "frag_offsets"),
+                list_column("unique_frag_mz", "unique_offsets"),
+                list_column("unique_obs_int", "unique_offsets"),
+                pa.array([h.file_name for h, k in zip(hits, n) for _ in range(k)], type=pa.large_string()),
+                pa.array([p for h in hits for p in h.protein], type=pa.large_string()),
+                np.concatenate([h.is_decoy for h in hits])]
+    if len(columns) != len(pa_schema):
+        raise ValueError(f"{len(columns)} columns for a {len(pa_schema)}-column schema")
+    return pa.Table.from_arrays(
+        [c if isinstance(c, pa.Array) else pa.array(c, type=f.type) for c, f in zip(columns, pa_schema)],
+        schema=pa_schema)
+
+
+def protein_column(library):
+    """The library's config.protein_column, or None when it is not filled in
+    (judged by the first entry): fit_to_lib2 then writes "NA"."""
+    first = library.key_to_idx[next(iter(library.key_to_idx))]
+    column = {'protein_group': library.protein_group, 'protein_name': library.protein_name,
+              'genes': library.genes, 'UniprotID': library.uniprot_id}.get(config.protein_column)
+    return column if column is not None and column[first] not in (None, '') else None
+
+
 def fit_to_lib2(dia_spec,
                 library,
                 rt_mz,
@@ -2386,16 +2747,17 @@ def fit_to_lib2(dia_spec,
                 file_name,
                 dino_features=None,rt_filter=False,ms1_mz=None,
                ms1_spectra = None,
-               return_frags = False,
                decoy=False,
                output_folder=None,
                frag_index=None,
                ms1_rt=None,
-               im_bin_ms1=None):
+               im_bin_ms1=None,
+               proteins=None):
     # spec_idx,dia_spec,library = inputs
     # im_tol: fragment IM tolerance (the run's fitted precision).
     # im_accuracy: widening of the IM candidate gate (the run's fitted library-IM
-    # accuracy), or None to leave the gate off when no IM alignment was fitted.
+    # accuracy), or None on data without ion mobility (and timeplex), where
+    # there is no gate.
     # file_name: the run's data file, written to each result row's file_name.
     
     spec_idx=dia_spec.scan_num
@@ -2447,6 +2809,7 @@ def fit_to_lib2(dia_spec,
         dia_spectrum = np.stack([merged_mz, merged_int], axis=1)
         _bin_mz = _bin_int = _bin_mob = None
 
+
     # Get candidates via fragment index or fallback to m/z + RT window
     # Single query returns both target and decoy candidates from unified index
     # IM admission window: a library precursor is only a candidate for this
@@ -2486,6 +2849,7 @@ def fit_to_lib2(dia_spec,
             )
         all_window_idxs = np.where(_bool)[0]
 
+
     # Split into target and decoy candidates
     # TODO: unify target/decoy processing paths to eliminate this split
     n_targets = library.n_targets
@@ -2493,373 +2857,255 @@ def fit_to_lib2(dia_spec,
     window_idxs = all_window_idxs[target_mask]
     decoy_window_idxs = all_window_idxs[~target_mask] if decoy else np.empty(0, dtype=all_window_idxs.dtype)
 
-    mass_window_candidates = [all_keys[i] for i in window_idxs]
-    _ref_idxs = library.resolve_indices(mass_window_candidates)
+    # Entry arrays every candidate group reads
+    _lib_arrays = dict(spec_data_mz=library.spectrum_mz,
+                       spec_data_int=library.spectrum_int,
+                       spec_offsets=library.spectrum_offsets,
+                       spec_lengths=library.spectrum_lengths,
+                       topn_data=library.top_n_data,
+                       topn_offsets=library.top_n_offsets,
+                       topn_lengths=library.top_n_lengths)
+    _match_args = dict(centroid_breaks=centroid_breaks, atleast_m=atleast_m,
+                       ms1_spec=ms1_spec, ms1_tol=ms1_tol,
+                       bin_mz=_bin_mz, bin_int=_bin_int, bin_mob=_bin_mob,
+                       mz_tol=mz_tol, im_tol=_im_tol, has_im=_has_im,
+                       frag_names_data=library.frag_names_data,
+                       dia_int=dia_spectrum[:, 1])
 
-    spec_frags = None
+    # window_idxs are library indices: the fragment index returns positions in
+    # all_keys, which is list(library)
+    ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets, ref_ms1_error, \
+        ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_prec_im, ref_cand_idx, \
+        ref_ent_angle, ref_topn, ref_frac = create_entries_direct(
+            candidate_indices=window_idxs, prec_mzs=rt_mz[:,1][window_idxs],
+            **_lib_arrays, **_match_args)
 
-    ref_peaks_in_dia,\
-    ref_pep_cand,\
-    ref_pep_cand_loc,\
-    ref_pep_cand_list,\
-    ref_flat_rows,\
-        ref_flat_cols,\
-        ref_flat_vals, \
-        ref_flat_offsets, \
-        norm_intensities, \
-        lib_peaks_matched, \
-        ref_ms1_error, \
-        ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_passing, ref_prec_im = create_entries_direct(
-                                        centroid_breaks=centroid_breaks,
-                                        spec_data_mz=library.spectrum_mz,
-                                        spec_data_int=library.spectrum_int,
-                                        spec_offsets=library.spectrum_offsets,
-                                        spec_lengths=library.spectrum_lengths,
-                                        topn_data=library.top_n_data,
-                                        topn_offsets=library.top_n_offsets,
-                                        topn_lengths=library.top_n_lengths,
-                                        candidate_indices=_ref_idxs,
-                                        mass_window_candidates=mass_window_candidates,
-                                        atleast_m=atleast_m,
-                                        prec_mzs=rt_mz[:,1][window_idxs],
-                                        ms1_spec=ms1_spec,
-                                        ms1_tol=ms1_tol,
-                                        bin_mz=_bin_mz,
-                                        bin_int=_bin_int,
-                                        bin_mob=_bin_mob,
-                                        mz_tol=mz_tol,
-                                        im_tol=_im_tol,
-                                        has_im=_has_im)
-    # Reconstruct split views where needed downstream
-    ref_spec_row_indices_split = _split_flat(ref_flat_rows, ref_flat_offsets)
-    ref_spec_col_indices_split = _split_flat(ref_flat_cols, ref_flat_offsets)
-    ref_spec_values_split = _split_flat(ref_flat_vals, ref_flat_offsets)
-
-
-    ### Generate equivalent Decoy spectra
+    ### Decoys, from the same index query (their m/z offset is already in rt_mz)
     if decoy:
-        # Decoy candidates already extracted from unified index above
-        mass_window_decoy_candidates = [all_keys[i] for i in decoy_window_idxs]
-        _decoy_idxs = library.resolve_indices(mass_window_decoy_candidates)
-        converted_frag_codes = library.get_frag_codes_batch(_decoy_idxs)
-        # Decoy m/z offset already pre-applied in rt_mz
         decoy_mz = rt_mz[:,1][decoy_window_idxs]
+        decoy_passing, decoy_flat_rows, decoy_flat_cols, decoy_flat_vals, decoy_flat_offsets, decoy_ms1_error, \
+            dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_prec_im, dec_cand_idx, \
+            dec_ent_angle, dec_topn, dec_frac = create_entries_direct(
+                candidate_indices=decoy_window_idxs, prec_mzs=decoy_mz,
+                **_lib_arrays, **_match_args)
 
-        decoy_spec_frags = None
-
-        decoy_peaks_in_dia,\
-        decoy_pep_cand,\
-        decoy_pep_cand_loc,\
-        decoy_pep_cand_list,\
-        decoy_flat_rows,\
-            decoy_flat_cols,\
-                decoy_flat_vals, \
-                    decoy_flat_offsets, \
-                        norm_decoy_intensities, \
-                            decoy_lib_peaks_matched, \
-                                decoy_ms1_error, \
-                                    dec_all_coords, dec_all_norm_int, dec_frag_offsets, dec_passing, dec_prec_im = create_entries_direct(
-                                                                    centroid_breaks=centroid_breaks,
-                                                                    spec_data_mz=library.spectrum_mz,
-                                                                    spec_data_int=library.spectrum_int,
-                                                                    spec_offsets=library.spectrum_offsets,
-                                                                    spec_lengths=library.spectrum_lengths,
-                                                                    topn_data=library.top_n_data,
-                                                                    topn_offsets=library.top_n_offsets,
-                                                                    topn_lengths=library.top_n_lengths,
-                                                                    candidate_indices=_decoy_idxs,
-                                                                    mass_window_candidates=mass_window_decoy_candidates,
-                                                                    atleast_m=atleast_m,
-                                                                    prec_mzs=decoy_mz,
-                                                                    ms1_spec=ms1_spec,
-                                                                    ms1_tol=ms1_tol,
-                                                                    bin_mz=_bin_mz,
-                                                                    bin_int=_bin_int,
-                                                                    bin_mob=_bin_mob,
-                                                                    mz_tol=mz_tol,
-                                                                    im_tol=_im_tol,
-                                                                    has_im=_has_im)
-        # Reconstruct split views where needed downstream
-        decoy_spec_row_indices_split = _split_flat(decoy_flat_rows, decoy_flat_offsets)
-        decoy_spec_col_indices_split = _split_flat(decoy_flat_cols, decoy_flat_offsets)
-        decoy_spec_values_split = _split_flat(decoy_flat_vals, decoy_flat_offsets)
-
-
-    frag_errors = []
-    lib_frag_mz = []
-    decoy_col_offset = 0
-    
-    if len(ref_flat_rows) > 0:
-
-        #### Use flat arrays directly (already concatenated from create_entries)
-        ref_spec_row_indices = ref_flat_rows
-        ref_spec_col_indices = ref_flat_cols
-        ref_spec_values = ref_flat_vals
-
-        frag_errors = [np.array(bin_centers[ref_spec_row_indices_split[i]]-ref_pep_cand_list[i][:,0][lib_peaks_matched[i]])/bin_centers[ref_spec_row_indices_split[i]] for i in range(len(lib_peaks_matched))]
-        lib_frag_mz = [ref_pep_cand_list[i][:,0][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
-        lib_frag_int = [ref_pep_cand_list[i][:,1][lib_peaks_matched[i]] for i in range(len(lib_peaks_matched))]
-        obs_frag_int = [dia_spectrum[ref_spec_row_indices_split[i],1] for i in range(len(ref_spec_row_indices_split))]
-        _ref_surv_idxs = library.resolve_indices(ref_pep_cand)
-        _ref_surv_frag_codes = library.get_frag_codes_batch(_ref_surv_idxs)
-        frag_name_codes = [_ref_surv_frag_codes[i][j] for i,j in enumerate(lib_peaks_matched)]
-        frag_matched_intensities = [ref_pep_cand_list[idx][:,1][j] for idx,j in enumerate(lib_peaks_matched)]
-
-        decoy_col_offset = np.max(ref_spec_col_indices)+1
-        
-    else:
-        ref_spec_row_indices=np.array([],dtype=int)
-        ref_spec_col_indices=np.array([],dtype=int)
-        ref_spec_values=np.array([],dtype=int)
-        frag_errors = []#np.array([],dtype=float)
-        lib_frag_mz = []#np.array([],dtype=float)
-        lib_frag_int = []
-        obs_frag_int = []
-        frag_name_codes = []
-        frag_matched_intensities = []
-        
-        
-    if decoy and len(decoy_flat_rows) > 0:
-        decoy_spec_row_indices = decoy_flat_rows
-        decoy_spec_col_indices = decoy_flat_cols + decoy_col_offset
-        decoy_spec_values = decoy_flat_vals
-        decoy_frag_errors = [np.array(bin_centers[decoy_spec_row_indices_split[i]]-decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]])/bin_centers[decoy_spec_row_indices_split[i]] for i in range(len(decoy_lib_peaks_matched))]
-        decoy_lib_frag_mz = [decoy_pep_cand_list[i][:,0][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
-        decoy_lib_frag_int = [decoy_pep_cand_list[i][:,1][decoy_lib_peaks_matched[i]] for i in range(len(decoy_lib_peaks_matched))]
-        decoy_obs_frag_int = [dia_spectrum[decoy_spec_row_indices_split[i],1] for i in range(len(decoy_spec_row_indices_split))]
-        decoy_frag_name_codes = [converted_frag_codes[i][decoy_lib_peaks_matched[idx]] for idx,i in enumerate(decoy_peaks_in_dia)]
-        decoy_frag_matched_intensities = [decoy_pep_cand_list[idx][:,1][decoy_lib_peaks_matched[idx]] for idx in range(len(decoy_peaks_in_dia))]
-    else:
-        decoy_spec_row_indices_split=[] ## needs to be improved
-        decoy_spec_values_split=[] ## needs to be improved
-        decoy_spec_row_indices=np.array([],dtype=int)
-        decoy_spec_col_indices=np.array([],dtype=int)
-        decoy_spec_values=np.array([],dtype=int)
-        decoy_frag_errors = []#np.array([],dtype=float)
-        decoy_lib_frag_mz = []#np.array([],dtype=float)
-        decoy_lib_frag_int = []
-        decoy_obs_frag_int = []
-        decoy_frag_name_codes = []
-        decoy_frag_matched_intensities = []
-        
-
-    if len(ref_flat_rows) > 0 or (decoy and len(decoy_flat_rows) > 0):
-        # Single JIT call replaces ~14 GIL-acquiring numpy/scipy calls
-        # (np.append ×6, np.concatenate ×3, np.unique, np.sort, rankdata, unmatched_peaks ×2)
-        _dec_rows = decoy_flat_rows if (decoy and len(decoy_flat_rows) > 0) else np.empty(0, np.int32)
-        _dec_cols = decoy_flat_cols if (decoy and len(decoy_flat_cols) > 0) else np.empty(0, np.int32)
-        _dec_vals = decoy_flat_vals if (decoy and len(decoy_flat_vals) > 0) else np.empty(0, np.float64)
-        _dec_coords = dec_all_coords if (decoy and len(decoy_flat_rows) > 0) else np.empty(0, np.int64)
-        _dec_norm_int = dec_all_norm_int if (decoy and len(decoy_flat_rows) > 0) else np.empty(0, np.float64)
-        _dec_frag_off = dec_frag_offsets if (decoy and len(decoy_flat_rows) > 0) else np.zeros(1, np.int32)
-        _dec_passing = dec_passing if (decoy and len(decoy_flat_rows) > 0) else np.empty(0, np.int32)
-
-        sparse_row_indices, sparse_col_indices, sparse_values, dia_spec_int, peak_idx_lookup = \
-            _assemble_coo_jit(
-                ref_flat_rows, ref_flat_cols, ref_flat_vals,
-                _dec_rows, _dec_cols, _dec_vals,
-                ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_passing,
-                _dec_coords, _dec_norm_int, _dec_frag_off, _dec_passing,
-                decoy_col_offset,
-                dia_spectrum[:, 1],
-                1e-10)
-
-
-        # Fit lib spectra to observed spectra (Huber loss via IRLS)
-        # Pass flat COO arrays directly — avoids constructing scipy sparse matrix
-        _n_coo_rows = len(dia_spec_int)
-        _n_coo_cols = int(sparse_col_indices.max()) + 1 if len(sparse_col_indices) > 0 else 0
-        fit_results = huber_nnls_irls(sparse_values, sparse_row_indices, sparse_col_indices,
-                                      _n_coo_rows, _n_coo_cols, dia_spec_int)
-        lib_coefficients = fit_results['x']
-
-        ####################################
-        # Compute single-matched rows via JIT (replaces sparse.coo_matrix + np.sum(matrix>0,1)==1)
-        _sm_max = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
-        single_match_lookup = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _sm_max)
-
-        # Map re-indexed single-match status back to original DIA peak indices
-        n_dia = dia_spectrum.shape[0]
-        unique_lookup_dia = np.zeros(n_dia, dtype=bool)
-        _orig_rows = np.where(peak_idx_lookup >= 0)[0]
-        _orig_rows = _orig_rows[_orig_rows < n_dia]
-        _reindexed = peak_idx_lookup[_orig_rows]
-        _valid_ri = _reindexed < _sm_max
-        _is_single = single_match_lookup[_reindexed[_valid_ri]]
-        unique_lookup_dia[_orig_rows[_valid_ri][_is_single]] = True
-
-
-        # Build decoy flat arrays for get_features (empty if no decoys)
-        _dec_rows = decoy_flat_rows if (decoy and len(decoy_flat_rows) > 0) else np.empty(0, np.int32)
-        _dec_vals = decoy_flat_vals if (decoy and len(decoy_flat_vals) > 0) else np.empty(0, np.float64)
-        _dec_cols = decoy_flat_cols if (decoy and len(decoy_flat_cols) > 0) else np.empty(0, np.int32)
-        _dec_offsets = decoy_flat_offsets if (decoy and len(decoy_flat_offsets) > 1) else np.zeros(1, np.int32)
-        features = get_features(rt_mz[window_idxs[ref_peaks_in_dia]],
-                                np.asarray(ref_prec_im, dtype=np.float64),
-                                ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
-                                _dec_rows, _dec_vals, _dec_cols, _dec_offsets,
-                                ref_peaks_in_dia,
-                                dia_spectrum,
-                                prec_rt,
-                                window_idxs,
-                                dia_spec_int,
-                                lib_coefficients,
-                                sparse_row_indices,
-                                sparse_col_indices,
-                                sparse_values,
-                                lib_peaks_matched,
-                                ref_pep_cand,
-                                (ref_spec_row_indices_split+decoy_spec_row_indices_split),
-                                (ref_spec_values_split+decoy_spec_values_split),
-                                frag_matched_intensities,
-                                ref_ms1_error,
-                                0,
-                                decoy_col_offset,
-                                frag_name_codes,
-                                unique_lookup_dia=unique_lookup_dia)
-
-
-        unique_row_indices_split = [single_match_lookup[peak_idx_lookup[i]] for i in ref_spec_row_indices_split]
-        unique_frags = [i[j] for i,j in zip(lib_frag_mz,unique_row_indices_split)]
-        unique_frags_int = [i[j] for i,j in zip(obs_frag_int,unique_row_indices_split)]
-
-        ####################################
+    # Per-spectrum cap on candidates entering the fit (--max_candidates).
+    # Targets and decoys are ranked together, by matched top-N ions then the
+    # matched fraction of library intensity, with the library index breaking ties
+    # so the choice is deterministic.  Same rule for both, so it is symmetric.
+    # The cap is per channel: every precursor has a copy in each channel the
+    # library was tagged with, decoy channel included, so it scales with plex size.
+    _cap = getattr(config.args, "max_candidates", None)
+    if _cap is not None:
+        _cap = int(_cap) * plex_size()
+    _n_dec = len(decoy_passing) if decoy else 0
+    if _cap is not None and len(ref_passing) + _n_dec > _cap:
+        _topn = np.concatenate([ref_topn, dec_topn]) if decoy else ref_topn
+        _frac = np.concatenate([ref_frac, dec_frac]) if decoy else ref_frac
+        _lib = (np.concatenate([window_idxs[ref_passing], decoy_window_idxs[decoy_passing]])
+                if decoy else window_idxs[ref_passing]).astype(np.int64)
+        _order = np.lexsort((_lib, -_frac, -_topn.astype(np.int64)))
+        _keep = np.zeros(len(_order), dtype=bool)
+        _keep[_order[:_cap]] = True
+        _kr, _kd = _keep[:len(ref_passing)], _keep[len(ref_passing):]
+        (ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets,
+         ref_ms1_error, ref_prec_im, ref_ent_angle) = _keep_passing(
+            _kr, ref_passing, ref_flat_rows, ref_flat_cols, ref_flat_vals, ref_flat_offsets,
+            ref_ms1_error, ref_prec_im, ref_ent_angle)
         if decoy:
-            # Column 2 (aligned library IM) has to be carried through here too --
-            # this array is rebuilt rather than sliced, so it would otherwise be
-            # 2 columns wide and the IM error feature would fail on decoys.
-            decoy_features = get_features(np.stack([rt_mz[decoy_window_idxs[decoy_peaks_in_dia],0],
-                                                    decoy_mz[decoy_peaks_in_dia],
-                                                    rt_mz[decoy_window_idxs[decoy_peaks_in_dia],2]],1),
-                                            np.asarray(dec_prec_im, dtype=np.float64),
-                                            decoy_flat_rows, decoy_flat_vals, decoy_flat_cols, decoy_flat_offsets,
-                                            ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
-                                            decoy_peaks_in_dia,
-                                            dia_spectrum,
-                                            prec_rt,
-                                            decoy_window_idxs,
-                                            dia_spec_int,
-                                            lib_coefficients,
-                                            sparse_row_indices,
-                                            sparse_col_indices,
-                                            sparse_values,
-                                            decoy_lib_peaks_matched,
-                                            decoy_pep_cand,
-                                            (ref_spec_row_indices_split+decoy_spec_row_indices_split),
-                                            (ref_spec_values_split+decoy_spec_values_split),
-                                            decoy_frag_matched_intensities,
-                                            decoy_ms1_error,
-                                            decoy_col_offset,
-                                            0,
-                                            decoy_frag_name_codes,
-                                            unique_lookup_dia=unique_lookup_dia)
+            (decoy_passing, decoy_flat_rows, decoy_flat_cols, decoy_flat_vals, decoy_flat_offsets,
+             decoy_ms1_error, dec_prec_im, dec_ent_angle) = _keep_passing(
+                _kd, decoy_passing, decoy_flat_rows, decoy_flat_cols, decoy_flat_vals,
+                decoy_flat_offsets, decoy_ms1_error, dec_prec_im, dec_ent_angle)
 
+    decoy_col_offset = int(np.max(ref_flat_cols)) + 1 if len(ref_flat_rows) > 0 else 0
 
-            unique_row_indices_split_decoy = [single_match_lookup[peak_idx_lookup[i]] for i in decoy_spec_row_indices_split]
-            unique_frags_decoy = [i[j] for i,j in zip(decoy_lib_frag_mz,unique_row_indices_split_decoy)]
-            unique_frags_int_decoy = [i[j] for i,j in zip(decoy_obs_frag_int,unique_row_indices_split_decoy)]
+    if not (len(ref_flat_rows) > 0 or (decoy and len(decoy_flat_rows) > 0)):
+        return None
 
-        ####################################
+    # Single JIT call replaces ~14 GIL-acquiring numpy/scipy calls
+    # (np.append ×6, np.concatenate ×3, np.unique, np.sort, rankdata, unmatched_peaks ×2)
+    _has_dec = decoy and len(decoy_flat_rows) > 0
+    _dec_rows = decoy_flat_rows if _has_dec else np.empty(0, np.int32)
+    _dec_cols = decoy_flat_cols if _has_dec else np.empty(0, np.int32)
+    _dec_vals = decoy_flat_vals if _has_dec else np.empty(0, np.float64)
+    _dec_coords = dec_all_coords if _has_dec else np.empty(0, np.int64)
+    _dec_norm_int = dec_all_norm_int if _has_dec else np.empty(0, np.float64)
+    _dec_frag_off = dec_frag_offsets if _has_dec else np.zeros(1, np.int32)
+    _dec_passing = decoy_passing if _has_dec else np.empty(0, np.int32)
 
-    #Select non-zero coeffs
-    # Note: many coeffs are non-zero but essentially zero!! Perhaps set less than 1e-7??
-    non_zero_coeffs = [c for c in lib_coefficients if c!=0]
-    non_zero_coeffs_idxs = [i for i,c in enumerate(lib_coefficients) if c!=0]
-    # print(f"N: {len(lib_coefficients)}, {len(non_zero_coeffs)}")
-    output = []
+    sparse_row_indices, sparse_col_indices, sparse_values, dia_spec_int, peak_idx_lookup = \
+        _assemble_coo_jit(
+            ref_flat_rows, ref_flat_cols, ref_flat_vals,
+            _dec_rows, _dec_cols, _dec_vals,
+            ref_all_coords, ref_all_norm_int, ref_frag_offsets, ref_passing,
+            _dec_coords, _dec_norm_int, _dec_frag_off, _dec_passing,
+            decoy_col_offset,
+            dia_spectrum[:, 1],
+            1e-10)
 
-    if len(non_zero_coeffs)>0:
-        target_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
-        # Precursor IM per hit, filtered by the same non-zero-coeff mask and in the
-        # same target-then-decoy order as all_spec_ids.
-        target_prec_im = [ref_prec_im[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
-        if decoy:
-            updated_decoy_offset = decoy_col_offset
-            decoy_spec_ids = [decoy_pep_cand[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
-            decoy_prec_im = [dec_prec_im[i] for i in range(len(decoy_pep_cand)) if lib_coefficients[updated_decoy_offset+i] != 0]
+    # Fit lib spectra to observed spectra (Huber loss via IRLS)
+    # Pass flat COO arrays directly — avoids constructing scipy sparse matrix
+    _n_coo_rows = len(dia_spec_int)
+    _n_coo_cols = int(sparse_col_indices.max()) + 1 if len(sparse_col_indices) > 0 else 0
+    fit_results = huber_nnls_irls(sparse_values, sparse_row_indices, sparse_col_indices,
+                                  _n_coo_rows, _n_coo_cols, dia_spec_int)
+    lib_coefficients = fit_results['x']
 
-            all_spec_ids = target_spec_ids+decoy_spec_ids
-            all_prec_im = target_prec_im+decoy_prec_im
-            n_target_hits = len(target_spec_ids)
-            all_features = np.concatenate((features,decoy_features))
-            # Store raw arrays instead of stringified — parquet handles list columns
-            all_ms2_frags = [list(i) for i in zip(frag_name_codes+decoy_frag_name_codes,
-                                                  frag_errors+decoy_frag_errors,
-                                                  lib_frag_mz+decoy_lib_frag_mz,
-                                                  lib_frag_int+decoy_lib_frag_int,
-                                                  obs_frag_int+decoy_obs_frag_int,
-                                                  unique_frags+unique_frags_decoy,
-                                                  unique_frags_int+unique_frags_int_decoy)]
+    # Responsibility-split entropy-normalized angle (30th feature column).
+    # TODO: evaluate on multiplexed data (several channels, crowded spectra), the
+    # case it is for: on the single-channel timsTOF 200 pg test it correlated 0.91
+    # with ent_norm_angle and changed IDs within noise.  Also evaluate its
+    # minimum across adjacent scans (the resp_ent_norm_angle nearby feature).
+    _y_pred = np.bincount(sparse_row_indices,
+                          weights=sparse_values * lib_coefficients[sparse_col_indices],
+                          minlength=_n_coo_rows)
+    def _resp_angle(passing, cand_idx, col_offset, coords, norm_int, frag_offsets):
+        return _resp_ent_angle_jit(passing, cand_idx, col_offset, lib_coefficients,
+                                   library.spectrum_offsets, library.spectrum_lengths,
+                                   library.spectrum_int, library.frag_names_data,
+                                   coords, norm_int, frag_offsets,
+                                   peak_idx_lookup, _y_pred, dia_spec_int)
+    ref_resp_angle = _resp_angle(ref_passing, ref_cand_idx, 0, ref_all_coords,
+                                 ref_all_norm_int, ref_frag_offsets)
+    if _has_dec:
+        dec_resp_angle = _resp_angle(decoy_passing, dec_cand_idx, decoy_col_offset,
+                                     dec_all_coords, dec_all_norm_int, dec_frag_offsets)
+    elif decoy:
+        dec_resp_angle = np.full(len(decoy_passing), np.nan)
 
+    # Compute single-matched rows via JIT (replaces sparse.coo_matrix + np.sum(matrix>0,1)==1)
+    _sm_max = int(sparse_row_indices.max()) + 1 if len(sparse_row_indices) > 0 else 0
+    single_match_lookup = _single_match_lookup_jit(sparse_row_indices, sparse_col_indices, _sm_max)
 
-        else:
-            all_spec_ids = target_spec_ids
-            all_prec_im = target_prec_im
-            n_target_hits = len(target_spec_ids)
-            all_features = features
-            all_ms2_frags = [list(i) for i in zip(frag_name_codes,
-                                                  frag_errors,
-                                                  lib_frag_mz,
-                                                  lib_frag_int,
-                                                  obs_frag_int,
-                                                  unique_frags,
-                                                  unique_frags_int)]
+    # Map re-indexed single-match status back to original DIA peak indices
+    n_dia = dia_spectrum.shape[0]
+    unique_lookup_dia = np.zeros(n_dia, dtype=bool)
+    _orig_rows = np.where(peak_idx_lookup >= 0)[0]
+    _orig_rows = _orig_rows[_orig_rows < n_dia]
+    _reindexed = peak_idx_lookup[_orig_rows]
+    _valid_ri = _reindexed < _sm_max
+    _is_single = single_match_lookup[_reindexed[_valid_ri]]
+    unique_lookup_dia[_orig_rows[_valid_ri][_is_single]] = True
 
-        # Check if protein column is populated (without creating _EntryView)
-        _first_idx = library.key_to_idx[next(iter(library.key_to_idx))]
-        _prot_field_map = {'protein_group': library.protein_group, 'protein_name': library.protein_name,
-                           'genes': library.genes, 'UniprotID': library.uniprot_id}
-        _prot_arr = _prot_field_map.get(config.protein_column)
-        return_prot = _prot_arr is not None and _prot_arr[_first_idx] not in (None, '')
+    # Matched-fragment output columns, flat per candidate group
+    _dia_int = np.ascontiguousarray(dia_spectrum[:, 1])
+    def _frag_columns(passing, cand_idx, coords, frag_offsets, flat_rows, flat_offsets):
+        return _frag_columns_jit(passing, cand_idx, library.spectrum_offsets,
+                                 library.spectrum_mz, library.spectrum_int, library.frag_names_data,
+                                 coords, frag_offsets, flat_rows, flat_offsets,
+                                 bin_centers, _dia_int, single_match_lookup, peak_idx_lookup)
+    ref_frags = _frag_columns(ref_passing, ref_cand_idx, ref_all_coords, ref_frag_offsets,
+                              ref_flat_rows, ref_flat_offsets)
 
-        # Pre-resolve protein column values for non-zero coefficients
-        # Decoy entries have protein info copied from their parent target
-        if return_prot:
-            _prot_idxs = library.resolve_indices(all_spec_ids)
-            _prot_vals = library.get_scalar_batch(_prot_idxs, config.protein_column)
+    # Build decoy flat arrays for get_features (empty if no decoys)
+    _dec_offsets = decoy_flat_offsets if (decoy and len(decoy_flat_offsets) > 1) else np.zeros(1, np.int32)
+    features = get_features(rt_mz[window_idxs[ref_passing]],
+                            ref_prec_im,
+                            ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
+                            _dec_rows, _dec_vals, _dec_cols, _dec_offsets,
+                            dia_spectrum,
+                            prec_rt,
+                            dia_spec_int,
+                            lib_coefficients,
+                            sparse_row_indices,
+                            sparse_col_indices,
+                            sparse_values,
+                            ref_frags[3], ref_frags[0], ref_frags[5],
+                            ref_ms1_error,
+                            0,
+                            decoy_col_offset,
+                            unique_lookup_dia=unique_lookup_dia)
+    # 29th column: entropy-normalized spectral angle (_create_entries_direct_jit);
+    # 30th: the same against each peak's responsibility-split intensity
+    features = np.column_stack((features, ref_ent_angle, ref_resp_angle))
 
-        if config.args.timeplex:
-            output = [[non_zero_coeffs[i],
-                       spec_idx,
-                       ms1_spec.scan_num,
-                       all_spec_ids[i][0],
-                       all_spec_ids[i][1],
-                       all_spec_ids[i][2],
-                       prec_mz,
-                       prec_rt,
-                       all_prec_im[i],
-                       *all_features[j],
-                       *all_ms2_frags[j],
-                       file_name,
-                       _prot_vals[i] if return_prot else "NA",
-                       i >= n_target_hits]
-                       for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
+    if decoy:
+        decoy_frags = _frag_columns(decoy_passing, dec_cand_idx, dec_all_coords, dec_frag_offsets,
+                                    decoy_flat_rows, decoy_flat_offsets)
+        # Column 2 (aligned library IM) has to be carried through here too --
+        # this array is rebuilt rather than sliced, so it would otherwise be
+        # 2 columns wide and the IM error feature would fail on decoys.
+        decoy_features = get_features(np.stack([rt_mz[decoy_window_idxs[decoy_passing],0],
+                                                decoy_mz[decoy_passing],
+                                                rt_mz[decoy_window_idxs[decoy_passing],2]],1),
+                                      dec_prec_im,
+                                      decoy_flat_rows, decoy_flat_vals, decoy_flat_cols, decoy_flat_offsets,
+                                      ref_flat_rows, ref_flat_vals, ref_flat_cols, ref_flat_offsets,
+                                      dia_spectrum,
+                                      prec_rt,
+                                      dia_spec_int,
+                                      lib_coefficients,
+                                      sparse_row_indices,
+                                      sparse_col_indices,
+                                      sparse_values,
+                                      decoy_frags[3], decoy_frags[0], decoy_frags[5],
+                                      decoy_ms1_error,
+                                      decoy_col_offset,
+                                      0,
+                                      unique_lookup_dia=unique_lookup_dia)
+        decoy_features = np.column_stack((decoy_features, dec_ent_angle, dec_resp_angle))
 
-        else:
-
-            output = [[non_zero_coeffs[i],
-                       spec_idx,
-                       ms1_spec.scan_num,
-                       all_spec_ids[i][0],
-                       all_spec_ids[i][1],
-                       prec_mz,
-                       prec_rt,
-                       all_prec_im[i],
-                       *all_features[j],
-                       *all_ms2_frags[j],
-                       file_name,
-                       _prot_vals[i] if return_prot else "NA",
-                       i >= n_target_hits]
-                       for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
-            
-        # lib_spec_ids = [ref_pep_cand[i] for i in range(len(ref_pep_cand)) if lib_coefficients[i] != 0]
-        # output = [[non_zero_coeffs[i],spec_idx,lib_spec_ids[i][0],lib_spec_ids[i][1],prec_mz,prec_rt,*features[j]] for i,j in zip(range(len(non_zero_coeffs)),non_zero_coeffs_idxs)]
-    
-
-    if return_frags:
-        return output, [frag_errors,lib_frag_mz]
+    # Rows: the candidates with a non-zero coefficient, targets then decoys.
+    # Columns of lib_coefficients are the target candidates then the decoys
+    # from decoy_col_offset, so a non-zero column is also the candidate's row
+    # in the stacked features and fragment columns.
+    nz = np.flatnonzero(lib_coefficients != 0)
+    if len(nz) == 0:
+        return None
+    n_ref = len(ref_passing)
+    nz_target = nz[nz < n_ref]
+    lib_idxs = window_idxs[ref_passing[nz_target]]
+    prec_im_rows = ref_prec_im[nz_target]
+    if decoy:
+        nz_decoy = nz[nz >= decoy_col_offset] - decoy_col_offset
+        lib_idxs = np.concatenate([lib_idxs, decoy_window_idxs[decoy_passing[nz_decoy]]])
+        prec_im_rows = np.concatenate([prec_im_rows, dec_prec_im[nz_decoy]])
+        all_features = np.concatenate((features, decoy_features))
+        frags = [np.concatenate([t, d]) for t, d in zip(ref_frags, decoy_frags)]
+        for o, base in ((5, ref_frags[5][-1]), (8, ref_frags[8][-1])):
+            frags[o] = np.concatenate([ref_frags[o], decoy_frags[o][1:] + base])
     else:
-        return output
+        all_features = features
+        frags = list(ref_frags)
+    codes, errors, lib_mz, lib_int, obs_int, offsets, unique_mz, unique_obs, unique_offsets = frags
+    codes, row_offsets = _take_segments_jit(codes, offsets, nz)
+    errors, _ = _take_segments_jit(errors, offsets, nz)
+    lib_mz, _ = _take_segments_jit(lib_mz, offsets, nz)
+    lib_int, _ = _take_segments_jit(lib_int, offsets, nz)
+    obs_int, _ = _take_segments_jit(obs_int, offsets, nz)
+    unique_mz, unique_row_offsets = _take_segments_jit(unique_mz, unique_offsets, nz)
+    unique_obs, _ = _take_segments_jit(unique_obs, unique_offsets, nz)
+
+    keys = [all_keys[i] for i in lib_idxs]
+
+    # Decoy entries have protein info copied from their parent target
+    if proteins is not None:
+        pool = proteins.pool
+        protein = [pool[c] for c in proteins.codes[lib_idxs].tolist()]
+    else:
+        protein = ["NA"] * len(nz)
+
+    hits = SpectrumHits(
+        coeff=lib_coefficients[nz],
+        spec_id=spec_idx,
+        ms1_spec_id=ms1_spec.scan_num,
+        seq=[k[0] for k in keys],
+        z=np.array([k[1] for k in keys], dtype=np.float64),
+        time_channel=(np.array([k[2] for k in keys], dtype=np.float64)
+                      if config.args.timeplex else None),
+        window_mz=prec_mz,
+        rt=prec_rt,
+        prec_im=prec_im_rows,
+        features=all_features[nz],
+        frag_codes=codes, frag_errors=errors, frag_mz=lib_mz, frag_int=lib_int, obs_int=obs_int,
+        frag_offsets=row_offsets,
+        unique_frag_mz=unique_mz, unique_obs_int=unique_obs, unique_offsets=unique_row_offsets,
+        file_name=file_name,
+        protein=protein,
+        is_decoy=np.arange(len(nz)) >= len(nz_target),
+    )
+    return hits
 
 
 # #@profile
@@ -2874,6 +3120,9 @@ def fit_to_lib(dia_spec,library,rt_mz,all_keys,
                ms1_spectra = None,
                return_frags = False,
                frac_matched = 0.5):
+    # Only the timeplex first search calls this.  ptinnls is not a JMod
+    # dependency: it needs cvxopt, which has no free-threaded wheels
+    import ptinnls as sparse_nnls
     # spec_idx,dia_spec,library = inputs
     
     spec_idx=dia_spec.scan_num

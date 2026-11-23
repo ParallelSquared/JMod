@@ -40,6 +40,8 @@ import pandas as pd
 
 # from src.ms1_cor_channels import ms1_cor_channels
 import src.ms1_cor_channels as ms1_mod
+from src.ms1_cor_channels import (MS1_LIST_COLUMNS, MS1_SCALAR_COLUMNS, area, argmax_within_radius,
+                                  walk_to_local_max)
 
 #from .mass_tags import mTRAQ, mTRAQ_02468, mTRAQ_678, tag_library
 from src.utils.misc_functions import unstring_floats
@@ -48,7 +50,7 @@ from src import config
 from src.logger import logger
 from src.utils.misc_functions import p_result
 from src.mass_tags import massTag
-from pyteomics import mass
+from src import mass
 from numba import njit
 
 
@@ -78,45 +80,6 @@ def _compute_shared_frac_jit(target_mz, target_int, other_mz_flat, mz_tol):
     if total_int == 0.0:
         return 0.0
     return shared_int / total_int
-
-
-def _compute_frac_shared_intensity(fdc, mz_tol):
-    """Compute fraction of library intensity from fragments shared across channels.
-
-    For each untag_prec group with 2+ channels, compares fragment m/z lists
-    across channels using relative PPM tolerance. Single-channel groups get -1.
-    """
-    result = np.full(len(fdc), -1.0)
-    groups = fdc.groupby("untag_prec").indices
-
-    for untag_prec, indices in groups.items():
-        if len(indices) < 2:
-            continue
-
-        # Collect frag_mz and frag_int arrays for all rows in this group
-        mz_arrays = []
-        int_arrays = []
-        for idx in indices:
-            mz_arr = np.array(fdc["frag_mz"].iloc[idx], dtype=np.float64)
-            int_arr = np.array(fdc["frag_int"].iloc[idx], dtype=np.float64)
-            mz_arrays.append(mz_arr)
-            int_arrays.append(int_arr)
-
-        for k, idx in enumerate(indices):
-            # Build other_mz_flat from all channels except this one
-            other_parts = [mz_arrays[j] for j in range(len(indices)) if j != k]
-            if len(other_parts) == 0 or all(len(p) == 0 for p in other_parts):
-                result[idx] = 0.0
-                continue
-            other_mz_flat = np.concatenate(other_parts)
-            target_mz = mz_arrays[k]
-            target_int = int_arrays[k]
-            if len(target_mz) == 0:
-                result[idx] = 0.0
-                continue
-            result[idx] = _compute_shared_frac_jit(target_mz, target_int, other_mz_flat, mz_tol)
-
-    return result
 
 
 def _compute_frac_shared_intensity_from_polars(fdc, fdc_list_cols, mz_tol):
@@ -180,78 +143,10 @@ def _compute_med_frag_error_from_polars(fdc_list_cols):
     ).to_pandas()
 
 
-def area(x, apex_idx, area_radius=1):
-    """Sum of ``x`` over the apex and ``area_radius`` scans on either side"""
-    return np.sum(x[max(0, apex_idx-area_radius):apex_idx+area_radius+1])
-
-
-def argmax_within_radius(fitted, start_pos, radius=None, area_radius=1):
-    """Pick the index with the highest ``fitted`` value within
-    ``start_pos ± radius`` cycles, capped ``area_radius`` positions in from
-    either edge so ``area`` always has its full window. When ``radius`` is
-    ``None`` the cap is the full interior of ``fitted``.
-    """
-    n = len(fitted)
-    if n < 2 * area_radius + 1:
-        return start_pos
-    lo = area_radius
-    hi = n - 1 - area_radius
-    if radius is not None:
-        lo = max(lo, start_pos - radius)
-        hi = min(hi, start_pos + radius)
-    return lo + int(np.argmax(fitted[lo:hi + 1]))
-
-
-def walk_to_local_max(fitted, start_pos, apex_jitter=None, area_radius=1):
-    """Slide the apex from ``start_pos`` toward a local maximum, one cycle at a
-    time, while strictly increasing. Capped ``area_radius`` positions in from
-    either edge so the picked apex always has the full window for ``area`` to
-    sum. When ``apex_jitter`` is given, the walk additionally stops
-    once it has moved ``apex_jitter`` cycles from ``start_pos`` in either
-    direction.
-
-    Returns the new apex index. Identical to ``start_pos`` when the voted apex
-    is already a local maximum.
-    """
-    n = len(fitted)
-    if n < 2 * area_radius + 1:
-        return start_pos
-    lo_cap = area_radius
-    hi_cap = n - 1 - area_radius
-    if apex_jitter is not None:
-        lo_cap = max(lo_cap, start_pos - apex_jitter)
-        hi_cap = min(hi_cap, start_pos + apex_jitter)
-    i = start_pos
-    while True:
-        left_ok = (i - 1 >= lo_cap)
-        right_ok = (i + 1 <= hi_cap)
-        left_higher = left_ok and (fitted[i - 1] > fitted[i])
-        right_higher = right_ok and (fitted[i + 1] > fitted[i])
-        if not (left_higher or right_higher):
-            return i
-        if left_higher and right_higher:
-            # Voted apex is in a saddle — step toward the higher side.
-            i = i - 1 if fitted[i - 1] >= fitted[i + 1] else i + 1
-        elif left_higher:
-            i -= 1
-        else:
-            i += 1
-
-
-# MS1_quality: how far to trust each ID's MS1 quant (plex_Area).
-# gauss_r2_joint: one Gaussian elution peak fit to the ID's MS1 and MS2
-# coefficient traces together (shared center and sigma, each trace its own
-# amplitude and counted equally), by grid search over center and sigma; the mean
-# over the two traces of the uncentered R^2 (cos^2 of trace and Gaussian). The
-# MS1 trace is plexfittrace_all over the MS1 fit window, the MS2 trace the run's
-# MS2 coefficients of the same precursor on those MS1 scans (matched on
-# Ms1_spec_id, 0 where there is none).
-# MS1_quality = sqrt(pct(PredVal) x pct(gauss_r2_joint)), percentiles within
-# the run's filtered IDs, a missing Gaussian fit counting as 0; x 0.01 when
-# plex_Area == 0, which puts IDs without an MS1 quant at the bottom.
 SIGMA_GRID = np.geomspace(0.3, 6.0, 40)   # Gaussian sigmas tried, in MS1 scans
 SHIFT_GRID = np.linspace(-2.0, 2.0, 41)   # centers tried, in scans from the MS1 apex
 NO_MS1_QUANT_FACTOR = 0.01                # MS1_quality factor when plex_Area == 0
+MS1_PASS_MIN_PEARSON = 0.5                # MS1_quality_pass: minimum plexfitMS1_p
 _CHUNK = 10000  # rows scored at once, against the 1,640 Gaussians of the grid
 
 
@@ -262,14 +157,12 @@ def gauss_r2_joint(ids, dc, timeplex=False):
     one in each. ``dc`` is the run's MS2 coefficients (polars: seq, z,
     Ms1_spec_id, coeff, and time_channel when ``timeplex``)."""
     out = np.full(len(ids), np.nan)
-    if dc is None:
-        return out
-    # IDs without an MS1 quant have 0 here (ms1_quant's fillna)
-    has_window = ids["plexfittrace_spec_all"].map(lambda s: isinstance(s, str) and s != "").to_numpy()
+    # IDs without an MS1 quant have None here
+    has_window = ids["plexfittrace_spec_all"].map(lambda s: isinstance(s, np.ndarray) and s.size > 0).to_numpy()
     if not has_window.any():
         return out
     df = ids[has_window]
-    lens = df["plexfittrace_spec_all"].str.count(";").to_numpy() + 1
+    lens = df["plexfittrace_spec_all"].map(len).to_numpy()
     width = int(lens.max())
     rows = np.repeat(np.arange(len(lens)), lens)
     pos = np.arange(lens.sum()) - np.repeat(np.cumsum(lens) - lens, lens)
@@ -277,7 +170,7 @@ def gauss_r2_joint(ids, dc, timeplex=False):
 
     def padded(col):
         values = np.full((len(lens), width), np.nan)
-        values[rows, pos] = np.array(";".join(df[col]).split(";"), dtype=float)
+        values[rows, pos] = np.concatenate(df[col].to_list()).astype(float)
         return values
 
     specs = padded("plexfittrace_spec_all")
@@ -342,14 +235,22 @@ def _gaussian_fit_r2(traces, lens, center):
 
 
 def ms1_quality(ids):
-    """MS1_quality of every row of ``ids``, one run's filtered IDs (pandas,
-    with PredVal or, when the channel FDR was fitted, ChannelScore,
-    gauss_r2_joint and plex_Area)."""
+    """MS1_quality of every row of ``ids``, one run's filtered IDs (pandas, with
+    PredVal or, when the channel FDR was fitted, ChannelScore, plexfitMS1_p,
+    plex_snr and plex_Area); see the comment above NO_MS1_QUANT_FACTOR."""
     def pct(values):  # percentile within the run; NaN stays NaN
         return values.rank(method="average") / values.count()
     id_score = ids["ChannelScore"] if ids.get("ChannelScore", pd.Series()).notna().any() else ids["PredVal"]
-    score = np.sqrt(pct(id_score).fillna(0.0) * pct(ids["gauss_r2_joint"]).fillna(0.0)).to_numpy()
+    parts = [pct(id_score).fillna(0.0), pct(ids["plexfitMS1_p"].clip(lower=0)).fillna(0.0),
+             pct(ids["plex_snr"]).fillna(0.0)]
+    score = np.power(np.prod(parts, axis=0), 1.0 / len(parts))
     return np.where(ids["plex_Area"].to_numpy() == 0, score * NO_MS1_QUANT_FACTOR, score)
+
+
+def ms1_quality_pass(ids):
+    """MS1_quality_pass of every row of ``ids`` (with plexfitMS1_p and
+    plex_Area): MS1-quantified and plexfitMS1_p >= MS1_PASS_MIN_PEARSON."""
+    return (ids["plex_Area"].to_numpy() > 0) & (ids["plexfitMS1_p"].to_numpy(dtype=float) >= MS1_PASS_MIN_PEARSON)
 
 
 # lp,fdc,dc = get_large_prec(file,condense_output=False,timeplex=bool(params["timeplex"]))
@@ -391,32 +292,47 @@ _UNFILLED_QVALUES = ("Qvalue", "BestChannel_Qvalue", "untag_prec_Qvalue", "PlexS
 
 def fill_ms1_quant_gaps(dat):
     """*dat* with every NaN 0, as ms1_quant has always left it, except in the
-    q-values and the plex-set score: a NaN there is "not scored" (the decoy
-    channel's Qvalue, and the best channel's of a set where only the decoy
-    channel was found), and a 0 would pass every threshold."""
-    return dat.fillna({c: 0 for c in dat.columns if c not in _UNFILLED_QVALUES})
+    q-values: a NaN there is "not scored" (the decoy channel's Qvalue, and the
+    best channel's of a set where only the decoy channel was found), and a 0
+    would pass every threshold; and in the MS1 quant's per-scan arrays
+    (MS1_LIST_COLUMNS), where a row without a quant has None."""
+    skip = set(_UNFILLED_QVALUES) | set(MS1_LIST_COLUMNS)
+    dat = dat.fillna({c: 0 for c in dat.columns if c not in skip})
+    for c in MS1_LIST_COLUMNS:
+        if c in dat.columns:
+            dat[c] = dat[c].astype(object).where(dat[c].notna(), None)
+    return dat
 
 
 def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=False,vote_sigma=1.0):
     # X = fdc.iloc[:,6:-5]
-    fit_whole_MS1 = False
    
     logger.info("")
     logger.info("Performing MS1 Quantitation") 
     
-    fdc = dat[~dat["is_decoy"]].copy().reset_index(drop=True)  #remove decoys
+    # Targets only, and not the decoy channel: it is a null draw for the channel
+    # FDR, not a sample, and fitted with the real channels it would share rows
+    # with the last of them and change their quant.  Its rows come back with no
+    # MS1 quant (process_ms1_quant's left merge, then fill_ms1_quant_gaps).
+    # TODO: the channel FDR reads its MS1 evidence (the plex-fit traces,
+    # plexfitMS1_p, gauss_r2_joint, ...) from this quant, so with the decoy
+    # channel left out it has none for the null and leaves those features out
+    # (channel_fdr._MS1_FIT_FEATURES).  The channel FDR should compute its own MS1
+    # evidence for every channel, decoy included, instead of reusing the quant's.
+    real = ~dat["is_decoy"]
+    if "is_decoy_channel" in dat.columns:
+        real &= ~dat["is_decoy_channel"].astype(bool)
+    fdc = dat[real].copy().reset_index(drop=True)
     
     #only quantify confident precs
     if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
         fdc = fdc[fdc["BestChannel_Qvalue"] < 0.01].reset_index(drop=True)
 
-    if timeplex:
-        all_keys = [(i,j,k) for i,j,k in zip(fdc.seq,fdc.z,fdc.time_channel)]
-    else:
-        all_keys = [(i,j) for i,j in zip(fdc.seq,fdc.z)]
-
     if mass_tag:
-        tag_to_use = mass_tag
+        # The fit builds each set's channels from the tag, which carries the decoy
+        # channel (run_jmod resolves it into config.tag): the real channels only
+        tag_to_use = (mass_tag if mass_tag.decoy_channel is None else
+                      mass_tag.select_channels([c for c in mass_tag.channel_names if c != mass_tag.decoy_channel]))
     else:
         tag_to_use = massTag(rules="nK",
                             base_mass=0.00,
@@ -425,181 +341,35 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=
                             name="no_tag",
                             compositions=mass.Composition())
 
-    (
-    group_p_corrs,
-    group_ms1_traces,
-    group_ms2_traces,
-    group_iso_ratios,
-    group_keys,
-    group_fitted,
-    new_output_dict,
-    fake_fdc_dict
-    ) = ms1_mod.ms1_cor_channels(DIAspectra, 
-                                fdc, 
-                                dc, 
-                                mz_ppm=mz_ppm, 
-                                rt_tol = rt_tol,
-                                tag=tag_to_use,
-                                SILAC=SILAC,
-                                timeplex=timeplex,
-                                num_iso = config.num_iso_ms1,
-                                num_iso_r = config.num_iso_r,
-                                additional_scans = config.args.additional_scans,
-                                vote_sigma = vote_sigma,
-                                # Gate MS1 peaks to those co-mobile with the
-                                # precursor; inert when the data has no IM.
-                                im_tol = im_tol,
-                                fit_whole_MS1=fit_whole_MS1
-                                )
-    
-    dat = process_ms1_quant(dat,
-                            fdc,
-                            all_keys,
-                            group_p_corrs,
-                            group_ms1_traces,
-                            group_ms2_traces,
-                            group_iso_ratios,
-                            group_keys,
-                            group_fitted,
-                            new_output_dict,
-                            fake_fdc_dict,
-                            DIAspectra,
-                            fit_whole_MS1=fit_whole_MS1
-                            )
+    quant = ms1_mod.ms1_cor_channels(DIAspectra,
+                                     fdc,
+                                     dc,
+                                     mz_ppm=mz_ppm,
+                                     rt_tol=rt_tol,
+                                     tag=tag_to_use,
+                                     SILAC=SILAC,
+                                     timeplex=timeplex,
+                                     num_iso=config.num_iso_ms1,
+                                     num_iso_r=config.num_iso_r,
+                                     additional_scans=config.args.additional_scans,
+                                     vote_sigma=vote_sigma,
+                                     # Gate MS1 peaks to those co-mobile with the
+                                     # precursor; inert when the data has no IM.
+                                     im_tol=im_tol)
+
+    dat = process_ms1_quant(dat, fdc, quant)
 
     return dat
 
 
-
-def process_ms1_quant(dat, fdc, all_keys, group_p_corrs, group_ms1_traces, group_ms2_traces, group_iso_ratios, group_keys, group_fitted, new_output_dict, fake_fdc_dict, DIAspectra, fit_whole_MS1=False):
-    
-    ## create dictionary  that links keys to data so we can match the order of "fdc"
-    linker_dict = {key:[group_idx,key_idx] for group_idx,keys in enumerate(group_keys) for key_idx,key in enumerate(keys)}
-    
-    p_corrs = [group_p_corrs[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-    ms1_traces = [group_ms1_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-    ms2_traces = [group_ms2_traces[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-    iso_ratios = [group_iso_ratios[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-    extracted_keys = [group_keys[linker_dict[key][0]][linker_dict[key][1]] for key in all_keys]
-
-    if fit_whole_MS1 is False:
-        extracted_fitted = [group_fitted[linker_dict[key][0]][0][:,linker_dict[key][1]] for key in all_keys]
-        extracted_fitted_specs = [group_fitted[linker_dict[key][0]][4] for key in all_keys]
-        extracted_fitted_p = [group_fitted[linker_dict[key][0]][3] for key in all_keys]
-
-    else:
-        ##TODO deal with fake_fdc_dict values make sure they get properly assigned
-        all_fdc_idxs = list(set(key for ms1_spec_idx in new_output_dict.keys() for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys()))
-        extracted_fitted_specs = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
-        extracted_fitted_p = [[] for k in all_fdc_idxs if k not in fake_fdc_dict.keys()]
-        for ms1_spec_idx in new_output_dict.keys():
-            for key in new_output_dict[ms1_spec_idx]["mapped_pred_coeffs"].keys():
-                if key not in fake_fdc_dict.keys():
-                    extracted_fitted_specs[key].append(ms1_spec_idx)
-                    extracted_fitted_p[key].append(p_result(r_sq=np.nan, p=np.nan))
-
-        extracted_fitted = []
-        for fdc_idx in all_fdc_idxs:
-            if fdc_idx not in fake_fdc_dict.keys():
-                fdc_coeffs = []
-                for scan in extracted_fitted_specs[fdc_idx]:
-                    fdc_coeffs.append(new_output_dict[scan]["mapped_pred_coeffs"][fdc_idx])
-                
-                extracted_fitted.append(np.array(fdc_coeffs))
-    
-    
-    fdc["plexfitMS1"] = [np.max(i) for i in extracted_fitted]
-    fdc["plexfitMS1_p"] = [j[np.argmax(i)].statistic  if type(j[np.argmax(i)])!=float else 0 for i,j in zip(extracted_fitted,extracted_fitted_p)]
-
-    plexfittrace_idxs = [np.where([e in set(k) for e in j])[0] for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    plexfittrace = [i[j] for i,j in zip(extracted_fitted,plexfittrace_idxs)]
-    plexfit_ps = [[i[k].statistic if type(i[k])!=float else 0 for k in j] for i,j in zip(extracted_fitted_p,plexfittrace_idxs)]
-    # fdc["plexfitMS1_new"] = [np.max(i) for i in plexfittrace]
-    fdc["plexfittrace"] = [";".join(map(str,i)) for i in plexfittrace] ###spec ids come from ms2_traces
-    fdc["plexfit_ps"] = [";".join(map(str,i)) for i in plexfit_ps]
-    
-    fdc["plexfittrace_spec_all"] = [";".join(map(str,j)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    fdc["plexfittrace_all"] = [";".join(map(str,i)) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    fdc["plexfittrace_ps_all"] = [";".join(map(str,[pi.statistic if pi==pi else np.nan for pi in p])) for i,j,k,p in zip(extracted_fitted,extracted_fitted_specs,ms2_traces,extracted_fitted_p)]
-    # ms1_cor_channels fit a ±fit_radius window around the group's voted apex.
-    # The voted apex is at the center of fitted/specs. Each channel can drift
-    # away from that center monotonically (only while values are strictly
-    # increasing), capped plex_area_scan_radius positions in from the edge so
-    # area() always has its full window.
-    area_radius = int(config.args.plex_area_scan_radius)
-    plex_areas = []
-    apex_scans = []
-    for idx in range(len(fdc)):
-        fitted = extracted_fitted[idx]
-        specs = extracted_fitted_specs[idx]
-        center = len(fitted) // 2
-        # Per-channel apex selection: optionally argmax-pick a seed within
-        # ±additional_scans of the group-voted center, then let the monotonic
-        # walk drift from that seed within ±apex_jitter. The two knobs are
-        # independent — apex_jitter still matters when free_apex is on, and
-        # vice versa.
-        if config.args.free_apex:
-            seed = argmax_within_radius(fitted, center, radius=int(config.args.additional_scans), area_radius=area_radius)
-        else:
-            seed = center
-        apex_pos = walk_to_local_max(fitted, seed, apex_jitter=int(config.args.apex_jitter), area_radius=area_radius)
-        plex_areas.append(area(fitted, apex_pos, area_radius))
-        apex_scans.append(int(specs[apex_pos]))
-    fdc["plex_Area"] = plex_areas
-    fdc["ms1_apex_scan"] = apex_scans
-       
-
-
-    
-    
-    fdc["ms1_cor"] = [i[0] for i in p_corrs]
-    
-    for idx in range(config.num_iso_r):
-        iso_num = idx+1
-        fdc[f"iso{iso_num}_cor"] = [i[iso_num] for i in p_corrs]
-    # fdc["iso1_cor"] = [i[1] for i in p_corrs]
-    # fdc["iso2_cor"] = [i[2] for i in p_corrs]
-    
-    # Rescale correlations from [-1,1] to [0,1] before computing product
-    _ms1_cor_scaled = (fdc["ms1_cor"] + 1) / 2
-    _iso1_cor_scaled = (fdc["iso1_cor"] + 1) / 2
-    _iso2_cor_scaled = (fdc["iso2_cor"] + 1) / 2
-    fdc["traceproduct"] = np.log10(_ms1_cor_scaled * _iso1_cor_scaled * _iso2_cor_scaled + 1e-6)
-    
-    # fdc["MS1_is1cor"] = [stats.pearsonr(list(i[0].values())[:10], list(i[1].values())[:10]).statistic for i in ms1_traces]
-    
-    
-    fdc["iso_cor"] = [i[0].statistic for i in iso_ratios]
-    
-    fdc["MS1_Int"] = [i[2][0] for i in iso_ratios]
-    fdc["MS1_Int"] = [np.linalg.lstsq(np.array(i[1])[:,np.newaxis], i[2], rcond=-1)[0][0] for i in iso_ratios]
-    
-    # X[np.isnan(X)]=0 ## set nans to zero (mostly for r2 values)
-    fdc["all_ms1_specs"] = [";".join(map(str,trace[0].keys())) for trace in ms1_traces]
-    for i in range(config.num_iso_ms1):
-        fdc[f"all_ms1_iso{i}vals"] = [";".join(map(str,trace[i].values())) for trace in ms1_traces]
-    # fdc["ms2_trace"] = [";".join(map(str,trace.values())) for trace in ms2_traces]
-    
-    fdc["MS1_Area"]=[auc(list(map(float,fdc.all_ms1_specs.iloc[idx].split(";"))),list(map(float,fdc.all_ms1_iso0vals.iloc[idx].split(";")))) for idx in range(len(fdc))]
-
-
-        # Define selected columns that we want to merge
-    selected_cols = [
-        "plexfitMS1", "plexfitMS1_p", "plexfittrace", "plexfit_ps",
-        "plexfittrace_spec_all", "plexfittrace_all", "plexfittrace_ps_all",
-        "plex_Area", "ms1_apex_scan", "ms1_cor", "traceproduct", "iso_cor", "MS1_Int",
-        "all_ms1_specs", "MS1_Area"
-    ] + [f"all_ms1_iso{i}vals" for i in range(config.num_iso_ms1)]
-    
-    # Ensure we only select columns that actually exist in fdc
-    existing_cols = [col for col in selected_cols if col in fdc.columns]
-    
-    # Perform the merge safely
-    dat = dat.merge(fdc[["untag_prec", "channel","silac_channel"] + existing_cols], how="left", on=["untag_prec", "channel","silac_channel"])
-    dat = fill_ms1_quant_gaps(dat)
-
-
-    return dat
+def process_ms1_quant(dat, fdc, quant):
+    """*dat* with the MS1 quant (ms1_cor_channels' frame, on fdc's rows) merged
+    in on (untag_prec, channel, silac_channel), its gaps filled (fill_ms1_quant_gaps).
+    TODO: the MS1 quant columns are merged here in fdr_analysis; ms1_quant and
+    the quality scores belong in a quant module."""
+    keys = ["untag_prec", "channel", "silac_channel"]
+    dat = dat.merge(pd.concat([fdc[keys], quant], axis=1), how="left", on=keys)
+    return fill_ms1_quant_gaps(dat)
 
 
 
@@ -742,6 +512,11 @@ class score_model():
                     
                     if self.folder:
                         os.makedirs(os.path.join(self.folder, "scoring"), exist_ok=True)
+                        # TODO: look into the feature importances with
+                        # importance_type="total_gain" alongside this one (keep "gain").
+                        # "gain" is the average per split, so a feature split on rarely
+                        # but near the root -- z, with three values -- ranks above
+                        # features the model leans on far more in total.
                         fi = m.model.get_score(importance_type="gain")
                         feature_importance = np.array([fi.get(c, 0) for c in X.columns])
                         sorted_indices = np.argsort(feature_importance, kind='stable')
@@ -1347,24 +1122,50 @@ def add_median_based_features(df, metric_columns, group_col="untag_prec", count_
     return result_df
 
 
+def _write_full_parquet(df, path):
+    """Write *df* to Parquet, column by column.
+
+    Each column keeps the type pyarrow infers (lists stay lists, as the MS1
+    quant's per-scan arrays do).  A column pyarrow cannot type -- an object
+    column mixing numbers with strings -- is written as strings, as the CSV
+    this replaces wrote everything.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    def _is_null(v):
+        return v is None or (isinstance(v, float) and np.isnan(v))
+
+    arrays = []
+    for col in df.columns:
+        try:
+            arrays.append(pa.array(df[col], from_pandas=True))
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
+            arrays.append(pa.array([None if _is_null(v) else str(v) for v in df[col]],
+                                   type=pa.string()))
+    pq.write_table(pa.Table.from_arrays(arrays, names=[str(c) for c in df.columns]), path)
+
+
 def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
-                 mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0):
+                 mass_tag=None,timeplex=False,SILAC=None,elution_fwhm=None,vote_sigma=1.0,
+                 im_accuracy=None):
     # ms1_tol, rt_tol, im_tol: the run's fitted tolerances (RunState.opt_*);
     # target_decoy_ratio: targets over decoys among the run's searchable entries
 
-    # results_folder = os.path.dirname(file)
-    results_folder = os.path.dirname(os.path.dirname(file))
+    # file: the main search's batch parquets, read as one table
+    results_folder = os.path.dirname(os.path.dirname(file[0]))
     mz_ppm = ms1_tol
 
     # After loading data and adding basic features
-    _glp = get_large_prec(file, condense_output=False, timeplex=timeplex)
-    # Tests monkey-patch ``get_large_prec`` to return a legacy 3-tuple; the
-    # production path returns a 4-tuple with a separate polars list-cols frame.
-    if len(_glp) == 4:
-        lp, fdc, dc, fdc_list_cols = _glp
-    else:
-        lp, fdc, dc = _glp
-        fdc_list_cols = None
+    # Apex log-prior scales, recovered from the fitted tolerances.  RT tolerance =
+    # 4*sigma + 8*elution_sd (rt_alignment); IM accuracy tolerance = b*ln(100) of a
+    # zero-mean Laplace core (_im_error_model).
+    _rt_sigma = None
+    if rt_tol and elution_fwhm:
+        _rt_sigma = max((float(rt_tol) - 8.0 * float(elution_fwhm) / 2.3548200450309493) / 4.0, 1e-6)
+    _im_scale = float(im_accuracy) / np.log(100.0) if im_accuracy else None
+    lp, fdc, dc, fdc_list_cols = get_large_prec(file, rt_tol, timeplex=timeplex,
+                                                rt_sigma=_rt_sigma, im_scale=_im_scale)
 
     # Add standard features
     fdc["stripped_seq"] = np.array([re.sub("Decoy_","",re.sub("\(.*?\)","",i)) for i in fdc["seq"]])
@@ -1388,14 +1189,9 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     fdc = add_median_based_features(fdc, metrics_to_process)
 
     # Compute frac_shared_intensity: fraction of library intensity from fragments shared across channels
-    if fdc_list_cols is not None:
-        fdc["frac_shared_intensity"] = _compute_frac_shared_intensity_from_polars(
-            fdc, fdc_list_cols, mz_tol=(config.args.ppm * 1e-6)
-        )
-    else:
-        fdc["frac_shared_intensity"] = _compute_frac_shared_intensity(
-            fdc, mz_tol=(config.args.ppm * 1e-6)
-        )
+    fdc["frac_shared_intensity"] = _compute_frac_shared_intensity_from_polars(
+        fdc, fdc_list_cols, mz_tol=(config.args.ppm * 1e-6)
+    )
 
     if timeplex:
         if mass_tag:
@@ -1435,16 +1231,10 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
         fdc["silac_channel"] = np.nan 
         
     #this was previously in ms1_quant function.. we need it for the target/decoy classification
-    # frag_errors stored as list columns in parquet — convert to numpy arrays
-    if fdc_list_cols is not None:
-        _med_pd = _compute_med_frag_error_from_polars(fdc_list_cols)
-        fdc = fdc.merge(_med_pd, on="__fdc_idx", how="left")
-        del _med_pd
-    else:
-        frag_errors = [np.array(x, dtype=float) if x is not None and len(x) > 0 else np.array([]) for x in fdc.frag_errors]
-        non_empty = [i for i in frag_errors if len(i) > 0]
-        median = np.median(np.concatenate(non_empty)) if non_empty else 0.0
-        fdc["med_frag_error"] = [np.median(np.abs(median-i)) if len(i) > 0 else np.nan for i in frag_errors]
+    _med_pd = _compute_med_frag_error_from_polars(fdc_list_cols)
+    fdc = fdc.merge(_med_pd, on="__fdc_idx", how="left")
+    del _med_pd
+
 
     # Fragment-ion correlation features (pairwise Pearson across MS2 scans)
     from src.fragment_correlation import compute_fragment_correlations
@@ -1501,7 +1291,16 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
         fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
         fdx["untag_prec_Qvalue"] = fdx["Qvalue"]  # one row per untagged precursor, so the same
 
-    
+
+    # The main-search scans MS1 quant reads, for the rows it quantifies only (the
+    # same selection ms1_quant makes), not every PSM of the run.  gauss_r2_joint
+    # below reads a subset of these.
+    _quant_rows = fdx[~fdx["is_decoy"]]
+    if config.args.unfiltered_quant:
+        _quant_rows = _quant_rows[_quant_rows["BestChannel_Qvalue"] < 0.01]
+    dc = dc.frame_for(_quant_rows)
+    del _quant_rows
+
     fdx_quant = ms1_quant(fdx, lp, dc, mass_tag, SILAC, spectra, mz_ppm, rt_tol, im_tol, timeplex,
                           vote_sigma=vote_sigma)
 
@@ -1547,25 +1346,27 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge
     # only happens once and the pipeline ran on a slim frame until now.
-    if fdc_list_cols is not None and "__fdc_idx" in fdx_quant.columns:
-        _list_cols_pd = fdc_list_cols.to_pandas()
-        fdx_quant = fdx_quant.merge(_list_cols_pd, on="__fdc_idx", how="left")
-        del _list_cols_pd
-        import gc as _gc_attach
-        _gc_attach.collect()
-    if "__fdc_idx" in fdx_quant.columns:
-        fdx_quant = fdx_quant.drop(columns=["__fdc_idx"])
+    _list_cols_pd = fdc_list_cols.to_pandas()
+    fdx_quant = fdx_quant.merge(_list_cols_pd, on="__fdc_idx", how="left").drop(columns=["__fdc_idx"])
+    del _list_cols_pd
+    import gc as _gc_attach
+    _gc_attach.collect()
 
     logger.info("")
     logger.info(f"Saving Results to Folder - {os.path.abspath(results_folder)}")
     ## save to results folder
-    fdx_quant.to_csv(results_folder+"/outputs/all_IDs.csv",index=False)
+    # Every scored precursor, targets and decoys (and the decoy channel, flagged
+    # by is_decoy_channel).  Parquet rather than CSV: it writes faster and far
+    # smaller, and the fragment list columns stay lists.
+    _write_full_parquet(fdx_quant, results_folder+"/outputs/all_precursors.parquet")
     filtered = fdx_quant[np.logical_and.reduce([~fdx_quant["is_decoy"],
                                                 ~fdx_quant["is_decoy_channel"],
                                                 fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold])].copy()
     filtered["MS1_quality"] = ms1_quality(filtered)
-    # For the parquets (all_IDs.csv is written): NaN outside the filtered IDs
+    filtered["MS1_quality_pass"] = ms1_quality_pass(filtered)
+    # For the parquets written below (all_precursors.parquet is written): NaN outside the filtered IDs
     fdx_quant["MS1_quality"] = filtered["MS1_quality"]
+    fdx_quant["MS1_quality_pass"] = filtered["MS1_quality_pass"]
 
     # Decode packed int32 frag codes into "y5_1" / "b3-H2O_2" strings, only for
     # the FDR-passing rows since decoding is expensive. In-place reassignment
@@ -1579,12 +1380,14 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
             if codes is not None and len(codes) > 0 else []
             for codes in filtered["frag_names"]
         ]
-    filtered.to_csv(results_folder+"/filtered_IDs.csv",index=False)
+    # The filtered precursors with every column.  Parquet: the CSV this replaced
+    # took ~50 s and ~1 GB on a 9-plex run.
+    _write_full_parquet(filtered, results_folder+"/filtered_precursors.parquet")
     # fdx_quant[np.logical_and(~fdx_quant["is_decoy"],fdx_quant["BestChannel_Qvalue"]<config.fdr_threshold)].to_csv(results_folder+"/filtered_IDs.csv",index=False)
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","is_decoy_channel","Qvalue", "Protein_Qvalue","PredVal","ChannelScore",
-                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'PlexSetScore', 'PlexSet_Qvalue', 'Protein_PlexSet_Qvalue', 'Channel_Qvalue', 'Protein_Channel_Qvalue', 'plex_Area', 'MS1_quality', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'PlexSetScore', 'PlexSet_Qvalue', 'Protein_PlexSet_Qvalue', 'Channel_Qvalue', 'Protein_Channel_Qvalue', 'plex_Area', 'plex_bg', 'plex_snr', 'MS1_quality', 'MS1_quality_pass', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")

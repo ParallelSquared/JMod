@@ -113,3 +113,196 @@ def test_length_mismatch_raises():
 
     with pytest.raises(ValueError):
         fit_im_alignment(lib[:-1], obs)
+
+
+# --------------------------------------------------------------------------
+# IM calibration (calibrate_im) and its application to the library
+# (aligned_library_im).  JRIF is replaced by a stand-in whose error is set by
+# the test; the real model is exercised in test_rt_predictor.py.
+# --------------------------------------------------------------------------
+
+import pandas as pd
+
+import src.rt_predictor as rt_predictor
+from src.rt_alignment import (MIN_IM_ANCHORS, IMCalibration, aligned_library_im,
+                              calibrate_im)
+from src.utils.errors import JModError
+
+
+class _FakeJRIF:
+    """Predicts a peptide's true 1/K0 plus a fixed per-peptide error."""
+
+    def __init__(self, truth, noise, seed=0):
+        rng = np.random.default_rng(seed)
+        self.table = {k: v + rng.normal(0.0, noise) for k, v in truth.items()}
+
+    def predict(self, mod_seqs, charges):
+        return np.array([self.table.get((s, float(z)), np.nan)
+                         for s, z in zip(mod_seqs, charges)])
+
+
+def _anchors(rng, n=3000, obs_noise=0.003):
+    """First-search anchors: observed IM, and library IM with a known distortion."""
+    seqs = [f"PEPTIDE{i}K" for i in range(n)]
+    z = rng.integers(2, 4, size=n).astype(float)
+    truth = rng.uniform(0.75, 1.30, size=n)
+    obs = truth + rng.normal(0.0, obs_noise, size=n)
+    # library IM such that _truth(lib) == truth, approximately (inverse of the
+    # mild distortion is close to linear over this range)
+    lib = (truth - 0.05) / 0.97
+    return seqs, z, truth, obs, lib
+
+
+def _patch_jrif(monkeypatch, seqs, z, truth, noise):
+    fake = _FakeJRIF({(s, float(c)): t for s, c, t in zip(seqs, z, truth)}, noise)
+    monkeypatch.setattr(rt_predictor.JmodIMPredictor, "calibrate",
+                        classmethod(lambda cls, train, tag=None: fake))
+    return fake
+
+
+def test_jrif_beats_a_noisy_library(monkeypatch):
+    rng = np.random.default_rng(10)
+    seqs, z, truth, obs, lib = _anchors(rng)
+    _patch_jrif(monkeypatch, seqs, z, truth, noise=0.002)
+    lib_noisy = lib + rng.normal(0.0, 0.03, size=lib.size)
+
+    cal, holdout, model = calibrate_im(seqs, z, obs, lib_noisy)
+
+    assert cal.winner == "JRIF"
+    assert cal.spline is not None
+    assert {"JRIF", "library"} <= set(holdout.columns)
+    assert model["tolerance"] > 0
+
+
+def test_a_good_library_beats_a_noisy_jrif(monkeypatch):
+    rng = np.random.default_rng(11)
+    seqs, z, truth, obs, lib = _anchors(rng)
+    _patch_jrif(monkeypatch, seqs, z, truth, noise=0.03)
+
+    cal, _, _ = calibrate_im(seqs, z, obs, lib)
+
+    assert cal.winner == "library"
+
+
+def test_no_library_im_means_jrif_alone(monkeypatch):
+    rng = np.random.default_rng(12)
+    seqs, z, truth, obs, _ = _anchors(rng)
+    _patch_jrif(monkeypatch, seqs, z, truth, noise=0.03)
+
+    cal, holdout, _ = calibrate_im(seqs, z, obs, np.full(len(seqs), np.nan))
+
+    assert cal.winner == "JRIF"
+    assert cal.spline is None
+    assert "library" not in holdout.columns
+
+
+def test_accuracy_comes_from_the_winners_held_out_error(monkeypatch):
+    """A worse model must give a wider gate, not the default."""
+    rng = np.random.default_rng(13)
+    seqs, z, truth, obs, _ = _anchors(rng)
+    nan_lib = np.full(len(seqs), np.nan)
+
+    _patch_jrif(monkeypatch, seqs, z, truth, noise=0.003)
+    tight = calibrate_im(seqs, z, obs, nan_lib)[2]["tolerance"]
+    _patch_jrif(monkeypatch, seqs, z, truth, noise=0.03)
+    wide = calibrate_im(seqs, z, obs, nan_lib)[2]["tolerance"]
+
+    assert wide > 3 * tight
+
+
+def test_too_few_anchors_is_an_error(monkeypatch):
+    rng = np.random.default_rng(14)
+    seqs, z, truth, obs, lib = _anchors(rng, n=MIN_IM_ANCHORS - 1)
+    _patch_jrif(monkeypatch, seqs, z, truth, noise=0.003)
+
+    with pytest.raises(JModError, match="anchors"):
+        calibrate_im(seqs, z, obs, lib)
+
+
+def test_anchors_without_observed_im_do_not_count(monkeypatch):
+    rng = np.random.default_rng(15)
+    seqs, z, truth, obs, lib = _anchors(rng, n=2 * MIN_IM_ANCHORS)
+    obs[: MIN_IM_ANCHORS + 1] = np.nan
+    _patch_jrif(monkeypatch, seqs, z, truth, noise=0.003)
+
+    with pytest.raises(JModError, match="anchors"):
+        calibrate_im(seqs, z, obs, lib)
+
+
+def test_library_im_that_cannot_be_aligned_is_an_error(monkeypatch):
+    rng = np.random.default_rng(16)
+    seqs, z, truth, obs, lib = _anchors(rng)
+    _patch_jrif(monkeypatch, seqs, z, truth, noise=0.003)
+    monkeypatch.setattr("src.rt_alignment.fit_im_alignment", lambda *a: None)
+
+    with pytest.raises(JModError, match="could not be aligned"):
+        calibrate_im(seqs, z, obs, lib)
+
+
+class _Library:
+    """The four library-store fields aligned_library_im reads."""
+
+    def __init__(self, mod_seq, prec_z, ion_mob, parent_idx):
+        self.mod_seq = list(mod_seq)
+        self.prec_z = np.asarray(prec_z, dtype=np.uint8)
+        self.ion_mob = np.asarray(ion_mob, dtype=np.float32)
+        self.parent_idx = np.asarray(parent_idx, dtype=np.int64)
+
+    def __len__(self):
+        return len(self.mod_seq)
+
+
+@pytest.fixture
+def library():
+    # Three targets, then decoys of targets 0 and 2, then one parentless decoy.
+    return _Library(
+        mod_seq=["AAAK", "CCCK", "DDDK", "KAAA", "KDDD", "EEEK"],
+        prec_z=[2, 2, 3, 2, 3, 2],
+        ion_mob=[0.80, np.nan, 1.10, 0.80, 1.10, 0.95],
+        parent_idx=[-1, -1, -1, 0, 2, -1],
+    )
+
+
+class _Lookup:
+    def __init__(self, table):
+        self.table = table
+        self.calls = []
+
+    def predict(self, mod_seqs, charges):
+        self.calls.append(list(mod_seqs))
+        return np.array([self.table.get(s, np.nan) for s in mod_seqs])
+
+
+def test_no_calibration_means_no_im(library):
+    assert np.isnan(aligned_library_im(library, None)).all()
+
+
+def test_jrif_winner_predicts_and_decoys_copy_their_parent(library):
+    jrif = _Lookup({"AAAK": 0.9, "CCCK": 1.0, "DDDK": 1.2, "EEEK": 0.7})
+    out = aligned_library_im(library, IMCalibration("JRIF", jrif, spline=None))
+
+    np.testing.assert_allclose(out, [0.9, 1.0, 1.2, 0.9, 1.2, 0.7])
+    # decoys with a parent are never predicted from their own sequence
+    assert "KAAA" not in jrif.calls[0] and "KDDD" not in jrif.calls[0]
+
+
+def test_library_winner_is_filled_from_jrif_where_the_library_has_no_im(library):
+    jrif = _Lookup({"CCCK": 1.0})
+    out = aligned_library_im(
+        library, IMCalibration("library", jrif, spline=lambda x: x + 0.01))
+
+    np.testing.assert_allclose(out, [0.81, 1.0, 1.11, 0.81, 1.11, 0.96], rtol=1e-6)
+    assert jrif.calls == [["CCCK"]]   # JRIF only for the gap
+
+
+def test_jrif_winner_is_filled_from_the_library_where_jrif_cannot_predict(library):
+    jrif = _Lookup({"AAAK": 0.9, "CCCK": 1.0, "EEEK": 0.7})   # DDDK unrepresentable
+    out = aligned_library_im(
+        library, IMCalibration("JRIF", jrif, spline=lambda x: x + 0.01))
+
+    np.testing.assert_allclose(out, [0.9, 1.0, 1.11, 0.9, 1.11, 0.7], rtol=1e-6)
+
+
+def test_library_cannot_win_without_an_alignment():
+    with pytest.raises(ValueError):
+        IMCalibration("library", object(), spline=None)

@@ -14,7 +14,7 @@
 
 import re
 from matplotlib.path import Path
-from pyteomics import mass
+from src import mass
 import tqdm
 import os
 from src.utils.errors import JModError

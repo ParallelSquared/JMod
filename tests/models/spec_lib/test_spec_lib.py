@@ -219,8 +219,8 @@ class TestMatchTagChannel:
         assert self.match(self.tag.select_channels(["0"]), "tag", 104.0)[0] == "T-4"
 
     def test_the_tag_mass_is_the_median_of_its_precursors(self):
-        from pyteomics import mass as pyteomics_mass
-        mz = lambda seq, tag_mass: (pyteomics_mass.fast_mass(seq) + tag_mass + 2 * 1.00727647) / 2
+        from src import mass
+        mz = lambda seq, tag_mass: (mass.fast_mass(seq) + tag_mass + 2 * 1.00727647) / 2
         peptides = ["(t)PEPTIDEK", "(t)ELVISK", "(t)AAAAK"]
         prec_mz = [mz("PEPTIDEK", 100.0), mz("ELVISK", 100.0), mz("AAAAK", 150.0)]   # one badly written
         tag_mass, found, name = has_mass_tag(peptides, prec_mz, [2, 2, 2])
@@ -301,7 +301,7 @@ class TestParseModSpec:
     def test_strip_by_name_alone_is_every_site(self):
         spec = parse_mod_spec("UniMod:36", "--strip_mod")
         assert spec.name == "UniMod:36" and spec.mass == pytest.approx(28.0313, abs=1e-4)
-        assert spec.nterm and spec.residues == "ACDEFGHIJKLMNOPQRSTUVWY"   # every residue the parser accepts
+        assert spec.nterm and spec.residues == "ACDEFGHIKLMNPQRSTVWY"   # every residue the parser accepts
         assert parse_mod_spec("DimethylNter,28.0313", "--strip_mod").sites == spec.sites
 
     def test_strip_by_an_unknown_name_alone_asks_for_its_mass(self):

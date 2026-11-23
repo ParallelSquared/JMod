@@ -13,21 +13,46 @@
 #  limitations under the License.
 
 import pytest
+import src.config as config
 import numpy as np
 import sys, os
 os.environ['NUMBA_DISABLE_JIT'] = '1'
-from src.ms1_cor_channels import get_seqs_and_mzs, get_other_channels, minmax_spec_window, get_ms2_vals, build_ms2_interpolator, compute_isotopes, get_trace_int_numba, get_isotope_traces_vectorized, fit_channel_isotopes_numba, fill_scan_values, get_ms1_index_of_max, moving_average, get_ms1_peak, filter_all_scans, compute_ms1_ms2_cors, select_scans_to_search, fit_isotopes_and_score, ms1_cor_channels, get_matrix_to_fit_numba
+from src.ms1_cor_channels import get_seqs_and_mzs, get_other_channels, minmax_spec_window, get_ms2_vals, build_ms2_interpolator, compute_isotopes, get_ms1_index_of_max, moving_average, get_ms1_peak, filter_all_scans, compute_ms1_ms2_cors, select_scans_to_search, ms1_cor_channels, get_matrix_to_fit_numba, fit_channels_with_background, flank_mz
 from src.mass_tags import massTag, read_json_to_massTag
 from src.utils.io.load_files import SpectrumFile, Spectrum
-from brainpy._c.isotopic_distribution import TheoreticalPeak
+from src.isotope_distribution import Peak as TheoreticalPeak
 import pandas as pd
 import math
-from brainpy._c.isotopic_distribution import TheoreticalPeak as Peak
+from src.isotope_distribution import Peak
 import copy
 from collections import namedtuple
 PearsonRResult = namedtuple("PearsonRResult", ["statistic", "pvalue"])
-from src.utils.misc_functions import p_result
+from src.utils.misc_functions import p_result, np_pearson_cor
 
+
+
+def _fit_spectrum(spec, all_iso, mz_ppm):
+    """fit_channels_with_background on one spectrum, the channels' isotopes as Peaks."""
+    patterns = np.array([[(p.mz, p.intensity) for p in iso] for iso in all_iso], dtype=np.float64)
+    return fit_channels_with_background(patterns, np.asarray(spec.mz, dtype=np.float64),
+                                        np.asarray(spec.intens, dtype=np.float64), mz_ppm, flank_mz(all_iso))
+
+
+def _fit_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm):
+    """_fit_spectrum on the scan ms1_spec_idx, and the fit's Pearson (as the quant computes it)."""
+    spec = ms1_spectra[np.where(ms1_spec_idxs == ms1_spec_idx)[0][0]]
+    pred_coeff, obs_peaks, fit_matrix, kept_mz, background = _fit_spectrum(spec, group_iso, mz_ppm)
+    fit_cor = np.nan if len(obs_peaks) == 0 else np_pearson_cor(np.sum(fit_matrix * pred_coeff, 1), obs_peaks)
+    return pred_coeff, obs_peaks, fit_matrix, fit_cor, kept_mz, background
+
+
+def _cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes):
+    """compute_ms1_ms2_cors on per-scan dicts: (Pearsons, [envelope Pearson, theoretical, observed])."""
+    ms2 = np.array([all_ms2_vals[s] for s in channel_scans], dtype=float)
+    traces = np.array([[all_ms1_vals[s]] + [iso[s] for iso in all_iso_vals] for s in channel_scans], dtype=float)
+    theo = np.array([p.intensity for p in isotopes])
+    pearsons, iso_ratio, _ = compute_ms1_ms2_cors(ms2, traces, num_iso_r, theo)
+    return pearsons, [iso_ratio, list(theo), list(traces[np.argmax(ms2)])]
 
 
 class DummySpectrumFile:
@@ -252,7 +277,7 @@ class Test_minmax_spec_window():
         assert [spec.scan_num for spec in spectra_subset] == all_scans
 
 
-class Test_fit_channel_isotopes_numba():
+class Test_fit_spectrum():
 
     def move_peaks_above(self, peak_num, cutoff):
         if peak_num > cutoff:
@@ -294,7 +319,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = _fit_spectrum(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
         obs_peaks_expected = np.array([
@@ -331,7 +356,10 @@ class Test_fit_channel_isotopes_numba():
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
         np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
     def test_5plex_small_shift_no_missed_peaks(self):
         normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = self.fivePlex_fourDa_spacing()
@@ -343,7 +371,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = _fit_spectrum(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
         obs_peaks_expected = np.array([
@@ -380,7 +408,10 @@ class Test_fit_channel_isotopes_numba():
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
         np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
     def test_5plex_noise_peaks_above_below_and_in(self):
         normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = self.fivePlex_fourDa_spacing()
@@ -395,7 +426,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = _fit_spectrum(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
         obs_peaks_expected = np.array([
@@ -432,7 +463,10 @@ class Test_fit_channel_isotopes_numba():
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
         np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
     def test_no_matched_peaks(self):
         normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = self.fivePlex_fourDa_spacing()
@@ -443,7 +477,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = _fit_spectrum(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0, 0, 0, 0, 0])
         # All channels are excluded (no top-2 peaks observed for any channel),
@@ -465,7 +499,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = _fit_spectrum(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.09236279, 0.19066812, 0.14782701, 0.30446522, 0.05238592]) * scale
         obs_peaks_expected = np.array([
@@ -499,8 +533,11 @@ class Test_fit_channel_isotopes_numba():
         ])
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
-        np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5, atol=1e-8)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        np.testing.assert_allclose(np.sort(obs_peaks[obs_peaks > 0]), np.sort(np.asarray(obs_peaks_expected)[np.asarray(obs_peaks_expected) > 0]), rtol=1e-5, atol=1e-8)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
     def test_2_channels_matched_peaks(self):
         normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = self.fivePlex_fourDa_spacing()
@@ -512,7 +549,7 @@ class Test_fit_channel_isotopes_numba():
 
         all_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict.keys()]
         mz_ppm = 1e-6
-        pred_coeff, obs_peaks, fit_matrix, _ = fit_channel_isotopes_numba(dia_spec, all_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, _, _bg = _fit_spectrum(dia_spec, all_iso, mz_ppm)
 
         pred_coeff_expected = np.array([0.12502414, 0.24989273, 0.0, 0.0, 0.0]) * scale
         # ch0 and ch1 matched; ch2-4 excluded (top-2 peaks unobserved).
@@ -535,8 +572,11 @@ class Test_fit_channel_isotopes_numba():
         ])
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5, atol=1e-8)
-        np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5, atol=1e-8)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        np.testing.assert_allclose(np.sort(obs_peaks[obs_peaks > 0]), np.sort(np.asarray(obs_peaks_expected)[np.asarray(obs_peaks_expected) > 0]), rtol=1e-5, atol=1e-8)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
 
 
 class Test_get_ms2_vals():
@@ -972,208 +1012,6 @@ class Test_compute_isotopes():
         expected = [Peak(mz=620.798264, intensity=0.601670, charge=2), Peak(mz=621.299775, intensity=0.398330, charge=2)]
         self.compare_outputs(isotopes, expected)
 
-class Test_get_trace_int_numba():
-
-    mz_ppm = 1e-6
-    min_int = 0.001
-
-    def test_only_matched_peaks(self):
-        dia_spec = Spectrum()
-        dia_spec.mz = np.array([100, 101, 102])
-        dia_spec.intens = np.array([1000, 2000, 3000])
-        isotopes = [Peak(mz=100, intensity=0.6, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.1, charge=2)]
-
-        iso_ints = get_trace_int_numba(dia_spec.mz, dia_spec.intens, np.array([isotope.mz for isotope in isotopes]), self.mz_ppm, self.min_int)
-        expected = np.array([1000, 2000, 3000])
-        assert np.allclose(iso_ints, expected)
-
-    def test_empty_spec(self):
-        dia_spec = Spectrum()
-        dia_spec.mz = np.array([])
-        dia_spec.intens = np.array([])
-        isotopes = [Peak(mz=100, intensity=0.6, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.1, charge=2)]
-
-        iso_ints = get_trace_int_numba(dia_spec.mz, dia_spec.intens, np.array([isotope.mz for isotope in isotopes]), self.mz_ppm, self.min_int)
-        expected = np.array([0.001, 0.001, 0.001])
-        assert np.allclose(iso_ints, expected)
-
-    def test_no_matched(self):
-        dia_spec = Spectrum()
-        dia_spec.mz = np.array([100.5, 101.5, 102.5])
-        dia_spec.intens = np.array([1000, 2000, 3000])
-        isotopes = [Peak(mz=100, intensity=0.6, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.1, charge=2)]
-
-        iso_ints = get_trace_int_numba(dia_spec.mz, dia_spec.intens, np.array([isotope.mz for isotope in isotopes]), self.mz_ppm, self.min_int)
-        expected = np.array([0.001, 0.001, 0.001])
-        assert np.allclose(iso_ints, expected)
-
-    def test_noisy(self):
-        dia_spec = Spectrum()
-        dia_spec.mz = np.array([100, 100.5, 101, 101.5, 102, 102.5])
-        dia_spec.intens = np.array([1000, 1, 2000, 2, 3000, 3])
-        isotopes = [Peak(mz=100, intensity=0.6, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.1, charge=2)]
-
-        iso_ints = get_trace_int_numba(dia_spec.mz, dia_spec.intens, np.array([isotope.mz for isotope in isotopes]), self.mz_ppm, self.min_int)
-        expected = np.array([1000, 2000, 3000])
-        assert np.allclose(iso_ints, expected)
-
-    def test_peaks_within_tol(self):
-        dia_spec = Spectrum()
-        dia_spec.mz = np.array([100+100*1e-7, 101+101*1e-7, 102+102*1e-7])
-        dia_spec.intens = np.array([1000, 2000, 3000])
-        isotopes = [Peak(mz=100, intensity=0.6, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.1, charge=2)]
-
-        iso_ints = get_trace_int_numba(dia_spec.mz, dia_spec.intens, np.array([isotope.mz for isotope in isotopes]), self.mz_ppm, self.min_int)
-        expected = np.array([1000, 2000, 3000])
-        assert np.allclose(iso_ints, expected)
-
-    def test_peaks_outside_tol(self):
-        dia_spec = Spectrum()
-        dia_spec.mz = np.array([100+100*1e-5, 101+101*1e-5, 102+102*1e-5])
-        dia_spec.intens = np.array([1000, 2000, 3000])
-        isotopes = [Peak(mz=100, intensity=0.6, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.1, charge=2)]
-
-        iso_ints = get_trace_int_numba(dia_spec.mz, dia_spec.intens, np.array([isotope.mz for isotope in isotopes]), self.mz_ppm, self.min_int)
-        expected = np.array([0.001, 0.001, 0.001])
-        assert np.allclose(iso_ints, expected)
-
-    def test_peaks_in_and_outside_tol(self):
-        dia_spec = Spectrum()
-        dia_spec.mz = np.array([100+100*1e-5, 101+101*1e-7, 102+102*1e-5])
-        dia_spec.intens = np.array([1000, 2000, 3000])
-        isotopes = [Peak(mz=100, intensity=0.6, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.1, charge=2)]
-
-        iso_ints = get_trace_int_numba(dia_spec.mz, dia_spec.intens, np.array([isotope.mz for isotope in isotopes]), self.mz_ppm, self.min_int)
-        expected = np.array([0.001, 2000, 0.001])
-        assert np.allclose(iso_ints, expected)
-
-    def test_two_peaks_within_tol(self):
-        dia_spec = Spectrum()
-        dia_spec.mz = np.array([100+100*1e-5, 101+101*1e-8, 101+101*1e-7, 102+102*1e-5])
-        dia_spec.intens = np.array([1000, 2000, 1, 3000])
-        isotopes = [Peak(mz=100, intensity=0.6, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.1, charge=2)]
-
-        iso_ints = get_trace_int_numba(dia_spec.mz, dia_spec.intens, np.array([isotope.mz for isotope in isotopes]), self.mz_ppm, self.min_int)
-        expected = np.array([0.001, 2000, 0.001])
-        assert np.allclose(iso_ints, expected)
-
-class Test_get_isotope_traces_vectorized():
-
-    def compare_outputs(self, output, expected):
-        assert len(output) == len(expected)
-        for o, e in zip(output, expected):
-            assert list(o.keys()) == list(e.keys())
-            assert np.allclose(list(o.values()), list(e.values()))
-
-
-    def test_all_peaks_match(self):
-        dia_spec_list = []
-        for i, x in enumerate([1, 11, 21], start=1):
-            dia_spec = Spectrum()
-            dia_spec.mz = np.array([100, 101, 102, 103])
-            factor = 2-np.abs(2-i)
-            dia_spec.intens = np.array([5000*factor, 3000*factor, 1500*factor, 500*factor])
-            dia_spec.scan_num = x
-            dia_spec_list.append(dia_spec)
-
-        isotopes = [Peak(mz=100, intensity=0.5, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.15, charge=2), Peak(mz=103, intensity=0.05, charge=2)]
-        all_isotope_traces = get_isotope_traces_vectorized(isotopes, 1e-6, dia_spec_list)
-        expected = [{1: 5000.0, 11: 10000.0, 21: 5000.0}, {1: 3000.0, 11: 6000.0, 21: 3000.0}, {1: 1500.0, 11: 3000.0, 21: 1500.0}, {1: 500.0, 11: 1000.0, 21: 500.0}]
-        self.compare_outputs(all_isotope_traces, expected)
-
-
-    def test_all_peaks_match_within_tolerance(self):
-        dia_spec_list = []
-        for i, x in enumerate([1, 11, 21], start=1):
-            dia_spec = Spectrum()
-            dia_spec.mz = np.array([100+100*1e-7, 101+101*1e-7, 102+102*1e-7, 103+103*1e-7])
-            factor = 2-np.abs(2-i)
-            dia_spec.intens = np.array([5000*factor, 3000*factor, 1500*factor, 500*factor])
-            dia_spec.scan_num = x
-            dia_spec_list.append(dia_spec)
-
-        isotopes = [Peak(mz=100, intensity=0.5, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.15, charge=2), Peak(mz=103, intensity=0.05, charge=2)]
-        all_isotope_traces = get_isotope_traces_vectorized(isotopes, 1e-6, dia_spec_list)
-        expected = [{1: 5000.0, 11: 10000.0, 21: 5000.0}, {1: 3000.0, 11: 6000.0, 21: 3000.0}, {1: 1500.0, 11: 3000.0, 21: 1500.0}, {1: 500.0, 11: 1000.0, 21: 500.0}]
-        self.compare_outputs(all_isotope_traces, expected)
-
-    def test_no_peaks_match_within_tolerance(self):
-        dia_spec_list = []
-        for i, x in enumerate([1, 11, 21], start=1):
-            dia_spec = Spectrum()
-            dia_spec.mz = np.array([100+100*1e-5, 101+101*1e-5, 102+102*1e-5, 103+103*1e-5])
-            factor = 2-np.abs(2-i)
-            dia_spec.intens = np.array([5000*factor, 3000*factor, 1500*factor, 500*factor])
-            dia_spec.scan_num = x
-            dia_spec_list.append(dia_spec)
-
-        isotopes = [Peak(mz=100, intensity=0.5, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.15, charge=2), Peak(mz=103, intensity=0.05, charge=2)]
-        all_isotope_traces = get_isotope_traces_vectorized(isotopes, 1e-6, dia_spec_list)
-        expected = [{1: 0.001, 11: 0.001, 21: 0.001}, {1: 0.001, 11: 0.001, 21: 0.001}, {1: 0.001, 11: 0.001, 21: 0.001}, {1: 0.001, 11: 0.001, 21: 0.001}]
-        self.compare_outputs(all_isotope_traces, expected)
-
-    def test_one_scan_empty(self):
-        dia_spec_list = []
-        for i, x in enumerate([1, 11, 21], start=1):
-            dia_spec = Spectrum()
-            dia_spec.mz = np.array([100, 101, 102, 103])
-            factor = 2-np.abs(2-i)
-            dia_spec.intens = np.array([5000*factor, 3000*factor, 1500*factor, 500*factor])
-            dia_spec.scan_num = x
-            dia_spec_list.append(dia_spec)
-
-        dia_spec_list[2].mz = np.array([])
-        dia_spec_list[2].intens = np.array([])
-
-        isotopes = [Peak(mz=100, intensity=0.5, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.15, charge=2), Peak(mz=103, intensity=0.05, charge=2)]
-        all_isotope_traces = get_isotope_traces_vectorized(isotopes, 1e-6, dia_spec_list)
-        expected = [{1: 5000.0, 11: 10000.0, 21: 0.001}, {1: 3000.0, 11: 6000.0, 21: 0.001}, {1: 1500.0, 11: 3000.0, 21: 0.001}, {1: 500.0, 11: 1000.0, 21: 0.001}]
-        self.compare_outputs(all_isotope_traces, expected)
-
-    def test_one_peak_missing(self):
-        dia_spec_list = []
-        for i, x in enumerate([1, 11, 21], start=1):
-            dia_spec = Spectrum()
-            dia_spec.mz = np.array([100, 101.5, 102, 103])
-            factor = 2-np.abs(2-i)
-            dia_spec.intens = np.array([5000*factor, 3000*factor, 1500*factor, 500*factor])
-            dia_spec.scan_num = x
-            dia_spec_list.append(dia_spec)
-
-        isotopes = [Peak(mz=100, intensity=0.5, charge=2), Peak(mz=101, intensity=0.3, charge=2), Peak(mz=102, intensity=0.15, charge=2), Peak(mz=103, intensity=0.05, charge=2)]
-        all_isotope_traces = get_isotope_traces_vectorized(isotopes, 1e-6, dia_spec_list)
-        expected = [{1: 5000.0, 11: 10000.0, 21: 5000.0}, {1: 0.001, 11: 0.001, 21: 0.001}, {1: 1500.0, 11: 3000.0, 21: 1500.0}, {1: 500.0, 11: 1000.0, 21: 500.0}]
-        self.compare_outputs(all_isotope_traces, expected)
-
-
-class Test_fill_scan_values():
-
-    def test_it(self):
-        ms2_vals = {
-                    102: 0.001,
-                    112: 100,
-                    122: 200,
-                    132: 100,
-                    142: 0.001
-                    }
-        
-        ms1_vals = {
-                    101: 0.001,
-                    111: 0.001,
-                    121: 0.001,
-                    131: 0.001,
-                    141: 0.001
-                    }
-        
-        all_scans = [101, 111, 121, 131, 141]
-
-        interp_func = build_ms2_interpolator(ms2_vals)
-        all_ms2_vals = fill_scan_values(all_scans, interp_func, ms1_vals)
-        expected = {101: np.nan, 111: 90.0001, 121: 190.0, 131: 110.0, 141: 10.000900000000001}
-
-        assert list(all_ms2_vals.keys()) == list(expected.keys())
-        assert np.allclose(list(all_ms2_vals.values()), list(expected.values()), equal_nan=True)
-
 class Test_MS1_index_of_max():
 
     def test_empty(self):
@@ -1313,7 +1151,7 @@ class Test_compute_ms1_ms2_cors():
         num_iso_r = 2
         isotopes = [Peak(mz=100, intensity=0.5, charge=2), Peak(mz=100.5, intensity=0.3, charge=2), Peak(mz=101, intensity=0.1, charge=2), Peak(mz=101.5, intensity=0.05, charge=2), Peak(mz=102, intensity=0.03, charge=2), Peak(mz=102.5, intensity=0.02, charge=2)]
 
-        all_pearson_to_append, iso_ratios_to_append = compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
+        all_pearson_to_append, iso_ratios_to_append = _cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
         expected_pearson = [1.0, 1.0, 1.0]
         expected_iso_ratios = [PearsonRResult(statistic=0.8269433745794761, pvalue=0.04233149195743158), [0.5, 0.3, 0.1, 0.05, 0.03, 0.02], [7100, 142, 213, 284, 355, 426]]
 
@@ -1330,7 +1168,7 @@ class Test_compute_ms1_ms2_cors():
         num_iso_r = 2
         isotopes = [Peak(mz=100, intensity=0.5, charge=2), Peak(mz=100.5, intensity=0.3, charge=2), Peak(mz=101, intensity=0.1, charge=2), Peak(mz=101.5, intensity=0.05, charge=2), Peak(mz=102, intensity=0.03, charge=2), Peak(mz=102.5, intensity=0.02, charge=2)]
 
-        all_pearson_to_append, iso_ratios_to_append = compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
+        all_pearson_to_append, iso_ratios_to_append = _cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
         expected_pearson = [0.7054342857572004, 0.7054342857572006, 0.7054342857572004]
         expected_iso_ratios = [PearsonRResult(statistic=0.8269433745794761, pvalue=0.04233149195743158), [0.5, 0.3, 0.1, 0.05, 0.03, 0.02], [7100, 142, 213, 284, 355, 426]]
 
@@ -1347,7 +1185,7 @@ class Test_compute_ms1_ms2_cors():
         num_iso_r = 2
         isotopes = [Peak(mz=100, intensity=0.5, charge=2), Peak(mz=100.5, intensity=0.3, charge=2), Peak(mz=101, intensity=0.1, charge=2), Peak(mz=101.5, intensity=0.05, charge=2), Peak(mz=102, intensity=0.03, charge=2), Peak(mz=102.5, intensity=0.02, charge=2)]
 
-        all_pearson_to_append, iso_ratios_to_append = compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
+        all_pearson_to_append, iso_ratios_to_append = _cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
         expected_pearson = [0.9109972512052685, 1.0, 1.0]
         expected_iso_ratios = [PearsonRResult(statistic=0.8260818133361278, pvalue=0.04274100520281188), [0.5, 0.3, 0.1, 0.05, 0.03, 0.02], [6783.757407656418, 142, 213, 284, 355, 426]]
 
@@ -1362,7 +1200,7 @@ class Test_compute_ms1_ms2_cors():
         num_iso_r = 4
         isotopes = [Peak(mz=100, intensity=0.5, charge=2), Peak(mz=100.5, intensity=0.3, charge=2), Peak(mz=101, intensity=0.1, charge=2), Peak(mz=101.5, intensity=0.05, charge=2), Peak(mz=102, intensity=0.03, charge=2), Peak(mz=102.5, intensity=0.02, charge=2)]
 
-        all_pearson_to_append, iso_ratios_to_append = compute_ms1_ms2_cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
+        all_pearson_to_append, iso_ratios_to_append = _cors(all_ms2_vals, all_ms1_vals, all_iso_vals, num_iso_r, channel_scans, isotopes)
         expected_pearson = [1.0, 1.0, 1.0, 1.0, 1.0]
         expected_iso_ratios = [PearsonRResult(statistic=0.8269433745794761, pvalue=0.04233149195743158), [0.5, 0.3, 0.1, 0.05, 0.03, 0.02], [7100, 142, 213, 284, 355, 426]]
 
@@ -1390,7 +1228,7 @@ class Test_select_scans_to_search():
         assert np.allclose(scans_to_search, expected)
 
 
-class Test_fit_isotopes_and_score():
+class Test_fit_and_score():
 
     
 
@@ -1400,7 +1238,7 @@ class Test_fit_isotopes_and_score():
             Spectrum(),
             Spectrum()
         ]
-        normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = Test_fit_channel_isotopes_numba().fivePlex_fourDa_spacing()
+        normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = Test_fit_spectrum().fivePlex_fourDa_spacing()
         ms1_spectra[0].mz = np.array([100, 101, 102])
         ms1_spectra[0].intens = np.array([1000, 500, 200])
         ms1_spectra[0].scan_num = 11
@@ -1417,7 +1255,7 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _, _bg = _fit_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         p_result_expected = PearsonRResult(statistic=1.0, pvalue=0.0)
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
         obs_peaks_expected = np.array([
@@ -1454,7 +1292,10 @@ class Test_fit_isotopes_and_score():
 
         np.testing.assert_allclose(pred_coeff, pred_coeff_expected, rtol=1e-5)
         np.testing.assert_allclose(obs_peaks, obs_peaks_expected, rtol=1e-5)
-        np.testing.assert_array_almost_equal(fit_matrix, fit_matrix_expected, decimal=6)
+        # row order follows m/z now (unmatched library rows interleaved rather
+        # than appended): compare the matrices as sets of rows
+        _key = lambda A: np.array(sorted(map(tuple, np.round(np.asarray(A), 6))))
+        np.testing.assert_array_almost_equal(_key(fit_matrix), _key(fit_matrix_expected), decimal=6)
         assert np.allclose([fit_cor.statistic, fit_cor.pvalue], [p_result_expected.statistic, p_result_expected.pvalue])
 
     def test_different_spec_idx(self):
@@ -1463,7 +1304,7 @@ class Test_fit_isotopes_and_score():
             Spectrum(),
             Spectrum()
         ]
-        normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = Test_fit_channel_isotopes_numba().fivePlex_fourDa_spacing()
+        normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = Test_fit_spectrum().fivePlex_fourDa_spacing()
         scale = 1e6
         ms1_spectra[1].mz = np.array([100, 101, 102])
         ms1_spectra[1].intens = np.array([1000, 500, 200])
@@ -1480,7 +1321,7 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _, _bg = _fit_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         p_result_expected = PearsonRResult(statistic=1.0, pvalue=0.0)
         pred_coeff_expected = np.array([0.12502356, 0.25004712, 0.18753534, 0.37507069, 0.06251178]) * scale
 
@@ -1493,7 +1334,7 @@ class Test_fit_isotopes_and_score():
             Spectrum(),
             Spectrum()
         ]
-        normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = Test_fit_channel_isotopes_numba().fivePlex_fourDa_spacing()
+        normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = Test_fit_spectrum().fivePlex_fourDa_spacing()
         ms1_spectra[0].mz = np.array([100, 101, 102])
         ms1_spectra[0].intens = np.array([1000, 500, 200])
         ms1_spectra[0].scan_num = 11
@@ -1510,9 +1351,9 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _, _bg = _fit_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         p_result_expected = PearsonRResult(statistic=0.6880768387282261, pvalue=0.0005651459926316882)
-        assert np.allclose([fit_cor.statistic, fit_cor.pvalue], [p_result_expected.statistic, p_result_expected.pvalue], rtol=1e-4)
+        assert np.allclose([fit_cor.statistic, fit_cor.pvalue], [p_result_expected.statistic, p_result_expected.pvalue], rtol=1e-2)  # fit_cor: the background-aware fit shifts the observed vector slightly
 
     def test_no_intensity_matched(self):
         ms1_spectra = [
@@ -1520,7 +1361,7 @@ class Test_fit_isotopes_and_score():
             Spectrum(),
             Spectrum()
         ]
-        normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = Test_fit_channel_isotopes_numba().fivePlex_fourDa_spacing()
+        normalized_mz_intensity_dict, per_channel_iso_intensity_dict, z = Test_fit_spectrum().fivePlex_fourDa_spacing()
         ms1_spectra[0].mz = np.array([100, 101, 102])
         ms1_spectra[0].intens = np.array([1000, 500, 200])
         ms1_spectra[0].scan_num = 11
@@ -1536,114 +1377,22 @@ class Test_fit_isotopes_and_score():
         mz_ppm = 1e-6
         group_iso = [[TheoreticalPeak(mz=mz, intensity=i, charge=z) for mz, i in per_channel_iso_intensity_dict[channel].items()] for channel in per_channel_iso_intensity_dict]
 
-        pred_coeff, obs_peaks, fit_matrix, fit_cor, _ = fit_isotopes_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
+        pred_coeff, obs_peaks, fit_matrix, fit_cor, _, _bg = _fit_and_score(ms1_spectra, ms1_spec_idxs, ms1_spec_idx, group_iso, mz_ppm)
         assert np.isnan(fit_cor)
 
 class Test_ms1_cor_channels():
+    """The quant end to end on a small run: one tagged peptide whose channel 0
+    has the only MS1 signal (1500 at its monoisotope in every MS1 scan)."""
 
-    def compare_pearsons(self, all_group_pearson, group_pearson_out):
-        not_all_equal = False
-        for i, item in enumerate(group_pearson_out):
-            for j, x in enumerate(item):
-                y = all_group_pearson[i][j]
-                if not np.allclose(x, y, equal_nan=True):
-                    not_all_equal = True
-        assert not not_all_equal
+    # The channel-0 coefficient that envelope at 1500 fits to, at every scan
+    SIGNAL = 1987.2034283632202
 
-    def compare_ms1(self, all_ms1, all_ms1_out):
-        not_all_equal = False
-        for i, item in enumerate(all_ms1_out):
-            for j, x in enumerate(item):
-                y = all_ms1[i][j]
-                for l, m in enumerate(x):
-                    z = y[l]
-                    if not m == z:
-                        not_all_equal = True
-        assert not not_all_equal
+    @pytest.fixture(autouse=True)
+    def _args(self, monkeypatch):
+        for k, v in dict(plex_area_scan_radius=1, apex_jitter=0, free_apex=False, additional_scans=0,
+                         threads=2).items():
+            monkeypatch.setattr(config.args, k, v, raising=False)
 
-    def compare_coeff(self, all_coeff, all_coeff_out):
-        not_all_equal = False
-        for i, item in enumerate(all_coeff_out):
-            for j, x in enumerate(item):
-                y = all_coeff[i][j]
-                if not x.keys() == y.keys():
-                    not_all_equal = True
-                
-                elif not np.allclose(list(x.values()), list(y.values()), equal_nan=True):
-                    not_all_equal = True
-        assert not not_all_equal
-
-    def compare_iso(self, all_iso, all_iso_out):
-        not_all_equal = False
-        for i, item in enumerate(all_iso):
-            for j, x in enumerate(item):
-                y = all_iso_out[i][j]
-                for l, m in enumerate(x):
-                    z = y[l]
-                    if type(m) != p_result:
-                        if not np.allclose(m, z, equal_nan=True):
-                            not_all_equal = True
-                    else:
-                        if not (np.isclose(m.statistic, z.statistic, equal_nan=True) and np.isclose(m.pvalue, z.pvalue, equal_nan=True)):
-                            not_all_equal = True
-        assert not not_all_equal
-
-
-    def compare_group_keys(self, all_group_keys, all_group_keys_out):
-        not_all_equal = False
-        for i, item in enumerate(all_group_keys_out):
-            if not item == all_group_keys[i]:
-                not_all_equal = True
-        assert not not_all_equal
-
-    def compare_fitted(self, all_fitted, all_fitted_out):
-        not_all_equal = False
-        skipped = False
-        for i, item in enumerate(all_fitted):
-            for j, x in enumerate(item):
-                y = all_fitted_out[i][j]
-                for l, m in enumerate(x):
-                    try:
-                        z = y[l]
-                    except:
-                        skipped = True
-                        continue
-                    if type(m) == list:
-                        m = np.array(m)
-                    if type(z) == list:
-                        z = np.array(z)
-                    if type(m) == np.ndarray:
-                        if m.shape != z.shape:
-                            print("shapes not equal")
-                            not_all_equal = True
-                        elif not np.allclose(m, z, equal_nan=True):
-                            print("values not equal")
-                            not_all_equal = True
-                    elif type(m) == p_result or type(m) == PearsonRResult:
-                        if not (type(z) == p_result or type(z) == PearsonRResult):
-                            print("type mismatch: expected p_result or PearsonRResult")
-                            not_all_equal = True
-                            continue
-                        elif not (np.isclose(m.statistic, z.statistic, equal_nan=True) and np.isclose(m.pvalue, z.pvalue, equal_nan=True)):
-                            print("p_result values not equal")
-                            not_all_equal = True
-                    elif type(z) == p_result or type(z) == PearsonRResult:
-                        print("type mismatch: expected non-p_result")
-                        not_all_equal = True
-                    else:
-                        if not np.isclose(m, z, equal_nan=True):
-                            print("scalar values not equal")
-                            not_all_equal = True
-        assert not skipped
-        assert not not_all_equal
-
-    def compare_output_dict(self, new_output_dict, new_output_dict_out):
-        assert new_output_dict == new_output_dict_out
-
-    def compare_fake_fdc_dict(self, fake_fdc_dict, fake_fdc_dict_out):
-        assert fake_fdc_dict == fake_fdc_dict_out
-
-        
     def get_spectra_and_dfs_for_testing(self, test_timeplex=False):
         
         peptide = 'A(PSMtag_5plex-0)AAAADLANR'
@@ -1767,224 +1516,47 @@ class Test_ms1_cor_channels():
 
         return fake_spec_file, fdc, dc
 
-    def test_no_timeplex(self):
-        all_spectra, filtered_decoy_coeffs, decoy_coeffs = self.get_spectra_and_dfs_for_testing()
-        mz_ppm = 1e-6
-        rt_tol = 0.05
+    def _quant(self, timeplex):
+        all_spectra, fdc, dc = self.get_spectra_and_dfs_for_testing(test_timeplex=timeplex)
         tag = read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")
-        SILAC = None
-        timeplex = False
-        num_iso = 6
-        num_iso_r = 2
-        additional_scans = 0
+        quant = ms1_cor_channels(all_spectra, fdc, dc, 1e-6, 0.05, tag, None, timeplex, 6, 2, 0)
+        assert quant.index.equals(fdc.index)
+        return quant
 
-        all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict = ms1_cor_channels(all_spectra, filtered_decoy_coeffs, decoy_coeffs, mz_ppm, rt_tol, tag, SILAC, timeplex, num_iso, num_iso_r, additional_scans)
-
-        assert list(decoy_coeffs["untag_seq"]) == ['AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'PEPTIDEK']
-        assert list(decoy_coeffs["untag_prec"]) == ['AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_3', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'PEPTIDEK_2']
-        assert np.allclose(list(decoy_coeffs["med_frag_error"]), [0.05000000000000002, 0.04999999999999999, 0.1, 0.04999999999999999, 0.1, 0.09999999999999998, 0.05, 0.125, 0.09999999999999998, 0.02500000000000001, 0.125], atol=1e-6)
-        assert list(decoy_coeffs["abs_rt_error"]) == [0.01, 0.02, 0.01, 0.02, 0.01, 0.05, 0.01, 0.02, 0.03, 0.01, 0.0]
-        assert list(decoy_coeffs["abs_mz_error"]) == [0.01, 0.02, 0.0, 0.01, 0.01, 0.03, 0.0, 0.01, 0.02, 0.0, 0.0]
-        group_pearson_out = [[[np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan]], [[np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan]], [[np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan]]]
-        all_ms1_out = [[[{101: 1500.0, 111: 1500.0, 121: 1500.0, 131: 1500.0, 141: 1500.0}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}]], [[{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}]], [[{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}]]]
-        all_coeff_out = [[{101: np.nan, 111: 150.0, 121: 250.0, 131: 250.0, 141: 150.0}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: 250.0, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}]]
-        all_iso_out = [[[PearsonRResult(statistic=0.7867351937891747, pvalue=0.06337297444937429), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [1500.0, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=np.nan, pvalue=1), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=np.nan, pvalue=1), [0.39507620528511905, 0.3512325726627763, 0.17219722005062268, 0.0605595509130631, 0.01694736169978692, 0.00398708938863182], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.414363030153363, 0.35013680485679677, 0.16318127391223858, 0.05455887818878705, 0.014514399295965628, 0.0032456135928489605], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.46904177829954585, 0.33582135179986045, 0.13973706503559785, 0.04266923603080598, 0.010525047187108276, 0.00220552164708163], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5039089626278065, 0.32440260823695743, 0.12557265897855013, 0.03602764939007652, 0.008411800357601374, 0.001676320409008026], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5211244218188595, 0.3200080979442071, 0.11805483136401036, 0.03227415201992785, 0.007176930251734072, 0.0013615666012610549], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]]]  
-        all_group_keys_out = [[('A(PSMtag_5plex-0)AAAADLANR', 2), ('A(PSMtag_5plex-4)AAAADLANR', 2), ('A(PSMtag_5plex-8)AAAADLANR', 2), ('A(PSMtag_5plex-12)AAAADLANR', 2), ('A(PSMtag_5plex-16)AAAADLANR', 2)], [('A(PSMtag_5plex-0)AAAADLANR', 3), ('A(PSMtag_5plex-4)AAAADLANR', 3), ('A(PSMtag_5plex-8)AAAADLANR', 3), ('A(PSMtag_5plex-12)AAAADLANR', 3), ('A(PSMtag_5plex-16)AAAADLANR', 3)], [('P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-0)', 2), ('P(PSMtag_5plex-4)EPTIDEK(PSMtag_5plex-4)', 2), ('P(PSMtag_5plex-8)EPTIDEK(PSMtag_5plex-8)', 2), ('P(PSMtag_5plex-12)EPTIDEK(PSMtag_5plex-12)', 2), ('P(PSMtag_5plex-16)EPTIDEK(PSMtag_5plex-16)', 2)]]
-        # Helper: build block-diagonal matrix from per-channel isotope intensities
-        def _block_diag_iso(iso_lists):
-            n_rows = sum(len(iso) for iso in iso_lists)
-            mat = np.zeros((n_rows, len(iso_lists)))
-            row = 0
-            for col, iso in enumerate(iso_lists):
-                for val in iso:
-                    mat[row, col] = val
-                    row += 1
-            return mat
-        # Isotope intensities per channel for AAAAADLANR z=2
-        _iso_a = [[0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016],
-                   [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194],
-                   [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093],
-                   [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699],
-                   [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915]]
-        # Isotope intensities per channel for PEPTIDEK z=2
-        _iso_b = [[0.39507620528511905, 0.3512325726627763, 0.17219722005062268, 0.0605595509130631, 0.01694736169978692, 0.00398708938863182],
-                   [0.414363030153363, 0.35013680485679677, 0.16318127391223858, 0.05455887818878705, 0.014514399295965628, 0.0032456135928489605],
-                   [0.46904177829954585, 0.33582135179986045, 0.13973706503559785, 0.04266923603080598, 0.010525047187108276, 0.00220552164708163],
-                   [0.5039089626278065, 0.32440260823695743, 0.12557265897855013, 0.03602764939007652, 0.008411800357601374, 0.001676320409008026],
-                   [0.5211244218188595, 0.3200080979442071, 0.11805483136401036, 0.03227415201992785, 0.007176930251734072, 0.0013615666012610549]]
-        _mat_a = np.array([[0.4910246589248151, 0.                , 0.                , 0.                , 0.                ],
-               [0.3339165922477426, 0.                , 0.                , 0.                , 0.                ],
-               [0.1290306538418312, 0.                , 0.                , 0.                , 0.                ],
-               [0.0362774551667685, 0.                , 0.                , 0.                , 0.                ],
-               [0.0081879801206633, 0.5029008133959499, 0.                , 0.                , 0.                ],
-               [0.0015626596981793, 0.3309228118344142, 0.                , 0.                , 0.                ],
-               [0.                , 0.1237706196067847, 0.                , 0.                , 0.                ],
-               [0.                , 0.0336865326325176, 0.                , 0.                , 0.                ],
-               [0.                , 0.0073598052701844, 0.                , 0.                , 0.                ],
-               [0.                , 0.                , 0.5350960061854384, 0.                , 0.                ],
-               [0.                , 0.0013594172601491, 0.                , 0.                , 0.                ],
-               [0.                , 0.                , 0.3175872635736647, 0.                , 0.                ],
-               [0.                , 0.                , 0.1113794751738876, 0.                , 0.                ],
-               [0.                , 0.                , 0.0288181441034475, 0.                , 0.                ],
-               [0.                , 0.                , 0.                , 0.554646556447887 , 0.                ],
-               [0.                , 0.                , 0.0060415378723211, 0.                , 0.                ],
-               [0.                , 0.                , 0.                , 0.309167791034079 , 0.                ],
-               [0.                , 0.                , 0.0010775730912408, 0.                , 0.                ],
-               [0.                , 0.                , 0.                , 0.1040273929437068, 0.                ],
-               [0.                , 0.                , 0.                , 0.0259690592206948, 0.                ],
-               [0.                , 0.                , 0.                , 0.                , 0.5640507087431275],
-               [0.                , 0.                , 0.                , 0.0052751503079254, 0.                ],
-               [0.                , 0.                , 0.                , 0.                , 0.3060336718617097],
-               [0.                , 0.                , 0.                , 0.0009140500457071, 0.                ],
-               [0.                , 0.                , 0.                , 0.                , 0.1000620977325595],
-               [0.                , 0.                , 0.                , 0.                , 0.0242639967330577],
-               [0.                , 0.                , 0.                , 0.                , 0.0047849902589825],
-               [0.                , 0.                , 0.                , 0.                , 0.0008045346705632]])
-        _mat_b = _block_diag_iso(_iso_b)
-        _zeros5x5 = np.zeros((5, 5))
-        _signal_obs = np.zeros(28); _signal_obs[0] = 1500.
-        _zeros28 = np.zeros(28)
-        _zeros30 = np.zeros(30)
-        _signal_coeff = np.zeros((5, 5))
-        _signal_coeff[:, 0] = 1987.2034283632202
-        _signal_group = [_signal_coeff,
-            [_signal_obs] * 5,
-            [_mat_a] * 5,
-            [PearsonRResult(statistic=0.8011806685029516, pvalue=3.023205368268833e-07)] * 5,
-            np.array([101, 111, 121, 131, 141])]
-        _empty_group_a = [_zeros5x5,
-            [_zeros28] * 5,
-            [_mat_a] * 5,
-            [PearsonRResult(statistic=np.nan, pvalue=1)] * 5,
-            np.array([101, 111, 121, 131, 141])]
-        _empty_group_b = [_zeros5x5,
-            [_zeros30] * 5,
-            [_mat_b] * 5,
-            [PearsonRResult(statistic=np.nan, pvalue=1)] * 5,
-            np.array([101, 111, 121, 131, 141])]
-        all_fitted_out = [_signal_group, _empty_group_a, _empty_group_b]
-        new_output_dict_out = {}
-        fake_fdc_dict_out = {}
-        self.compare_pearsons(all_group_pearson, group_pearson_out)
-        # below commented out because shape mismatches were happening
-        # self.compare_ms1(all_ms1, all_ms1_out)
-        # self.compare_coeff(all_coeff, all_coeff_out)
-        # self.compare_iso(all_iso, all_iso_out)
-        # self.compare_group_keys(all_group_keys, all_group_keys_out)
-        # self.compare_fitted(all_fitted, all_fitted_out)
-        # self.compare_output_dict(new_output_dict, new_output_dict_out)
-        # self.compare_fake_fdc_dict(fake_fdc_dict, fake_fdc_dict_out)
-
-
+    def test_no_timeplex(self):
+        q = self._quant(False)
+        signal = [0, 1, 2, 3, 4]          # channel 0 of AAAAADLANR, z 2 (five rows of it)
+        for i in signal:
+            assert np.allclose(q["plexfittrace_all"][i], [self.SIGNAL] * 5)
+            assert list(q["plexfittrace_spec_all"][i]) == [101, 111, 121, 131, 141]
+            # the monoisotope's trace is its row's summed intensity; the other isotopes have none
+            assert list(q["all_ms1_iso0vals"][i]) == [1500.0] * 5
+            assert list(q["all_ms1_iso1vals"][i]) == [0.001] * 5
+        assert np.allclose(q["plex_Area"][signal], 3 * self.SIGNAL)
+        assert np.allclose(q["iso_cor"][signal], 0.7867351937891747)
+        assert (q["ms1_apex_scan"][signal] == 121).all()
+        # the same set's other channels: fitted, nothing there, the set's Pearson
+        for i in [6, 7, 8, 9]:
+            assert list(q["plexfittrace_all"][i]) == [0.0] * 5
+            assert list(q["all_ms1_iso0vals"][i]) == [0.001] * 5
+        assert np.allclose(q["plexfitMS1_p"][[0, 6, 7, 8, 9]], q["plexfitMS1_p"][0])
+        # z 3 and PEPTIDEK: their own sets, no signal; PEPTIDEK's window is cut at the run's last MS1 scan
+        assert q["plex_Area"][5] == 0 and q["plex_Area"][10] == 0
+        assert list(q["plexfittrace_spec_all"][10]) == [121, 131, 141]
+        # MS2 is flat in the fixture: no MS1-MS2 correlation
+        assert q["ms1_cor"].isna().all()
 
     def test_timeplex(self):
-        all_spectra, filtered_decoy_coeffs, decoy_coeffs = self.get_spectra_and_dfs_for_testing(test_timeplex=True)
-        mz_ppm = 1e-6
-        rt_tol = 0.05
-        tag = read_json_to_massTag("tests/MassTags/", "PSMtag_5plex.json")
-        SILAC = None
-        timeplex = True
-        num_iso = 6
-        num_iso_r = 2
-        additional_scans = 0
-
-        all_group_pearson, all_ms1, all_coeff, all_iso, all_group_keys, all_fitted, new_output_dict, fake_fdc_dict = ms1_cor_channels(all_spectra, filtered_decoy_coeffs, decoy_coeffs, mz_ppm, rt_tol, tag, SILAC, timeplex, num_iso, num_iso_r, additional_scans)
-
-        assert list(decoy_coeffs["untag_seq"]) == ['AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'AAAAADLANR', 'PEPTIDEK']
-        assert list(decoy_coeffs["untag_prec"]) == ['AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_3', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'AAAAADLANR_2', 'PEPTIDEK_2']
-        assert np.allclose(list(decoy_coeffs["med_frag_error"]), [0.05000000000000002, 0.04999999999999999, 0.1, 0.04999999999999999, 0.1, 0.09999999999999998, 0.05, 0.125, 0.09999999999999998, 0.02500000000000001, 0.125], atol=1e-6)
-        assert list(decoy_coeffs["abs_rt_error"]) == [0.01, 0.02, 0.01, 0.02, 0.01, 0.05, 0.01, 0.02, 0.03, 0.01, 0.0]
-        assert list(decoy_coeffs["abs_mz_error"]) == [0.01, 0.02, 0.0, 0.01, 0.01, 0.03, 0.0, 0.01, 0.02, 0.0, 0.0]
-        group_pearson_out = [[[np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan]], [[np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan]], [[np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan]], [[np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan]]]
-        all_ms1_out = [[[{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}]], [[{101: 1500.0, 111: 1500.0, 121: 1500.0, 131: 1500.0, 141: 1500.0}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}]], [[{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}]], [[{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}], [{101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}, {101: 0.001, 111: 0.001, 121: 0.001, 131: 0.001, 141: 0.001}]]]
-        all_coeff_out = [[{101: np.nan, 111: 150.0, 121: 100.0005, 131: 100.0005, 141: 150.0}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: 88.88944444444445, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}], [{101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}, {101: np.nan, 111: np.nan, 121: np.nan, 131: np.nan, 141: np.nan}]]
-        all_iso_out = [[[PearsonRResult(statistic=np.nan, pvalue=1), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=0.7867351937891747, pvalue=0.06337297444937429), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [1500.0, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=np.nan, pvalue=1), [0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]], [[PearsonRResult(statistic=np.nan, pvalue=1), [0.39507620528511905, 0.3512325726627763, 0.17219722005062268, 0.0605595509130631, 0.01694736169978692, 0.00398708938863182], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.414363030153363, 0.35013680485679677, 0.16318127391223858, 0.05455887818878705, 0.014514399295965628, 0.0032456135928489605], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.46904177829954585, 0.33582135179986045, 0.13973706503559785, 0.04266923603080598, 0.010525047187108276, 0.00220552164708163], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5039089626278065, 0.32440260823695743, 0.12557265897855013, 0.03602764939007652, 0.008411800357601374, 0.001676320409008026], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]], [PearsonRResult(statistic=np.nan, pvalue=1), [0.5211244218188595, 0.3200080979442071, 0.11805483136401036, 0.03227415201992785, 0.007176930251734072, 0.0013615666012610549], [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]]]]
-        all_group_keys_out = [[('A(PSMtag_5plex-0)AAAADLANR', 2, 1), ('A(PSMtag_5plex-4)AAAADLANR', 2, 1), ('A(PSMtag_5plex-8)AAAADLANR', 2, 1), ('A(PSMtag_5plex-12)AAAADLANR', 2, 1), ('A(PSMtag_5plex-16)AAAADLANR', 2, 1)], [('A(PSMtag_5plex-0)AAAADLANR', 2, 2), ('A(PSMtag_5plex-4)AAAADLANR', 2, 2), ('A(PSMtag_5plex-8)AAAADLANR', 2, 2), ('A(PSMtag_5plex-12)AAAADLANR', 2, 2), ('A(PSMtag_5plex-16)AAAADLANR', 2, 2)], [('A(PSMtag_5plex-0)AAAADLANR', 3, 1), ('A(PSMtag_5plex-4)AAAADLANR', 3, 1), ('A(PSMtag_5plex-8)AAAADLANR', 3, 1), ('A(PSMtag_5plex-12)AAAADLANR', 3, 1), ('A(PSMtag_5plex-16)AAAADLANR', 3, 1)], [('P(PSMtag_5plex-0)EPTIDEK(PSMtag_5plex-0)', 2, 1), ('P(PSMtag_5plex-4)EPTIDEK(PSMtag_5plex-4)', 2, 1), ('P(PSMtag_5plex-8)EPTIDEK(PSMtag_5plex-8)', 2, 1), ('P(PSMtag_5plex-12)EPTIDEK(PSMtag_5plex-12)', 2, 1), ('P(PSMtag_5plex-16)EPTIDEK(PSMtag_5plex-16)', 2, 1)]]
-        # Helper: build block-diagonal matrix from per-channel isotope intensities
-        def _block_diag_iso(iso_lists):
-            n_rows = sum(len(iso) for iso in iso_lists)
-            mat = np.zeros((n_rows, len(iso_lists)))
-            row = 0
-            for col, iso in enumerate(iso_lists):
-                for val in iso:
-                    mat[row, col] = val
-                    row += 1
-            return mat
-        _iso_a = [[0.49102465892481517, 0.33391659224774267, 0.12903065384183116, 0.03627745516676849, 0.008187980120663317, 0.0015626596981793016],
-                   [0.5029008133959499, 0.33092281183441424, 0.12377061960678473, 0.033686532632517606, 0.007359805270184388, 0.0013594172601491194],
-                   [0.5350960061854384, 0.3175872635736647, 0.11137947517388755, 0.028818144103447473, 0.0060415378723211255, 0.0010775730912408093],
-                   [0.5546465564478869, 0.309167791034079, 0.10402739294370679, 0.02596905922069484, 0.005275150307925415, 0.0009140500457070699],
-                   [0.5640507087431275, 0.30603367186170966, 0.10006209773255949, 0.0242639967330577, 0.004784990258982495, 0.0008045346705631915]]
-        _iso_b = [[0.39507620528511905, 0.3512325726627763, 0.17219722005062268, 0.0605595509130631, 0.01694736169978692, 0.00398708938863182],
-                   [0.414363030153363, 0.35013680485679677, 0.16318127391223858, 0.05455887818878705, 0.014514399295965628, 0.0032456135928489605],
-                   [0.46904177829954585, 0.33582135179986045, 0.13973706503559785, 0.04266923603080598, 0.010525047187108276, 0.00220552164708163],
-                   [0.5039089626278065, 0.32440260823695743, 0.12557265897855013, 0.03602764939007652, 0.008411800357601374, 0.001676320409008026],
-                   [0.5211244218188595, 0.3200080979442071, 0.11805483136401036, 0.03227415201992785, 0.007176930251734072, 0.0013615666012610549]]
-        _mat_a = np.array([[0.4910246589248151, 0.                , 0.                , 0.                , 0.                ],
-               [0.3339165922477426, 0.                , 0.                , 0.                , 0.                ],
-               [0.1290306538418312, 0.                , 0.                , 0.                , 0.                ],
-               [0.0362774551667685, 0.                , 0.                , 0.                , 0.                ],
-               [0.0081879801206633, 0.5029008133959499, 0.                , 0.                , 0.                ],
-               [0.0015626596981793, 0.3309228118344142, 0.                , 0.                , 0.                ],
-               [0.                , 0.1237706196067847, 0.                , 0.                , 0.                ],
-               [0.                , 0.0336865326325176, 0.                , 0.                , 0.                ],
-               [0.                , 0.0073598052701844, 0.                , 0.                , 0.                ],
-               [0.                , 0.                , 0.5350960061854384, 0.                , 0.                ],
-               [0.                , 0.0013594172601491, 0.                , 0.                , 0.                ],
-               [0.                , 0.                , 0.3175872635736647, 0.                , 0.                ],
-               [0.                , 0.                , 0.1113794751738876, 0.                , 0.                ],
-               [0.                , 0.                , 0.0288181441034475, 0.                , 0.                ],
-               [0.                , 0.                , 0.                , 0.554646556447887 , 0.                ],
-               [0.                , 0.                , 0.0060415378723211, 0.                , 0.                ],
-               [0.                , 0.                , 0.                , 0.309167791034079 , 0.                ],
-               [0.                , 0.                , 0.0010775730912408, 0.                , 0.                ],
-               [0.                , 0.                , 0.                , 0.1040273929437068, 0.                ],
-               [0.                , 0.                , 0.                , 0.0259690592206948, 0.                ],
-               [0.                , 0.                , 0.                , 0.                , 0.5640507087431275],
-               [0.                , 0.                , 0.                , 0.0052751503079254, 0.                ],
-               [0.                , 0.                , 0.                , 0.                , 0.3060336718617097],
-               [0.                , 0.                , 0.                , 0.0009140500457071, 0.                ],
-               [0.                , 0.                , 0.                , 0.                , 0.1000620977325595],
-               [0.                , 0.                , 0.                , 0.                , 0.0242639967330577],
-               [0.                , 0.                , 0.                , 0.                , 0.0047849902589825],
-               [0.                , 0.                , 0.                , 0.                , 0.0008045346705632]])
-        _mat_b = _block_diag_iso(_iso_b)
-        _zeros5x5 = np.zeros((5, 5))
-        _signal_obs = np.zeros(28); _signal_obs[0] = 1500.
-        _zeros28 = np.zeros(28)
-        _zeros30 = np.zeros(30)
-        _signal_coeff = np.zeros((5, 5))
-        _signal_coeff[:, 0] = 1987.2034283632202
-        _signal_group = [_signal_coeff,
-            [_signal_obs] * 5,
-            [_mat_a] * 5,
-            [PearsonRResult(statistic=0.8011806685029516, pvalue=3.023205368268833e-07)] * 5,
-            np.array([101, 111, 121, 131, 141])]
-        _empty_group_a = [_zeros5x5,
-            [_zeros28] * 5,
-            [_mat_a] * 5,
-            [PearsonRResult(statistic=np.nan, pvalue=1)] * 5,
-            np.array([101, 111, 121, 131, 141])]
-        _empty_group_b = [_zeros5x5,
-            [_zeros30] * 5,
-            [_mat_b] * 5,
-            [PearsonRResult(statistic=np.nan, pvalue=1)] * 5,
-            np.array([101, 111, 121, 131, 141])]
-        all_fitted_out = [_empty_group_a, _signal_group, _empty_group_a, _empty_group_b]
-        new_output_dict_out = {}
-        fake_fdc_dict_out = {}
-        self.compare_pearsons(all_group_pearson, group_pearson_out)
-        # below commented out because shape mismatches were happening
-        # self.compare_ms1(all_ms1, all_ms1_out)
-        # self.compare_coeff(all_coeff, all_coeff_out)
-        # self.compare_iso(all_iso, all_iso_out)
-        # self.compare_group_keys(all_group_keys, all_group_keys_out)
-        # self.compare_fitted(all_fitted, all_fitted_out)
-        # self.compare_output_dict(new_output_dict, new_output_dict_out)
-        # self.compare_fake_fdc_dict(fake_fdc_dict, fake_fdc_dict_out)
+        q = self._quant(True)
+        # time channel 2 is its own set, and the one with the signal
+        assert np.allclose(q["plexfittrace_all"][2], [self.SIGNAL] * 5)
+        assert np.isclose(q["plex_Area"][2], 3 * self.SIGNAL)
+        others = [0, 1, 3, 4, 5, 6, 7, 8, 9, 10]
+        assert (q["plex_Area"][others] == 0).all()
+        assert list(q["plexfittrace_spec_all"][0]) == [101, 111, 121, 131]
 
 
-class Test_get_matrix_to_fit_numba():  #this is tested more thoroughly in the tests for fit_channel_isotopes_numba
+class Test_get_matrix_to_fit_numba():  #this is tested more thoroughly in Test_fit_spectrum
 
     def test_very_quick(self):
         ms1_iso_patterns = np.array([[[3.10000000e+01, 5.47156642e-01],
@@ -2225,11 +1797,77 @@ class Test_get_matrix_to_fit_numba():  #this is tested more thoroughly in the te
 
 def main():
     
-    instance = Test_fit_channel_isotopes_numba()
+    instance = Test_fit_spectrum()
     instance.test_5plex_no_noise_or_missed_peaks()
 
 
 
 if __name__ == "__main__":
     main()
+
+
+
+class TestFitChannelsWithBackground:
+    """The background-aware fit: a flat on-grid background is absorbed by the
+    intercept and the channel ratios come out right; without background it
+    agrees with the plain fit."""
+
+    def _group(self):
+        from src.ms1_cor_channels import compute_isotopes
+        tag = read_json_to_massTag("src/MassTags", "PSMtag_5plex.json")
+        seq, z, mz = "A(PSMtag_5plex-0)AAAADLANR", 2, 626.31433
+        comb = get_other_channels((seq, z), mz, [tag])
+        return [compute_isotopes(s, m, z, 6, [tag]) for s, m in comb]
+
+    def _spectrum(self, all_iso, abund, background, flanks):
+        from src.ms1_cor_channels import build_fit_system
+        mzs, ints = [], []
+        for a, iso in zip(abund, all_iso):
+            for p in iso:
+                mzs.append(p.mz); ints.append(a * p.intensity)
+        mzs, ints = np.asarray(mzs), np.asarray(ints, dtype=float)
+        o = np.argsort(mzs); mzs, ints = mzs[o], ints[o]
+        # the same peptide-like background in every grid window (one per fit
+        # row: isotopes within tolerance of each other share a window), flanks included
+        pat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso]).reshape(len(all_iso), 6, 2)
+        _, _, row_mz, _ = build_fit_system(pat, mzs, ints, 10e-6, flanks)
+        mzs = np.r_[mzs, row_mz + 1e-6]; ints = np.r_[ints, np.full(row_mz.size, background)]
+        o = np.argsort(mzs)
+        return mzs[o], ints[o]
+
+    def test_recovers_ratios_under_a_flat_background(self):
+        from src.ms1_cor_channels import fit_channels_with_background, flank_mz
+        all_iso = self._group()
+        pat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso]).reshape(len(all_iso), 6, 2)
+        truth = np.array([8000.0, 2000.0, 8000.0, 1000.0, 4000.0])
+        flanks = flank_mz(all_iso)
+        mz, it = self._spectrum(all_iso, truth, background=300.0, flanks=flanks)
+        c, obs, M, row_mz, bg = fit_channels_with_background(pat, mz, it, 10e-6, flanks)
+        assert bg == pytest.approx(300.0, rel=0.05)
+        np.testing.assert_allclose(c / c[0], truth / truth[0], rtol=0.05)
+        assert len(flanks) == 6 and row_mz.size == M.shape[0] == obs.size
+
+    def test_plain_fit_is_fooled_by_the_same_background(self):
+        from src.ms1_cor_channels import fit_channels_with_background, flank_mz, build_fit_system
+        from scipy import optimize
+        all_iso = self._group()
+        pat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso]).reshape(len(all_iso), 6, 2)
+        truth = np.array([8000.0, 2000.0, 8000.0, 1000.0, 4000.0])
+        flanks = flank_mz(all_iso)
+        mz, it = self._spectrum(all_iso, truth, background=300.0, flanks=flanks)
+        M, y, _, is_flank = build_fit_system(pat, mz, it, 10e-6, flanks)
+        plain, _ = optimize.nnls(M[~is_flank], y[~is_flank])
+        # the faintest channel (12) is inflated by the background in the plain fit
+        assert plain[3] / plain[0] > 1.3 * truth[3] / truth[0]
+
+    def test_no_background_matches_the_plain_fit(self):
+        from src.ms1_cor_channels import fit_channels_with_background, flank_mz
+        all_iso = self._group()
+        pat = np.array([(p.mz, p.intensity) for iso in all_iso for p in iso]).reshape(len(all_iso), 6, 2)
+        truth = np.array([8000.0, 2000.0, 8000.0, 1000.0, 4000.0])
+        flanks = flank_mz(all_iso)
+        mz, it = self._spectrum(all_iso, truth, background=0.0, flanks=flanks)
+        c, *_, bg = fit_channels_with_background(pat, mz, it, 10e-6, flanks)
+        assert bg == pytest.approx(0.0, abs=1e-6)
+        np.testing.assert_allclose(c, truth, rtol=1e-6)
 
