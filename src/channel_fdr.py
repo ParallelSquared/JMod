@@ -69,6 +69,10 @@ _ID_COLUMNS = ["file_name", "seq", "untag_seq", "untag_prec", "protein", "channe
 # apex.  Read, not written: the traces stay in all_precursors.parquet
 _MS1_COLUMNS = ["plexfittrace_all", "plexfittrace_ps_all", "plexfittrace_spec_all",
                 "ms1_apex_scan", "Ms1_spec_id"]
+# The run's own score for the row (the discriminant behind Qvalue), carried
+# when the precursor model scored the run; with the plex-set model there is
+# none (it scores sets, not rows)
+_OPTIONAL_CARRIED_FEATURES = ["PredVal"]
 # A Gaussian fit to fewer points than this says nothing
 MIN_MS1_POINTS = 5
 
@@ -87,9 +91,8 @@ _SET_MEDIANS = ["median_gof_stats", "median_scribe_scores", "median_max_matched_
 _FROM_SET_MEDIANS = ["diff_gof_stats_from_median", "diff_scribe_scores_from_median",
                      "diff_max_matched_residuals_from_median", "diff_manhattan_distances_from_median"]
 _CARRIED_FEATURES = [
-    # the run's own score for the row (the discriminant behind Qvalue), and the
-    # precursor's charge (also part of its identity, with seq)
-    "PredVal", "z",
+    # the precursor's charge (also part of its identity, with seq)
+    "z",
     # the precursor's scans and errors, and where it eluted
     "n_scans", "smoothness", "apex_pc1", "hyperscore", "mz_error", "rt_error", "im_error", "rt",
     # fragment elution correlations
@@ -513,7 +516,9 @@ _FROM_EXTREME = {
 # take the features with no better end (signed errors, where the peptide
 # eluted).  Not PredVal itself: its _from_best is its _from_max.  Never
 # abundance, as everywhere here: its difference from the best channel is the
-# ratio the experiment measures.  With is_best_of_set.
+# ratio the experiment measures.  With is_best_of_set.  Only when the run was
+# scored by the precursor model (--scoring precursor): with the plex-set
+# model there is no PredVal, and so no best channel
 _FROM_BEST = [f for f in _FROM_EXTREME if f != "PredVal"] + [
     "rt", "rt_error", "im_error", "ms1_ms2_apex_delta", "std_frag_corr", "manhattan_distances",
     "manhattan_distances_nearby_max", "fitted_spectral_contrasts", "frac_int_matched", "frac_int_pred",
@@ -528,24 +533,25 @@ def set_keys(features):
 
 
 def add_set_comparisons(features):
-    """*features* with every _FROM_EXTREME and _FROM_BEST comparison and
+    """*features* with every _FROM_EXTREME comparison and, when it has a
+    PredVal (the precursor model scored the run), every _FROM_BEST one and
     is_best_of_set added.  Null throughout a set with one channel here, which
     has nothing to compare against (it would be best of itself, every
     difference 0).  A difference is null where either value is; the mean of
     tied best channels is over those of them with a value."""
     keys = set_keys(features)
-    best = pl.col("_best")
-    added = {
-        **{f"{f}_from_{better}": pl.col(f) - (pl.col(f).max() if better == "max" else pl.col(f).min()).over(keys)
-           for f, better in _FROM_EXTREME.items()},
-        **{f"{f}_from_best": pl.col(f) - pl.col(f).filter(best).mean().over(keys) for f in _FROM_BEST},
-        "is_best_of_set": best,
-    }
+    has_predval = "PredVal" in features.columns
+    added = {f"{f}_from_{better}": pl.col(f) - (pl.col(f).max() if better == "max" else pl.col(f).min()).over(keys)
+             for f, better in _FROM_EXTREME.items() if has_predval or f != "PredVal"}
+    if has_predval:
+        best = pl.col("_best")
+        added |= {**{f"{f}_from_best": pl.col(f) - pl.col(f).filter(best).mean().over(keys) for f in _FROM_BEST},
+                  "is_best_of_set": best}
+        features = features.with_columns(_best=pl.col("PredVal") == pl.col("PredVal").max().over(keys))
     alone = pl.len().over(keys) == 1
     return (features
-            .with_columns(_best=pl.col("PredVal") == pl.col("PredVal").max().over(keys))
             .with_columns(pl.when(alone).then(None).otherwise(e).alias(name) for name, e in added.items())
-            .drop("_best"))
+            .drop("_best", strict=False))
 
 
 def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, mass_tag, fdr_threshold):
@@ -568,6 +574,7 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
         raise KeyError(f"Channel features need these columns of the run's IDs; missing {missing}")
     keep = (~ids["is_decoy"].to_numpy()) & (ids["BestChannel_Qvalue"].to_numpy() < fdr_threshold)
     scored = ids.loc[keep, [c for c in _ID_COLUMNS if c in ids.columns] + _CARRIED_FEATURES
+                           + [c for c in _OPTIONAL_CARRIED_FEATURES if c in ids.columns]
                            + _RULE_COLUMNS + _MS1_COLUMNS + ["last_aa", "__fdc_idx"]]
     # Where each precursor is tagged, read off its sequence (tag_sites).  An
     # untagged one (no K under a K-only tag) was searched once: it has no channels

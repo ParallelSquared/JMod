@@ -579,6 +579,16 @@ class TestSetComparisons:
         for c in ("is_best_of_set", "cosine_chan_from_best"):
             assert a[c].to_list() == b[c].to_list()
 
+    def test_without_predval_no_best_channel_comparisons(self):
+        # the plex-set model scored the run: no PredVal, so no best channel
+        rows = {"file_name": ["f"] * 3, "untag_prec": ["A"] * 3, "channel": [0.0, 4.0, 20.0],
+                **{c: [0.0] * 3 for c in _FROM_EXTREME if c != "PredVal"}}
+        rows["cosine_chan"] = [0.6, 0.8, 0.3]
+        out = add_set_comparisons(pl.DataFrame(rows))
+        assert not [c for c in out.columns if c.endswith("_from_best")]
+        assert "is_best_of_set" not in out.columns and "PredVal_from_max" not in out.columns
+        assert out["cosine_chan_from_max"].to_list() == pytest.approx([-0.2, 0.0, -0.5])
+
     def test_from_max_and_min_are_each_features_own_best(self):
         out = self._set(cosine_chan=[0.6, 0.8, 0.3, 0.5], mz_error=[2e-6, 1e-6, None, 3e-6])
         assert out["cosine_chan_from_max"].to_list()[:3] == pytest.approx([-0.2, 0.0, -0.5])
