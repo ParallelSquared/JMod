@@ -58,6 +58,11 @@ FEATURE_FILE = "plex_set_features.parquet"
 FEATURE_IMPORTANCE_FILE = "feature_importance.csv"
 IDS_PLOT = "ids_vs_qvalue.png"
 SCORE_PLOT = "plex_set_score.png"
+# The features with the most gain, each group's distribution of them
+# (plot_feature_distributions)
+ECDF_PLOT = "ecdf_top_features.png"
+HIST_PLOT = "hist_top_features.png"
+N_PLOTTED_FEATURES = 30
 SCORE_COLUMNS = ["PlexSetScore", "PlexSet_Qvalue"]
 
 # What a plex set is, as for untag_prec_Qvalue (fdr_analysis.untag_prec_qvalues)
@@ -670,6 +675,7 @@ def run_plex_scoring(rows, target_decoy_ratio, results_folder, fdr_threshold, sc
         plot_feature_importance(importance, folder)
         plot_ids_vs_qvalue(features, folder, fdr_threshold)
         plot_score(features, folder)
+        plot_feature_distributions(features, importance, folder, fdr_threshold)
         report_counts(features, fdr_threshold)
     features.drop("__set").write_parquet(os.path.join(folder, FEATURE_FILE))
     return (pd.Series(score_by_set[group], index=rows.index),
@@ -790,9 +796,117 @@ def plot_score(features, folder, bins=50):
     _save(fig, os.path.join(folder, SCORE_PLOT))
 
 
-def _save(fig, path):
+# plot_feature_distributions: each panel's x range is this percentile range
+# over every group, so a long tail does not squeeze the rest
+_DISTRIBUTION_CLIP = (0.5, 99.5)
+_DISTRIBUTION_COLUMNS = 6
+# A 30-panel figure is about 20 x 14 inches: 300 dpi would be 6000 pixels wide
+_DISTRIBUTION_DPI = 110
+# Each group's colour and line style: the IDs, the other target sets, the decoys
+_GROUP_STYLES = {"IDs": ("#1baf7a", "-"), "non-ID targets": ("#2a78d6", "--"), "decoys": ("#eb6834", "-")}
+
+
+def _feature_values(features, mask, feature):
+    """*feature*'s finite values over the sets in *mask* (nulls, NaN and inf left out)."""
+    values = features[feature].filter(mask).drop_nulls().to_numpy().astype(float)
+    return values[np.isfinite(values)]
+
+
+def _feature_grid(n):
+    n_rows = int(np.ceil(n / _DISTRIBUTION_COLUMNS))
+    fig, axes = plt.subplots(n_rows, _DISTRIBUTION_COLUMNS, figsize=(3.3 * _DISTRIBUTION_COLUMNS, 2.7 * n_rows),
+                             squeeze=False)
+    for ax in axes.flat[n:]:
+        ax.axis("off")
+    return fig, axes.flat
+
+
+def _feature_panel(ax, title):
+    ax.set_title(title, fontsize=8)
+    ax.tick_params(labelsize=7)
+    ax.grid(alpha=0.25)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+
+
+def plot_feature_distributions(features, importance, folder, fdr_threshold=0.01, n=N_PLOTTED_FEATURES):
+    """How the *n* features with the most gain (*importance*, fit_plex_scoring's)
+    are distributed in three groups of sets: the IDs (target sets at
+    PlexSet_Qvalue <= *fdr_threshold*), the other target sets (non-ID targets:
+    above it, or with none), and the decoys -- the model's stand-in for false
+    targets, so what separates the IDs from them is what it uses.  Into *folder*:
+
+      - ECDF_PLOT: each group's ECDF, a panel per feature
+      - HIST_PLOT: each group's histogram, as a density (the groups differ in
+        size)
+
+    Each panel's title gives the feature's share of the gain and each group's
+    share of sets missing it (null, NaN or inf, so a placeholder made null
+    counts).  Its x range is the _DISTRIBUTION_CLIP percentiles over the
+    groups, and the histograms clip into their end bins.  Features not in
+    *features* (or with no value in any group) are left out; nothing is drawn
+    without a PlexSet_Qvalue.
+    """
+    from src.channel_fdr import IMPORTANCE_COLUMN
+    if "PlexSet_Qvalue" not in features.columns:
+        return
+    targets = ~features["is_decoy"].cast(pl.Boolean)
+    ids = targets & (features["PlexSet_Qvalue"] <= fdr_threshold).fill_null(False)
+    groups = {"IDs": ids, "non-ID targets": targets & ~ids, "decoys": ~targets}
+    sizes = {g: int(mask.sum()) for g, mask in groups.items()}
+    share = importance[IMPORTANCE_COLUMN].sort_values(ascending=False)
+    top = [f for f in share.index if f in features.columns
+           and any(_feature_values(features, mask, f).size for mask in groups.values())][:n]
+    if not top:
+        return
+    labels = {g: f"{g} ({sizes[g]:,})" for g in groups}
+    ids_label = f"IDs = target sets at PlexSet_Qvalue <= {fdr_threshold:g}"
+    clip = f"{_DISTRIBUTION_CLIP[0]:g}-{_DISTRIBUTION_CLIP[1]:g}th percentile"
+    values = {f: {g: _feature_values(features, mask, f) for g, mask in groups.items()} for f in top}
+
+    def title(rank, feature):
+        missing = ", ".join(f"{g} {1 - values[feature][g].size / sizes[g]:.0%}" if sizes[g] else f"{g} -"
+                            for g in groups)
+        return f"{rank}. {feature} ({share[feature]:.1%} of gain)\nmissing: {missing}"
+
+    def x_range(feature):
+        lo, hi = np.percentile(np.concatenate([v for v in values[feature].values() if v.size]), _DISTRIBUTION_CLIP)
+        return lo, hi
+
+    fig, axes = _feature_grid(len(top))
+    quantiles = np.linspace(0, 1, 500)
+    for rank, (ax, feature) in enumerate(zip(axes, top), start=1):
+        for g, (color, style) in _GROUP_STYLES.items():
+            if values[feature][g].size:
+                ax.plot(np.quantile(values[feature][g], quantiles), quantiles, color=color, ls=style, lw=1.5,
+                        label=labels[g])
+        lo, hi = x_range(feature)
+        if hi > lo:
+            ax.set_xlim(lo, hi)
+        _feature_panel(ax, title(rank, feature))
+    axes[0].legend(fontsize=7, frameon=False, loc="upper left")
+    fig.suptitle(f"Top plex-set features: ECDFs ({ids_label}; x: {clip})", y=1.0)
+    fig.tight_layout()
+    _save(fig, os.path.join(folder, ECDF_PLOT), dpi=_DISTRIBUTION_DPI)
+
+    fig, axes = _feature_grid(len(top))
+    for rank, (ax, feature) in enumerate(zip(axes, top), start=1):
+        lo, hi = x_range(feature)
+        bins = np.linspace(lo, hi, 61) if hi > lo else 60
+        for g, (color, style) in _GROUP_STYLES.items():
+            if values[feature][g].size:
+                ax.hist(np.clip(values[feature][g], lo, hi), bins=bins, density=True, histtype="step", lw=1.5,
+                        ls=style, color=color, label=labels[g])
+        _feature_panel(ax, title(rank, feature))
+    axes[0].legend(fontsize=7, frameon=False)
+    fig.suptitle(f"Top plex-set features: density ({ids_label}; clipped to {clip})", y=1.0)
+    fig.tight_layout()
+    _save(fig, os.path.join(folder, HIST_PLOT), dpi=_DISTRIBUTION_DPI)
+
+
+def _save(fig, path, dpi=300):
     try:
-        fig.savefig(path, dpi=300)
+        fig.savefig(path, dpi=dpi)
     except OSError as error:
         # e.g. the file is open in a viewer on Windows
         logger.warning(f"Plex-set scoring: could not write {path} ({error})")

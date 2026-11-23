@@ -6,8 +6,9 @@ import polars as pl
 import pytest
 
 from src import plex_scoring
-from src.plex_scoring import (FEATURE_FILE, FIRST_MODEL_OUTPUTS, FOLDER, MIN_DECOYS, fit_plex_scoring,
-                              model_columns, protein_qvalues, run_plex_scoring, set_features)
+from src.plex_scoring import (ECDF_PLOT, FEATURE_FILE, FIRST_MODEL_OUTPUTS, FOLDER, HIST_PLOT, MIN_DECOYS,
+                              fit_plex_scoring, model_columns, plot_feature_distributions, protein_qvalues,
+                              run_plex_scoring, set_features)
 from src.utils.frag_encoding import encode_frag_names
 
 
@@ -354,6 +355,39 @@ class TestRunPlexScoring:
         score, q = run_plex_scoring(rows, 1.0, str(tmp_path), 0.01)
         assert score.isna().all() and q.isna().all()
         assert os.path.exists(os.path.join(tmp_path, FOLDER, FEATURE_FILE))
+
+
+class TestPlotFeatureDistributions:
+    """The top features' distributions, IDs vs every target vs the decoys."""
+
+    @staticmethod
+    def _features(n=40):
+        rng = np.random.default_rng(0)
+        is_decoy = np.arange(n) % 2 == 1
+        return pl.DataFrame({"is_decoy": is_decoy,
+                             "PlexSet_Qvalue": np.where(is_decoy, np.nan, np.linspace(0, 0.05, n)),
+                             "good": np.where(is_decoy, rng.normal(0, 1, n), rng.normal(3, 1, n)),
+                             # a placeholder made null: missing in most sets
+                             "sparse": [1.0 if i % 5 == 0 else None for i in range(n)]})
+
+    @staticmethod
+    def _importance(*features):
+        return pd.DataFrame({"share_of_gain": np.linspace(1, 0.1, len(features)), "share_of_gain_sd": 0.0},
+                            index=pd.Index(list(features), name="feature"))
+
+    def test_both_plots_written(self, tmp_path):
+        plot_feature_distributions(self._features(), self._importance("good", "sparse"), str(tmp_path))
+        assert os.path.exists(tmp_path / ECDF_PLOT) and os.path.exists(tmp_path / HIST_PLOT)
+
+    def test_features_not_in_the_table_or_never_valued_are_left_out(self, tmp_path):
+        features = self._features().with_columns(empty=pl.lit(None, dtype=pl.Float64))
+        plot_feature_distributions(features, self._importance("not_there", "empty"), str(tmp_path))
+        assert not os.listdir(tmp_path)
+
+    def test_nothing_without_a_plex_set_qvalue(self, tmp_path):
+        plot_feature_distributions(self._features().drop("PlexSet_Qvalue"), self._importance("good"),
+                                   str(tmp_path))
+        assert not os.listdir(tmp_path)
 
 
 class TestProteinQvalues:
