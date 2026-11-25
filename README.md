@@ -250,6 +250,10 @@ Some commonly used search parameters are listed below. A more extensive list of 
   Decoy channel used as the null for the channel-level FDR. 
   default = auto (one channel past the last, if more than 1 channel, else none)
   other options: none (do not perform channel level FDR), int (the channel to be used as the decoy)
+--scoring
+  Score each plex set (a precursor across all of its channels) or each precursor in each channel.
+  default = auto (plexset with 2 or more channels, else precursor)
+  other options: plexset, precursor, both (plexset is used; the precursor model's q-values are also reported)
 --SILAC
   Adds stable isotope label
   default = False
@@ -379,6 +383,15 @@ JMod produces multiple output files. Each search writes them to a folder determi
 
 With `--mbr`, the first search of each file is in `first_pass/` and the match between runs library is in `mbr_library/`.
 
+#### Plex-set scoring
+
+With two or more channels, JMod scores each plex set (one precursor across all of its channels) instead of each channel separately. Scoring the channels together lets the model use their agreement as features: the channels of a real peptide co-elute and score consistently well, while those of a false match need not. This is especially advantageous when samples in each channel within a run are highly similar. This is enabled automatically with multiplexed data with more than 2 channels.
+
+- Label-free or single channel: each precursor is scored on its own (`PredVal`, `Qvalue`).
+- `--scoring precursor`: each channel is scored on its own, and a plex set's `PlexSet_Qvalue` comes from its best channel.
+- `--scoring plexset`: each target and decoy plex set is scores, and `PlexSet_Qvalue` comes from the plex sets.
+- `--scoring both`: the plex-set model is used, and the precursor model's `Qvalue` and `untag_prec_Qvalue` are also reported for comparison.
+
 #### Channel-level FDR
 
 With a tag searching two or more channels, JMod also searches a decoy channel (`--decoy_channel`). Its IDs are false by construction, so they are the null for a model that scores each channel of a plex set (`ChannelScore`) and gives it a q-value of its own against the decoy channel (`Channel_Qvalue`). Proteins get one per channel the same way (`Protein_Channel_Qvalue`).
@@ -462,17 +475,18 @@ A comprehensive list of all output columns and descriptions for each one can be 
 | `top_[n]_pair_corr` | Top [n] correlations between fragments |
 | `mean_prec_frag_corr` | Mean precursor to fragment correlation |
 | `max_prec_frag_corr` | Maximum precursor to fragment correlation |
-| `PredVal` | Raw score from the target-decoy classifier (1 is target) |
-| `Qvalue` | Q-value of the precursor |
-| `BestChannel_Qvalue` | Best q-value of the precursor plex set |
-| `untag_prec_Qvalue` | Q-value of the untagged precursor (the plex set), scored by its best PredVal over its channels |
+| `PredVal` | Raw score from the target-decoy classifier (1 is target) if --scoring precursor or label-free |
+| `Qvalue` | Q-value of the precursor in this channel, from PredVal |
+| `PlexSetScore` | Score of the plex set: the plex-set model's, or with `--scoring precursor` its best channel's PredVal |
+| `PlexSet_Qvalue` | Q-value of the plex set, from PlexSetScore: the run-level q-value of a multiplexed search |
+| `untag_prec_Qvalue` | (`--scoring both`) Q-value of the plex set from its best channel's PredVal, to compare with PlexSet_Qvalue |
 | `is_decoy_channel` | Is this precursor in the decoy channel (`--decoy_channel`) |
 | `ChannelScore` | Channel FDR model score for this channel of the plex set |
 | `Channel_Qvalue` | Channel-level q-value: this channel against the decoy channel (none for the decoy channel itself) |
 | `Protein_Channel_Qvalue` | Channel-level protein q-value: the protein in this channel against the decoy channel |
 | `gauss_r2_joint` | Fit of one Gaussian elution peak to the MS1 and MS2 traces together (mean R^2 of the two) |
-| `MS1_quality` | How far to trust the MS1 quant (plex_Area): percentile of ChannelScore (or PredVal without channel FDR) and gauss_r2_joint; x 0.01 without an MS1 quant |
-| `untag_prec_Global_Qvalue` | (combined_filtered_IDs) Q-value of the untagged precursor over every run |
+| `MS1_quality` | How far to trust the MS1 quant (plex_Area): percentile of ChannelScore (without a channel-level FDR, PredVal or PlexSetScore) and gauss_r2_joint; x 0.01 without an MS1 quant |
+| `PlexSet_Global_Qvalue` | (combined_filtered_IDs) Q-value of the untagged precursor over every run, by its best PlexSetScore; `Global_Qvalue` label-free, by its best PredVal |
 | `Protein_Global_Qvalue` | (combined_filtered_IDs) Q-value of the protein over every run |
 | `plexfitMS1` | Fitted MS1 coefficient at max |
 | `plexfitMS1_p` | Correlation of theoretical MS1 isotope distribution with observed peaks |
@@ -528,13 +542,17 @@ experiment_folder (-o, or 'Output Folder' entry in GUI)
     │   ├── [channel_fdr_plots].png
     │   └── ECDF/
     │       └── [feature].png
+    ├── plex_scoring/         (plex-set model)
+    │   ├── plex_set_features.parquet
+    │   ├── feature_importance.csv
+    │   └── [plex_scoring_plots].png
     ├── outputs/
     │   ├── all_IDs_filtered.parquet
     │   ├── all_precursors.parquet
     │   ├── config.json
     │   ├── decoylibsearch_coeffs.parquet
     │   └── params.txt
-    ├── scoring/
+    ├── scoring/              (precursor model)
     └────── [scoring_plots].png
 
 ```
