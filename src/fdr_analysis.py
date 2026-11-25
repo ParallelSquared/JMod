@@ -1141,15 +1141,19 @@ def compute_protein_FDR(df, target_decoy_ratio):
 
 
 def report_id_counts(df, results_folder=None):
-    """The run's ID table (id_counts), into the log and <results_folder>/Summary.txt."""
+    """The run's ID table (id_counts): into the log, its run-level IDs alone
+    (the set-level q-value: PlexSet_Qvalue, or Qvalue label-free, and
+    Protein_Qvalue); into <results_folder>/Summary.txt, those and, when the run
+    has a channel FDR, its precursors and proteins at the channel q-value too."""
     table = id_counts(df)
-    lines = id_table_lines(table, timeplex=config.args.timeplex, silac=config.args.SILAC is not None)
+    run_level = table[[column for column in table.columns if column[1] != "chan Q"]]
+    layout = dict(timeplex=config.args.timeplex, silac=config.args.SILAC is not None)
     logger.info("")
-    for line in lines:
+    for line in id_table_lines(run_level, **layout):
         logger.info(line)
     if results_folder is not None:
         with open(results_folder + '/Summary.txt', 'a') as f:
-            print(*lines, sep="\n", file=f)
+            print(*id_table_lines(table, **layout), sep="\n", file=f)
 
 def add_median_based_features(df, metric_columns, group_col="untag_prec", count_col="channels_matched"):
     """

@@ -374,6 +374,20 @@ def test_id_counts_and_summary_leave_out_the_decoy_channel(tmp_path):
         ["0", "2", "0"],
         ["total", "2", "0"]]                                                   # no channel 8
 
+
+def test_the_log_has_the_run_level_ids_and_summary_the_channel_ones_too(tmp_path, app_log):
+    df = pd.DataFrame({"file_name": "A", "channel": [0, 4], "silac_channel": np.nan, "is_decoy": False,
+                       "untag_prec": ["p0", "p1"], "protein": ["P0", "P1"],
+                       "PlexSet_Qvalue": [0.001, 0.001], "Channel_Qvalue": [0.001, 0.5],
+                       "Protein_Qvalue": [0.001, 0.001], "Protein_Channel_Qvalue": [0.001, 0.5]})
+    report_id_counts(df, str(tmp_path))
+    logged = [r.getMessage().split() for r in app_log if r.getMessage().strip()]
+    assert ["channel", "Precursors", "Proteins"] in logged and ["total", "2", "2"] in logged
+    assert not any("chan" in line for line in logged)
+    summary = [line.split() for line in (tmp_path / "Summary.txt").read_text().splitlines()]
+    assert summary[2] == ["channel", "plex", "set", "Q", "chan", "Q", "plex", "set", "Q", "chan", "Q"]
+    assert summary[-1] == ["total", "2", "1", "2", "1"]
+
         
 def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
     fake_args = types.SimpleNamespace(plexDIA=False)
