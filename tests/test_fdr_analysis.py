@@ -23,7 +23,7 @@ from src.utils.errors import JModError
 from src.utils.io.read_output import MainSearchFiles, MainSearchRows
 from src.fdr_analysis import (score_precursors, score_model, add_median_based_features, process_data,
                                compute_protein_FDR, id_counts, id_table_lines, report_id_counts, target_decoy_qvalues,
-                               untag_prec_qvalues, fill_ms1_quant_gaps,
+                               precursor_set_scores, resolve_scoring, n_real_channels, fill_ms1_quant_gaps,
                                area, walk_to_local_max, gauss_r2_joint, ms1_quality, ms1_quality_pass)
 
 def test_score_model_minimal_fixed():
@@ -289,9 +289,9 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
 
     for fname in expected_files:
         assert (tmp_path.parent / fname).exists()
-    # Label-free: each untagged precursor is one row, so its q-value is the row's
+    # Label-free: the precursor model's Qvalue is the set level; no plex sets
     written = pd.read_parquet(tmp_path.parent / "outputs/all_IDs_filtered.parquet")
-    assert written["untag_prec_Qvalue"].tolist() == written["Qvalue"].tolist()
+    assert "Qvalue" in written.columns and "PlexSet_Qvalue" not in written.columns
     # gauss_r2_joint in all_precursors.parquet; MS1_quality only with the filtered IDs
     assert "gauss_r2_joint" in pd.read_parquet(tmp_path.parent / "outputs/all_precursors.parquet").columns
     assert "MS1_quality" not in pd.read_parquet(tmp_path.parent / "outputs/all_precursors.parquet").columns
@@ -299,7 +299,7 @@ def test_process_data_creates_output_files(tmp_path, monkeypatch):
     assert "MS1_quality" in pd.read_parquet(tmp_path.parent / "filtered_IDs.parquet").columns
 
 
-def test_untag_prec_qvalues_rank_each_plex_set_by_its_best_channel():
+def test_precursor_set_scores_rank_each_plex_set_by_its_best_channel():
     # Two channels each: P1 0.9, P2 0.8, decoy D1 0.7, P3 0.6 as their best.
     # Counted down that order: 1/1, 1/2, 2/2, 2/3, monotonized
     fdx = pd.DataFrame({
@@ -308,11 +308,12 @@ def test_untag_prec_qvalues_rank_each_plex_set_by_its_best_channel():
         "is_decoy": [False] * 4 + [True] * 2 + [False] * 2,
         "PredVal": [0.9, 0.1, 0.2, 0.8, 0.7, 0.05, 0.3, 0.6],
     })
-    q = untag_prec_qvalues(fdx, target_decoy_ratio=1.0)
+    score, q = precursor_set_scores(fdx, target_decoy_ratio=1.0)
+    assert score.tolist() == pytest.approx([0.9, 0.9, 0.8, 0.8, 0.7, 0.7, 0.6, 0.6])
     assert q.tolist() == pytest.approx([0.5, 0.5, 0.5, 0.5, 2 / 3, 2 / 3, 2 / 3, 2 / 3])
 
 
-def test_untag_prec_qvalues_leave_out_the_decoy_channel():
+def test_precursor_set_scores_leave_out_the_decoy_channel():
     # P1's best is its decoy channel (0.95), so it ranks by its real 0.4; P2 is
     # seen only in the decoy channel.  Ranked: P3 0.9, D1 0.6, P1 0.4 -> 1/1, 2/1, 2/2
     fdx = pd.DataFrame({
@@ -322,29 +323,56 @@ def test_untag_prec_qvalues_leave_out_the_decoy_channel():
         "is_decoy_channel": [False, True, True, False, False, True],
         "PredVal": [0.4, 0.95, 0.99, 0.9, 0.6, 0.97],
     })
-    q = untag_prec_qvalues(fdx, target_decoy_ratio=1.0)
+    score, q = precursor_set_scores(fdx, target_decoy_ratio=1.0)
+    assert score.iloc[[0, 1]].tolist() == pytest.approx([0.4, 0.4])
     assert q.iloc[[0, 1, 3, 4, 5]].tolist() == pytest.approx([1.0, 1.0, 1.0, 1.0, 1.0])
-    assert np.isnan(q.iloc[2])
+    assert np.isnan(q.iloc[2]) and np.isnan(score.iloc[2])
 
 
-def test_id_counts_and_summary_leave_out_the_decoy_channel(monkeypatch, tmp_path):
-    from src import config
-    monkeypatch.setattr(config.args, "plexDIA", True)
+class TestResolveScoring:
+    """--scoring: the plex-set model with 2 or more channels, the precursor model otherwise."""
+
+    def test_auto_follows_the_channels(self):
+        assert resolve_scoring("auto", 5) == "plexset"
+        assert resolve_scoring("auto", 1) == "precursor"
+
+    def test_both_is_both(self):
+        assert resolve_scoring("both", 5) == "both"
+
+    @pytest.mark.parametrize("setting", ["plexset", "both"])
+    def test_a_plex_set_model_with_one_channel_falls_back_with_a_warning(self, setting, app_log):
+        assert resolve_scoring(setting, 1) == "precursor"
+        assert any(f"--scoring {setting} needs at least 2 channels" in r.getMessage() for r in app_log)
+
+    def test_the_model_used_is_logged(self, app_log):
+        resolve_scoring("precursor", 5)
+        assert any("Scoring with the precursor model" in r.getMessage() for r in app_log)
+
+    def test_an_unknown_setting_is_an_error(self):
+        with pytest.raises(JModError, match="--scoring neither"):
+            resolve_scoring("neither", 5)
+
+    def test_the_decoy_channel_is_not_a_channel(self):
+        fdc = pd.DataFrame({"channel": [0, 4, 8, 0], "silac_channel": np.nan,
+                            "is_decoy_channel": [False, False, True, False]})
+        assert n_real_channels(fdc) == 2
+        assert n_real_channels(fdc.assign(channel=0, is_decoy_channel=False)) == 1      # label-free
+
+
+def test_id_counts_and_summary_leave_out_the_decoy_channel(tmp_path):
     df = pd.DataFrame({
         "file_name": ["A"] * 4, "channel": [0, 0, 8, 8], "silac_channel": [0] * 4,
-        "Qvalue": [0.001, 0.002, np.nan, np.nan], "BestChannel_Qvalue": [0.001, 0.002, 0.001, 0.002],
-        "PredVal": [0.9, 0.8, 0.95, 0.85], "is_decoy": [False] * 4,
-        "is_decoy_channel": [False, False, True, True],
+        "PlexSet_Qvalue": [0.001, 0.002, 0.001, 0.002], "PlexSetScore": [0.9, 0.8, 0.9, 0.8],
+        "is_decoy": [False] * 4, "is_decoy_channel": [False, False, True, True],
         "protein": ["P1", "P2", "P1", "P2"], "untag_prec": ["p1", "p2", "p1", "p2"],
     })
     report_id_counts(compute_protein_FDR(df, target_decoy_ratio=1.0), str(tmp_path))
-    # the precursors at Qvalue and at BestChannel_Qvalue; too few proteins for a protein FDR
-    assert (tmp_path / "Summary.txt").read_text().splitlines() == [
-        "IDs at 1% FDR, A",
-        "          Precursors            Proteins",
-        "channel   own Q   best chan Q   own Q   best chan Q",
-        "      0       2             2       0             0",
-        "  total       2             2       0             0"]               # no channel 8
+    # the precursors at PlexSet_Qvalue; too few proteins for a protein FDR
+    assert [line.split() for line in (tmp_path / "Summary.txt").read_text().splitlines()] == [
+        ["IDs", "at", "1%", "FDR,", "A"],
+        ["channel", "Precursors", "Proteins"],
+        ["0", "2", "0"],
+        ["total", "2", "0"]]                                                   # no channel 8
 
         
 def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
@@ -368,18 +396,30 @@ def test_compute_protein_FDR_minimal(monkeypatch, tmp_path):
     assert out.shape[0] == 2  # still same number of rows
 
 
-def _counted(file_name, channels, silac_channels=None):
+def test_compute_protein_FDR_ranks_by_the_plex_set_when_there_is_one():
+    # no Qvalue or PredVal (the plex-set model): each protein by its best set at PlexSet_Qvalue
+    df = pd.DataFrame({"file_name": "A", "channel": [0, 4, 0], "silac_channel": np.nan,
+                       "PlexSet_Qvalue": [0.001, 0.001, 0.5], "PlexSetScore": [0.9, 0.9, 0.2],
+                       "is_decoy": [False, False, True], "protein": ["P1", "P1", "P1"],
+                       "untag_prec": ["p1", "p1", "d1"]})
+    out = compute_protein_FDR(df, target_decoy_ratio=1.0)
+    # the decoy set fails its PlexSet_Qvalue, so only the target protein is ranked: 1 / 1
+    assert out["Protein_Qvalue"].tolist() == pytest.approx([1.0, 1.0, 1.0])
+
+
+def _counted(file_name, channels, silac_channels=None, plex=True):
+    """IDs that pass everything; label-free (*plex* False) with Qvalue, else PlexSet_Qvalue."""
     n = len(channels)
     df = pd.DataFrame({"file_name": file_name, "channel": channels,
                        "silac_channel": silac_channels if silac_channels is not None else [np.nan] * n,
-                       "is_decoy": False, "Qvalue": 0.001, "BestChannel_Qvalue": 0.001,
+                       "is_decoy": False, ("PlexSet_Qvalue" if plex else "Qvalue"): 0.001,
                        "Protein_Qvalue": 0.001, "untag_prec": [f"p{i}" for i in range(n)],
                        "protein": [f"P{i}" for i in range(n)]})
     return df
 
 
 def test_id_table_label_free_is_one_level():
-    lines = id_table_lines(id_counts(_counted("C:/data/run.mzML", [0, 0, 0])))
+    lines = id_table_lines(id_counts(_counted("C:/data/run.mzML", [0, 0, 0], plex=False)))
     assert lines == ["IDs at 1% FDR, run.mzML",
                      "channel   Precursors   Proteins",
                      "      0            3          3",
@@ -387,32 +427,31 @@ def test_id_table_label_free_is_one_level():
 
 
 def test_id_table_sorts_the_channels_as_numbers_and_splits_timeplex():
-    table = id_counts(_counted("f", ["1_4", "0_12", "0_4", "0_4"]), plexDIA=True)
+    table = id_counts(_counted("f", ["1_4", "0_12", "0_4", "0_4"]))
     lines = id_table_lines(table, timeplex=True)
-    rows = [line.split() for line in lines[3:]]
-    assert lines[2].split() == ["time", "channel", "own", "Q", "best", "chan", "Q", "own", "Q", "best", "chan", "Q"]
-    assert rows == [["0", "4", "2", "2", "2", "2"], ["0", "12", "1", "1", "1", "1"],
-                    ["1", "4", "1", "1", "1", "1"], ["total", "4", "4", "4", "4"]]
+    rows = [line.split() for line in lines[2:]]
+    assert lines[1].split() == ["time", "channel", "Precursors", "Proteins"]
+    assert rows == [["0", "4", "2", "2"], ["0", "12", "1", "1"], ["1", "4", "1", "1"], ["total", "4", "4"]]
 
 
-def test_id_counts_channel_fdr_between_qvalue_and_best_channel():
-    # p0 passes everything; p1 only through its channel FDR and best channel;
-    # p2 only best channel.  P0 is in the run and the channel, P1 in the run
-    # but not the channel, P2 in the channel but not the run
+def test_id_counts_plex_set_and_channel_fdr_levels():
+    # Every set passes its PlexSet_Qvalue; p2 not its channel.  P0 is in the run
+    # and the channel, P1 in the run but not the channel, P2 in the channel but
+    # not the run
     df = pd.DataFrame({"file_name": "f", "channel": 0, "silac_channel": np.nan, "is_decoy": False,
                        "untag_prec": ["p0", "p1", "p2"], "protein": ["P0", "P1", "P2"],
-                       "Qvalue": [0.001, 0.5, 0.5], "Channel_Qvalue": [0.001, 0.001, 0.5],
-                       "BestChannel_Qvalue": [0.001, 0.001, 0.001],
+                       "PlexSet_Qvalue": [0.001, 0.001, 0.001], "Channel_Qvalue": [0.001, 0.001, 0.5],
                        "Protein_Qvalue": [0.001, 0.001, 0.5], "Protein_Channel_Qvalue": [0.001, 0.5, 0.001]})
-    table = id_counts(df, plexDIA=True)
-    assert [label for _, label in table.columns] == ["own Q", "chan Q", "best chan Q"] * 2
-    assert table.iloc[0].tolist() == [1, 2, 3, 1, 1, 2]
+    table = id_counts(df)
+    assert [label for _, label in table.columns] == ["plex set Q", "chan Q"] * 2
+    assert table.iloc[0].tolist() == [3, 2, 2, 1]
     # without a fitted channel FDR, no such column
     assert "chan Q" not in {label for _, label in id_counts(df.assign(Channel_Qvalue=np.nan)).columns}
 
 
 def test_id_table_one_per_file_and_silac():
-    df = pd.concat([_counted("a", [0, 0, 0], [0.0, 1.0, np.nan]), _counted("b", [4], [0.0])])
+    df = pd.concat([_counted("a", [0, 0, 0], [0.0, 1.0, np.nan], plex=False),
+                    _counted("b", [4], [0.0], plex=False)])
     lines = id_table_lines(id_counts(df), silac=True)
     assert [line for line in lines if line.startswith("IDs")] == [
         "IDs at 1% FDR, a", "IDs at 1% FDR, b"]
@@ -464,21 +503,21 @@ def test_no_ms2_coefficients_means_no_fit():
 
 
 def test_ms1_quant_fill_leaves_the_decoy_channels_qvalues_unscored():
-    """A set found only in the decoy channel has no best channel: as 0 it would
-    pass the run's FDR and be scored by the channel FDR and the protein FDR."""
+    """A set found only in the decoy channel has no set-level values: as 0 it
+    would pass the run's FDR and be scored by the channel FDR and the protein FDR."""
     dat = pd.DataFrame({"is_decoy_channel": [False, True, True],
                         "Qvalue": [0.001, np.nan, np.nan],
-                        "BestChannel_Qvalue": [0.001, 0.001, np.nan],      # the last: decoy channel alone
-                        "untag_prec_Qvalue": [0.001, 0.001, np.nan],
+                        "PlexSet_Qvalue": [0.001, 0.001, np.nan],          # the last: decoy channel alone
+                        "PlexSetScore": [0.9, 0.9, np.nan],
                         "plex_Area": [5.0, np.nan, np.nan], "ms1_cor": [0.9, np.nan, 0.2],
                         "plexfittrace_all": [np.array([1.0, 2.0]), np.nan, None]})
     out = fill_ms1_quant_gaps(dat)
     assert out["Qvalue"].isna().tolist() == [False, True, True]
-    assert out["BestChannel_Qvalue"].isna().tolist() == [False, False, True]
-    assert out["untag_prec_Qvalue"].isna().tolist() == [False, False, True]
+    assert out["PlexSet_Qvalue"].isna().tolist() == [False, False, True]
+    assert out["PlexSetScore"].isna().tolist() == [False, False, True]
     assert out["plex_Area"].tolist() == [5.0, 0.0, 0.0]                   # the rest as before
     assert out["ms1_cor"].tolist() == [0.9, 0.0, 0.2]
-    assert not (out["BestChannel_Qvalue"] < 0.01).iloc[2]
+    assert not (out["PlexSet_Qvalue"] < 0.01).iloc[2]
     # the per-scan arrays: None where there is no quant, not 0
     assert out["plexfittrace_all"].iloc[0].tolist() == [1.0, 2.0]
     assert out["plexfittrace_all"].iloc[1] is None and out["plexfittrace_all"].iloc[2] is None
@@ -617,7 +656,7 @@ def test_ms1_quant_leaves_the_decoy_channel_out_of_the_fit(monkeypatch):
     mass_tag = available_tags["PSMtag_5plex"].select_channels(["0", "4"]).with_decoy_channel()
     dat = pd.DataFrame({"seq": [f"(PSMtag_5plex-{c})AAAA" for c in (0, 4, 8)], "z": 2.0,
                         "channel": [0, 4, 8], "is_decoy": False, "is_decoy_channel": [False, False, True],
-                        "BestChannel_Qvalue": 0.001})
+                        "PlexSet_Qvalue": 0.001})
     seen = {}
 
     def fake_fit(spectra, fdc, dc, **kwargs):

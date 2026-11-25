@@ -7,7 +7,7 @@ import pytest
 
 from src import plex_scoring
 from src.plex_scoring import (ECDF_PLOT, FEATURE_FILE, FIRST_MODEL_OUTPUTS, FOLDER, HIST_PLOT, MIN_DECOYS,
-                              fit_plex_scoring, model_columns, plot_feature_distributions, protein_qvalues,
+                              fit_plex_scoring, model_columns, plot_feature_distributions,
                               run_plex_scoring, set_features)
 from src.utils.frag_encoding import encode_frag_names
 
@@ -16,7 +16,7 @@ def _rows(**columns):
     """Precursor-channel rows of one run, with the columns set_features reads."""
     n = len(columns["untag_prec"])
     base = {"file_name": ["f"] * n, "is_decoy": [False] * n, "stripped_seq": columns["untag_prec"],
-            "untag_prec_Qvalue": [0.0] * n, "Qvalue": [0.0] * n, "rt": [10.0] * n,
+            "Qvalue": [0.0] * n, "rt": [10.0] * n,
             "rt_error": [0.0] * n, "mz_error": [0.0] * n, "hyperscore": [1.0] * n}
     return pd.DataFrame({**base, **columns})
 
@@ -96,7 +96,7 @@ class TestSetFeatures:
 
     def test_nothing_from_the_precursor_scoring_is_a_feature(self):
         rows = _rows(untag_prec=["A_2", "A_2"], PredVal=[0.9, 0.5], Qvalue=[0.001, 0.2],
-                     BestChannel_Qvalue=[0.001, 0.001])
+                     untag_prec_Qvalue=[0.001, 0.001], Protein_Qvalue=[0.001, 0.001])
         columns = model_columns(set_features(rows))
         assert not [c for c in columns if any(c.startswith(o) for o in FIRST_MODEL_OUTPUTS)]
         # nor the set's identity
@@ -411,37 +411,3 @@ class TestPlotFeatureDistributions:
         plot_feature_distributions(self._features().drop("PlexSet_Qvalue"), self._importance("good"),
                                    str(tmp_path))
         assert not os.listdir(tmp_path)
-
-
-class TestProteinQvalues:
-    """Protein_PlexSet_Qvalue: each protein by its best plex set."""
-
-    def _ids(self, **columns):
-        n = len(columns["protein"])
-        return pd.DataFrame({"is_decoy": [False] * n, "is_decoy_channel": [False] * n, **columns})
-
-    def test_each_protein_by_its_best_set(self):
-        # best scores: P1 0.9, P2 0.8, decoy P1 0.7, P3 0.6.  Counted down that
-        # order: 1/1, 1/2, 2/2, 2/3, monotonized
-        ids = self._ids(protein=["P1", "P1", "P2", "P1", "P3"], is_decoy=[False, False, False, True, False],
-                        PlexSetScore=[0.9, 0.2, 0.8, 0.7, 0.6])
-        q = protein_qvalues(ids, 1.0)
-        assert q.iloc[[0, 1, 2, 4]].tolist() == pytest.approx([0.5, 0.5, 0.5, 2 / 3])
-        # a library decoy has none of its own (it shares its target's name)
-        assert np.isnan(q.iloc[3])
-
-    def test_the_decoy_channel_is_left_out(self):
-        # P2's decoy-channel row would make it the best protein
-        ids = self._ids(protein=["P1", "P2", "P2", "D"], is_decoy=[False, False, False, True],
-                        is_decoy_channel=[False, False, True, False], PlexSetScore=[0.9, 0.5, 0.99, 0.7])
-        q = protein_qvalues(ids, 1.0)
-        # P1 0.9, decoy D 0.7, P2 0.5: 1/1, 2/1, 2/2
-        assert q.iloc[[0, 1]].tolist() == pytest.approx([1.0, 1.0])
-        assert np.isnan(q.iloc[2])
-
-    def test_the_run_ratio_scales_them(self):
-        ids = self._ids(protein=["P1", "P2", "D"], is_decoy=[False, False, True], PlexSetScore=[0.9, 0.8, 0.1])
-        assert protein_qvalues(ids, 0.5).iloc[:2].tolist() == pytest.approx([0.25, 0.25])
-
-    def test_nothing_without_a_plex_set_score(self):
-        assert protein_qvalues(self._ids(protein=["P1"]), 1.0).isna().all()

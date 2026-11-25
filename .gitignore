@@ -6,3 +6,4 @@ uv.lock
 .claude/
 data/filtered_library.tsv_store.npz
 data/settings.json
+.venv/

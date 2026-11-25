@@ -14,7 +14,7 @@ from tests.models.spec_lib.test_decoy_differential import _entry
 def _write_run(tmp_path, run_name, rows, proteins=None, channels=None, decoy_channels=None):
     """A run's results folder, with an outputs/all_IDs_filtered.parquet of *rows*.
 
-    Each row is (sequence, is_decoy, PredVal, BestChannel_Qvalue); every
+    Each row is (sequence, is_decoy, PredVal, Qvalue); every
     precursor is charge 2, of protein P1 unless *proteins* names one per row,
     and label-free (channel 0) unless *channels* names one per row.
     *decoy_channels* says per row whether it is in the tag's empty channel; the
@@ -31,7 +31,7 @@ def _write_run(tmp_path, run_name, rows, proteins=None, channels=None, decoy_cha
         "is_decoy": [decoy for _, decoy, _, _ in rows],
         "Qvalue": [q for *_, q in rows], "Protein_Qvalue": [0.001] * n,
         "PredVal": [score for _, _, score, _ in rows], "protein": proteins or ["P1"] * n,
-        "BestChannel_Qvalue": [q for *_, q in rows], "plex_Area": [1.0] * n,
+        "plex_Area": [1.0] * n,
         "seq": seqs, "silac_channel": [float("nan")] * n, "untag_seq": seqs,
         "rt": [1.0] * n, "mz": [500.0] * n, "prec_im": [float("nan")] * n, "coeff": [1.0] * n,
         **({"is_decoy_channel": decoy_channels} if decoy_channels is not None else {}),
@@ -56,7 +56,7 @@ class TestGlobalQvalue:
         runs = {1: _write_run(tmp_path, "a", [("AAA", False, 0.1, 0.001)]),
                 2: _write_run(tmp_path, "b", [("AAA", False, 0.9, 0.001)])}
         _, precursors, _ = collect_results(runs, target_decoy_ratio=1.0, fdr_threshold=0.01)
-        assert precursors.select("MaxPredVal", "BestRun").row(0) == (pytest.approx(0.9), 2)
+        assert precursors.select("MaxScore", "BestRun").row(0) == (pytest.approx(0.9), 2)
 
     @pytest.mark.parametrize("rows", [
         [("AAA", False, 0.9, 0.001), ("DDD", True, 0.9, 0.5)],
@@ -133,7 +133,7 @@ def _first_pass_ids(rows):
     run_idx, untag_prec, rt, pred_val = zip(*rows)
     n = len(rows)
     return pl.DataFrame({"run_idx": run_idx, "untag_prec": untag_prec, "rt": rt, "PredVal": pred_val,
-                         "BestChannel_Qvalue": [0.001] * n, "untag_prec_Global_Qvalue": [0.001] * n,
+                         "Qvalue": [0.001] * n, "untag_prec_Global_Qvalue": [0.001] * n,
                          "is_decoy": [False] * n})
 
 

@@ -398,6 +398,21 @@ default_dict = {
         'special_upload': False,
         'values': 'any'
     },
+    'scoring': {  ## the model the run's IDs are scored by: precursor (each precursor-channel row,
+                  ## score_precursors), plexset (each plex set, plex_scoring; needs 2 or more
+                  ## channels), both (the two, with plexset's used downstream and the precursor
+                  ## model's Qvalue and untag_prec_Qvalue reported beside it; needs 2 or more
+                  ## channels), or auto (plexset with 2 or more channels, precursor otherwise)
+        'flags': ('--scoring',),
+        'default': 'auto',
+        'takes_value': True,
+        'in_GUI': False,
+        'type': 'str',
+        'widget': '',
+        'tk_handle': None,
+        'special_upload': False,
+        'values': ['auto', 'precursor', 'plexset', 'both']
+    },
     'channel_fdr_plots': {  ## the channel FDR's plots (an ECDF of every channel feature in
                             ## channel_fdr/ECDF among them): all (every precursor together), an amino
                             ## acid such as K (the peptides ending in it and the rest side by side),

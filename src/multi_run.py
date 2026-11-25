@@ -27,16 +27,16 @@ import polars as pl
 
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
-from src.fdr_analysis import target_decoy_qvalues
+from src.fdr_analysis import set_qvalue_column, set_score_column, target_decoy_qvalues
 from src.logger import logger
 from src.utils.parse_peptides import untag_sequences
 from src.utils.errors import JModError
 from src.utils.misc_functions import datestamped
 
-# The first pass's IDs that go into the match-between-runs library: those with
-# this q-value below the FDR threshold.  "untag_prec_Global_Qvalue" is the
-# stricter choice, keeping the union of the runs' IDs at the FDR threshold.
-MBR_QVALUE_COLUMN = "BestChannel_Qvalue"
+# The first pass's IDs that go into the match-between-runs library are those
+# with their run-level q-value below the FDR threshold: PlexSet_Qvalue, or
+# Qvalue label-free (fdr_analysis.set_qvalue_column).  "untag_prec_Global_Qvalue"
+# is the stricter choice, keeping the union of the runs' IDs at the FDR threshold.
 
 # A run is aligned to the reference only if they share at least this many precursors
 _MIN_SHARED_FOR_ALIGNMENT = 20
@@ -92,14 +92,14 @@ class _IdLevel(NamedTuple):
     shade: str           # its shade of the channel's colour: "dark", "full" or "light"
 
 
-# From the strictest.  The run-level IDs pass the best channel's q-value;
-# the global q-value is per ID over the experiment, so it can sit anywhere
-# below them.  qvalue_pass is on the channel FDR's q-value when there is one
-# (_channel_q), the channel's own Qvalue when not
+# From the strictest.  The run-level IDs pass their plex set's q-value
+# (PlexSet_Qvalue); the global q-value is per ID over the experiment, so it can
+# sit anywhere below them.  qvalue_pass is on the channel FDR's q-value when
+# there is one (_channel_q), the channel's own Qvalue when not
 _ID_LEVELS = [
     _IdLevel("qvalue_pass", "Qvalue", "dark"),
     _IdLevel("retained", "Global Qvalue", "full"),
-    _IdLevel(None, "BestChannel Qvalue", "light"),
+    _IdLevel(None, "PlexSet Qvalue", "light"),
 ]
 
 # The proteins' plot_lost_to_global_q stacks each column by 1, 2, 3 and this
@@ -187,7 +187,9 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
     ], how="vertical_relaxed")  # a column's type can differ between runs (e.g. channel int vs float)
 
     # Kept when the runs' results carry them: timeplex runs have each ID's time
-    # channel, and coeff, prec_im and untag_prec_Qvalue are there when the
+    # channel; PredVal and Qvalue are the precursor model's (and with --scoring
+    # both its set-level untag_prec_Qvalue), PlexSetScore and PlexSet_Qvalue
+    # there with 2 or more channels; coeff and prec_im are there when the
     # results were written with them
     available = df.collect_schema().names()
     # The decoy channel is a null draw, not an identification: it is left out of
@@ -195,19 +197,18 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
     # per-run counts and plots, nor the MBR library (which reads these IDs)
     if "is_decoy_channel" in available:
         df = df.filter(~pl.col("is_decoy_channel").fill_null(False))
-    (time_channel, coeff, prec_im, untag_prec_q, channel_q, protein_channel_q, ms1_quality, channel_score,
-     plex_set_score, plex_set_q, protein_plex_set_q) = (
+    (time_channel, coeff, prec_im, pred_val, qvalue, untag_prec_q, channel_q, protein_channel_q, ms1_quality,
+     channel_score, plex_set_score, plex_set_q) = (
         [c] if c in available else []
-        for c in ("time_channel", "coeff", "prec_im", "untag_prec_Qvalue", "Channel_Qvalue",
-                  "Protein_Channel_Qvalue", "MS1_quality", "ChannelScore", "PlexSetScore", "PlexSet_Qvalue",
-                  "Protein_PlexSet_Qvalue"))
+        for c in ("time_channel", "coeff", "prec_im", "PredVal", "Qvalue", "untag_prec_Qvalue", "Channel_Qvalue",
+                  "Protein_Channel_Qvalue", "MS1_quality", "ChannelScore", "PlexSetScore", "PlexSet_Qvalue"))
     df = (
         df
         .select(["run_idx", "file_name", "protein", "seq", "z", "channel", "silac_channel",
                  *time_channel,
-                 "PredVal", *channel_score, "Qvalue", "BestChannel_Qvalue", *untag_prec_q, *plex_set_score, *plex_set_q, *channel_q,
+                 *pred_val, *channel_score, *qvalue, *untag_prec_q, *plex_set_score, *plex_set_q, *channel_q,
                  "Protein_Qvalue",
-                 *protein_channel_q, *protein_plex_set_q,
+                 *protein_channel_q,
                  "plex_Area", *coeff, *ms1_quality, "stripped_seq", "untag_seq", "untag_prec",
                  "mz", "rt", *prec_im, "is_decoy"])
         .with_columns(
@@ -225,7 +226,7 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
     # (a decoy shares its target's protein name)
     df = (
         df
-        .filter(pl.col("BestChannel_Qvalue") < fdr_threshold)
+        .filter(pl.col(set_qvalue_column(df.collect_schema())) < fdr_threshold)
         .filter(pl.col("is_decoy") == False)
         .join(
             untag_prec_global_qs.lazy().select(["untag_prec", "untag_prec_Global_Qvalue"]),
@@ -247,8 +248,9 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
 def global_qvalues(df, key, target_decoy_ratio, qvalue_name):
     """A global q-value for each *key* (untag_prec, or protein), over every run.
 
-    Each key's target and decoy are ranked by their best PredVal across runs,
-    channels and SILAC channels (and a protein's precursors), and targets and
+    Each key's target and decoy are ranked by their best score across runs,
+    channels and SILAC channels (and a protein's precursors): PlexSetScore, or
+    PredVal label-free (fdr_analysis.set_score_column), and targets and
     decoys are counted as the per-run q-value does.  Returns one row per key and
     is_decoy with its best score, the run it came from (BestRun) and that run's
     channel (Best_channel and so on, one per channel column), the number of runs
@@ -258,14 +260,15 @@ def global_qvalues(df, key, target_decoy_ratio, qvalue_name):
     on the runs' row order.
     """
     channel_columns = [c for c in _CHANNEL_COLUMNS if c in df.collect_schema().names()]
+    score = set_score_column(df.collect_schema())
     # Ties go to the earliest run, then the lowest channel
-    best_first = ["PredVal", "run_idx", *channel_columns]
+    best_first = [score, "run_idx", *channel_columns]
     descending = [True] + [False] * (1 + len(channel_columns))
     scores = (
         # A decoy shares its target's protein name, so they are told apart by is_decoy
         df.group_by(key, "is_decoy")
         .agg(
-            pl.col("PredVal").max().alias("MaxPredVal"),
+            pl.col(score).max().alias("MaxScore"),
             pl.col("run_idx").sort_by(best_first, descending=descending).first().alias("BestRun"),
             *(pl.col(c).sort_by(best_first, descending=descending).first().alias(f"Best_{c}")
               for c in channel_columns),
@@ -276,15 +279,18 @@ def global_qvalues(df, key, target_decoy_ratio, qvalue_name):
 
     # group_by's order is arbitrary: fixed first, as the estimator's ties keep the row order
     scores = scores.sort("is_decoy", key).collect()
-    qvalues = target_decoy_qvalues(scores["MaxPredVal"].to_numpy(), scores["is_decoy"].to_numpy(),
+    qvalues = target_decoy_qvalues(scores["MaxScore"].to_numpy(), scores["is_decoy"].to_numpy(),
                                    target_decoy_ratio)
     return scores.with_columns(pl.Series(qvalue_name, qvalues))
 
 
 def _channel_q(df, column="Channel_Qvalue"):
     """*column* (Channel_Qvalue, Protein_Channel_Qvalue) where the channel FDR
-    gave it, the run's Qvalue where not."""
-    return column if column in df.columns and df[column].is_not_null().any() else "Qvalue"
+    gave it, the run's Qvalue where not, or with no Qvalue (the plex-set
+    model) the run-level PlexSet_Qvalue."""
+    if column in df.columns and df[column].is_not_null().any():
+        return column
+    return "Qvalue" if "Qvalue" in df.columns else set_qvalue_column(df)
 
 
 def precursors_per_run(df, units, fdr_threshold):
@@ -410,16 +416,18 @@ class _Units:
         return f"{v:g}" if isinstance(v, float) else str(v)
 
 
-def mbr_library_rts(combined_ids, fdr_threshold, mbr_dir, qvalue_column=MBR_QVALUE_COLUMN):
+def mbr_library_rts(combined_ids, fdr_threshold, mbr_dir, qvalue_column=None):
     """One aligned RT for every untagged precursor the first pass identified.
 
-    The IDs are those with *qvalue_column* below *fdr_threshold*.  Each run's
+    The IDs are those with *qvalue_column* below *fdr_threshold*: by default
+    their run-level q-value (fdr_analysis.set_qvalue_column).  Each run's
     RTs are aligned to a reference run, the one with the most IDs: a LOWESS fit
     of the RT difference over the precursors the two share, after dropping
     differences more than 4 SD from their mean, is added to every RT of the
     run.  A precursor's library RT is then its reference-run RT, or else the
     median of its aligned RTs.  Within a run, a precursor identified in several
-    channels takes the RT of its best-scoring one.
+    channels takes the RT of its best-scoring one (by PredVal; with the plex-set
+    model every channel of a set has the set's score, and it takes the earliest).
 
     On timeplex each time channel of each run is aligned as a unit of its own,
     so the channels' offsets are removed along with the drift between runs.
@@ -427,6 +435,7 @@ def mbr_library_rts(combined_ids, fdr_threshold, mbr_dir, qvalue_column=MBR_QVAL
 
     Writes the plots to *mbr_dir*.  Returns one row per untag_prec with its rt.
     """
+    qvalue_column = qvalue_column or set_qvalue_column(combined_ids)
     ids = combined_ids.filter(pl.col(qvalue_column) < fdr_threshold, ~pl.col("is_decoy"))
     if ids.is_empty():
         raise JModError("The first pass identified no precursors, so there is no "
@@ -434,7 +443,8 @@ def mbr_library_rts(combined_ids, fdr_threshold, mbr_dir, qvalue_column=MBR_QVAL
     unit_columns = ["run_idx"] + (["time_channel"] if "time_channel" in ids.columns else [])
     unit_rts = (
         ids.group_by(*unit_columns, "untag_prec")
-        .agg(pl.col("rt").sort_by(["PredVal", "rt"], descending=[True, False]).first().cast(pl.Float64))
+        .agg(pl.col("rt").sort_by(["PredVal" if "PredVal" in ids.columns else set_score_column(ids), "rt"],
+                                  descending=[True, False]).first().cast(pl.Float64))
     )
     units = {unit: frame.drop(unit_columns)
              for unit, frame in unit_rts.partition_by(unit_columns, as_dict=True).items()}
@@ -786,25 +796,26 @@ def plot_library_size_by_run(targets, fdr_threshold, qvalue_column, mbr_dir):
     one with the most IDs (MBR's reference run), then each time the one adding
     the most not yet in it, on *qvalue_column* (the library's q-value).  One
     line for the run-level IDs of *targets* (the first pass's combined
-    targets), one for those that also pass the global q-value, each labelled
-    with its final size.
+    targets, at their run-level q-value: fdr_analysis.set_qvalue_column), one
+    for those that also pass the global q-value, each labelled with its final
+    size.
     """
     run_idxs = sorted(targets["run_idx"].unique().to_list())
+    run_q = set_qvalue_column(targets)
     ids_by_run = {}
-    for column in ("untag_prec_Global_Qvalue", "BestChannel_Qvalue"):
+    for column in ("untag_prec_Global_Qvalue", run_q):
         by_run = dict(targets.filter(pl.col(column) < fdr_threshold)
                       .group_by("run_idx").agg(pl.col("untag_prec").unique()).iter_rows())
         ids_by_run[column] = {r: set(by_run.get(r, [])) for r in run_idxs}
     order = _greedy_run_order(ids_by_run[qvalue_column])
 
-    # On channels the run-level IDs are the best channel's, as in the other plots
-    channels = any(c in targets.columns and targets[c].n_unique() > 1 for c in _CHANNEL_COLUMNS)
-    run_level = "BestChannel Qvalue" if channels else "Qvalue"
+    # On channels the run-level IDs are their plex set's, as in the other plots
+    run_level = "PlexSet Qvalue" if run_q == "PlexSet_Qvalue" else "Qvalue"
     x = np.arange(1, len(order) + 1)
     fig, ax = plt.subplots(figsize=(_figure_width(len(order)), 4))
     finals = {}
     for column, name, color in (("untag_prec_Global_Qvalue", "Global Qvalue", _BLUE),
-                                ("BestChannel_Qvalue", run_level, _LIGHT_BLUE)):
+                                (run_q, run_level, _LIGHT_BLUE)):
         seen, library_size = set(), []
         for r in order:
             seen |= ids_by_run[column][r]

@@ -510,8 +510,9 @@ def plot_channel_scores(features, folder, split="all", fdr_threshold=0.01):
 
 def plot_channel_fdr(features, folder, importance=None, split="all", fdr_threshold=0.01, workers=1):
     """The channel-FDR plots of a run into *folder*: each feature's ECDF,
-    drawn in *workers* processes, the best channel by PredVal, IDs vs
-    Channel_Qvalue, the IDs it retains at *fdr_threshold*, and the feature
+    drawn in *workers* processes, the best channel by PredVal (when the
+    precursor model scored the run: the plex-set model gives no PredVal), IDs
+    vs Channel_Qvalue, the IDs it retains at *fdr_threshold*, and the feature
     importance if there is one.  *split*: "all"; an amino acid ("K") for the
     peptides ending in it and the rest as two panels (not the feature
     importance, which is one model's); or "off", no plots."""
@@ -519,7 +520,8 @@ def plot_channel_fdr(features, folder, importance=None, split="all", fdr_thresho
     if split is None:
         return
     plot_feature_ecdfs(features, folder, split=split, workers=workers)
-    plot_best_channel(features, folder, split=split)
+    if "PredVal" in features.columns:
+        plot_best_channel(features, folder, split=split)
     plot_ids_vs_channel_qvalue(features, folder, split=split, fdr_threshold=fdr_threshold)
     plot_ids_retained(features, folder, split=split, fdr_threshold=fdr_threshold)
     if importance is not None:

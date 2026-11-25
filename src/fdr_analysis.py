@@ -236,11 +236,15 @@ def _gaussian_fit_r2(traces, lens, center):
 
 def ms1_quality(ids):
     """MS1_quality of every row of ``ids``, one run's filtered IDs (pandas, with
-    PredVal or, when the channel FDR was fitted, ChannelScore, plexfitMS1_p,
+    the channel FDR's ChannelScore when it was fitted, or else PredVal from the
+    precursor model or PlexSetScore from the plex-set model, plexfitMS1_p,
     plex_snr and plex_Area); see the comment above NO_MS1_QUANT_FACTOR."""
     def pct(values):  # percentile within the run; NaN stays NaN
         return values.rank(method="average") / values.count()
-    id_score = ids["ChannelScore"] if ids.get("ChannelScore", pd.Series()).notna().any() else ids["PredVal"]
+    if ids.get("ChannelScore", pd.Series()).notna().any():
+        id_score = ids["ChannelScore"]
+    else:
+        id_score = ids["PredVal"] if "PredVal" in ids.columns else ids["PlexSetScore"]
     parts = [pct(id_score).fillna(0.0), pct(ids["plexfitMS1_p"].clip(lower=0)).fillna(0.0),
              pct(ids["plex_snr"]).fillna(0.0)]
     score = np.power(np.prod(parts, axis=0), 1.0 / len(parts))
@@ -287,7 +291,7 @@ def ms1_quality_pass(ids):
 
 
 # Left NaN by ms1_quant's fill (fill_ms1_quant_gaps)
-_UNFILLED_QVALUES = ("Qvalue", "BestChannel_Qvalue", "untag_prec_Qvalue", "PlexSetScore", "PlexSet_Qvalue")
+_UNFILLED_QVALUES = ("Qvalue", "untag_prec_Qvalue", "PlexSetScore", "PlexSet_Qvalue")
 
 
 def fill_ms1_quant_gaps(dat):
@@ -326,7 +330,7 @@ def ms1_quant(dat,lp,dc,mass_tag,SILAC,DIAspectra,mz_ppm,rt_tol,im_tol,timeplex=
     
     #only quantify confident precs
     if config.args.unfiltered_quant: #this will not execute if you specificy --unfiltered_quant (inherently stored as false)
-        fdc = fdc[fdc["BestChannel_Qvalue"] < 0.01].reset_index(drop=True)
+        fdc = fdc[fdc[set_qvalue_column(fdc)] < 0.01].reset_index(drop=True)
 
     if mass_tag:
         # The fit builds each set's channels from the tag, which carries the decoy
@@ -699,7 +703,7 @@ def target_decoy_qvalues(scores, is_decoy, target_decoy_ratio=1.0, rows=None):
     (1 + decoys at or above) / (targets at or above) x *target_decoy_ratio*,
     monotonized, so each is the lowest at or below it.  Ties keep the order of
     the rows (a stable sort).  Every q-value JMod reports is this: Qvalue,
-    untag_prec_Qvalue, Protein_Qvalue, Channel_Qvalue and the experiment's
+    PlexSet_Qvalue, Protein_Qvalue, Channel_Qvalue and the experiment's
     global q-values (multi_run.global_qvalues).
 
     With *rows* (a mask), of those rows alone, NaN for every other.
@@ -949,27 +953,25 @@ ID_COUNT_FDR = 0.01
 _ID_COUNT_KEYS = ["file_name", "channel", "silac_channel"]
 
 
-def id_counts(df, plexDIA=False):
+def id_counts(df):
     """The run's IDs at ID_COUNT_FDR, one row per (file, channel, SILAC
     channel), columns (kind, level), kind "Precursors" or "Proteins".  The
     real channels only: the decoy channel's IDs are none.
 
     Each level is what a precursor or protein in that channel must pass:
-      - "own Q": its own Qvalue (a protein: Protein_Qvalue, and a precursor
-        there at Qvalue)
+      - "plex set Q" (or "Q", with no plex sets: a label-free run): the
+        set-level q-value, PlexSet_Qvalue or Qvalue (set_qvalue_column) (a
+        protein: Protein_Qvalue, and a precursor there at that q-value)
       - "chan Q", when the run has a channel FDR: Channel_Qvalue (a
         protein: Protein_Qvalue and Protein_Channel_Qvalue)
-      - "best chan Q", with *plexDIA*: BestChannel_Qvalue (a protein:
-        Protein_Qvalue, and a precursor there at BestChannel_Qvalue)
     """
     real = ~df["is_decoy_channel"].astype(bool) if "is_decoy_channel" in df.columns else True
     targets = (df["is_decoy"] == False) & real
     passes = lambda column: df[column] < ID_COUNT_FDR          # NaN passes nothing
-    levels = [("own Q", passes("Qvalue"), passes("Qvalue"))]
+    qvalue = set_qvalue_column(df)
+    levels = [("plex set Q" if qvalue == "PlexSet_Qvalue" else "Q", passes(qvalue), passes(qvalue))]
     if {"Channel_Qvalue", "Protein_Channel_Qvalue"} <= set(df.columns) and df["Channel_Qvalue"].notna().any():
         levels.append(("chan Q", passes("Channel_Qvalue"), passes("Protein_Channel_Qvalue")))
-    if plexDIA:
-        levels.append(("best chan Q", passes("BestChannel_Qvalue"), passes("BestChannel_Qvalue")))
     counts = {}
     for kind, unit in (("Precursors", "untag_prec"), ("Proteins", "protein")):
         for label, precursor, protein in levels:
@@ -1042,17 +1044,61 @@ def id_table_lines(table, timeplex=False, silac=False, gap=3):
         lines += [line(header), *map(line, body), line(total), ""]
     return lines[:-1]
 
-def untag_prec_qvalues(fdx, target_decoy_ratio):
-    """Each row's untag_prec_Qvalue: the run's q-value of its untagged
-    precursor (its plexDIA set of channels).
+SCORING_MODELS = ("precursor", "plexset", "both")
+_SCORING_NAMES = {"precursor": "the precursor model",
+                  "plexset": "the plex-set model",
+                  "both": "both models (the plex-set model's PlexSet_Qvalue used downstream)"}
 
-    Each untagged precursor, targets and decoys apart, is scored by its best
-    PredVal over its channels; those are ranked and counted as score_precursors
-    counts the rows for Qvalue, with the same *target_decoy_ratio*.  Grouped
-    like BestChannel_Qvalue (run, untag_prec, is_decoy).  The decoy channel's
-    PredVal is not counted, as it is not for Qvalue: its rows get their set's
-    q-value from the real channels, NaN for a set seen only in it.  Returns a
-    Series aligned with *fdx*.
+
+def n_real_channels(fdc):
+    """How many channels the run's rows are in, the decoy channel left out: its
+    (channel, SILAC channel) pairs.  1 for a label-free run."""
+    real = ~fdc["is_decoy_channel"].astype(bool) if "is_decoy_channel" in fdc.columns else True
+    return len(fdc.loc[real, ["channel", "silac_channel"]].drop_duplicates())
+
+
+def resolve_scoring(setting, n_channels):
+    """The model the run is scored by, from --scoring (*setting*) and its
+    *n_channels*: "plexset" (the plex-set model, plex_scoring), "precursor"
+    (score_precursors), or "both" (the two; the plex-set model's values used
+    downstream).  auto is plexset with 2 or more channels, precursor otherwise;
+    plexset or both with fewer than 2 falls back to precursor, with a warning,
+    as a plex set of one channel has nothing to compare.  Logs which."""
+    setting = str(setting or "auto").lower()
+    if setting not in ("auto", *SCORING_MODELS):
+        raise JModError(f"--scoring {setting}: choose auto, precursor, plexset or both")
+    model = ("plexset" if n_channels >= 2 else "precursor") if setting == "auto" else setting
+    if model in ("plexset", "both") and n_channels < 2:
+        logger.warning(f"--scoring {model} needs at least 2 channels; this run has {n_channels}. "
+                       f"Using the precursor model")
+        model = "precursor"
+    logger.info(f"Scoring with {_SCORING_NAMES[model]} "
+                f"(--scoring {setting}, {n_channels} channel{'s' if n_channels != 1 else ''})")
+    return model
+
+
+def set_qvalue_column(df):
+    """The run's set-level q-value: PlexSet_Qvalue when the run has plex sets
+    (2 or more channels), whichever model scored it; Qvalue when not (a
+    label-free run, one row per precursor).  *df*: a pandas or polars frame,
+    or a polars schema."""
+    return "PlexSet_Qvalue" if "PlexSet_Qvalue" in getattr(df, "columns", df) else "Qvalue"
+
+
+def set_score_column(df):
+    """The score behind set_qvalue_column: PlexSetScore, or PredVal."""
+    return "PlexSetScore" if "PlexSetScore" in getattr(df, "columns", df) else "PredVal"
+
+
+def precursor_set_scores(fdx, target_decoy_ratio):
+    """(PlexSetScore, PlexSet_Qvalue) of every row, by the precursor model: its
+    plex set's best PredVal over its channels, and the run's q-value of that.
+
+    The sets, targets and decoys apart (run, untag_prec, is_decoy), are ranked
+    and counted as score_precursors counts the rows for Qvalue, with the same
+    *target_decoy_ratio*.  The decoy channel's PredVal is not counted, as it is
+    not for Qvalue: its rows get their set's values from the real channels, NaN
+    for a set seen only in it.  Two Series aligned with *fdx*.
     """
     group = fdx.groupby(["file_name", "untag_prec", "is_decoy"], sort=False).ngroup().to_numpy()
     predval = fdx["PredVal"]
@@ -1061,24 +1107,26 @@ def untag_prec_qvalues(fdx, target_decoy_ratio):
     best = predval.groupby(group).max().to_numpy()                        # NaN: only the decoy channel
     is_decoy = fdx["is_decoy"].groupby(group).first().to_numpy().astype(bool)
     q = target_decoy_qvalues(best, is_decoy, target_decoy_ratio, ~np.isnan(best))
-    return pd.Series(q[group], index=fdx.index)
+    return pd.Series(best[group], index=fdx.index), pd.Series(q[group], index=fdx.index)
 
 
 def compute_protein_FDR(df, target_decoy_ratio):
-    """Protein_Qvalue onto *df*: each protein in the run, by its best precursor
-    at Qvalue < 0.01 in any channel, against the library's decoy proteins."""
+    """Protein_Qvalue onto *df*: each protein in the run, by its best plex set
+    (PlexSetScore) at PlexSet_Qvalue < 0.01, or with no plex sets (a label-free
+    run) its best precursor (PredVal) at Qvalue < 0.01, against the library's
+    decoy proteins (set_qvalue_column, set_score_column)."""
     logger.info("")
     logger.info("Computing Protein FDR")
 
-  
+    qvalue, score = set_qvalue_column(df), set_score_column(df)
     df["run_chan"] = df["file_name"].astype(str) + df["channel"].astype(str)+ df["silac_channel"].astype(str)
-    df_seqchargeqvals = df[df["Qvalue"] < 0.01].copy().reset_index(drop=True) #filter
-    df_seqchargeqvals["maxPredval"] = df_seqchargeqvals.groupby(["protein", "is_decoy"])["PredVal"].transform("max")
+    df_seqchargeqvals = df[df[qvalue] < 0.01].copy().reset_index(drop=True) #filter
+    df_seqchargeqvals["best_score"] = df_seqchargeqvals.groupby(["protein", "is_decoy"])[score].transform("max")
     df_seqchargeqvals = df_seqchargeqvals.drop_duplicates(subset=["protein", "is_decoy"]).reset_index(drop=True)
 
-    # Each protein, target and decoy apart, ranked by its best precursor
+    # Each protein, target and decoy apart, ranked by its best set (or precursor)
     df_seqchargeqvals["Protein_Qvalue"] = target_decoy_qvalues(
-        df_seqchargeqvals["maxPredval"].to_numpy(), df_seqchargeqvals["is_decoy"].to_numpy(), target_decoy_ratio)
+        df_seqchargeqvals["best_score"].to_numpy(), df_seqchargeqvals["is_decoy"].to_numpy(), target_decoy_ratio)
     
     # Filter for non-decoy proteins and select distinct protein values
     df_seqchargeqvals_distinct = (
@@ -1094,7 +1142,7 @@ def compute_protein_FDR(df, target_decoy_ratio):
 
 def report_id_counts(df, results_folder=None):
     """The run's ID table (id_counts), into the log and <results_folder>/Summary.txt."""
-    table = id_counts(df, plexDIA=config.args.plexDIA)
+    table = id_counts(df)
     lines = id_table_lines(table, timeplex=config.args.timeplex, silac=config.args.SILAC is not None)
     logger.info("")
     for line in lines:
@@ -1165,6 +1213,22 @@ def _write_full_parquet(df, path):
             arrays.append(pa.array([None if _is_null(v) else str(v) for v in df[col]],
                                    type=pa.string()))
     pq.write_table(pa.Table.from_arrays(arrays, names=[str(c) for c in df.columns]), path)
+
+
+def _plex_set_scores(fdx, spectra, dc, fdc_list_cols, mass_tag, SILAC, target_decoy_ratio, results_folder):
+    """(PlexSetScore, PlexSet_Qvalue) of every row of *fdx* by the plex-set
+    model (plex_scoring.run_plex_scoring), with its elution and fragment
+    features: the run's per-scan coefficients (*dc*) on its DIA cycles, and the
+    apex scans' fragments (*fdc_list_cols*), tagged by the mass tag or SILAC."""
+    from src.channel_fdr import ms2_cycles
+    from src.plex_scoring import run_plex_scoring
+    scan_cycles = ms2_cycles([spectrum.scan_num for spectrum in spectra.ms2scans],
+                             [spectrum.ms1window for spectrum in spectra.ms2scans])
+    # the label whose sites make a fragment channel-specific
+    label = mass_tag if mass_tag is not None else SILAC
+    return run_plex_scoring(fdx, target_decoy_ratio, results_folder, config.fdr_threshold,
+                            scan_coeffs=dc, scan_cycles=scan_cycles, list_cols=fdc_list_cols,
+                            label_name=label.name if label is not None else None)
 
 
 def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
@@ -1274,51 +1338,39 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     corr_features.index = fdc.index
     fdc = pd.concat([fdc, corr_features], axis=1)
 
-    fdx = score_precursors(fdc.reset_index(drop=True), target_decoy_ratio, config.score_model, config.fdr_threshold,
-                          folder=results_folder)
-
-    fdx['PredVal'] = fdx['PredVal'].fillna(0)
-    # The decoy channel has no Qvalue (score_precursors): it stays NaN, so the
-    # best channel's below takes the real channels' alone (min skips NaN), and
-    # gives it to the decoy channel's rows of a set they pass
-    real_rows = ~fdx["is_decoy_channel"]
-    fdx.loc[real_rows, 'Qvalue'] = fdx.loc[real_rows, 'Qvalue'].fillna(1)
-
-
-    # if config.args.plexDIA:
-    #     if config.args.timeplex:
-    #         fdx["BestChannel_Qvalue"] = fdx.groupby(["time_channel", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a plexDIA set for each timechannel
-    #     else:
-    #         fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "decoy"])["Qvalue"].transform("min") #within a plexDIA set
-    
-    if config.args.plexDIA or config.args.timeplex:
-        fdx["BestChannel_Qvalue"] = fdx.groupby(["file_name", "untag_prec", "is_decoy"])["Qvalue"].transform("min") #within a run
-        fdx["untag_prec_Qvalue"] = untag_prec_qvalues(fdx, target_decoy_ratio)
-        # A separate model, one row per plex set (plex_scoring): built from the
-        # per-channel measurements alone, none of score_precursors' outputs, to
-        # compare against untag_prec_Qvalue.  Into every output; nothing is
-        # filtered by it
-        from src.channel_fdr import ms2_cycles
-        from src.plex_scoring import run_plex_scoring
-        scan_cycles = ms2_cycles([spectrum.scan_num for spectrum in spectra.ms2scans],
-                                 [spectrum.ms1window for spectrum in spectra.ms2scans])
-        # the label whose sites make a fragment channel-specific
-        label = mass_tag if mass_tag is not None else SILAC
-        fdx["PlexSetScore"], fdx["PlexSet_Qvalue"] = run_plex_scoring(
-            fdx, target_decoy_ratio, results_folder, config.fdr_threshold,
-            scan_coeffs=dc, scan_cycles=scan_cycles, list_cols=fdc_list_cols,
-            label_name=label.name if label is not None else None)
+    # Scored by --scoring's model (resolve_scoring).  With 2 or more channels
+    # every row gets its plex set's PlexSetScore and PlexSet_Qvalue, from the
+    # plex-set model (plexset, both) or, with the precursor model alone, from
+    # its rows' best PredVal; everything downstream reads those
+    # (set_qvalue_column).  With both, the precursor model's Qvalue and its
+    # set-level untag_prec_Qvalue are reported beside them.  Label-free (one
+    # channel), the precursor model's PredVal and Qvalue are the set level
+    n_channels = n_real_channels(fdc)
+    model = resolve_scoring(config.args.scoring, n_channels)
+    if model == "plexset":
+        fdx = fdc.reset_index(drop=True)
     else:
-        fdx["BestChannel_Qvalue"] = fdx["Qvalue"] #applies to no plex
-        fdx["untag_prec_Qvalue"] = fdx["Qvalue"]  # one row per untagged precursor, so the same
-
+        fdx = score_precursors(fdc.reset_index(drop=True), target_decoy_ratio, config.score_model,
+                               config.fdr_threshold, folder=results_folder)
+        fdx['PredVal'] = fdx['PredVal'].fillna(0)
+        # The decoy channel has no Qvalue (score_precursors): it stays NaN, and
+        # its rows get their set's values from the real channels
+        real_rows = ~fdx["is_decoy_channel"]
+        fdx.loc[real_rows, 'Qvalue'] = fdx.loc[real_rows, 'Qvalue'].fillna(1)
+    if model == "precursor" and n_channels >= 2:
+        fdx["PlexSetScore"], fdx["PlexSet_Qvalue"] = precursor_set_scores(fdx, target_decoy_ratio)
+    elif model in ("plexset", "both"):
+        if model == "both":
+            fdx["untag_prec_Qvalue"] = precursor_set_scores(fdx, target_decoy_ratio)[1]
+        fdx["PlexSetScore"], fdx["PlexSet_Qvalue"] = _plex_set_scores(
+            fdx, spectra, dc, fdc_list_cols, mass_tag, SILAC, target_decoy_ratio, results_folder)
 
     # The main-search scans MS1 quant reads, for the rows it quantifies only (the
     # same selection ms1_quant makes), not every PSM of the run.  gauss_r2_joint
     # below reads a subset of these.
     _quant_rows = fdx[~fdx["is_decoy"]]
     if config.args.unfiltered_quant:
-        _quant_rows = _quant_rows[_quant_rows["BestChannel_Qvalue"] < 0.01]
+        _quant_rows = _quant_rows[_quant_rows[set_qvalue_column(_quant_rows)] < 0.01]
     dc = dc.frame_for(_quant_rows)
     del _quant_rows
 
@@ -1351,18 +1403,10 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     # The proteins: in the run, then (with the channel FDR) in each channel.
     # compute_protein_FDR's merge keeps the rows and their order
     fdx_quant = compute_protein_FDR(fdx_quant, target_decoy_ratio=target_decoy_ratio)
-    if "PlexSetScore" in fdx_quant.columns:
-        # the proteins by the plex-set model, beside Protein_Qvalue
-        from src.plex_scoring import protein_qvalues
-        fdx_quant["Protein_PlexSet_Qvalue"] = protein_qvalues(fdx_quant, target_decoy_ratio)
     if channel_features is not None:
         logger.info("Computing Protein Channel FDR")
         fdx_quant["Protein_Channel_Qvalue"] = protein_channel_qvalues(fdx_quant, channel_features)
     report_id_counts(fdx_quant, results_folder)
-    # TEMPORARY: proteins by the plex-set model against the best channel's, in the log only
-    if "Protein_PlexSet_Qvalue" in fdx_quant.columns:
-        from src.plex_scoring import log_protein_counts
-        log_protein_counts(fdx_quant)
 
     # Re-attach the list columns we held back from fdc through the heavy
     # in-memory phase. Done here, just before the CSV write, so the merge
@@ -1382,7 +1426,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
     _write_full_parquet(fdx_quant, results_folder+"/outputs/all_precursors.parquet")
     filtered = fdx_quant[np.logical_and.reduce([~fdx_quant["is_decoy"],
                                                 ~fdx_quant["is_decoy_channel"],
-                                                fdx_quant["BestChannel_Qvalue"] < config.fdr_threshold])].copy()
+                                                fdx_quant[set_qvalue_column(fdx_quant)] < config.fdr_threshold])].copy()
     filtered["MS1_quality"] = ms1_quality(filtered)
     filtered["MS1_quality_pass"] = ms1_quality_pass(filtered)
     # For the parquets written below (all_precursors.parquet is written): NaN outside the filtered IDs
@@ -1408,7 +1452,7 @@ def process_data(file,spectra,library,ms1_tol,rt_tol,im_tol,target_decoy_ratio,
 
     ### select minimum columns for parquet
     parquet_columns = ["stripped_seq","z","untag_prec","file_name","channel","is_decoy","is_decoy_channel","Qvalue", "Protein_Qvalue","PredVal","ChannelScore",
-                       "protein",'BestChannel_Qvalue', 'untag_prec_Qvalue', 'PlexSetScore', 'PlexSet_Qvalue', 'Protein_PlexSet_Qvalue', 'Channel_Qvalue', 'Protein_Channel_Qvalue', 'plex_Area', 'plex_bg', 'plex_snr', 'MS1_quality', 'MS1_quality_pass', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
+                       "protein", 'untag_prec_Qvalue', 'PlexSetScore', 'PlexSet_Qvalue', 'Channel_Qvalue', 'Protein_Channel_Qvalue', 'plex_Area', 'plex_bg', 'plex_snr', 'MS1_quality', 'MS1_quality_pass', 'seq', 'silac_channel', 'untag_seq',"rt","mz","prec_im","coeff",
                        "time_channel"]
     parquet_columns = [i for i in parquet_columns if i in fdx_quant.columns]
     fdx_quant[parquet_columns].to_parquet(results_folder+"/outputs/all_IDs_filtered.parquet")

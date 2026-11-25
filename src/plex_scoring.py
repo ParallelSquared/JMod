@@ -12,15 +12,16 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-"""Plex-set scoring: a separate model of the run's IDs, one row per plex set,
-giving PlexSetScore and PlexSet_Qvalue -- a candidate to replace the precursor
-scoring (score_precursors) and the q-values built on it.
+"""Plex-set scoring: the plex-set model of the run's IDs, one row per plex set,
+giving PlexSetScore and PlexSet_Qvalue -- the alternative to the precursor
+model (score_precursors), chosen by --scoring (fdr_analysis.resolve_scoring).
 
 A plex set is one untagged precursor in one run: the same peptide searched once
 per channel, targets and decoys apart (each channel's target has its own decoy,
 and the decoys of a set share their untagged precursor, as the targets do).
-untag_prec_Qvalue ranks each set by its best channel's PredVal alone.  This
-model sees every channel of the set at once: the measurements of each channel
+With the precursor model a set's PlexSet_Qvalue ranks it by its best channel's
+PredVal alone (fdr_analysis.precursor_set_scores).  This model sees every
+channel of the set at once: the measurements of each channel
 side by side, and whether the channels agree with each other -- real channels
 of one peptide co-elute and share their errors; the channels of a false set are
 independent draws and need not.
@@ -36,8 +37,7 @@ channel has no PlexSetScore or PlexSet_Qvalue.
 
 Fitted as the precursor scoring is: cross-validated, grouped by peptide, with
 two semi-supervised refits on this model's own q-values.  The q-values use the
-run's target/decoy ratio, as untag_prec_Qvalue's do.  Nothing is filtered by
-them.
+run's target/decoy ratio, as the precursor model's do.
 """
 
 import os
@@ -65,18 +65,18 @@ HIST_PLOT = "hist_top_features.png"
 N_PLOTTED_FEATURES = 30
 SCORE_COLUMNS = ["PlexSetScore", "PlexSet_Qvalue"]
 
-# What a plex set is, as for untag_prec_Qvalue (fdr_analysis.untag_prec_qvalues)
+# What a plex set is, as for the precursor model's (fdr_analysis.precursor_set_scores)
 SET_KEYS = ["file_name", "untag_prec", "is_decoy"]
-# Carried into the feature table so it stands on its own; not features
+# Carried into the feature table so it stands on its own; not features.  With
+# --scoring both, the precursor model's untag_prec_Qvalue, compared against
 _ID_COLUMNS = [*SET_KEYS, "stripped_seq", "untag_prec_Qvalue"]
 # The CV groups: a peptide's charges in one fold, as for the precursor scoring
 GROUP_COLUMN = "stripped_seq"
 
 # The precursor scoring's outputs, and what is built on them, never features
 # here (most are made after this model runs; listed so they never can be)
-FIRST_MODEL_OUTPUTS = ["PredVal", "Qvalue", "BestChannel_Qvalue", "untag_prec_Qvalue", "Protein_Qvalue",
-                       "ChannelScore", "Channel_Qvalue", "Protein_Channel_Qvalue", *SCORE_COLUMNS,
-                       "Protein_PlexSet_Qvalue"]
+FIRST_MODEL_OUTPUTS = ["PredVal", "Qvalue", "untag_prec_Qvalue", "Protein_Qvalue", "ChannelScore",
+                       "Channel_Qvalue", "Protein_Channel_Qvalue", *SCORE_COLUMNS]
 # The channels of a set are laid side by side in this order, highest first:
 # <feature>_rank<i> is the i-th channel's.  By rank, not by channel: the model
 # is to learn how many channels agree and how well, not anything about a
@@ -664,8 +664,7 @@ def run_plex_scoring(rows, target_decoy_ratio, results_folder, fdr_threshold, sc
     FEATURE_FILE (the feature table, with PlexSetScore and PlexSet_Qvalue),
     FEATURE_IMPORTANCE_FILE and the plots.
 
-    *rows* is the run's scored precursor-channels (pandas, with PredVal,
-    Qvalue and untag_prec_Qvalue); *scan_coeffs* and *scan_cycles*, when
+    *rows* is the run's precursor-channels (pandas); *scan_coeffs* and *scan_cycles*, when
     given, add the elution features, and *list_cols* and *label_name* the
     fragment features (set_features).  Returns (PlexSetScore, PlexSet_Qvalue), two
     Series aligned with *rows*: every row gets its set's, the decoy channel's
@@ -700,64 +699,10 @@ def run_plex_scoring(rows, target_decoy_ratio, results_folder, fdr_threshold, sc
             pd.Series(q_by_set[group], index=rows.index))
 
 
-def protein_qvalues(ids, target_decoy_ratio):
-    """Protein_PlexSet_Qvalue for every row of the run's IDs (pandas): its
-    protein's q-value by the plex-set model.
-
-    Each protein, targets and decoys apart (a decoy shares its target's protein
-    name), is scored by the best PlexSetScore of its plex sets in the real
-    channels, and ranked with JMod's estimator (fdr_analysis.
-    target_decoy_qvalues) and the run's *target_decoy_ratio* -- as
-    fdr_analysis.compute_protein_FDR ranks them by the best PredVal for
-    Protein_Qvalue, so the two are alternatives.  Unlike it, no precursor
-    q-value is required first: that would tie the proteins to the precursor
-    scoring's IDs.  Ranked in (protein, target before decoy) order, so ties
-    fall the same way every run.
-
-    Returns one value per row, in its order and with its index: its protein's
-    q-value for the target rows of the real channels; null for the library
-    decoys, the decoy channel, a row without a protein, and everywhere when
-    there is no PlexSetScore.
-    """
-    from src.fdr_analysis import target_decoy_qvalues
-    q = pd.Series(np.nan, index=ids.index)
-    if "PlexSetScore" not in ids.columns:
-        return q
-    real = (~ids["is_decoy_channel"].astype(bool) if "is_decoy_channel" in ids.columns
-            else pd.Series(True, index=ids.index))
-    scored = ids[real & ids["protein"].notna() & ids["PlexSetScore"].notna()]
-    if scored.empty:
-        return q
-    best = (scored.groupby(["protein", "is_decoy"], sort=True)["PlexSetScore"].max().reset_index())
-    best["q"] = target_decoy_qvalues(best["PlexSetScore"].to_numpy(), best["is_decoy"].to_numpy(bool),
-                                     target_decoy_ratio)
-    by_protein = best[~best["is_decoy"].astype(bool)].set_index("protein")["q"]
-    targets = real & ~ids["is_decoy"].astype(bool)
-    q[targets] = ids.loc[targets, "protein"].map(by_protein).to_numpy(dtype=float)
-    return q
-
-
-def log_protein_counts(ids, fdr=0.01):
-    """TEMPORARY: one log line of the run's proteins at *fdr* by the plex-set
-    model (a precursor at PlexSet_Qvalue and the protein at
-    Protein_PlexSet_Qvalue) and by the best channel (BestChannel_Qvalue and
-    Protein_Qvalue, as the ID table's "best chan Q"): summed over the real
-    channels, and unique."""
-    real = ~ids["is_decoy_channel"].astype(bool) if "is_decoy_channel" in ids.columns else True
-    targets = ids[~ids["is_decoy"].astype(bool) & real & ids["protein"].notna()]
-    keys = [c for c in ("file_name", "channel", "silac_channel", "time_channel") if c in targets.columns]
-    counts = []
-    for label, precursor, protein in (("plex set Q", "PlexSet_Qvalue", "Protein_PlexSet_Qvalue"),
-                                      ("best chan Q", "BestChannel_Qvalue", "Protein_Qvalue")):
-        passing = targets[(targets[precursor] < fdr) & (targets[protein] < fdr)]
-        summed = len(passing.drop_duplicates(subset=keys + ["protein"]))
-        counts.append(f"{label} {summed:,} summed over channels, {passing['protein'].nunique():,} unique")
-    logger.info(f"Proteins at {fdr:.0%} FDR: " + "; ".join(counts))
-
-
 def set_counts(features, fdr_threshold):
     """{q-value column: target plex sets at or below *fdr_threshold*}, for
-    untag_prec_Qvalue and PlexSet_Qvalue, over the sets of *features*."""
+    PlexSet_Qvalue and, with --scoring both, the precursor model's
+    untag_prec_Qvalue, over the sets of *features*."""
     targets = features.filter(~pl.col("is_decoy"))
     return {c: int((targets[c] <= fdr_threshold).sum())
             for c in ("untag_prec_Qvalue", "PlexSet_Qvalue") if c in targets.columns}
@@ -774,12 +719,12 @@ Q_RANGE = 0.1
 
 
 def plot_ids_vs_qvalue(features, folder, fdr_threshold=0.01):
-    """Target plex sets at or below each q-value, by untag_prec_Qvalue (best
-    channel) and by PlexSet_Qvalue (the set model), with the threshold marked.
-    Into *folder*/IDS_PLOT."""
+    """Target plex sets at or below each q-value, by PlexSet_Qvalue (the set
+    model) and, with --scoring both, the precursor model's untag_prec_Qvalue
+    (best channel), with the threshold marked.  Into *folder*/IDS_PLOT."""
     targets = features.filter(~pl.col("is_decoy"))
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    for column, label in (("untag_prec_Qvalue", "best channel (untag_prec_Qvalue)"),
+    for column, label in (("untag_prec_Qvalue", "precursor model (untag_prec_Qvalue)"),
                           ("PlexSet_Qvalue", "plex-set model (PlexSet_Qvalue)")):
         if column not in targets.columns:
             continue

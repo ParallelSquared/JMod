@@ -204,7 +204,7 @@ def _last_aa(seq):
 
 
 def _ids(rows):
-    """*rows*: (seq, channel, is_decoy, is_decoy_channel, BestChannel_Qvalue).
+    """*rows*: (seq, channel, is_decoy, is_decoy_channel, PlexSet_Qvalue).
     Every carried feature is 1 (a real value for each of them) unless a test
     sets it; the plex set has two channels and the precursor three scans."""
     return pd.DataFrame({
@@ -214,7 +214,7 @@ def _ids(rows):
         "untag_seq": "PEPTIDER", "untag_prec": "PEPTIDER_2",
         "channel": [r[1] for r in rows], "is_decoy": [r[2] for r in rows],
         "is_decoy_channel": [r[3] for r in rows], "Qvalue": 0.001,
-        "BestChannel_Qvalue": [r[4] for r in rows], "PredVal": 0.9, "rt": 61.5,
+        "PlexSet_Qvalue": [r[4] for r in rows], "PredVal": 0.9, "rt": 61.5,
         # ms1_quant's outputs: one MS1 fit window of five scans, a peak in the middle
         "plexfittrace_all": [_T("0;1;4;1;0") for _ in rows],
         "plexfittrace_ps_all": [_T("0.9;0.9;0.9;0.9;0.9") for _ in rows],
@@ -627,7 +627,7 @@ class TestRunScoreAndSequence:
         features = _features(ids, _list_cols([(["b2_1"], [1.0])]), _store(),
                              available_tags["PSMtag_5plex"].with_decoy_channel(), 0.01)
         assert features["PredVal"].to_list() == [0.9] and features["rt"].to_list() == [61.5]
-        assert "Qvalue" not in features.columns and "BestChannel_Qvalue" in features.columns
+        assert "Qvalue" not in features.columns and "PlexSet_Qvalue" in features.columns
         # JMod's cosine is the scan's fit, so it is carried under that name
         assert features["scan_fit_cosine"].to_list() == [1.0] and "cosine" not in features.columns
         assert features["z"].to_list() == [2]
@@ -701,7 +701,7 @@ class TestWriteChannelFeatures:
         assert not (tmp_path / FEATURE_FOLDER / FEATURE_IMPORTANCE_FILE).exists()
 
     def test_the_model_is_fitted_on_the_features_only(self):
-        columns = ["seq", "z", "channel", "is_decoy_channel", "BestChannel_Qvalue", "untag_seq", "protein",
+        columns = ["seq", "z", "channel", "is_decoy_channel", "PlexSet_Qvalue", "untag_seq", "protein",
                    "PredVal", "cosine_chan", "ChannelScore", "Channel_Qvalue"]
         assert model_columns(pl.DataFrame({c: [1.0] for c in columns})) == ["z", "PredVal", "cosine_chan"]
 

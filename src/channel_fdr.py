@@ -61,7 +61,7 @@ SCORE_COLUMNS = ["ChannelScore", "Channel_Qvalue"]
 # feature; Qvalue is not carried, being a coarser step function of it.  These are
 # the table's only columns that are not features
 _ID_COLUMNS = ["file_name", "seq", "untag_seq", "untag_prec", "protein", "channel", "time_channel",
-               "is_decoy_channel", "BestChannel_Qvalue"]
+               "is_decoy_channel", "PlexSet_Qvalue"]
 
 # ms1_quant's outputs the MS1 features read: this channel's plex-fit coefficient
 # and the joint fit's quality at every scan of the set's fit window (arrays),
@@ -558,9 +558,9 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
     """The channel-evidence table for the rows of *ids* worth scoring.
 
     Those are the target rows of every plex set that passed the run's FDR
-    (BestChannel_Qvalue, which is one value for a whole set, so a set is kept or
-    dropped together).  The decoy channel's rows are kept: they are the null the
-    channel-level FDR is measured against.
+    (its set-level q-value, PlexSet_Qvalue: one value for a whole set, so a set
+    is kept or dropped together).  The decoy channel's rows are kept: they are
+    the null the channel-level FDR is measured against.
 
     *list_cols* holds the apex scan's matched fragments (read straight from
     polars rather than merged into the frame, which is why this runs before that
@@ -572,7 +572,8 @@ def build_channel_features(ids, list_cols, scan_coeffs, scan_cycles, library, ma
                if c not in ids.columns]
     if missing:
         raise KeyError(f"Channel features need these columns of the run's IDs; missing {missing}")
-    keep = (~ids["is_decoy"].to_numpy()) & (ids["BestChannel_Qvalue"].to_numpy() < fdr_threshold)
+    from src.fdr_analysis import set_qvalue_column
+    keep = (~ids["is_decoy"].to_numpy()) & (ids[set_qvalue_column(ids)].to_numpy() < fdr_threshold)
     scored = ids.loc[keep, [c for c in _ID_COLUMNS if c in ids.columns] + _CARRIED_FEATURES
                            + [c for c in _OPTIONAL_CARRIED_FEATURES if c in ids.columns]
                            + _RULE_COLUMNS + _MS1_COLUMNS + ["last_aa", "__fdc_idx"]]
