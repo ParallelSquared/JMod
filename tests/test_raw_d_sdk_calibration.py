@@ -63,6 +63,8 @@ def test_cached_tables_are_reused(tmp_path, monkeypatch):
     assert bd._sdk_calibration_tables(str(tmp_path)) == str(tables)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a macOS path, as only a Mac (running Wine) has them; "
+                                           "on Windows os.path.abspath adds a drive letter")
 def test_wine_path():
     assert bd._wine_path("/Users/me/run 1.d") == r"Z:\Users\me\run 1.d"
 

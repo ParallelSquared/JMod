@@ -1324,11 +1324,15 @@ def merge_main_search(batch_files, merged_path):
     """
     logger.info("Merging main search output")
     tmp_path = merged_path + ".partial"
-    with pq.ParquetWriter(tmp_path, pq.ParquetFile(batch_files[0]).schema_arrow) as writer:
+    # Every batch is closed before the deletes below: Windows can't delete a
+    # file that is still open
+    with pq.ParquetFile(batch_files[0]) as first:
+        schema = first.schema_arrow
+    with pq.ParquetWriter(tmp_path, schema) as writer:
         for f in batch_files:
-            pf = pq.ParquetFile(f)
-            for i in range(pf.metadata.num_row_groups):
-                writer.write_table(pf.read_row_group(i))
+            with pq.ParquetFile(f) as pf:
+                for i in range(pf.metadata.num_row_groups):
+                    writer.write_table(pf.read_row_group(i))
     os.replace(tmp_path, merged_path)
     for f in batch_files:
         os.remove(f)
