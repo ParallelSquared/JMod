@@ -1,17 +1,19 @@
 import os
 from unittest.mock import patch
 
+import numpy as np
 import polars as pl
 import pytest
 
 from src.mass_tags import available_tags
 from src.models.spec_lib.library_store import SpectrumLibraryStore
-from src.multi_run import (_PROTEIN_LEVEL, _Units, collect_results, combine_runs, mbr_library_rts, mbr_targets,
-                           plot_lost_to_global_q, precursors_per_protein, precursors_per_run, proteins_per_run)
+from src.multi_run import (_PRECURSOR_LEVEL, _PROTEIN_LEVEL, _Units, _id_panels, collect_results, combine_runs,
+                           mbr_library_rts, mbr_targets, plot_intensity_per_run, plot_lost_to_global_q,
+                           plot_run_correlation, precursors_per_protein, precursors_per_run, proteins_per_run)
 from tests.models.spec_lib.test_decoy_differential import _entry
 
 
-def _write_run(tmp_path, run_name, rows, proteins=None, channels=None, decoy_channels=None):
+def _write_run(tmp_path, run_name, rows, proteins=None, channels=None, decoy_channels=None, extra=None):
     """A run's results folder, with an outputs/all_IDs_filtered.parquet of *rows*.
 
     Each row is (sequence, is_decoy, PredVal, Qvalue); every
@@ -19,7 +21,7 @@ def _write_run(tmp_path, run_name, rows, proteins=None, channels=None, decoy_cha
     and label-free (channel 0) unless *channels* names one per row.
     *decoy_channels* says per row whether it is in the tag's empty channel; the
     column is left out entirely when it is None, as results written before
-    decoy channels existed have no such column.
+    decoy channels existed have no such column.  *extra* adds columns.
     """
     folder = tmp_path / run_name
     (folder / "outputs").mkdir(parents=True)
@@ -35,12 +37,13 @@ def _write_run(tmp_path, run_name, rows, proteins=None, channels=None, decoy_cha
         "seq": seqs, "silac_channel": [float("nan")] * n, "untag_seq": seqs,
         "rt": [1.0] * n, "mz": [500.0] * n, "prec_im": [float("nan")] * n, "coeff": [1.0] * n,
         **({"is_decoy_channel": decoy_channels} if decoy_channels is not None else {}),
+        **(extra or {}),
     }).write_parquet(folder / "outputs" / "all_IDs_filtered.parquet")
     return str(folder)
 
 
 def _global_q(precursor_table):
-    return dict(precursor_table.select("untag_prec", "untag_prec_Global_Qvalue").iter_rows())
+    return dict(precursor_table.select("untag_prec", "Global_Qvalue").iter_rows())
 
 
 class TestGlobalQvalue:
@@ -87,22 +90,42 @@ class TestPrecursorsPerRun:
     def test_missing_area_is_left_out_of_the_log(self):
         df = pl.DataFrame({"run_idx": [1, 1, 2], "channel": [0, 0, 0], "untag_prec": ["AAA_2", "BBB_2", "AAA_2"],
                            "plex_Area": [8.0, float("nan"), 4.0], "Qvalue": [0.001] * 3,
-                           "untag_prec_Global_Qvalue": [0.001, 0.5, 0.001]})
+                           "Global_Qvalue": [0.001, 0.5, 0.001]})
         rows = precursors_per_run(df, _Units(df, [1, 2]), fdr_threshold=0.01).sort("run_idx", "untag_prec")
         assert rows.select("run_idx", "untag_prec", "log2_area", "retained").rows() == [
             (1, "AAA_2", 3.0, True), (1, "BBB_2", None, False), (2, "AAA_2", 2.0, True)]
 
     def test_each_channel_of_a_run_is_its_own_unit(self):
         # AAA in two channels of run 1: two rows, areas not summed, and only
-        # channel 4 passing on its own Qvalue (channel 0 through its best channel)
+        # channel 4 passing its channel FDR (channel 0 through its plex set)
         df = pl.DataFrame({"run_idx": [1, 1, 2], "channel": [0, 4, 4], "untag_prec": ["AAA_2"] * 3,
-                           "plex_Area": [8.0, 4.0, 2.0], "Qvalue": [0.5, 0.001, 0.001],
-                           "untag_prec_Global_Qvalue": [0.001] * 3})
+                           "plex_Area": [8.0, 4.0, 2.0], "PlexSet_Qvalue": [0.001] * 3,
+                           "Channel_Qvalue": [0.5, 0.001, 0.001], "PlexSet_Global_Qvalue": [0.001] * 3})
         units = _Units(df, [1, 2])
         assert units.labels == ["1·0", "1·4", "2·0", "2·4"]
         rows = precursors_per_run(df, units, fdr_threshold=0.01).sort("unit")
         assert rows.select("unit", "log2_area", "qvalue_pass").rows() == [
             (0, 3.0, False), (1, 2.0, True), (3, 1.0, True)]
+        assert [lvl.label for lvl in units.id_levels(_PRECURSOR_LEVEL)] == [
+            "Channel_Qvalue", "PlexSet_Global_Qvalue", "PlexSet_Qvalue"]
+        assert [lvl.label for lvl in units.id_levels(_PROTEIN_LEVEL)] == [
+            "Protein_Channel_Qvalue", "Protein_Global_Qvalue", "Protein_Qvalue"]
+
+    def test_without_a_channel_fdr_there_is_no_channel_level(self):
+        # a row's own Qvalue (the precursor model's) is not plotted as a channel level
+        df = pl.DataFrame({"run_idx": [1, 1], "channel": [0, 4], "untag_prec": ["AAA_2"] * 2,
+                           "plex_Area": [8.0, 4.0], "PlexSet_Qvalue": [0.001] * 2, "Qvalue": [0.5, 0.001],
+                           "PlexSet_Global_Qvalue": [0.001] * 2})
+        units = _Units(df, [1])
+        assert [lvl.label for lvl in units.id_levels(_PRECURSOR_LEVEL)] == ["PlexSet_Global_Qvalue",
+                                                                            "PlexSet_Qvalue"]
+        assert precursors_per_run(df, units, fdr_threshold=0.01)["qvalue_pass"].all()
+
+    def test_label_free_is_qvalue_and_global_qvalue(self):
+        df = pl.DataFrame({"run_idx": [1, 2], "channel": [0, 0], "untag_prec": ["AAA_2"] * 2,
+                           "plex_Area": [8.0, 4.0], "Qvalue": [0.001] * 2, "Global_Qvalue": [0.001] * 2})
+        assert [lvl.label for lvl in _Units(df, [1, 2]).id_levels(_PRECURSOR_LEVEL)] == [
+            "Global_Qvalue", "Qvalue"]
 
 
 class TestProteinsLostToGlobalQ:
@@ -125,6 +148,63 @@ class TestProteinsLostToGlobalQ:
         assert [[bar.get_height() for bar in stack] for stack in ax.containers] == [
             [0, 1], [0, 0], [0, 0], [1, 0]]
         assert "2 of 3" in ax.get_title()
+        assert "Protein_Global_Qvalue < 0.01" in ax.get_title()
+        assert "Protein_Qvalue < 0.01" in ax.get_xlabel()
+
+    def test_units_are_counted_at_the_plex_set_level_not_the_channel_fdr(self):
+        # AAA is a run-level ID in both channels of run 1, but fails the channel FDR in one:
+        # it counts in both, as the run-level ID it is
+        df = pl.DataFrame({"run_idx": [1, 1], "channel": [0, 4], "untag_prec": ["AAA_2"] * 2,
+                           "plex_Area": [8.0, 4.0], "PlexSet_Qvalue": [0.001] * 2,
+                           "Channel_Qvalue": [0.001, 0.5], "PlexSet_Global_Qvalue": [0.5] * 2})
+        units = _Units(df, [1])
+        with patch("src.multi_run._save") as save:
+            plot_lost_to_global_q(precursors_per_run(df, units, 0.01), _PRECURSOR_LEVEL, units, 0.01, "out")
+        ax = save.call_args.args[0].axes[0]
+        assert [bar.get_height() for bar in ax.containers[0]] == [0, 1]
+        assert "PlexSet_Qvalue < 0.01" in ax.get_xlabel()
+
+
+def _two_run_ids(**columns):
+    """Two runs of channels 0 and 4, each with 12 run-level precursor IDs, plus *columns*."""
+    rows = [(run, ch, f"P{p}_2") for run in (1, 2) for ch in (0, 4) for p in range(12)]
+    run_idx, channel, untag_prec = zip(*rows)
+    return pl.DataFrame({"run_idx": run_idx, "channel": channel, "untag_prec": untag_prec,
+                         "plex_Area": np.linspace(1e5, 1e6, len(rows)), "PlexSet_Qvalue": [0.001] * len(rows),
+                         "PlexSet_Global_Qvalue": [0.001] * len(rows),
+                         **{name: values(rows) for name, values in columns.items()}})
+
+
+def _panel_titles_of(plot, df):
+    units = _Units(df, [1, 2])
+    with patch("src.multi_run._save") as save:
+        plot(precursors_per_run(df, units, 0.01), units, 0.01, "out")
+    return [ax.get_title() for ax in save.call_args.args[0].axes if ax.get_title()]
+
+
+class TestIntensityPlotsSayWhichIds:
+    @pytest.mark.parametrize("plot", [plot_intensity_per_run, plot_run_correlation])
+    def test_without_a_channel_fdr_one_panel_of_the_run_level_ids(self, plot):
+        assert _panel_titles_of(plot, _two_run_ids()) == ["precursors at PlexSet_Qvalue < 0.01"]
+
+    @pytest.mark.parametrize("plot", [plot_intensity_per_run, plot_run_correlation])
+    def test_with_a_channel_fdr_a_second_panel_of_those_passing_it(self, plot):
+        df = _two_run_ids(Channel_Qvalue=lambda rows: [0.001] * len(rows))
+        assert _panel_titles_of(plot, df) == ["precursors at PlexSet_Qvalue < 0.01",
+                                              "precursors at Channel_Qvalue < 0.01"]
+
+    def test_the_channel_panel_keeps_only_the_precursors_passing_their_channel_fdr(self):
+        # run 1's channel 0 fails its channel FDR throughout
+        df = _two_run_ids(Channel_Qvalue=lambda rows: [0.5 if (run, ch) == (1, 0) else 0.001
+                                                       for run, ch, _ in rows])
+        units = _Units(df, [1, 2])
+        (_, run_level), (_, channel_level) = _id_panels(precursors_per_run(df, units, 0.01), units, 0.01)
+        assert sorted(run_level["unit"].unique().to_list()) == [0, 1, 2, 3]
+        assert sorted(channel_level["unit"].unique().to_list()) == [1, 2, 3]
+
+    def test_a_channel_fdr_nothing_passes_leaves_its_correlation_panel_blank(self):
+        df = _two_run_ids(Channel_Qvalue=lambda rows: [0.5] * len(rows))
+        assert len(_panel_titles_of(plot_run_correlation, df)) == 2
 
 
 def _first_pass_ids(rows):
@@ -133,7 +213,7 @@ def _first_pass_ids(rows):
     run_idx, untag_prec, rt, pred_val = zip(*rows)
     n = len(rows)
     return pl.DataFrame({"run_idx": run_idx, "untag_prec": untag_prec, "rt": rt, "PredVal": pred_val,
-                         "Qvalue": [0.001] * n, "untag_prec_Global_Qvalue": [0.001] * n,
+                         "Qvalue": [0.001] * n, "Global_Qvalue": [0.001] * n,
                          "is_decoy": [False] * n})
 
 
@@ -176,7 +256,14 @@ class TestGroupedResults:
         grouped, _, _ = collect_results(runs, target_decoy_ratio=1.0, fdr_threshold=0.01)
         # No decoy, nothing failing the run-level FDR, and no filter on the global q-value
         assert grouped.select("untag_prec", "run_idx").rows() == [("AAA_2", 1), ("AAA_2", 2), ("BBB_2", 1)]
-        assert "untag_prec_Global_Qvalue" in grouped.columns
+        assert "Global_Qvalue" in grouped.columns
+
+    def test_multiplexed_runs_name_the_global_qvalue_after_the_plex_set(self, tmp_path):
+        run = _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001), ("BBB", True, 0.1, 0.5)],
+                         extra={"PlexSetScore": [0.9, 0.1], "PlexSet_Qvalue": [0.001, 0.5]})
+        grouped, precursors, _ = collect_results({1: run}, target_decoy_ratio=1.0, fdr_threshold=0.01)
+        assert "PlexSet_Global_Qvalue" in grouped.columns and "Global_Qvalue" not in grouped.columns
+        assert "PlexSet_Global_Qvalue" in precursors.columns
 
     def test_coeff_and_prec_im_are_kept_only_when_the_runs_have_them(self, tmp_path):
         with_them = _write_run(tmp_path, "a", [("AAA", False, 0.9, 0.001)])

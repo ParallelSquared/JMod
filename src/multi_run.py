@@ -35,8 +35,8 @@ from src.utils.misc_functions import datestamped
 
 # The first pass's IDs that go into the match-between-runs library are those
 # with their run-level q-value below the FDR threshold: PlexSet_Qvalue, or
-# Qvalue label-free (fdr_analysis.set_qvalue_column).  "untag_prec_Global_Qvalue"
-# is the stricter choice, keeping the union of the runs' IDs at the FDR threshold.
+# Qvalue label-free (fdr_analysis.set_qvalue_column).  PlexSet_Global_Qvalue
+# (Global_Qvalue label-free: global_qvalue_column) is the stricter choice, keeping the union of the runs' IDs at the FDR threshold.
 
 # A run is aligned to the reference only if they share at least this many precursors
 _MIN_SHARED_FOR_ALIGNMENT = 20
@@ -61,22 +61,25 @@ _CHANNEL_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
 
 
 class _Level(NamedTuple):
-    """What the global q-value plots of one level (precursor or protein) are about."""
+    """What the global q-value plots of one level (precursor or protein) are
+    about.  Its q-values are named in the labels by their columns."""
     key: str             # the column the global q-value is computed per
     noun: str            # e.g. "precursor", in the labels
-    global_q: str        # its global q-value, in the labels
+    global_q: str | None  # its global q-value; None: the precursors' (_Units.global_q)
+    channel_q: str       # its channel FDR's q-value
+    run_q: str | None    # its run-level q-value; None: the precursors' (_Units.run_q)
     ids_file: str        # plot_ids_per_run's file
     lost_file: str       # plot_lost_to_global_q's file
     best_run_file: str   # plot_best_score_run's file
     completeness_file: str  # plot_data_completeness's file
 
 
-_PRECURSOR_LEVEL = _Level("untag_prec", "precursor", "global q-value", "01_precursors_per_run.png",
-                          "07_precursors_lost_to_global_q.png", "11_precursor_best_score_run.png",
-                          "03_precursor_data_completeness.png")
-_PROTEIN_LEVEL = _Level("protein", "protein", "global protein q-value", "02_proteins_per_run.png",
-                        "08_proteins_lost_to_global_q.png", "12_protein_best_score_run.png",
-                        "04_protein_data_completeness.png")
+_PRECURSOR_LEVEL = _Level("untag_prec", "precursor", None, "Channel_Qvalue", None,
+                          "01_precursors_per_run.png", "07_precursors_lost_to_global_q.png",
+                          "11_precursor_best_score_run.png", "03_precursor_data_completeness.png")
+_PROTEIN_LEVEL = _Level("protein", "protein", "Protein_Global_Qvalue", "Protein_Channel_Qvalue", "Protein_Qvalue",
+                        "02_proteins_per_run.png", "08_proteins_lost_to_global_q.png",
+                        "12_protein_best_score_run.png", "04_protein_data_completeness.png")
 
 # The columns that can tell an ID's channel apart within a run, and their names
 # in the plots, outermost first: within a run, time channels group channels.
@@ -88,19 +91,16 @@ class _IdLevel(NamedTuple):
     """One q-value an ID can pass in a (run, channel), for the ID and
     completeness plots."""
     column: str          # the per-run table's column saying whether the ID passes; None: every ID does
-    label: str           # in the legends
+    label: str           # in the legends: the q-value's column (_Units.id_levels)
     shade: str           # its shade of the channel's colour: "dark", "full" or "light"
 
 
-# From the strictest.  The run-level IDs pass their plex set's q-value
-# (PlexSet_Qvalue); the global q-value is per ID over the experiment, so it can
-# sit anywhere below them.  qvalue_pass is on the channel FDR's q-value when
-# there is one (_channel_q), the channel's own Qvalue when not
-_ID_LEVELS = [
-    _IdLevel("qvalue_pass", "Qvalue", "dark"),
-    _IdLevel("retained", "Global Qvalue", "full"),
-    _IdLevel(None, "PlexSet Qvalue", "light"),
-]
+# From the strictest, as (column, shade).  The run-level IDs pass their
+# run-level q-value (PlexSet_Qvalue, or Qvalue label-free; Protein_Qvalue); the
+# global q-value is per ID over the experiment, so it can sit anywhere below
+# them.  qvalue_pass is on the channel FDR's q-value, and plotted only when the
+# runs have one
+_ID_LEVELS = [("qvalue_pass", "dark"), ("retained", "full"), (None, "light")]
 
 # The proteins' plot_lost_to_global_q stacks each column by 1, 2, 3 and this
 # many or more precursors, light to dark
@@ -147,9 +147,9 @@ def combine_runs(completed_run_folders, experiment_dir, target_decoy_ratio, fdr_
     if units.n_units >= 2:
         plot_data_completeness(precursors, _PRECURSOR_LEVEL, units, fdr_threshold, results_dir)
         plot_data_completeness(proteins, _PROTEIN_LEVEL, units, fdr_threshold, results_dir)
-    plot_intensity_per_run(precursors, units, results_dir)
+    plot_intensity_per_run(precursors, units, fdr_threshold, results_dir)
     if units.n_units >= 3:
-        plot_run_correlation(precursors, units, results_dir)
+        plot_run_correlation(precursors, units, fdr_threshold, results_dir)
     if units.n_units >= 2:
         plot_lost_to_global_q(precursors, _PRECURSOR_LEVEL, units, fdr_threshold, results_dir)
         plot_lost_to_global_q(proteins, _PROTEIN_LEVEL, units, fdr_threshold, results_dir,
@@ -170,6 +170,13 @@ def write_run_index(df, completed_run_folders, results_dir):
         f.write("run_idx\tdata_file\tresults_folder\n")
         for run_idx in sorted(completed_run_folders):
             f.write(f"{run_idx}\t{data_files.get(run_idx, '')}\t{completed_run_folders[run_idx]}\n")
+
+
+def global_qvalue_column(df):
+    """The untagged precursors' global q-value column, named after their
+    run-level one (fdr_analysis.set_qvalue_column): PlexSet_Global_Qvalue,
+    or Global_Qvalue label-free.  *df* is a table or its schema."""
+    return "PlexSet_Global_Qvalue" if set_qvalue_column(df) == "PlexSet_Qvalue" else "Global_Qvalue"
 
 
 def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
@@ -216,7 +223,8 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
         )
     )
 
-    untag_prec_global_qs = global_qvalues(df, "untag_prec", target_decoy_ratio, "untag_prec_Global_Qvalue")
+    global_q = global_qvalue_column(df.collect_schema())
+    untag_prec_global_qs = global_qvalues(df, "untag_prec", target_decoy_ratio, global_q)
     # Each protein by its best precursor; rows without a protein are left out, as
     # the run-level protein q-value leaves them out (fdr_analysis.compute_protein_FDR)
     protein_global_qs = global_qvalues(df.filter(pl.col("protein").is_not_null()), "protein",
@@ -229,7 +237,7 @@ def collect_results(folder_path_dict, target_decoy_ratio, fdr_threshold):
         .filter(pl.col(set_qvalue_column(df.collect_schema())) < fdr_threshold)
         .filter(pl.col("is_decoy") == False)
         .join(
-            untag_prec_global_qs.lazy().select(["untag_prec", "untag_prec_Global_Qvalue"]),
+            untag_prec_global_qs.lazy().select(["untag_prec", global_q]),
             on="untag_prec",
             how="left",
         )
@@ -286,11 +294,15 @@ def global_qvalues(df, key, target_decoy_ratio, qvalue_name):
 
 def _channel_q(df, column="Channel_Qvalue"):
     """*column* (Channel_Qvalue, Protein_Channel_Qvalue) where the channel FDR
-    gave it, the run's Qvalue where not, or with no Qvalue (the plex-set
-    model) the run-level PlexSet_Qvalue."""
-    if column in df.columns and df[column].is_not_null().any():
-        return column
-    return "Qvalue" if "Qvalue" in df.columns else set_qvalue_column(df)
+    gave it; None where not."""
+    return column if column in df.columns and df[column].is_not_null().any() else None
+
+
+def _passes_channel_q(df, fdr_threshold, column="Channel_Qvalue"):
+    """Whether a row passes its channel FDR's *column*, or with no channel FDR
+    True: every run-level ID is in its channel."""
+    column = _channel_q(df, column)
+    return pl.col(column) < fdr_threshold if column else pl.lit(True)
 
 
 def precursors_per_run(df, units, fdr_threshold):
@@ -299,15 +311,16 @@ def precursors_per_run(df, units, fdr_threshold):
 
     ``area`` is the plex_Area (0 when there is none), ``log2_area`` its log2
     (null when there is none), ``retained`` whether the precursor passes the
-    global q-value, and ``qvalue_pass`` whether it passes its own channel's
-    Qvalue, not only through its best channel.
+    global q-value, and ``qvalue_pass`` whether it passes its channel's own
+    q-value (Channel_Qvalue), not only its plex set's: True throughout without
+    a channel FDR.
     """
     return units.index(
         df.group_by("run_idx", *units.columns, "untag_prec")
         .agg(
             pl.col("plex_Area").fill_nan(None).sum().alias("area"),
-            (pl.col("untag_prec_Global_Qvalue").first() < fdr_threshold).alias("retained"),
-            (pl.col(_channel_q(df)) < fdr_threshold).any().alias("qvalue_pass"),
+            (pl.col(global_qvalue_column(df)).first() < fdr_threshold).alias("retained"),
+            _passes_channel_q(df, fdr_threshold).any().alias("qvalue_pass"),
         )
         .with_columns(
             pl.when(pl.col("area") > 0).then(pl.col("area").log(2)).alias("log2_area")
@@ -321,25 +334,27 @@ def proteins_per_run(df, units, fdr_threshold):
     plots, with the unit's index in *units* (``unit``).
 
     ``retained`` is whether the protein passes the global protein q-value, and
-    ``qvalue_pass`` whether one of its precursors passes its own channel's
-    Qvalue there.  The protein q-value is the run's, over every channel.
+    ``qvalue_pass`` whether it passes its channel FDR there
+    (Protein_Channel_Qvalue): True throughout without one.  The protein q-value
+    is the run's, over every channel.
     """
     return units.index(
         df.filter(pl.col("Protein_Qvalue") < fdr_threshold)
         .group_by("run_idx", *units.columns, "protein")
         .agg((pl.col("Protein_Global_Qvalue").first() < fdr_threshold).alias("retained"),
-             (pl.col(_channel_q(df, "Protein_Channel_Qvalue")) < fdr_threshold).any().alias("qvalue_pass"))
+             _passes_channel_q(df, fdr_threshold, "Protein_Channel_Qvalue").any().alias("qvalue_pass"))
     )
 
 
 def precursors_per_protein(df, fdr_threshold):
     """Each protein at the run-level protein q-value in some run, with how many
-    untagged precursors identify it (``n_precursors``): those that pass their
-    own channel's Qvalue in some run."""
+    untagged precursors identify it (``n_precursors``): those that are run-level
+    IDs (PlexSet_Qvalue, or Qvalue label-free) in some run."""
     return (
         df.filter(pl.col("Protein_Qvalue") < fdr_threshold)
         .group_by("protein")
-        .agg(pl.col("untag_prec").filter(pl.col(_channel_q(df)) < fdr_threshold).n_unique().alias("n_precursors"))
+        .agg(pl.col("untag_prec").filter(pl.col(set_qvalue_column(df)) < fdr_threshold)
+             .n_unique().alias("n_precursors"))
     )
 
 
@@ -368,7 +383,10 @@ class _Units:
         self.plural = f"(run, {self.channel_name}) pairs" if self.columns else "runs"
         self.axis_name = ", ".join(["Run", *(_CHANNEL_COLUMNS[c].capitalize() for c in self.columns)])
         self.labels = [self._label(row) for row in self.frame.select("run_idx", *self.columns).rows()]
-        self.qvalue_label = "Channel Qvalue" if _channel_q(df) != "Qvalue" else "Qvalue"
+        # The precursors' run-level and global q-values, and whether the runs have a channel FDR's
+        self.run_q = set_qvalue_column(df)
+        self.global_q = global_qvalue_column(df)
+        self.has_channel_q = _channel_q(df) is not None
 
         # The colour of each channel of a run, by its innermost channel
         innermost = sorted({ch[-1] for ch in self.channels}) if self.columns else [None]
@@ -390,14 +408,24 @@ class _Units:
         by_unit = dict(rows.group_by("unit").len().iter_rows())
         return np.array([by_unit.get(u, 0) for u in range(self.n_units)])
 
-    def id_levels(self):
-        """The q-value levels to plot.  Without channels an ID's Qvalue is its
-        best channel's, so the two are one level, named Qvalue."""
-        if self.columns:
-            return [level._replace(label=self.qvalue_label) if level.column == "qvalue_pass" else level
-                    for level in _ID_LEVELS]
-        return [level if level.column else level._replace(label="Qvalue")
-                for level in _ID_LEVELS if level.column != "qvalue_pass"]
+    def run_level_q(self, level):
+        """*level*'s run-level q-value: PlexSet_Qvalue (Qvalue label-free) for
+        precursors, Protein_Qvalue for proteins."""
+        return level.run_q or self.run_q
+
+    def global_level_q(self, level):
+        """*level*'s global q-value: PlexSet_Global_Qvalue (Global_Qvalue
+        label-free) for precursors, Protein_Global_Qvalue for proteins."""
+        return level.global_q or self.global_q
+
+    def id_levels(self, level):
+        """The q-value levels to plot for *level*, each labelled with its
+        column: the channel FDR's when the runs have one, the global q-value,
+        and the run-level q-value."""
+        labels = {"qvalue_pass": level.channel_q, "retained": self.global_level_q(level),
+                  None: self.run_level_q(level)}
+        return [_IdLevel(column, labels[column], shade) for column, shade in _ID_LEVELS
+                if column != "qvalue_pass" or self.has_channel_q]
 
     def channel_legend_handles(self):
         """A legend entry per innermost channel colour, when there are channels."""
@@ -541,11 +569,11 @@ def plot_ids_per_run(per_run, level, units, fdr_threshold, results_dir):
 
     Each level's count is its own column from zero, drawn largest first, so
     every level's top is at its count and the smaller ones sit in front: the
-    run-level IDs (the best channel's q-value) at the top, and below them the
-    channel's own Qvalue and the global q-value, in whichever order their
+    run-level IDs (their plex set's q-value) at the top, and below them the
+    channel FDR's q-value and the global q-value, in whichever order their
     counts fall.  *per_run* is precursors_per_run's (proteins_per_run's) table.
     """
-    levels = units.id_levels()
+    levels = units.id_levels(level)
     counts = np.array([units.counts(per_run, lvl.column) for lvl in levels])  # level x unit
 
     noun = level.noun.capitalize()
@@ -593,50 +621,69 @@ def plot_summed_intensity_per_run(precursors, units, results_dir):
     _save(fig, results_dir, "10_summed_intensity_per_run.png")
 
 
-def plot_intensity_per_run(precursors, units, results_dir):
+def _id_panels(precursors, units, fdr_threshold):
+    """The precursors the intensity and correlation plots show, a panel each,
+    as (which IDs, precursors_per_run's rows): the run-level IDs, and beside
+    them, when the runs have a channel FDR, those that pass it."""
+    panels = [(f"precursors at {units.run_q} < {fdr_threshold:g}", precursors)]
+    if units.has_channel_q:
+        panels.append((f"precursors at {_PRECURSOR_LEVEL.channel_q} < {fdr_threshold:g}",
+                       precursors.filter(pl.col("qvalue_pass"))))
+    return panels
+
+
+def _panel_titles(fig, axes, title, panels):
+    """*title* over the figure, and over each panel which IDs it shows."""
+    fig.suptitle(title, color=_TEXT_COLOR)
+    for ax, (ids_label, _) in zip(axes, panels):
+        ax.set_title(ids_label, loc="center", fontsize=9, color=_MUTED_COLOR)
+
+
+def plot_intensity_per_run(precursors, units, fdr_threshold, results_dir):
     """Box plots, grouped by run: the distribution of log2 plex_Area in each
-    (run, channel).
+    (run, channel), over its run-level IDs, and with a channel FDR, in a panel
+    beside them on the same scale, over those passing it (_id_panels).
 
     Units on the same intensity scale have their medians level.  Whiskers reach
     1.5 x IQR; points beyond them are not drawn, so 90 runs stay readable.
     """
-    by_unit = dict(precursors.filter(pl.col("log2_area").is_not_null())
-                   .group_by("unit").agg(pl.col("log2_area")).iter_rows())
-    data = [np.asarray(by_unit.get(u, [np.nan])) for u in range(units.n_units)]
-
-    fig, ax = plt.subplots(figsize=(_figure_width(units.n_units), 4))
-    x, width = _unit_positions(fig, units)
-    boxes = ax.boxplot(data, positions=x, widths=width * 0.9,
-                       showfliers=False, patch_artist=True, manage_ticks=False,
-                       medianprops=dict(linewidth=1.5))
-    # Each box in its channel's colour: a light fill, the colour's edge, a dark median
-    for u, color in enumerate(units.colors):
-        boxes["boxes"][u].set(facecolor=_shade(color, "light"), edgecolor=color)
-        for part in ("whiskers", "caps"):
-            for line in boxes[part][2 * u:2 * u + 2]:
-                line.set_color(color)
-        boxes["medians"][u].set_color(_shade(color, "dark"))
-    _style_axes(ax, units.run_idxs, zero_baseline=False)
-    _unit_axis(ax, units, x)
-    ax.set_ylabel("log2 plex_Area", color=_MUTED_COLOR)
-    ax.set_title("Intensity per run", loc="center", color=_TEXT_COLOR)
+    panels = _id_panels(precursors, units, fdr_threshold)
+    fig, axes = plt.subplots(1, len(panels), sharey=True, squeeze=False,
+                             figsize=(len(panels) * _figure_width(units.n_units), 4))
+    axes = axes[0]
+    x, width = _unit_positions(fig, units, n_panels=len(panels))
+    for ax, (_, ids) in zip(axes, panels):
+        by_unit = dict(ids.filter(pl.col("log2_area").is_not_null())
+                       .group_by("unit").agg(pl.col("log2_area")).iter_rows())
+        data = [np.asarray(by_unit.get(u, [np.nan])) for u in range(units.n_units)]
+        boxes = ax.boxplot(data, positions=x, widths=width * 0.9,
+                           showfliers=False, patch_artist=True, manage_ticks=False,
+                           medianprops=dict(linewidth=1.5))
+        # Each box in its channel's colour: a light fill, the colour's edge, a dark median
+        for u, color in enumerate(units.colors):
+            boxes["boxes"][u].set(facecolor=_shade(color, "light"), edgecolor=color)
+            for part in ("whiskers", "caps"):
+                for line in boxes[part][2 * u:2 * u + 2]:
+                    line.set_color(color)
+            boxes["medians"][u].set_color(_shade(color, "dark"))
+        _style_axes(ax, units.run_idxs, zero_baseline=False)
+        _unit_axis(ax, units, x)
+    axes[0].set_ylabel("log2 plex_Area", color=_MUTED_COLOR)
+    _panel_titles(fig, axes, "Intensity per run", panels)
     _save(fig, results_dir, "05_intensity_per_run.png")
 
 
 def plot_lost_to_global_q(per_run, level, units, fdr_threshold, results_dir, n_precursors=None):
     """Columns: the precursors (or proteins, per *level*) the global q-value
-    removes, by the number of (run, channel) units they pass their own
-    channel's Qvalue in.  With *n_precursors* (precursors_per_protein's
-    table), each column is stacked by the proteins' precursors: 1, 2, 3, 4+.
-
-    Counted on each channel's own Qvalue, not its best channel's, which would
-    count every channel of a run as soon as one passes.  *per_run* is
-    precursors_per_run's (proteins_per_run's) table.
+    removes, by the number of (run, channel) units they are run-level IDs in
+    (PlexSet_Qvalue, or Qvalue label-free).  With *n_precursors*
+    (precursors_per_protein's table), each column is stacked by the proteins'
+    precursors: 1, 2, 3, 4+.  *per_run* is precursors_per_run's
+    (proteins_per_run's) table, of run-level IDs only.
     """
     per_key = (
         per_run.group_by(level.key)
-        .agg(pl.col("unit").filter(pl.col("qvalue_pass")).n_unique().alias("n_units"),
-             pl.col("retained").first())
+        .agg(pl.col("unit").n_unique().alias("n_units"), pl.col("retained").first())
     )
     lost = per_key.filter(~pl.col("retained"))
     if n_precursors is None:
@@ -666,9 +713,10 @@ def plot_lost_to_global_q(per_run, level, units, fdr_threshold, results_dir, n_p
     if not counts.any():
         ax.set_ylim(0, 1)
         ax.text(0.5, 0.5, "None", transform=ax.transAxes, ha="center", va="center", color=_MUTED_COLOR)
-    ax.set_xlabel(f"Number of {units.plural.title()} with {units.qvalue_label} < {fdr_threshold:g}", color=_MUTED_COLOR)
+    ax.set_xlabel(f"Number of {units.plural.title()} with {units.run_level_q(level)} < {fdr_threshold:g}",
+                  color=_MUTED_COLOR)
     ax.set_ylabel(f"{level.noun.capitalize()}s", color=_MUTED_COLOR)
-    ax.set_title(f"{level.noun.capitalize()}s failing the {level.global_q} ({fdr_threshold:g}): "
+    ax.set_title(f"{level.noun.capitalize()}s failing {units.global_level_q(level)} < {fdr_threshold:g}: "
                  f"{lost.height:,} of {per_key.height:,}",
                  loc="center", color=_TEXT_COLOR)
     _save(fig, results_dir, level.lost_file)
@@ -721,7 +769,7 @@ def plot_data_completeness(per_run, level, units, fdr_threshold, results_dir):
     noun = level.noun.capitalize()
     fig, ax = plt.subplots(figsize=(_figure_width(units.n_units), 4))
     marker = "o" if units.n_units <= 30 else None
-    for lvl in units.id_levels():
+    for lvl in units.id_levels(level):
         passing = per_run if lvl.column is None else per_run.filter(pl.col(lvl.column))
         n_units = passing.group_by(level.key).agg(pl.col("unit").n_unique())["unit"].to_numpy()
         at_least = np.array([(n_units >= i).sum() for i in k])
@@ -738,53 +786,66 @@ def plot_data_completeness(per_run, level, units, fdr_threshold, results_dir):
     _save(fig, results_dir, level.completeness_file)
 
 
-def plot_run_correlation(precursors, units, results_dir):
-    """Heatmap: Pearson correlation of log2 plex_Area between every pair of
-    (run, channel) units, over the precursors both quantify.  An outlier shows
-    as a pale row and column."""
-    # Pairs sharing fewer precursors than this are left blank
-    min_shared = 10
-    wide = (precursors.filter(pl.col("log2_area").is_not_null())
-            .pivot(on="unit", index="untag_prec", values="log2_area")
-            .to_pandas())
+def _unit_correlation(ids, units, min_shared):
+    """Pearson correlation of log2 plex_Area between every pair of (run,
+    channel) units over the precursors (precursors_per_run's rows) both
+    quantify: NaN for pairs sharing fewer than *min_shared*."""
+    quantified = ids.filter(pl.col("log2_area").is_not_null())
+    if quantified.is_empty():
+        return np.full((units.n_units, units.n_units), np.nan)
+    wide = quantified.pivot(on="unit", index="untag_prec", values="log2_area").to_pandas()
     wide.columns = [str(c) for c in wide.columns]
     wide = wide.reindex(columns=[str(u) for u in range(units.n_units)])
-    corr = wide.corr(min_periods=min_shared).to_numpy()
+    return wide.corr(min_periods=min_shared).to_numpy()
+
+
+def plot_run_correlation(precursors, units, fdr_threshold, results_dir):
+    """Heatmap: Pearson correlation of log2 plex_Area between every pair of
+    (run, channel) units, over the run-level IDs both quantify, and with a
+    channel FDR, in a panel beside it on the same colour scale, over those
+    passing it (_id_panels).  An outlier shows as a pale row and column."""
+    # Pairs sharing fewer precursors than this are left blank
+    min_shared = 10
+    panels = _id_panels(precursors, units, fdr_threshold)
+    corrs = [_unit_correlation(ids, units, min_shared) for _, ids in panels]
 
     n = units.n_units
-    off_diagonal = corr[~np.eye(n, dtype=bool)]
+    off_diagonal = np.concatenate([corr[~np.eye(n, dtype=bool)] for corr in corrs])
     lowest = np.nanmin(off_diagonal) if np.isfinite(off_diagonal).any() else 0.0
     cmap = LinearSegmentedColormap.from_list("blues", _BLUE_RAMP)
     cmap.set_bad(_GRID_COLOR)
 
     size = min(12, max(5, 3 + 0.1 * n))
-    fig, ax = plt.subplots(figsize=(size + 1, size))
-    image = ax.imshow(np.ma.masked_invalid(corr), cmap=cmap, vmin=lowest, vmax=1)
-    colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    fig, axes = plt.subplots(1, len(panels), squeeze=False, figsize=(len(panels) * size + 1, size))
+    axes = axes[0]
+    step = math.ceil(n / 20)  # at most about 20 labels per axis
+    ticks = list(range(0, n, step))
+    for ax, corr in zip(axes, corrs):
+        image = ax.imshow(np.ma.masked_invalid(corr), cmap=cmap, vmin=lowest, vmax=1)
+        for set_ticks, set_labels in ((ax.set_xticks, ax.set_xticklabels),
+                                      (ax.set_yticks, ax.set_yticklabels)):
+            set_ticks(ticks)
+            set_labels([units.labels[i] for i in ticks])
+        if units.columns:
+            ax.tick_params(axis="x", labelrotation=90)  # run·channel labels are too wide to sit side by side
+        ax.tick_params(colors=_MUTED_COLOR, length=0)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        if n <= 12:
+            midpoint = (lowest + 1) / 2
+            for i in range(n):
+                for j in range(n):
+                    if np.isfinite(corr[i, j]):
+                        ax.text(j, i, f"{corr[i, j]:.2f}", ha="center", va="center", fontsize=8,
+                                color=_SURFACE_COLOR if corr[i, j] > midpoint else _TEXT_COLOR)
+        ax.set_xlabel(units.axis_name, color=_MUTED_COLOR)
+    axes[0].set_ylabel(units.axis_name, color=_MUTED_COLOR)
+    # One colour bar: the panels share its scale
+    colorbar = fig.colorbar(image, ax=list(axes), fraction=0.046 / len(panels), pad=0.04 / len(panels))
     colorbar.set_label("Pearson r", color=_MUTED_COLOR)
     colorbar.ax.tick_params(colors=_MUTED_COLOR, length=0)
     colorbar.outline.set_visible(False)
-
-    step = math.ceil(n / 20)  # at most about 20 labels per axis
-    ticks = list(range(0, n, step))
-    for set_ticks, set_labels in ((ax.set_xticks, ax.set_xticklabels), (ax.set_yticks, ax.set_yticklabels)):
-        set_ticks(ticks)
-        set_labels([units.labels[i] for i in ticks])
-    if units.columns:
-        ax.tick_params(axis="x", labelrotation=90)  # run·channel labels are too wide to sit side by side
-    ax.tick_params(colors=_MUTED_COLOR, length=0)
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    if n <= 12:
-        midpoint = (lowest + 1) / 2
-        for i in range(n):
-            for j in range(n):
-                if np.isfinite(corr[i, j]):
-                    ax.text(j, i, f"{corr[i, j]:.2f}", ha="center", va="center", fontsize=8,
-                            color=_SURFACE_COLOR if corr[i, j] > midpoint else _TEXT_COLOR)
-    ax.set_xlabel(units.axis_name, color=_MUTED_COLOR)
-    ax.set_ylabel(units.axis_name, color=_MUTED_COLOR)
-    ax.set_title("Run-to-run correlation of log2 plex_Area", loc="center", color=_TEXT_COLOR)
+    _panel_titles(fig, axes, "Run-to-run correlation of log2 plex_Area", panels)
     _save(fig, results_dir, "06_run_correlation.png")
 
 
@@ -801,29 +862,26 @@ def plot_library_size_by_run(targets, fdr_threshold, qvalue_column, mbr_dir):
     size.
     """
     run_idxs = sorted(targets["run_idx"].unique().to_list())
-    run_q = set_qvalue_column(targets)
+    run_q, global_q = set_qvalue_column(targets), global_qvalue_column(targets)
     ids_by_run = {}
-    for column in ("untag_prec_Global_Qvalue", run_q):
+    for column in (global_q, run_q):
         by_run = dict(targets.filter(pl.col(column) < fdr_threshold)
                       .group_by("run_idx").agg(pl.col("untag_prec").unique()).iter_rows())
         ids_by_run[column] = {r: set(by_run.get(r, [])) for r in run_idxs}
     order = _greedy_run_order(ids_by_run[qvalue_column])
 
-    # On channels the run-level IDs are their plex set's, as in the other plots
-    run_level = "PlexSet Qvalue" if run_q == "PlexSet_Qvalue" else "Qvalue"
     x = np.arange(1, len(order) + 1)
     fig, ax = plt.subplots(figsize=(_figure_width(len(order)), 4))
     finals = {}
-    for column, name, color in (("untag_prec_Global_Qvalue", "Global Qvalue", _BLUE),
-                                (run_q, run_level, _LIGHT_BLUE)):
+    for column, color in ((global_q, _BLUE), (run_q, _LIGHT_BLUE)):
         seen, library_size = set(), []
         for r in order:
             seen |= ids_by_run[column][r]
             library_size.append(len(seen))
         finals[column] = library_size[-1]
         ax.plot(x, library_size, color=color, linewidth=2, marker="o" if len(order) <= 30 else None,
-                markersize=5, markeredgecolor=_SURFACE_COLOR, zorder=3 if column == "untag_prec_Global_Qvalue" else 2,
-                label=f"{name} < {fdr_threshold:g}")
+                markersize=5, markeredgecolor=_SURFACE_COLOR, zorder=3 if column == global_q else 2,
+                label=f"{column} < {fdr_threshold:g}")
     # Each line's final size beside its last point; the larger above, the smaller below
     for column, size in finals.items():
         above = size >= max(finals.values())
@@ -902,9 +960,9 @@ def _unstick(bars):
         bar.sticky_edges.y.clear()
 
 
-def _unit_positions(fig, units):
+def _unit_positions(fig, units, n_panels=1):
     """The x of each (run, channel)'s column, grouped side by side around its
-    run, and the columns' width.
+    run, and the columns' width, in each of *fig*'s *n_panels* side by side.
 
     Within a run the channels are grouped by their outer channels (e.g. a time
     channel's mass tag channels), half a column apart.  A run's group takes
@@ -921,7 +979,7 @@ def _unit_positions(fig, units):
         places.append(place)
         place += 1
     span = places[-1] + 1
-    slot_inches = fig.get_figwidth() * 0.8 / len(units.run_idxs)
+    slot_inches = fig.get_figwidth() / n_panels * 0.8 / len(units.run_idxs)
     width = min(0.8 / span, 0.25 / slot_inches)
     offsets = (np.array(places) + 0.5 - span / 2) * width
     return np.array([r + o for r in units.run_idxs for o in offsets]), width
